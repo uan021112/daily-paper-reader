@@ -6,85 +6,61 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-03-10 ~ 2026-03-19
-- 运行时间：2026-03-19 07:40:04 UTC
+- 最新运行日期：2026-03-19
+- 运行时间：2026-03-19 20:16:56 UTC
 - 运行状态：成功
-- 本次总论文数：21
-- 精读区：10
-- 速读区：11
+- 本次总论文数：13
+- 精读区：3
+- 速读区：10
 
 ### 今日简报（AI）
-今日精选 21 篇论文，深度聚焦 3D 几何建模与牙科模型分割的满分技术突破。
-重点关注分层图 Transformer 驱动的 BRep 自动编码器，以及通过中心注意力机制实现精准 3D 牙科分割的 TCATSeg。
-建议同步探索 CLIP 嵌入空间下的深度估计及高斯泼溅在语言关联领域的新应用。
-- 详情：[/20260310-20260319/README](/20260310-20260319/README)
+今日深度解析 13 篇前沿成果，重点聚焦单目视频的时空场景图生成与 4K 超高清全景分割技术。
+最值得关注评分 9.0 的时空世界场景图构建，以及 SAP 框架在超大分辨率全景感知上的突破。
+建议读者从中观察 AI 如何从理解静态图像进化到重构动态、高精度的复杂现实世界模型。
+- 详情：[/202603/19/README](/202603/19/README)
 
 ### 精读区论文标签
-1. [Masked BRep Autoencoder via Hierarchical Graph Transformer](/20260310-20260319/2603.14927v2-masked-brep-autoencoder-via-hierarchical-graph-transformer)  
-   标签：评分：10.0/10、query:partseg
-   evidence：用于 CAD 模型分割和部件分类的自监督学习
-2. [TCATSeg: A Tooth Center-Wise Attention Network for 3D Dental Model Semantic Segmentation](/20260310-20260319/2603.16620v1-tcatseg-a-tooth-center-wise-attention-network-for-3d-dental-model-semantic-segmentation)  
-   标签：评分：10.0/10、query:partseg
-   evidence：3D牙模语义分割及新数据集
-3. [SegviGen: Repurposing 3D Generative Model for Part Segmentation](/20260310-20260319/2603.16869v1-segvigen-repurposing-3d-generative-model-for-part-segmentation)  
-   标签：评分：10.0/10、query:partseg
-   evidence：将3D生成模型重新用于3D部件分割
-4. [Towards Instance Segmentation with Polygon Detection Transformers](/20260310-20260319/2603.09245v1-towards-instance-segmentation-with-polygon-detection-transformers)  
-   标签：评分：9.0/10、query:partseg
-   evidence：将实例分割重新表述为稀疏顶点回归
-5. [SpaceSense-Bench: A Large-Scale Multi-Modal Benchmark for Spacecraft Perception and Pose Estimation](/20260310-20260319/2603.09320v1-spacesense-bench-a-large-scale-multi-modal-benchmark-for-spacecraft-perception-and-pose-estimation)  
-   标签：评分：9.0/10、query:partseg
-   evidence：用于航天器部件级语义理解的大规模多模态基准数据集
-6. [In-Field 3D Wheat Head Instance Segmentation From TLS Point Clouds Using Deep Learning Without Manual Labels](/20260310-20260319/2603.14309v1-in-field-3d-wheat-head-instance-segmentation-from-tls-point-clouds-using-deep-learning-without-manual-labels)  
-   标签：评分：9.0/10、query:partseg
-   evidence：LiDAR点云的3D实例分割
-7. [Masked BRep Autoencoder via Hierarchical Graph Transformer](/20260310-20260319/2603.14927v1-masked-brep-autoencoder-via-hierarchical-graph-transformer)  
-   标签：评分：9.0/10、query:partseg
-   evidence：用于CAD模型分割和零件分类的自监督学习
-8. [Material Magic Wand: Material-Aware Grouping of 3D Parts in Untextured Meshes](/20260310-20260319/2603.17370v1-material-magic-wand-material-aware-grouping-of-3d-parts-in-untextured-meshes)  
-   标签：评分：9.0/10、query:partseg
-   evidence：无纹理网格中基于材质感知的3D部件分组
-9. [PCA-Seg: Revisiting Cost Aggregation for Open-Vocabulary Semantic and Part Segmentation](/20260310-20260319/2603.17520v1-pca-seg-revisiting-cost-aggregation-for-open-vocabulary-semantic-and-part-segmentation)  
-   标签：评分：9.0/10、query:partseg
-   evidence：开放词汇语义和部件分割
-10. [Part-Aware Open-Vocabulary 3D Affordance Grounding via Prototypical Semantic and Geometric Alignment](/20260310-20260319/2603.17647v1-part-aware-open-vocabulary-3d-affordance-grounding-via-prototypical-semantic-and-geometric-alignment)  
-   标签：评分：9.0/10、query:partseg
-   evidence：部件级语义一致性与3D功能区域定位
+1. [Towards Spatio-Temporal World Scene Graph Generation from Monocular Videos](/202603/19/2603.13185v1-towards-spatio-temporal-world-scene-graph-generation-from-monocular-videos)  
+   标签：评分：9.0/10、query:ff3dr
+   evidence：通过前馈3D重建将视频升级为4D场景
+2. [SAP: Segment Any 4K Panorama](/202603/19/2603.12759v1-sap-segment-any-4k-panorama)  
+   标签：评分：8.0/10、query:partseg
+   evidence：全景实例级分割基础模型
+3. [Learning Coordinate-based Convolutional Kernels for Continuous SE(3) Equivariant and Efficient Point Cloud Analysis](/202603/19/2603.17538v1-learning-coordinate-based-convolutional-kernels-for-continuous-se3-equivariant-and-efficient-point-cloud-analysis)  
+   标签：评分：8.0/10、query:partseg
+   evidence：针对大规模问题的SE(3)等变点云分析
 
 ### 速读区论文标签
-1. [USIS-PGM: Photometric Gaussian Mixtures for Underwater Salient Instance Segmentation](/20260310-20260319/2603.13961v1-usis-pgm-photometric-gaussian-mixtures-for-underwater-salient-instance-segmentation)  
-   标签：评分：8.0/10、query:partseg
-   evidence：水下显著实例分割框架
-2. [PureCLIP-Depth: Prompt-Free and Decoder-Free Monocular Depth Estimation within CLIP Embedding Space](/20260310-20260319/2603.16238v1-pureclip-depth-prompt-free-and-decoder-free-monocular-depth-estimation-within-clip-embedding-space)  
-   标签：评分：8.0/10、query:ff3dr
-   evidence：利用前馈 CLIP 嵌入空间实现从 RGB 到深度域的直接映射
-3. [ReLaGS: Relational Language Gaussian Splatting](/20260310-20260319/2603.17605v1-relags-relational-language-gaussian-splatting)  
-   标签：评分：8.0/10、query:partseg
-   evidence：分层3D语义场景图与物体嵌入
-4. [From Semantics to Pixels: Coarse-to-Fine Masked Autoencoders for Hierarchical Visual Understanding](/20260310-20260319/2603.09955v1-from-semantics-to-pixels-coarse-to-fine-masked-autoencoders-for-hierarchical-visual-understanding)  
-   标签：评分：7.0/10、query:partseg
-   evidence：跨语义和实例掩码的分层视觉理解
-5. [Prompt-Driven Lightweight Foundation Model for Instance Segmentation-Based Fault Detection in Freight Trains](/20260310-20260319/2603.12624v1-prompt-driven-lightweight-foundation-model-for-instance-segmentation-based-fault-detection-in-freight-trains)  
-   标签：评分：7.0/10、query:partseg
-   evidence：用于列车部件的实例分割框架
-6. [Semantic Aware Feature Extraction for Enhanced 3D Reconstruction](/20260310-20260319/2603.13556v1-semantic-aware-feature-extraction-for-enhanced-3d-reconstruction)  
+1. [LiTo: Surface Light Field Tokenization](/202603/19/2603.11047v1-lito-surface-light-field-tokenization)  
    标签：评分：7.0/10、query:ff3dr
-   evidence：用于增强3D重建的语义感知特征提取
-7. [USIS-PGM: Photometric Gaussian Mixtures for Underwater Salient Instance Segmentation](/20260310-20260319/2603.13961v2-usis-pgm-photometric-gaussian-mixtures-for-underwater-salient-instance-segmentation)  
+   evidence：几何与外观的3D潜变量表示
+2. [Leveraging Phytolith Research using Artificial Intelligence](/202603/19/2603.11476v1-leveraging-phytolith-research-using-artificial-intelligence)  
    标签：评分：7.0/10、query:partseg
-   evidence：水下显著实例分割的单阶段框架
-8. [FlatLands: Generative Floormap Completion From a Single Egocentric View](/20260310-20260319/2603.16016v1-flatlands-generative-floormap-completion-from-a-single-egocentric-view)  
-   标签：评分：7.0/10、query:ff3dr
-   evidence：单目RGB到楼层平面图流水线
-9. [Phase-Interface Instance Segmentation as a Visual Sensor for Laboratory Process Monitoring](/20260310-20260319/2603.10782v1-phase-interface-instance-segmentation-as-a-visual-sensor-for-laboratory-process-monitoring)  
+   evidence：使用 PointNet++ 对单个微粒进行 3D 点云分析
+3. [Intrinsic Concept Extraction Based on Compositional Interpretability](/202603/19/2603.11795v1-intrinsic-concept-extraction-based-on-compositional-interpretability)  
+   标签：评分：7.0/10、query:partseg
+   evidence：提取可组合的对象级和属性级概念
+4. [Revisiting foundation models for cell instance segmentation](/202603/19/2603.17845v1-revisiting-foundation-models-for-cell-instance-segmentation)  
+   标签：评分：7.0/10、query:partseg
+   evidence：对细胞实例分割基础模型的全面评估
+5. [SegFly: A 2D-3D-2D Paradigm for Aerial RGB-Thermal Semantic Segmentation at Scale](/202603/19/2603.17920v1-segfly-a-2d-3d-2d-paradigm-for-aerial-rgb-thermal-semantic-segmentation-at-scale)  
+   标签：评分：7.0/10、query:partseg
+   evidence：将RGB图像提升为语义3D点云以进行标签传播
+6. [OilSAM2: Memory-Augmented SAM2 for Scalable SAR Oil Spill Detection](/202603/19/2603.10231v1-oilsam2-memory-augmented-sam2-for-scalable-sar-oil-spill-detection)  
    标签：评分：6.0/10、query:partseg
-   evidence：实验室玻璃仪器的相界面实例分割
-10. [HFP-SAM: Hierarchical Frequency Prompted SAM for Efficient Marine Animal Segmentation](/20260310-20260319/2603.12708v1-hfp-sam-hierarchical-frequency-prompted-sam-for-efficient-marine-animal-segmentation)  
+   evidence：针对无序集合的记忆增强分割框架
+7. [When Slots Compete: Slot Merging in Object-Centric Learning](/202603/19/2603.11246v1-when-slots-compete-slot-merging-in-object-centric-learning)  
    标签：评分：6.0/10、query:partseg
-   evidence：用于海洋动物实例分割的分层频率提示 SAM
-11. [Learning Human-Object Interaction for 3D Human Pose Estimation from LiDAR Point Clouds](/20260310-20260319/2603.16343v1-learning-human-object-interaction-for-3d-human-pose-estimation-from-lidar-point-clouds)  
+   evidence：以对象为中心的学习和基于槽的实体表示
+8. [OCRA: Object-Centric Learning with 3D and Tactile Priors for Human-to-Robot Action Transfer](/202603/19/2603.14401v1-ocra-object-centric-learning-with-3d-and-tactile-priors-for-human-to-robot-action-transfer)  
+   标签：评分：6.0/10、query:ff3dr
+   evidence：使用3D基础模型重建以对象为中心的3D点云
+9. [Exclusivity-Guided Mask Learning for Semi-Supervised Crowd Instance Segmentation and Counting](/202603/19/2603.16241v1-exclusivity-guided-mask-learning-for-semi-supervised-crowd-instance-segmentation-and-counting)  
    标签：评分：6.0/10、query:partseg
-   evidence：LiDAR点云以及人与物体点之间的空间歧义
+   evidence：半监督人群实例分割与掩码学习
+10. [VisionNVS: Self-Supervised Inpainting for Novel View Synthesis under the Virtual-Shift Paradigm](/202603/19/2603.17382v1-visionnvs-self-supervised-inpainting-for-novel-view-synthesis-under-the-virtual-shift-paradigm)  
+   标签：评分：6.0/10、query:ff3dr
+   evidence：利用深度代理进行自监督视图合成
 
 
 <div class="dpr-home-promo-card">
