@@ -6,88 +6,83 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-03-21
-- 运行时间：2026-03-21 19:14:11 UTC
+- 最新运行日期：2026-03-22
+- 运行时间：2026-03-22 19:24:19 UTC
 - 运行状态：成功
-- 本次总论文数：22
-- 精读区：9
+- 本次总论文数：21
+- 精读区：8
 - 速读区：13
 
 ### 今日简报（AI）
-今日精选 22 篇前沿论文，重点聚焦多视角视频下的多人场景一致性重建与跨领域神经重建技术。
-推荐关注单次通过（Single Pass）实现多人场景重建的 9.0 分佳作，以及结合物理先验提升气旋预测精度的创新框架。
-建议优先研读高分重建论文，探索视觉大模型先验在复杂场景建模中的落地潜力。
-- 详情：[/202603/21/README](/202603/21/README)
+今日精选 21 篇前沿论文，重点突破卫星地表即时恢复与高效手部网格重构。
+- 详情：[/202603/22/README](/202603/22/README)
 
 ### 精读区论文标签
-1. [Coherent Human-Scene Reconstruction from Multi-Person Multi-View Video in a Single Pass](/202603/21/2603.12789v1-coherent-human-scene-reconstruction-from-multi-person-multi-view-video-in-a-single-pass)  
+1. [SwiftGS: Episodic Priors for Immediate Satellite Surface Recovery](/202603/22/2603.18634v1-swiftgs-episodic-priors-for-immediate-satellite-surface-recovery)  
+   标签：评分：10.0/10、query:ff3dr
+   evidence：通过单次前向传播重建3D表面
+2. [Fast-HaMeR: Boosting Hand Mesh Reconstruction using Knowledge Distillation](/202603/22/2603.16444v1-fast-hamer-boosting-hand-mesh-reconstruction-using-knowledge-distillation)  
    标签：评分：9.0/10、query:ff3dr
-   evidence：用于人体和场景联合重建的一阶段神经网络
-2. [Coherent Human-Scene Reconstruction from Multi-Person Multi-View Video in a Single Pass](/202603/21/2603.12789v2-coherent-human-scene-reconstruction-from-multi-person-multi-view-video-in-a-single-pass)  
+   evidence：用于快速3D手部网格重建的轻量级神经网络
+3. [Patient4D: Temporally Consistent Patient Body Mesh Recovery from Monocular Operating Room Video](/202603/22/2603.17178v1-patient4d-temporally-consistent-patient-body-mesh-recovery-from-monocular-operating-room-video)  
    标签：评分：9.0/10、query:3dgen
-   evidence：从多视图视频中联合估计场景点云和人体网格
-3. [S2GS: Streaming Semantic Gaussian Splatting for Online Scene Understanding and Reconstruction](/202603/21/2603.14232v1-s2gs-streaming-semantic-gaussian-splatting-for-online-scene-understanding-and-reconstruction)  
-   标签：评分：9.0/10、query:ff3dr
-   evidence：在线前馈联合场景理解与重建
-4. [MeMix: Writing Less, Remembering More for Streaming 3D Reconstruction](/202603/21/2603.15330v1-memix-writing-less-remembering-more-for-streaming-3d-reconstruction)  
-   标签：评分：9.0/10、query:ff3dr
-   evidence：高效流式3D重建
-5. [Real-Time Human Frontal View Synthesis from a Single Image](/202603/21/2603.15433v1-real-time-human-frontal-view-synthesis-from-a-single-image)  
+   evidence：从单目视频中恢复稠密3D人体网格
+4. [CustomTex: High-fidelity Indoor Scene Texturing via Multi-Reference Customization](/202603/22/2603.19121v1-customtex-high-fidelity-indoor-scene-texturing-via-multi-reference-customization)  
    标签：评分：9.0/10、query:3dgen
-   evidence：单张图像的正面视图合成
-6. [DualPrim: Compact 3D Reconstruction with Positive and Negative Primitives](/202603/21/2603.16133v1-dualprim-compact-3d-reconstruction-with-positive-and-negative-primitives)  
-   标签：评分：9.0/10、query:ff3dr
-   evidence：使用可微分渲染器和基元进行紧凑的3D重建
-7. [MG-Grasp: Metric-Scale Geometric 6-DoF Grasping Framework with Sparse RGB Observations](/202603/21/2603.16270v1-mg-grasp-metric-scale-geometric-6-dof-grasping-framework-with-sparse-rgb-observations)  
-   标签：评分：9.0/10、query:3dgen
-   evidence：从稀疏RGB图像重建稠密点云以进行3D抓取
-8. [MG-Grasp: Metric-Scale Geometric 6-DoF Grasping Framework with Sparse RGB Observations](/202603/21/2603.16270v2-mg-grasp-metric-scale-geometric-6-dof-grasping-framework-with-sparse-rgb-observations)  
-   标签：评分：9.0/10、query:3dgen
-   evidence：从稀疏RGB图像重建稠密点云
-9. [World Reconstruction From Inconsistent Views](/202603/21/2603.16736v1-world-reconstruction-from-inconsistent-views)  
-   标签：评分：9.0/10、query:3dgen
-   evidence：从视频帧重建3D世界
+   evidence：高质量3D资产生成与场景纹理化
+5. [4D Synchronized Fields: Motion-Language Gaussian Splatting for Temporal Scene Understanding](/202603/22/2603.14301v1-4d-synchronized-fields-motion-language-gaussian-splatting-for-temporal-scene-understanding)  
+   标签：评分：8.0/10、query:3dgen
+   evidence：具有对象分解运动和语言的4D高斯表示
+6. [MVHOI: Bridge Multi-view Condition to Complex Human-Object Interaction Video Reenactment via 3D Foundation Model](/202603/22/2603.14686v1-mvhoi-bridge-multi-view-condition-to-complex-human-object-interaction-video-reenactment-via-3d-foundation-model)  
+   标签：评分：8.0/10、query:3dgen
+   evidence：通过3D基础模型连接多视图条件
+7. [GeoNVS: Geometry Grounded Video Diffusion for Novel View Synthesis](/202603/22/2603.14965v1-geonvs-geometry-grounded-video-diffusion-for-novel-view-synthesis)  
+   标签：评分：8.0/10、query:3dgen
+   evidence：用于新视角合成的高斯泼溅技术
+8. [IRIS: Intersection-aware Ray-based Implicit Editable Scenes](/202603/22/2603.15368v1-iris-intersection-aware-ray-based-implicit-editable-scenes)  
+   标签：评分：8.0/10、query:3dgen
+   evidence：用于交互式编辑的高效神经渲染与场景表示
 
 ### 速读区论文标签
-1. [VFM-Recon: Unlocking Cross-Domain Scene-Level Neural Reconstruction with Scale-Aligned Foundation Priors](/202603/21/2603.12657v1-vfm-recon-unlocking-cross-domain-scene-level-neural-reconstruction-with-scale-aligned-foundation-priors)  
+1. [SAIF: A Stability-Aware Inference Framework for Medical Image Segmentation with Segment Anything Model](/202603/22/2603.13533v1-saif-a-stability-aware-inference-framework-for-medical-image-segmentation-with-segment-anything-model)  
+   标签：评分：8.0/10、query:partseg
+   evidence：医学图像分割的稳定性感知推理
+2. [A Hyperbolic Perspective on Hierarchical Structure in Object-Centric Scene Representations](/202603/22/2603.14022v1-a-hyperbolic-perspective-on-hierarchical-structure-in-object-centric-scene-representations)  
+   标签：评分：8.0/10、query:partseg
+   evidence：以物体为中心的场景表示中的层次结构
+3. [Interp3R: Continuous-time 3D Geometry Estimation with Frames and Events](/202603/22/2603.14528v1-interp3r-continuous-time-3d-geometry-estimation-with-frames-and-events)  
    标签：评分：8.0/10、query:ff3dr
-   evidence：利用基础模型先验从单目视频中进行场景级神经体积重建
-2. [3DTCR: A Physics-Based Generative Framework for Vortex-Following 3D Reconstruction to Improve Tropical Cyclone Intensity Forecasting](/202603/21/2603.13049v1-3dtcr-a-physics-based-generative-framework-for-vortex-following-3d-reconstruction-to-improve-tropical-cyclone-intensity-forecasting)  
-   标签：评分：8.0/10、query:3dgen
-   evidence：基于物理的3D重建生成框架
-3. [3DTCR: A Physics-Based Generative Framework for Vortex-Following 3D Reconstruction to Improve Tropical Cyclone Intensity Forecasting](/202603/21/2603.13049v2-3dtcr-a-physics-based-generative-framework-for-vortex-following-3d-reconstruction-to-improve-tropical-cyclone-intensity-forecasting)  
-   标签：评分：8.0/10、query:3dgen
-   evidence：基于物理的热带气旋3D重建生成框架
-4. [PhyGaP: Physically-Grounded Gaussians with Polarization Cues](/202603/21/2603.14001v1-phygap-physically-grounded-gaussians-with-polarization-cues)  
-   标签：评分：8.0/10、query:3dgen
-   evidence：用于反光物体和重光照的3D高斯泼溅
-5. [SGR-OCC: Evolving Monocular Priors for Embodied 3D Occupancy Prediction via Soft-Gating Lifting and Semantic-Adaptive Geometric Refinement](/202603/21/2603.14076v1-sgr-occ-evolving-monocular-priors-for-embodied-3d-occupancy-prediction-via-soft-gating-lifting-and-semantic-adaptive-geometric-refinement)  
+   evidence：基于点图的连续时间3D几何估计
+4. [E2EGS: Event-to-Edge Gaussian Splatting for Pose-Free 3D Reconstruction](/202603/22/2603.14684v1-e2egs-event-to-edge-gaussian-splatting-for-pose-free-3d-reconstruction)  
    标签：评分：8.0/10、query:ff3dr
-   evidence：从单目视频流中进行增量式3D语义占据预测
-6. [Catalyst4D: High-Fidelity 3D-to-4D Scene Editing via Dynamic Propagation](/202603/21/2603.12766v1-catalyst4d-high-fidelity-3d-to-4d-scene-editing-via-dynamic-propagation)  
-   标签：评分：7.0/10、query:3dgen
-   evidence：基于3DGS的高保真3D到4D场景编辑与动态传播
-7. [Spectral-Geometric Neural Fields for Pose-Free LiDAR View Synthesis](/202603/21/2603.12903v1-spectral-geometric-neural-fields-for-pose-free-lidar-view-synthesis)  
-   标签：评分：7.0/10、query:3dgen
-   evidence：用于LiDAR场景重建的神经辐射场
-8. [SGMatch: Semantic-Guided Non-Rigid Shape Matching with Flow Regularization](/202603/21/2603.12937v1-sgmatch-semantic-guided-non-rigid-shape-matching-with-flow-regularization)  
+   evidence：基于高斯泼溅的无位姿3D重建
+5. [HSImul3R: Physics-in-the-Loop Reconstruction of Simulation-Ready Human-Scene Interactions](/202603/22/2603.15612v1-hsimul3r-physics-in-the-loop-reconstruction-of-simulation-ready-human-scene-interactions)  
+   标签：评分：8.0/10、query:3dgen
+   evidence：从图像和视频中重建人与场景的3D交互
+6. [DiveUp: Learning Feature Upsampling from Diverse Vision Foundation Models](/202603/22/2603.13571v1-diveup-learning-feature-upsampling-from-diverse-vision-foundation-models)  
    标签：评分：7.0/10、query:partseg
-   evidence：利用视觉基础模型进行语义引导的非刚性3D形状匹配
-9. [Geo-ID: Test-Time Geometric Consensus for Cross-View Consistent Intrinsics](/202603/21/2603.13859v1-geo-id-test-time-geometric-consensus-for-cross-view-consistent-intrinsics)  
+   evidence：增强视觉基础模型以进行像素级理解任务
+7. [RegFormer++: An Efficient Large-Scale 3D LiDAR Point Registration Network with Projection-Aware 2D Transformer](/202603/22/2603.14290v1-regformer-an-efficient-large-scale-3d-lidar-point-registration-network-with-projection-aware-2d-transformer)  
    标签：评分：7.0/10、query:ff3dr
-   evidence：用于3D重建的跨视图一致性内在属性估计
-10. [CMHANet: A Cross-Modal Hybrid Attention Network for Point Cloud Registration](/202603/21/2603.12721v1-cmhanet-a-cross-modal-hybrid-attention-network-for-point-cloud-registration)  
-   标签：评分：6.0/10、query:ff3dr
-   evidence：用于大规模3D重建的点云配准
-11. [NeurFrame: Learning Continuous Frame Fields for Structured Mesh Generation](/202603/21/2603.12820v1-neurframe-learning-continuous-frame-fields-for-structured-mesh-generation)  
-   标签：评分：6.0/10、query:3dgen
-   evidence：用于连续3D框架场和网格生成的神经网络框架
-12. [Task-Oriented Wireless Transmission of 3D Point Clouds: Geometric Versus Semantic Robustness](/202603/21/2603.13560v1-task-oriented-wireless-transmission-of-3d-point-clouds-geometric-versus-semantic-robustness)  
+   evidence：高效的大规模3D激光雷达点云配准网络
+8. [Refining 3D Medical Segmentation with Verbal Instruction](/202603/22/2603.14496v1-refining-3d-medical-segmentation-with-verbal-instruction)  
+   标签：评分：7.0/10、query:partseg
+   evidence：通过口头指令优化3D医学分割
+9. [RenderMem: Rendering as Spatial Memory Retrieval](/202603/22/2603.14669v1-rendermem-rendering-as-spatial-memory-retrieval)  
+   标签：评分：7.0/10、query:3dgen
+   evidence：将渲染作为3D世界表示与空间推理之间的接口
+10. [Human-like Object Grouping in Self-supervised Vision Transformers](/202603/22/2603.13994v1-human-like-object-grouping-in-self-supervised-vision-transformers)  
    标签：评分：6.0/10、query:partseg
-   evidence：3D点云的语义通信
-13. [PhysAlign: Physics-Coherent Image-to-Video Generation through Feature and 3D Representation Alignment](/202603/21/2603.13770v1-physalign-physics-coherent-image-to-video-generation-through-feature-and-3d-representation-alignment)  
-   标签：评分：6.0/10、query:3dgen
-   evidence：具有3D表示对齐的物理相干图像到视频生成
+   evidence：视觉Transformer中涌现的对象分割特性
+11. [R3DP: Real-Time 3D-Aware Policy for Embodied Manipulation](/202603/22/2603.14498v1-r3dp-real-time-3d-aware-policy-for-embodied-manipulation)  
+   标签：评分：6.0/10、query:ff3dr
+   evidence：将大规模3D先验集成到实时策略中
+12. [Medical Image Spatial Grounding with Semantic Sampling](/202603/22/2603.14579v1-medical-image-spatial-grounding-with-semantic-sampling)  
+   标签：评分：6.0/10、query:partseg
+   evidence：解剖结构的几何定位与语义标注
+13. [AURORA-KITTI: Any-Weather Depth Completion and Denoising in the Wild](/202603/22/2603.14701v1-aurora-kitti-any-weather-depth-completion-and-denoising-in-the-wild)  
+   标签：评分：6.0/10、query:ff3dr
+   evidence：大规模3D场景理解与深度重建
 
 
 <div class="dpr-home-promo-card">
