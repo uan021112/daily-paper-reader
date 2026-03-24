@@ -6,95 +6,106 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-03-23
-- 运行时间：2026-03-23 20:08:08 UTC
+- 最新运行日期：2026-03-24
+- 运行时间：2026-03-24 19:48:50 UTC
 - 运行状态：成功
-- 本次总论文数：25
-- 精读区：12
+- 本次总论文数：28
+- 精读区：15
 - 速读区：13
 
 ### 今日简报（AI）
-今日精选 25 篇前沿成果，深度解析 3D 结构化生成与动态街道感知的满分突破。
-- 详情：[/202603/23/README](/202603/23/README)
+今日聚焦 28 篇视觉前沿，重点攻克了单图人群 3D 重建与动态场景实时建模两大难题。
+满分论文 CrowdGaussian 与 RayMap3R 分别在单图高保真人群还原和动态推理效率上取得突破。
+推荐关注 3D 高斯技术在自动驾驶修复及多模态深度感知中的最新落地进展。
+- 详情：[/202603/24/README](/202603/24/README)
 
 ### 精读区论文标签
-1. [Points-to-3D: Structure-Aware 3D Generation with Point Cloud Priors](/202603/23/2603.18782v2-points-to-3d-structure-aware-3d-generation-with-point-cloud-priors)  
+1. [CrowdGaussian: Reconstructing High-Fidelity 3D Gaussians for Human Crowd from a Single Image](/202603/24/2603.17779v2-crowdgaussian-reconstructing-high-fidelity-3d-gaussians-for-human-crowd-from-a-single-image)  
    标签：评分：10.0/10、query:3dgen
-   evidence：基于扩散模型的几何可控3D资产生成框架
-2. [StreetForward: Perceiving Dynamic Street with Feedforward Causal Attention](/202603/23/2603.19552v1-streetforward-perceiving-dynamic-street-with-feedforward-causal-attention)  
+   evidence：从单张图像输入重建多人3D高斯泼溅表示
+2. [RayMap3R: Inference-Time RayMap for Dynamic 3D Reconstruction](/202603/24/2603.20588v1-raymap3r-inference-time-raymap-for-dynamic-3d-reconstruction)  
    标签：评分：10.0/10、query:ff3dr
-   evidence：动态街道重建的前馈框架
-3. [SegVGGT: Joint 3D Reconstruction and Instance Segmentation from Multi-View Images](/202603/23/2603.19926v1-segvggt-joint-3d-reconstruction-and-instance-segmentation-from-multi-view-images)  
+   evidence：基于RGB图像的流式前馈3D重建
+3. [Two Experts Are Better Than One Generalist: Decoupling Geometry and Appearance for Feed-Forward 3D Gaussian Splatting](/202603/24/2603.21064v1-two-experts-are-better-than-one-generalist-decoupling-geometry-and-appearance-for-feed-forward-3d-gaussian-splatting)  
    标签：评分：10.0/10、query:ff3dr
-   evidence：统一的多视图图像前馈3D重建与实例分割
-4. [FlowScene: Style-Consistent Indoor Scene Generation with Multimodal Graph Rectified Flow](/202603/23/2603.19598v1-flowscene-style-consistent-indoor-scene-generation-with-multimodal-graph-rectified-flow)  
-   标签：评分：9.0/10、query:3dgen
-   evidence：用于场景布局、物体形状和纹理的生成模型
-5. [OrbitNVS: Harnessing Video Diffusion Priors for Novel View Synthesis](/202603/23/2603.19613v1-orbitnvs-harnessing-video-diffusion-priors-for-novel-view-synthesis)  
-   标签：评分：9.0/10、query:3dgen
-   evidence：利用视频扩散先验进行新视角合成与3D物体生成
-6. [UniPR: Unified Object-level Real-to-Sim Perception and Reconstruction from a Single Stereo Pair](/202603/23/2603.19616v1-unipr-unified-object-level-real-to-sim-perception-and-reconstruction-from-a-single-stereo-pair)  
-   标签：评分：9.0/10、query:ff3dr
-   evidence：基于立体图像对的端到端物体级感知与重建
-7. [TSegAgent: Zero-Shot Tooth Segmentation via Geometry-Aware Vision-Language Agents](/202603/23/2603.19684v1-tsegagent-zero-shot-tooth-segmentation-via-geometry-aware-vision-language-agents)  
+   evidence：用于快速3D建模的无位姿前馈3D高斯泼溅
+4. [Text-Image Conditioned 3D Generation](/202603/24/2603.21295v1-text-image-conditioned-3d-generation)  
+   标签：评分：10.0/10、query:3dgen
+   evidence：结合文本和图像模态进行3D资产生成
+5. [F4Splat: Feed-Forward Predictive Densification for Feed-Forward 3D Gaussian Splatting](/202603/24/2603.21304v1-f4splat-feed-forward-predictive-densification-for-feed-forward-3d-gaussian-splatting)  
+   标签：评分：10.0/10、query:ff3dr
+   evidence：用于单次通过重建的前馈3D高斯泼溅
+6. [From Part to Whole: 3D Generative World Model with an Adaptive Structural Hierarchy](/202603/24/2603.21557v1-from-part-to-whole-3d-generative-world-model-with-an-adaptive-structural-hierarchy)  
+   标签：评分：10.0/10、query:3dgen
+   evidence：具有自适应结构层次的3D生成世界模型
+7. [Teaching an Agent to Sketch One Part at a Time](/202603/24/2603.19500v1-teaching-an-agent-to-sketch-one-part-at-a-time)  
    标签：评分：9.0/10、query:partseg
-   evidence：3D扫描中的零样本牙齿分割
-8. [WorldAgents: Can Foundation Image Models be Agents for 3D World Models?](/202603/23/2603.19708v1-worldagents-can-foundation-image-models-be-agents-for-3d-world-models)  
+   evidence：具有部件级标注的数据集和草图自动分割流水线
+8. [2K Retrofit: Entropy-Guided Efficient Sparse Refinement for High-Resolution 3D Geometry Prediction](/202603/24/2603.19964v2-2k-retrofit-entropy-guided-efficient-sparse-refinement-for-high-resolution-3d-geometry-prediction)  
+   标签：评分：9.0/10、query:ff3dr
+   evidence：高效高分辨率3D几何预测
+9. [STAC: Plug-and-Play Spatio-Temporal Aware Cache Compression for Streaming 3D Reconstruction](/202603/24/2603.20284v1-stac-plug-and-play-spatio-temporal-aware-cache-compression-for-streaming-3d-reconstruction)  
+   标签：评分：9.0/10、query:ff3dr
+   evidence：流式3D重建的高效内存使用
+10. [Benchmarking Efficient & Effective Camera Pose Estimation Strategies for Novel View Synthesis](/202603/24/2603.20428v1-benchmarking-efficient--effective-camera-pose-estimation-strategies-for-novel-view-synthesis)  
+   标签：评分：9.0/10、query:ff3dr
+   evidence：前馈神经网络直接回归相机参数和3D结构
+11. [Training-Free Instance-Aware 3D Scene Reconstruction and Diffusion-Based View Synthesis from Sparse Images](/202603/24/2603.21166v1-training-free-instance-aware-3d-scene-reconstruction-and-diffusion-based-view-synthesis-from-sparse-images)  
+   标签：评分：9.0/10、query:ff3dr
+   evidence：从稀疏图像进行无需训练的 3D 场景重建
+12. [PAS3R: Pose-Adaptive Streaming 3D Reconstruction for Long Video Sequences](/202603/24/2603.21436v1-pas3r-pose-adaptive-streaming-3d-reconstruction-for-long-video-sequences)  
+   标签：评分：9.0/10、query:ff3dr
+   evidence：最先进的视频流式3D重建
+13. [4DGS360: 360° Gaussian Reconstruction of Dynamic Objects from a Single Video](/202603/24/2603.21618v1-4dgs360-360-gaussian-reconstruction-of-dynamic-objects-from-a-single-video)  
    标签：评分：9.0/10、query:3dgen
-   evidence：使用图像模型进行3D世界合成的代理框架
-9. [ReLi3D: Relightable Multi-view 3D Reconstruction with Disentangled Illumination](/202603/23/2603.19753v1-reli3d-relightable-multi-view-3d-reconstruction-with-disentangled-illumination)  
-   标签：评分：9.0/10、query:ff3dr
-   evidence：一秒内完成3D重建的统一端到端流水线
-10. [Uncertainty-aware Prototype Learning with Variational Inference for Few-shot Point Cloud Segmentation](/202603/23/2603.19757v1-uncertainty-aware-prototype-learning-with-variational-inference-for-few-shot-point-cloud-segmentation)  
+   evidence：从单段视频中进行360度动态物体重建
+14. [GeoFusion-CAD: Structure-Aware Diffusion with Geometric State Space for Parametric 3D Design](/202603/24/2603.21978v1-geofusion-cad-structure-aware-diffusion-with-geometric-state-space-for-parametric-3d-design)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：用于参数化3D CAD设计生成的端到端扩散框架
+15. [FreeArtGS: Articulated Gaussian Splatting Under Free-moving Scenario](/202603/24/2603.22102v1-freeartgs-articulated-gaussian-splatting-under-free-moving-scenario)  
    标签：评分：9.0/10、query:partseg
-   evidence：点云的少样本3D语义分割
-11. [Learning Hierarchical Orthogonal Prototypes for Generalized Few-Shot 3D Point Cloud Segmentation](/202603/23/2603.19788v1-learning-hierarchical-orthogonal-prototypes-for-generalized-few-shot-3d-point-cloud-segmentation)  
-   标签：评分：9.0/10、query:partseg
-   evidence：用于少样本3D点云分割的分层原型
-12. [LagerNVS: Latent Geometry for Fully Neural Real-time Novel View Synthesis](/202603/23/2603.20176v1-lagernvs-latent-geometry-for-fully-neural-real-time-novel-view-synthesis)  
-   标签：评分：9.0/10、query:ff3dr
-   evidence：具有3D归纳偏置的确定性前馈新视角合成
+   evidence：结合自由移动部件分割与关节估计用于关节物体
 
 ### 速读区论文标签
-1. [Joint Optimization of Storage and Loading for High-Performance 3D Point Cloud Data Processing](/202603/23/2603.16945v1-joint-optimization-of-storage-and-loading-for-high-performance-3d-point-cloud-data-processing)  
+1. [DriveFix: Spatio-Temporally Coherent Driving Scene Restoration](/202603/24/2603.16306v1-drivefix-spatio-temporally-coherent-driving-scene-restoration)  
+   标签：评分：8.0/10、query:3dgen
+   evidence：利用扩散先验进行4D场景重建和新视角合成
+2. [Iris: Bringing Real-World Priors into Diffusion Model for Monocular Depth Estimation](/202603/24/2603.16340v1-iris-bringing-real-world-priors-into-diffusion-model-for-monocular-depth-estimation)  
    标签：评分：8.0/10、query:ff3dr
-   evidence：大规模3D点云数据的高效处理
-2. [MosaicMem: Hybrid Spatial Memory for Controllable Video World Models](/202603/23/2603.17117v1-mosaicmem-hybrid-spatial-memory-for-controllable-video-world-models)  
+   evidence：结合扩散先验的前馈单目深度估计
+3. [Loc3R-VLM: Language-based Localization and 3D Reasoning with Vision-Language Models](/202603/24/2603.18002v1-loc3r-vlm-language-based-localization-and-3d-reasoning-with-vision-language-models)  
    标签：评分：8.0/10、query:3dgen
-   evidence：将补丁提升至3D的混合空间记忆用于视频模型
-3. [OnlineHMR: Video-based Online World-Grounded Human Mesh Recovery](/202603/23/2603.17355v1-onlinehmr-video-based-online-world-grounded-human-mesh-recovery)  
+   evidence：从单目视频输入进行全局布局重建
+4. [Sparse3DTrack: Monocular 3D Object Tracking Using Sparse Supervision](/202603/24/2603.18298v1-sparse3dtrack-monocular-3d-object-tracking-using-sparse-supervision)  
    标签：评分：8.0/10、query:3dgen
-   evidence：以在线方式从单目视频中重建3D人体
-4. [Edit-As-Act: Goal-Regressive Planning for Open-Vocabulary 3D Indoor Scene Editing](/202603/23/2603.17583v1-edit-as-act-goal-regressive-planning-for-open-vocabulary-3d-indoor-scene-editing)  
-   标签：评分：8.0/10、query:3dgen
-   evidence：开词汇3D室内场景编辑和生成任务
-5. [Fast and Generalizable NeRF Architecture Selection for Satellite Scene Reconstruction](/202603/23/2603.18306v1-fast-and-generalizable-nerf-architecture-selection-for-satellite-scene-reconstruction)  
-   标签：评分：8.0/10、query:ff3dr
-   evidence：针对大规模卫星场景重建的高效NeRF架构选择
-6. [Fractal Autoregressive Depth Estimation with Continuous Token Diffusion](/202603/23/2603.14702v1-fractal-autoregressive-depth-estimation-with-continuous-token-diffusion)  
-   标签：评分：7.0/10、query:ff3dr
-   evidence：使用前馈自回归扩散实现从像素到深度的直接映射
-7. [Reference-Free Omnidirectional Stereo Matching via Multi-View Consistency Maximization](/202603/23/2603.15019v1-reference-free-omnidirectional-stereo-matching-via-multi-view-consistency-maximization)  
-   标签：评分：7.0/10、query:ff3dr
-   evidence：多视图立体匹配的全向深度估计
-8. [NanoGS: Training-Free Gaussian Splat Simplification](/202603/23/2603.16103v1-nanogs-training-free-gaussian-splat-simplification)  
+   evidence：从图像序列中进行单目3D几何估计
+5. [Inst4DGS: Instance-Decomposed 4D Gaussian Splatting with Multi-Video Label Permutation Learning](/202603/24/2603.18402v1-inst4dgs-instance-decomposed-4d-gaussian-splatting-with-multi-video-label-permutation-learning)  
+   标签：评分：8.0/10、query:partseg
+   evidence：具有身份保持功能的实例分解4D高斯泼溅
+6. [VIGOR: VIdeo Geometry-Oriented Reward for Temporal Generative Alignment](/202603/24/2603.16271v2-vigor-video-geometry-oriented-reward-for-temporal-generative-alignment)  
    标签：评分：7.0/10、query:3dgen
-   evidence：用于高效渲染的3D高斯泼溅简化
-9. [OGScene3D: Incremental Open-Vocabulary 3D Gaussian Scene Graph Mapping for Scene Understanding](/202603/23/2603.16301v2-ogscene3d-incremental-open-vocabulary-3d-gaussian-scene-graph-mapping-for-scene-understanding)  
-   标签：评分：7.0/10、query:3dgen
-   evidence：增量式3D语义映射和场景图构建
-10. [ReMAP-DP: Reprojected Multi-view Aligned PointMaps for Diffusion Policy](/202603/23/2603.14977v1-remap-dp-reprojected-multi-view-aligned-pointmaps-for-diffusion-policy)  
-   标签：评分：6.0/10、query:3dgen
-   evidence：多视图图像的3D空间感知和几何描述符
-11. [ReMAP-DP: Reprojected Multi-view Aligned PointMaps for Diffusion Policy](/202603/23/2603.14977v2-remap-dp-reprojected-multi-view-aligned-pointmaps-for-diffusion-policy)  
-   标签：评分：6.0/10、query:3dgen
-   evidence：从多视图图像中重建3D空间感知
-12. [RieMind: Geometry-Grounded Spatial Agent for Scene Understanding](/202603/23/2603.15386v1-riemind-geometry-grounded-spatial-agent-for-scene-understanding)  
+   evidence：视频扩散模型中用于多视图一致性的几何奖励模型
+7. [Iris: Bringing Real-World Priors into Diffusion Model for Monocular Depth Estimation](/202603/24/2603.16340v2-iris-bringing-real-world-priors-into-diffusion-model-for-monocular-depth-estimation)  
+   标签：评分：7.0/10、query:ff3dr
+   evidence：整合真实世界先验的前馈单目深度估计
+8. [SOMA: Unifying Parametric Human Body Models](/202603/24/2603.16858v1-soma-unifying-parametric-human-body-models)  
+   标签：评分：7.0/10、query:ff3dr
+   evidence：统一参数化人体模型进行重建
+9. [Adaptive Anchor Policies for Efficient 4D Gaussian Streaming](/202603/24/2603.17227v1-adaptive-anchor-policies-for-efficient-4d-gaussian-streaming)  
+   标签：评分：7.0/10、query:ff3dr
+   evidence：用于动态场景重建的高效4D高斯流式传输
+10. [Thermal Image Refinement with Depth Estimation using Recurrent Networks for Monocular ORB-SLAM3](/202603/24/2603.14998v1-thermal-image-refinement-with-depth-estimation-using-recurrent-networks-for-monocular-orb-slam3)  
    标签：评分：6.0/10、query:ff3dr
-   evidence：通过感知模块构建3D场景图
-13. [Pointing-Based Object Recognition](/202603/23/2603.15403v1-pointing-based-object-recognition)  
+   evidence：使用轻量级监督网络进行实时深度估计
+11. [Riemannian Motion Generation: A Unified Framework for Human Motion Representation and Generation via Riemannian Flow Matching](/202603/24/2603.15016v1-riemannian-motion-generation-a-unified-framework-for-human-motion-representation-and-generation-via-riemannian-flow-matching)  
    标签：评分：6.0/10、query:3dgen
-   evidence：从单张图像重建3D空间信息
+   evidence：黎曼流形上的生成式人体动作建模
+12. [Automated Counting of Stacked Objects in Industrial Inspection](/202603/24/2603.15470v1-automated-counting-of-stacked-objects-in-industrial-inspection)  
+   标签：评分：6.0/10、query:3dgen
+   evidence：估计堆叠物体的3D几何形状以进行计数
+13. [GATS: Gaussian Aware Temporal Scaling Transformer for Invariant 4D Spatio-Temporal Point Cloud Representation](/202603/24/2603.16154v1-gats-gaussian-aware-temporal-scaling-transformer-for-invariant-4d-spatio-temporal-point-cloud-representation)  
+   标签：评分：6.0/10、query:partseg
+   evidence：时空点云表示与骨干网络
 
 
 <div class="dpr-home-promo-card">
