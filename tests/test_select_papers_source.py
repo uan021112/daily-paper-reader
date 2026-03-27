@@ -163,6 +163,37 @@ class SelectPapersSourceTagTest(unittest.TestCase):
         self.assertEqual(payload["tag_states"]["GENE"]["updated_date"], "20260328")
         self.assertEqual(payload["tag_states"]["GENE"]["items"][0]["id"], "gene-1")
 
+    def test_collect_seen_ids_isolated_by_active_tag(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = pathlib.Path(tmpdir)
+            recommend_dir = root / "20260327" / "recommend"
+            recommend_dir.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "deep_dive": [
+                    {
+                        "id": "paper-ahd",
+                        "matched_query_tag": "query:AHD",
+                    },
+                    {
+                        "id": "paper-gene",
+                        "matched_query_tag": "query:GENE",
+                    },
+                ],
+                "quick_skim": [],
+            }
+            (recommend_dir / "arxiv_papers_20260327.standard.json").write_text(
+                json.dumps(payload, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            seen_gene = self.mod.collect_seen_ids(str(root), "20260328", active_tags=["GENE"])
+            seen_ahd = self.mod.collect_seen_ids(str(root), "20260328", active_tags=["AHD"])
+            seen_all = self.mod.collect_seen_ids(str(root), "20260328")
+
+        self.assertEqual(seen_gene, {"paper-gene"})
+        self.assertEqual(seen_ahd, {"paper-ahd"})
+        self.assertEqual(seen_all, {"paper-ahd", "paper-gene"})
+
 
 class SelectPapersDeepPriorityModeTest(unittest.TestCase):
     @classmethod

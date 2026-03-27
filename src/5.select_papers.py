@@ -112,33 +112,6 @@ def list_date_dirs(archive_root: str) -> List[str]:
     return sorted(result)
 
 
-def collect_seen_ids(archive_root: str, today_str: str) -> set:
-    seen = set()
-    for day in list_date_dirs(archive_root):
-        if day == today_str:
-            continue
-        rec_dir = os.path.join(archive_root, day, "recommend")
-        if not os.path.isdir(rec_dir):
-            continue
-        for name in os.listdir(rec_dir):
-            if not name.endswith(".json"):
-                continue
-            # 兼容单日与区间 token 的文件名前缀
-            if not name.startswith(f"arxiv_papers_{day}."):
-                continue
-            rec_path = os.path.join(rec_dir, name)
-            try:
-                payload = load_json(rec_path)
-            except Exception:
-                continue
-            for key in ("deep_dive", "quick_skim"):
-                for item in payload.get(key) or []:
-                    pid = str(item.get("id") or item.get("paper_id") or "").strip()
-                    if pid:
-                        seen.add(pid)
-    return seen
-
-
 def parse_payload_date(payload: Dict[str, Any]) -> date | None:
     date_str = str(payload.get("updated_date") or "").strip()
     if date_str:
@@ -372,6 +345,53 @@ def resolve_carryover_tags(item: Dict[str, Any], fallback_tags: List[str] | None
         seen.add(tag)
         cleaned.append(tag)
     return cleaned or [CARRYOVER_UNTAGGED]
+
+
+def collect_seen_ids(
+    archive_root: str,
+    today_str: str,
+    active_tags: List[str] | None = None,
+) -> set:
+    active_tag_keys = {
+        normalize_carryover_tag(tag).lower()
+        for tag in (active_tags or [])
+        if normalize_carryover_tag(tag)
+    }
+
+    seen = set()
+    for day in list_date_dirs(archive_root):
+        if day == today_str:
+            continue
+        rec_dir = os.path.join(archive_root, day, "recommend")
+        if not os.path.isdir(rec_dir):
+            continue
+        for name in os.listdir(rec_dir):
+            if not name.endswith(".json"):
+                continue
+            if not name.startswith(f"arxiv_papers_{day}."):
+                continue
+            rec_path = os.path.join(rec_dir, name)
+            try:
+                payload = load_json(rec_path)
+            except Exception:
+                continue
+            for key in ("deep_dive", "quick_skim"):
+                for item in payload.get(key) or []:
+                    if not isinstance(item, dict):
+                        continue
+                    pid = str(item.get("id") or item.get("paper_id") or "").strip()
+                    if not pid:
+                        continue
+                    if active_tag_keys:
+                        item_tag_keys = {
+                            normalize_carryover_tag(tag).lower()
+                            for tag in resolve_carryover_tags(item)
+                            if normalize_carryover_tag(tag)
+                        }
+                        if not item_tag_keys.intersection(active_tag_keys):
+                            continue
+                    seen.add(pid)
+    return seen
 
 
 def parse_score(value: Any) -> float:
@@ -1030,7 +1050,7 @@ def main() -> None:
         if ignore_seen_ids:
             log("[INFO] skims/backfill 模式：已关闭历史 seen_ids 过滤（输出数量更完整）。")
     else:
-        seen_ids = collect_seen_ids(archive_root, TODAY_STR)
+        seen_ids = collect_seen_ids(archive_root, TODAY_STR, active_tags=active_carryover_tags)
     log_substep("5.3", "加载 carryover 并构建候选集", "START")
     try:
         carryover_items, _delta = load_recent_carryover(
