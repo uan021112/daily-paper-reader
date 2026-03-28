@@ -6,88 +6,83 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-03-27
-- 运行时间：2026-03-27 19:54:20 UTC
+- 最新运行日期：2026-03-28
+- 运行时间：2026-03-28 19:22:51 UTC
 - 运行状态：成功
-- 本次总论文数：22
-- 精读区：9
+- 本次总论文数：21
+- 精读区：8
 - 速读区：13
 
 ### 今日简报（AI）
-今日聚焦动态场景重建，SLARM 与 ViewSplat 两项满分研究引领 3D 视觉新突破。
-重点推荐流式语言对齐重建与前馈式动态高斯泼溅技术，实现了高保真度与实时性的结合。
-建议深入探索 3DGS 在复杂表面重建及人体动作捕捉中的落地潜力。
-- 详情：[/202603/27/README](/202603/27/README)
+今日精选 21 篇论文，重点突破 360° 全景 3D 重建与复杂医疗场景
+- 详情：[/202603/28/README](/202603/28/README)
 
 ### 精读区论文标签
-1. [SLARM: Streaming and Language-Aligned Reconstruction Model for Dynamic Scenes](/202603/27/2603.22893v3-slarm-streaming-and-language-aligned-reconstruction-model-for-dynamic-scenes)  
-   标签：评分：10.0/10、query:ff3dr
-   evidence：用于动态场景重建的前馈模型
-2. [ViewSplat: View-Adaptive Dynamic Gaussian Splatting for Feed-Forward Synthesis](/202603/27/2603.25265v1-viewsplat-view-adaptive-dynamic-gaussian-splatting-for-feed-forward-synthesis)  
-   标签：评分：10.0/10、query:ff3dr
-   evidence：用于新视角合成的前馈3D高斯泼溅
-3. [Less Gaussians, Texture More: 4K Feed-Forward Textured Splatting](/202603/27/2603.25745v1-less-gaussians-texture-more-4k-feed-forward-textured-splatting)  
-   标签：评分：10.0/10、query:ff3dr
-   evidence：高效大规模 4K 前馈 3D 高斯泼溅
-4. [HGGT: Robust and Flexible 3D Hand Mesh Reconstruction from Uncalibrated Images](/202603/27/2603.23997v2-hggt-robust-and-flexible-3d-hand-mesh-reconstruction-from-uncalibrated-images)  
-   标签：评分：9.0/10、query:3dgen
-   evidence：从非标定图像进行3D手部网格重建
-5. [TopoMesh: High-Fidelity Mesh Autoencoding via Topological Unification](/202603/27/2603.24278v2-topomesh-high-fidelity-mesh-autoencoding-via-topological-unification)  
-   标签：评分：9.0/10、query:3dgen
-   evidence：用于高保真3D生成和网格重建的VAE扩散流水线
-6. [KitchenTwin: Semantically and Geometrically Grounded 3D Kitchen Digital Twins](/202603/27/2603.24684v1-kitchentwin-semantically-and-geometrically-grounded-3d-kitchen-digital-twins)  
+1. [FullCircle: Effortless 3D Reconstruction from Casual 360$^\circ$ Captures](/202603/28/2603.22572v1-fullcircle-effortless-3d-reconstruction-from-casual-360circ-captures)  
    标签：评分：9.0/10、query:ff3dr
-   evidence：基于Transformer的单目视频前馈重建
-7. [GaussFusion: Improving 3D Reconstruction in the Wild with A Geometry-Informed Video Generator](/202603/27/2603.25053v1-gaussfusion-improving-3d-reconstruction-in-the-wild-with-a-geometry-informed-video-generator)  
-   标签：评分：9.0/10、query:ff3dr
-   evidence：改进优化和前馈方法的3D高斯泼溅重建
-8. [AirSplat: Alignment and Rating for Robust Feed-Forward 3D Gaussian Splatting](/202603/27/2603.25129v1-airsplat-alignment-and-rating-for-robust-feed-forward-3d-gaussian-splatting)  
-   标签：评分：9.0/10、query:ff3dr
-   evidence：鲁棒的前馈3D高斯泼溅框架
-9. [VolDiT: Controllable Volumetric Medical Image Synthesis with Diffusion Transformers](/202603/27/2603.25181v1-voldit-controllable-volumetric-medical-image-synthesis-with-diffusion-transformers)  
+   evidence：从原始360度相机捕获中进行3D场景重建
+2. [Pose-Free Omnidirectional Gaussian Splatting for 360-Degree Videos with Consistent Depth Priors](/202603/28/2603.23324v2-pose-free-omnidirectional-gaussian-splatting-for-360-degree-videos-with-consistent-depth-priors)  
    标签：评分：9.0/10、query:3dgen
-   evidence：用于体积医学图像合成的3D扩散Transformer
+   evidence：从无位姿视频重建3D高斯点云
+3. [LightSplat: Fast and Memory-Efficient Open-Vocabulary 3D Scene Understanding in Five Seconds](/202603/28/2603.24146v1-lightsplat-fast-and-memory-efficient-open-vocabulary-3d-scene-understanding-in-five-seconds)  
+   标签：评分：9.0/10、query:partseg
+   evidence：开放词汇 3D 场景理解与物体分割
+4. [Few TensoRF: Enhance the Few-shot on Tensorial Radiance Fields](/202603/28/2603.25008v1-few-tensorf-enhance-the-few-shot-on-tensorial-radiance-fields)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：使用张量辐射场从稀疏视图进行3D重建
+5. [MoRGS: Efficient Per-Gaussian Motion Reasoning for Streamable Dynamic 3D Scenes](/202603/28/2603.25042v1-morgs-efficient-per-gaussian-motion-reasoning-for-streamable-dynamic-3d-scenes)  
+   标签：评分：9.0/10、query:ff3dr
+   evidence：使用高斯泼溅进行动态 3D 场景的在线重建
+6. [Towards Foundation Models for 3D Scene Understanding: Instance-Aware Self-Supervised Learning for Point Clouds](/202603/28/2603.25165v1-towards-foundation-models-for-3d-scene-understanding-instance-aware-self-supervised-learning-for-point-clouds)  
+   标签：评分：9.0/10、query:partseg
+   evidence：点云的实例感知自监督学习
+7. [Fast and Robust Deformable 3D Gaussian Splatting](/202603/28/2603.20857v1-fast-and-robust-deformable-3d-gaussian-splatting)  
+   标签：评分：8.0/10、query:3dgen
+   evidence：用于动态场景的高效可变形3D高斯泼溅
+8. [GaussianSSC: Triplane-Guided Directional Gaussian Fields for 3D Semantic Completion](/202603/28/2603.21487v1-gaussianssc-triplane-guided-directional-gaussian-fields-for-3d-semantic-completion)  
+   标签：评分：8.0/10、query:3dgen
+   evidence：单目图像的 3D 语义场景补全
 
 ### 速读区论文标签
-1. [Scaling Sim-to-Real Reinforcement Learning for Robot VLAs with Generative 3D Worlds](/202603/27/2603.18532v1-scaling-sim-to-real-reinforcement-learning-for-robot-vlas-with-generative-3d-worlds)  
+1. [LoD-Loc v3: Generalized Aerial Localization in Dense Cities using Instance Silhouette Alignment](/202603/28/2603.19609v2-lod-loc-v3-generalized-aerial-localization-in-dense-cities-using-instance-silhouette-alignment)  
+   标签：评分：8.0/10、query:partseg
+   evidence：最大的航空影像实例分割数据集
+2. [PanORama: Multiview Consistent Panoptic Segmentation in Operating Rooms](/202603/28/2603.19920v1-panorama-multiview-consistent-panoptic-segmentation-in-operating-rooms)  
+   标签：评分：8.0/10、query:partseg
+   evidence：单次前向传播中的多视图一致全景分割
+3. [Hierarchical Text-Guided Brain Tumor Segmentation via Sub-Region-Aware Prompts](/202603/28/2603.21083v1-hierarchical-text-guided-brain-tumor-segmentation-via-sub-region-aware-prompts)  
+   标签：评分：8.0/10、query:partseg
+   evidence：肿瘤子区域的分层分割
+4. [SARe: Structure-Aware Large-Scale 3D Fragment Reassembly](/202603/28/2603.21611v1-sare-structure-aware-large-scale-3d-fragment-reassembly)  
    标签：评分：8.0/10、query:3dgen
-   evidence：用于扩展机器人训练的生成式3D世界
-2. [3D Gaussian Splatting with Self-Constrained Priors for High Fidelity Surface Reconstruction](/202603/27/2603.19682v2-3d-gaussian-splatting-with-self-constrained-priors-for-high-fidelity-surface-reconstruction)  
+   evidence：3D碎片重组的生成式框架
+5. [RefracGS: Novel View Synthesis Through Refractive Water Surfaces with 3D Gaussian Ray Tracing](/202603/28/2603.21695v1-refracgs-novel-view-synthesis-through-refractive-water-surfaces-with-3d-gaussian-ray-tracing)  
    标签：评分：8.0/10、query:3dgen
-   evidence：使用3D高斯泼溅进行高保真表面重建
-3. [RAM: Recover Any 3D Human Motion in-the-Wild](/202603/27/2603.19929v1-ram-recover-any-3d-human-motion-in-the-wild)  
-   标签：评分：8.0/10、query:3dgen
-   evidence：从自然场景视频中重建3D人体运动
-4. [High-fidelity Multi-view Normal Integration with Scale-encoded Neural Surface Representation](/202603/27/2603.20337v1-high-fidelity-multi-view-normal-integration-with-scale-encoded-neural-surface-representation)  
-   标签：评分：8.0/10、query:3dgen
-   evidence：高保真多视角3D表面重建与神经表示
-5. [PiLoT: Neural Pixel-to-3D Registration for UAV-based Ego and Target Geo-localization](/202603/27/2603.20778v1-pilot-neural-pixel-to-3d-registration-for-uav-based-ego-and-target-geo-localization)  
-   标签：评分：8.0/10、query:ff3dr
-   evidence：将实时视频直接配准到地理参考3D地图
-6. [EdgeCrafter: Compact ViTs for Edge Dense Prediction via Task-Specialized Distillation](/202603/27/2603.18739v1-edgecrafter-compact-vits-for-edge-dense-prediction-via-task-specialized-distillation)  
+   evidence：利用3D高斯泼溅技术实现折射表面的新视角合成
+6. [SeeClear: Reliable Transparent Object Depth Estimation via Generative Opacification](/202603/28/2603.19547v1-seeclear-reliable-transparent-object-depth-estimation-via-generative-opacification)  
+   标签：评分：7.0/10、query:3dgen
+   evidence：用于透明物体3D重建的单目深度估计
+7. [Fourier Splatting: Generalized Fourier encoded primitives for scalable radiance fields](/202603/28/2603.19834v1-fourier-splatting-generalized-fourier-encoded-primitives-for-scalable-radiance-fields)  
+   标签：评分：7.0/10、query:3dgen
+   evidence：使用傅里叶编码原语的可扩展辐射场
+8. [Hyper-Connections for Adaptive Multi-Modal MRI Brain Tumor Segmentation](/202603/28/2603.19844v1-hyper-connections-for-adaptive-multi-modal-mri-brain-tumor-segmentation)  
    标签：评分：7.0/10、query:partseg
-   evidence：用于边缘端实例分割的紧凑型ViT框架
-7. [VGGT-360: Geometry-Consistent Zero-Shot Panoramic Depth Estimation](/202603/27/2603.18943v1-vggt-360-geometry-consistent-zero-shot-panoramic-depth-estimation)  
-   标签：评分：7.0/10、query:3dgen
-   evidence：为全景深度估计重建3D模型
-8. [Generalized Hand-Object Pose Estimation with Occlusion Awareness](/202603/27/2603.19013v2-generalized-hand-object-pose-estimation-with-occlusion-awareness)  
-   标签：评分：7.0/10、query:3dgen
-   evidence：从单张RGB图像进行3D手物姿态估计
-9. [Matryoshka Gaussian Splatting](/202603/27/2603.19234v1-matryoshka-gaussian-splatting)  
-   标签：评分：7.0/10、query:3dgen
-   evidence：3D高斯泼溅的连续细节层次渲染
-10. [R&D: Balancing Reliability and Diversity in Synthetic Data Augmentation for Semantic Segmentation](/202603/27/2603.18427v1-rd-balancing-reliability-and-diversity-in-synthetic-data-augmentation-for-semantic-segmentation)  
+   evidence：体积多模态脑肿瘤分割
+9. [Hyper-Connections for Adaptive Multi-Modal MRI Brain Tumor Segmentation](/202603/28/2603.19844v2-hyper-connections-for-adaptive-multi-modal-mri-brain-tumor-segmentation)  
+   标签：评分：7.0/10、query:partseg
+   evidence：肿瘤组件和子区域的语义标注
+10. [dinov3.seg: Open-Vocabulary Semantic Segmentation with DINOv3](/202603/28/2603.19531v1-dinov3seg-open-vocabulary-semantic-segmentation-with-dinov3)  
    标签：评分：6.0/10、query:partseg
-   evidence：像素级语义分割的合成数据增强
-11. [Rethinking Vector Field Learning for Generative Segmentation](/202603/27/2603.19218v1-rethinking-vector-field-learning-for-generative-segmentation)  
+   evidence：开放词汇语义分割与密集预测
+11. [Dual-Domain Representation Alignment: Bridging 2D and 3D Vision via Geometry-Aware Architecture Search](/202603/28/2603.19563v1-dual-domain-representation-alignment-bridging-2d-and-3d-vision-via-geometry-aware-architecture-search)  
+   标签：评分：6.0/10、query:ff3dr
+   evidence：面向2D和3D视觉效率的几何感知架构搜索
+12. [MagicSeg: Open-World Segmentation Pretraining via Counterfactural Diffusion-Based Auto-Generation](/202603/28/2603.19575v1-magicseg-open-world-segmentation-pretraining-via-counterfactural-diffusion-based-auto-generation)  
    标签：评分：6.0/10、query:partseg
-   evidence：使用流匹配和向量场学习的生成式分割
-12. [IUP-Pose: Decoupled Iterative Uncertainty Propagation for Real-time Relative Pose Regression via Implicit Dense Alignment v1](/202603/27/2603.19625v1-iup-pose-decoupled-iterative-uncertainty-propagation-for-real-time-relative-pose-regression-via-implicit-dense-alignment-v1)  
-   标签：评分：6.0/10、query:ff3dr
-   evidence：用于3D重建的前馈神经网络
-13. [ReManNet: A Riemannian Manifold Network for Monocular 3D Lane Detection](/202603/27/2603.19776v1-remannet-a-riemannian-manifold-network-for-monocular-3d-lane-detection)  
-   标签：评分：6.0/10、query:ff3dr
-   evidence：单目3D车道线检测，将像素映射到3D几何结构
+   evidence：自动生成语义分割数据集
+13. [PCSTracker: Long-Term Scene Flow Estimation for Point Cloud Sequences](/202603/28/2603.19762v1-pcstracker-long-term-scene-flow-estimation-for-point-cloud-sequences)  
+   标签：评分：6.0/10、query:partseg
+   evidence：点云序列中一致的场景流估计
 
 
 <div class="dpr-home-promo-card">
