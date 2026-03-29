@@ -6,83 +6,85 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-03-28
-- 运行时间：2026-03-28 19:22:51 UTC
+- 最新运行日期：2026-03-29
+- 运行时间：2026-03-29 19:29:30 UTC
 - 运行状态：成功
 - 本次总论文数：21
 - 精读区：8
 - 速读区：13
 
 ### 今日简报（AI）
-今日精选 21 篇论文，重点突破 360° 全景 3D 重建与复杂医疗场景
-- 详情：[/202603/28/README](/202603/28/README)
+今日精选 21 篇前沿成果，重点突破了从第一视角动态视频还原静态场景及半透明物体高精度建模的技术瓶颈。
+最值得关注 9.0 分的场景重建方案，以及利用多模态大模型（MLLM）驱动的 3D 开放词汇检测新范式。
+建议优先研读高分重建论文，并探索 DINOv3 等 2D 视觉先验在 3D 神经分割中的跨维度迁移潜力。
+- 详情：[/202603/29/README](/202603/29/README)
 
 ### 精读区论文标签
-1. [FullCircle: Effortless 3D Reconstruction from Casual 360$^\circ$ Captures](/202603/28/2603.22572v1-fullcircle-effortless-3d-reconstruction-from-casual-360circ-captures)  
-   标签：评分：9.0/10、query:ff3dr
-   evidence：从原始360度相机捕获中进行3D场景重建
-2. [Pose-Free Omnidirectional Gaussian Splatting for 360-Degree Videos with Consistent Depth Priors](/202603/28/2603.23324v2-pose-free-omnidirectional-gaussian-splatting-for-360-degree-videos-with-consistent-depth-priors)  
+1. [Static Scene Reconstruction from Dynamic Egocentric Videos](/202603/29/2603.22450v1-static-scene-reconstruction-from-dynamic-egocentric-videos)  
    标签：评分：9.0/10、query:3dgen
-   evidence：从无位姿视频重建3D高斯点云
-3. [LightSplat: Fast and Memory-Efficient Open-Vocabulary 3D Scene Understanding in Five Seconds](/202603/28/2603.24146v1-lightsplat-fast-and-memory-efficient-open-vocabulary-3d-scene-understanding-in-five-seconds)  
-   标签：评分：9.0/10、query:partseg
-   evidence：开放词汇 3D 场景理解与物体分割
-4. [Few TensoRF: Enhance the Few-shot on Tensorial Radiance Fields](/202603/28/2603.25008v1-few-tensorf-enhance-the-few-shot-on-tensorial-radiance-fields)  
-   标签：评分：9.0/10、query:3dgen
-   evidence：使用张量辐射场从稀疏视图进行3D重建
-5. [MoRGS: Efficient Per-Gaussian Motion Reasoning for Streamable Dynamic 3D Scenes](/202603/28/2603.25042v1-morgs-efficient-per-gaussian-motion-reasoning-for-streamable-dynamic-3d-scenes)  
-   标签：评分：9.0/10、query:ff3dr
-   evidence：使用高斯泼溅进行动态 3D 场景的在线重建
-6. [Towards Foundation Models for 3D Scene Understanding: Instance-Aware Self-Supervised Learning for Point Clouds](/202603/28/2603.25165v1-towards-foundation-models-for-3d-scene-understanding-instance-aware-self-supervised-learning-for-point-clouds)  
-   标签：评分：9.0/10、query:partseg
-   evidence：点云的实例感知自监督学习
-7. [Fast and Robust Deformable 3D Gaussian Splatting](/202603/28/2603.20857v1-fast-and-robust-deformable-3d-gaussian-splatting)  
+   evidence：从动态第一视角视频中重建静态3D场景
+2. [GTSR: Subsurface Scattering Awared 3D Gaussians for Translucent Surface Reconstruction](/202603/29/2603.22036v1-gtsr-subsurface-scattering-awared-3d-gaussians-for-translucent-surface-reconstruction)  
+   标签：评分：8.0/10、query:ff3dr
+   evidence：基于3DGS的半透明表面重建流水线
+3. [Gau-Occ: Geometry-Completed Gaussians for Multi-Modal 3D Occupancy Prediction](/202603/29/2603.22852v1-gau-occ-geometry-completed-gaussians-for-multi-modal-3d-occupancy-prediction)  
+   标签：评分：8.0/10、query:ff3dr
+   evidence：使用紧凑的3D高斯进行3D语义占据预测，实现高效场景建模
+4. [Cog3DMap: Multi-View Vision-Language Reasoning with 3D Cognitive Maps](/202603/29/2603.23023v1-cog3dmap-multi-view-vision-language-reasoning-with-3d-cognitive-maps)  
    标签：评分：8.0/10、query:3dgen
-   evidence：用于动态场景的高效可变形3D高斯泼溅
-8. [GaussianSSC: Triplane-Guided Directional Gaussian Fields for 3D Semantic Completion](/202603/28/2603.21487v1-gaussianssc-triplane-guided-directional-gaussian-fields-for-3d-semantic-completion)  
+   evidence：从多视图图像中重建显式 3D 记忆以进行空间推理
+5. [GTLR-GS: Geometry-Texture Aware LiDAR-Regularized 3D Gaussian Splatting for Realistic Scene Reconstruction](/202603/29/2603.23192v1-gtlr-gs-geometry-texture-aware-lidar-regularized-3d-gaussian-splatting-for-realistic-scene-reconstruction)  
+   标签：评分：8.0/10、query:ff3dr
+   evidence：激光雷达正则化的3D高斯泼溅用于真实场景重建
+6. [FG-Portrait: 3D Flow Guided Editable Portrait Animation](/202603/29/2603.23381v1-fg-portrait-3d-flow-guided-editable-portrait-animation)  
    标签：评分：8.0/10、query:3dgen
-   evidence：单目图像的 3D 语义场景补全
+   evidence：来自参数化3D头部模型的3D流引导运动对应
+7. [3DCity-LLM: Empowering Multi-modality Large Language Models for 3D City-scale Perception and Understanding](/202603/29/2603.23447v1-3dcity-llm-empowering-multi-modality-large-language-models-for-3d-city-scale-perception-and-understanding)  
+   标签：评分：8.0/10、query:ff3dr
+   evidence：大规模数据集下的3D城市级感知与理解
+8. [How Far Are Vision-Language Models from Constructing the Real World? A Benchmark for Physical Generative Reasoning](/202603/29/2603.24866v1-how-far-are-vision-language-models-from-constructing-the-real-world-a-benchmark-for-physical-generative-reasoning)  
+   标签：评分：8.0/10、query:3dgen
+   evidence：3D布局和形状物理生成推理的基准测试
 
 ### 速读区论文标签
-1. [LoD-Loc v3: Generalized Aerial Localization in Dense Cities using Instance Silhouette Alignment](/202603/28/2603.19609v2-lod-loc-v3-generalized-aerial-localization-in-dense-cities-using-instance-silhouette-alignment)  
+1. [Boundary-Aware Instance Segmentation in Microscopy Imaging](/202603/29/2603.21206v1-boundary-aware-instance-segmentation-in-microscopy-imaging)  
    标签：评分：8.0/10、query:partseg
-   evidence：最大的航空影像实例分割数据集
-2. [PanORama: Multiview Consistent Panoptic Segmentation in Operating Rooms](/202603/28/2603.19920v1-panorama-multiview-consistent-panoptic-segmentation-in-operating-rooms)  
+   evidence：使用几何一致性建模的实例分割
+2. [Group3D: MLLM-Driven Semantic Grouping for Open-Vocabulary 3D Object Detection](/202603/29/2603.21944v1-group3d-mllm-driven-semantic-grouping-for-open-vocabulary-3d-object-detection)  
    标签：评分：8.0/10、query:partseg
-   evidence：单次前向传播中的多视图一致全景分割
-3. [Hierarchical Text-Guided Brain Tumor Segmentation via Sub-Region-Aware Prompts](/202603/28/2603.21083v1-hierarchical-text-guided-brain-tumor-segmentation-via-sub-region-aware-prompts)  
+   evidence：用于开放词汇3D物体检测的语义分组
+3. [NeuroSeg Meets DINOv3: Transferring 2D Self-Supervised Visual Priors to 3D Neuron Segmentation via DINOv3 Initialization](/202603/29/2603.23104v1-neuroseg-meets-dinov3-transferring-2d-self-supervised-visual-priors-to-3d-neuron-segmentation-via-dinov3-initialization)  
    标签：评分：8.0/10、query:partseg
-   evidence：肿瘤子区域的分层分割
-4. [SARe: Structure-Aware Large-Scale 3D Fragment Reassembly](/202603/28/2603.21611v1-sare-structure-aware-large-scale-3d-fragment-reassembly)  
+   evidence：将2D先验迁移至3D神经元分割
+4. [Automatic Segmentation of 3D CT scans with SAM2 using a zero-shot approach](/202603/29/2603.23116v1-automatic-segmentation-of-3d-ct-scans-with-sam2-using-a-zero-shot-approach)  
+   标签：评分：8.0/10、query:partseg
+   evidence：使用基础模型对3D CT扫描进行自动分割
+5. [One View Is Enough! Monocular Training for In-the-Wild Novel View Generation](/202603/29/2603.23488v1-one-view-is-enough-monocular-training-for-in-the-wild-novel-view-generation)  
    标签：评分：8.0/10、query:3dgen
-   evidence：3D碎片重组的生成式框架
-5. [RefracGS: Novel View Synthesis Through Refractive Water Surfaces with 3D Gaussian Ray Tracing](/202603/28/2603.21695v1-refracgs-novel-view-synthesis-through-refractive-water-surfaces-with-3d-gaussian-ray-tracing)  
-   标签：评分：8.0/10、query:3dgen
-   evidence：利用3D高斯泼溅技术实现折射表面的新视角合成
-6. [SeeClear: Reliable Transparent Object Depth Estimation via Generative Opacification](/202603/28/2603.19547v1-seeclear-reliable-transparent-object-depth-estimation-via-generative-opacification)  
-   标签：评分：7.0/10、query:3dgen
-   evidence：用于透明物体3D重建的单目深度估计
-7. [Fourier Splatting: Generalized Fourier encoded primitives for scalable radiance fields](/202603/28/2603.19834v1-fourier-splatting-generalized-fourier-encoded-primitives-for-scalable-radiance-fields)  
-   标签：评分：7.0/10、query:3dgen
-   evidence：使用傅里叶编码原语的可扩展辐射场
-8. [Hyper-Connections for Adaptive Multi-Modal MRI Brain Tumor Segmentation](/202603/28/2603.19844v1-hyper-connections-for-adaptive-multi-modal-mri-brain-tumor-segmentation)  
-   标签：评分：7.0/10、query:partseg
-   evidence：体积多模态脑肿瘤分割
-9. [Hyper-Connections for Adaptive Multi-Modal MRI Brain Tumor Segmentation](/202603/28/2603.19844v2-hyper-connections-for-adaptive-multi-modal-mri-brain-tumor-segmentation)  
-   标签：评分：7.0/10、query:partseg
-   evidence：肿瘤组件和子区域的语义标注
-10. [dinov3.seg: Open-Vocabulary Semantic Segmentation with DINOv3](/202603/28/2603.19531v1-dinov3seg-open-vocabulary-semantic-segmentation-with-dinov3)  
+   evidence：单目新视角合成及单图3D提升
+6. [GaussianPile: A Unified Sparse Gaussian Splatting Framework for Slice-based Volumetric Reconstruction](/202603/29/2603.20611v1-gaussianpile-a-unified-sparse-gaussian-splatting-framework-for-slice-based-volumetric-reconstruction)  
+   标签：评分：7.0/10、query:ff3dr
+   evidence：使用3D高斯泼溅进行体积重建的联合优化流水线
+7. [ToFormer: Towards Large-scale Scenario Depth Completion for Lightweight ToF Camera](/202603/29/2603.20669v1-toformer-towards-large-scale-scenario-depth-completion-for-lightweight-tof-camera)  
+   标签：评分：7.0/10、query:ff3dr
+   evidence：大规模场景深度补全与重建
+8. [The Role and Relationship of Initialization and Densification in 3D Gaussian Splatting](/202603/29/2603.20714v1-the-role-and-relationship-of-initialization-and-densification-in-3d-gaussian-splatting)  
+   标签：评分：7.0/10、query:ff3dr
+   evidence：研究3D高斯泼溅重建中的初始化与稠密化
+9. [PiLoT: Neural Pixel-to-3D Registration for UAV-based Ego and Target Geo-localization](/202603/29/2603.20778v2-pilot-neural-pixel-to-3d-registration-for-uav-based-ego-and-target-geo-localization)  
+   标签：评分：7.0/10、query:ff3dr
+   evidence：将实时视频流直接注册到地理参考的3D地图上
+10. [Mamba Learns in Context: Structure-Aware Domain Generalization for Multi-Task Point Cloud Understanding](/202603/29/2603.20739v1-mamba-learns-in-context-structure-aware-domain-generalization-for-multi-task-point-cloud-understanding)  
    标签：评分：6.0/10、query:partseg
-   evidence：开放词汇语义分割与密集预测
-11. [Dual-Domain Representation Alignment: Bridging 2D and 3D Vision via Geometry-Aware Architecture Search](/202603/28/2603.19563v1-dual-domain-representation-alignment-bridging-2d-and-3d-vision-via-geometry-aware-architecture-search)  
+   evidence：多任务点云理解与结构建模
+11. [Geometrically Plausible Object Pose Refinement using Differentiable Simulation](/202603/29/2603.20992v1-geometrically-plausible-object-pose-refinement-using-differentiable-simulation)  
    标签：评分：6.0/10、query:ff3dr
-   evidence：面向2D和3D视觉效率的几何感知架构搜索
-12. [MagicSeg: Open-World Segmentation Pretraining via Counterfactural Diffusion-Based Auto-Generation](/202603/28/2603.19575v1-magicseg-open-world-segmentation-pretraining-via-counterfactural-diffusion-based-auto-generation)  
+   evidence：用于3D空间物体位姿优化的可微渲染与仿真
+12. [DyGeoVLN: Infusing Dynamic Geometry Foundation Model into Vision-Language Navigation](/202603/29/2603.21269v1-dygeovln-infusing-dynamic-geometry-foundation-model-into-vision-language-navigation)  
+   标签：评分：6.0/10、query:3dgen
+   evidence：用于导航中 3D 空间表示的动态几何基础模型
+13. [PEARL: Geometry Aligns Semantics for Training-Free Open-Vocabulary Semantic Segmentation](/202603/29/2603.21528v1-pearl-geometry-aligns-semantics-for-training-free-open-vocabulary-semantic-segmentation)  
    标签：评分：6.0/10、query:partseg
-   evidence：自动生成语义分割数据集
-13. [PCSTracker: Long-Term Scene Flow Estimation for Point Cloud Sequences](/202603/28/2603.19762v1-pcstracker-long-term-scene-flow-estimation-for-point-cloud-sequences)  
-   标签：评分：6.0/10、query:partseg
-   evidence：点云序列中一致的场景流估计
+   evidence：无需训练的开放词汇语义分割
 
 
 <div class="dpr-home-promo-card">
