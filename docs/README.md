@@ -6,86 +6,106 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-03-30
-- 运行时间：2026-03-30 20:50:02 UTC
+- 最新运行日期：2026-03-31
+- 运行时间：2026-03-31 20:09:08 UTC
 - 运行状态：成功
-- 本次总论文数：22
-- 精读区：9
+- 本次总论文数：28
+- 精读区：15
 - 速读区：13
 
 ### 今日简报（AI）
-今日精选 22 篇前沿成果，重点攻克 3D 几何解码与场景实例分割的 Feed-forward 架构
-- 详情：[/202603/30/README](/202603/30/README)
+今日深度复盘 28 篇视觉前沿，聚焦高分辨率几何 Transformer 与自监督三维重建的满分突破。
+HD-VGGT 重新定义了视觉几何精度，而 3D Gaussian Splatting 在无位姿处理与随机光线追踪方向展现出极强潜力。
+建议优先精读两篇 10 分力作，快速掌握从 2D 图像到高精度 3D 场景构建的最新范式。
+- 详情：[/202603/31/README](/202603/31/README)
 
 ### 精读区论文标签
-1. [Fus3D: Decoding Consolidated 3D Geometry from Feed-forward Geometry Transformer Latents](/202603/30/2603.25827v1-fus3d-decoding-consolidated-3d-geometry-from-feed-forward-geometry-transformer-latents)  
+1. [HD-VGGT: High-Resolution Visual Geometry Transformer](/202603/31/2603.27222v1-hd-vggt-high-resolution-visual-geometry-transformer)  
    标签：评分：10.0/10、query:ff3dr
-   evidence：从图像进行稠密SDF回归的前馈方法
-2. [FAST3DIS: Feed-forward Anchored Scene Transformer for 3D Instance Segmentation](/202603/30/2603.25993v1-fast3dis-feed-forward-anchored-scene-transformer-for-3d-instance-segmentation)  
+   evidence：用于高分辨率3D重建的前馈方法
+2. [From None to All: Self-Supervised 3D Reconstruction via Novel View Synthesis](/202603/31/2603.27455v1-from-none-to-all-self-supervised-3d-reconstruction-via-novel-view-synthesis)  
    标签：评分：10.0/10、query:ff3dr
-   evidence：用于场景理解的前馈3D重建模型
-3. [GaussianGPT: Towards Autoregressive 3D Gaussian Scene Generation](/202603/30/2603.26661v1-gaussiangpt-towards-autoregressive-3d-gaussian-scene-generation)  
+   evidence：用于3D重建的自监督前馈框架
+3. [Seen2Scene: Completing Realistic 3D Scenes with Visibility-Guided Flow](/202603/31/2603.28548v1-seen2scene-completing-realistic-3d-scenes-with-visibility-guided-flow)  
    标签：评分：10.0/10、query:3dgen
-   evidence：自回归 3D 高斯场景生成
-4. [DRoPS: Dynamic 3D Reconstruction of Pre-Scanned Objects](/202603/30/2603.24770v1-drops-dynamic-3d-reconstruction-of-pre-scanned-objects)  
+   evidence：使用流匹配进行3D场景补全和生成
+4. [FilterGS: Traversal-Free Parallel Filtering and Adaptive Shrinking for Large-Scale LoD 3D Gaussian Splatting](/202603/31/2603.23891v1-filtergs-traversal-free-parallel-filtering-and-adaptive-shrinking-for-large-scale-lod-3d-gaussian-splatting)  
+   标签：评分：9.0/10、query:ff3dr
+   evidence：具有并行过滤的高效大规模3D高斯泼溅
+5. [GaussFusion: Improving 3D Reconstruction in the Wild with A Geometry-Informed Video Generator](/202603/31/2603.25053v2-gaussfusion-improving-3d-reconstruction-in-the-wild-with-a-geometry-informed-video-generator)  
+   标签：评分：9.0/10、query:ff3dr
+   evidence：改进优化式和前馈式方法的3DGS渲染
+6. [Generative Shape Reconstruction with Geometry-Guided Langevin Dynamics](/202603/31/2603.27016v1-generative-shape-reconstruction-with-geometry-guided-langevin-dynamics)  
    标签：评分：9.0/10、query:3dgen
-   evidence：从普通视频中进行动态3D重建
-5. [ArtHOI: Taming Foundation Models for Monocular 4D Reconstruction of Hand-Articulated-Object Interactions](/202603/30/2603.25791v1-arthoi-taming-foundation-models-for-monocular-4d-reconstruction-of-hand-articulated-object-interactions)  
+   evidence：使用朗之万动力学的3D形状生成模型
+7. [Complet4R: Geometric Complete 4D Reconstruction](/202603/31/2603.27300v1-complet4r-geometric-complete-4d-reconstruction)  
+   标签：评分：9.0/10、query:ff3dr
+   evidence：几何完整4D重建的端到端框架
+8. [MeshTailor: Cutting Seams via Generative Mesh Traversal](/202603/31/2603.27309v1-meshtailor-cutting-seams-via-generative-mesh-traversal)  
    标签：评分：9.0/10、query:3dgen
-   evidence：从单目 RGB 视频重建 4D 人类与关节物体的交互
-6. [GeoGuide: Hierarchical Geometric Guidance for Open-Vocabulary 3D Semantic Segmentation](/202603/30/2603.26260v1-geoguide-hierarchical-geometric-guidance-for-open-vocabulary-3d-semantic-segmentation)  
+   evidence：在3D表面合成接缝的生成式框架
+9. [GIFT: Bootstrapping Image-to-CAD Program Synthesis via Geometric Feedback](/202603/31/2603.27448v1-gift-bootstrapping-image-to-cad-program-synthesis-via-geometric-feedback)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：生成式CAD设计与图像到CAD程序合成
+10. [SPREAD: Spatial-Physical REasoning via geometry Aware Diffusion](/202603/31/2603.27573v1-spread-spatial-physical-reasoning-via-geometry-aware-diffusion)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：基于扩散框架的自动化 3D 场景生成
+11. [Which Reconstruction Model Should a Robot Use? Routing Image-to-3D Models for Cost-Aware Robotic Manipulation](/202603/31/2603.27797v1-which-reconstruction-model-should-a-robot-use-routing-image-to-3d-models-for-cost-aware-robotic-manipulation)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：图像转3D重建模型的路由与评估
+12. [ObjectMorpher: 3D-Aware Image Editing via Deformable 3DGS Models](/202603/31/2603.28152v1-objectmorpher-3d-aware-image-editing-via-deformable-3dgs-models)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：图像转3D生成器与3D感知图像编辑
+13. [INSID3: Training-Free In-Context Segmentation with DINOv3](/202603/31/2603.28480v1-insid3-training-free-in-context-segmentation-with-dinov3)  
    标签：评分：9.0/10、query:partseg
-   evidence：利用分层几何的开放词汇3D语义分割
-7. [CADSmith: Multi-Agent CAD Generation with Programmatic Geometric Validation](/202603/30/2603.26512v1-cadsmith-multi-agent-cad-generation-with-programmatic-geometric-validation)  
+   evidence：使用自监督骨干网络对物体和部件进行上下文分割
+14. [SonoWorld: From One Image to a 3D Audio-Visual Scene](/202603/31/2603.28757v1-sonoworld-from-one-image-to-a-3d-audio-visual-scene)  
    标签：评分：9.0/10、query:3dgen
-   evidence：具有程序化几何验证的文本到CAD生成
-8. [OVI-MAP:Open-Vocabulary Instance-Semantic Mapping](/202603/30/2603.26541v1-ovi-mapopen-vocabulary-instance-semantic-mapping)  
-   标签：评分：9.0/10、query:partseg
-   evidence：开放词汇 3D 实例语义映射
-9. [Drive-Through 3D Vehicle Exterior Reconstruction via Dynamic-Scene SfM and Distortion-Aware Gaussian Splatting](/202603/30/2603.26638v1-drive-through-3d-vehicle-exterior-reconstruction-via-dynamic-scene-sfm-and-distortion-aware-gaussian-splatting)  
+   evidence：从单张图像生成3D视听场景
+15. [PoseDreamer: Scalable and Photorealistic Human Data Generation Pipeline with Diffusion Models](/202603/31/2603.28763v1-posedreamer-scalable-and-photorealistic-human-data-generation-pipeline-with-diffusion-models)  
    标签：评分：9.0/10、query:3dgen
-   evidence：基于图像的3D车辆外观重建
+   evidence：利用扩散模型生成3D人体网格数据集
 
 ### 速读区论文标签
-1. [CataractSAM-2: A Domain-Adapted Model for Anterior Segment Surgery Segmentation and Scalable Ground-Truth Annotation](/202603/30/2603.21566v1-cataractsam-2-a-domain-adapted-model-for-anterior-segment-surgery-segmentation-and-scalable-ground-truth-annotation)  
-   标签：评分：8.0/10、query:partseg
-   evidence：手术分割的可扩展真值标注
-2. [Riverine Land Cover Mapping through Semantic Segmentation of Multispectral Point Clouds](/202603/30/2603.22230v1-riverine-land-cover-mapping-through-semantic-segmentation-of-multispectral-point-clouds)  
-   标签：评分：8.0/10、query:partseg
-   evidence：多光谱点云的语义分割
-3. [GSwap: Realistic Head Swapping with Dynamic Neural Gaussian Field](/202603/30/2603.23168v1-gswap-realistic-head-swapping-with-dynamic-neural-gaussian-field)  
-   标签：评分：8.0/10、query:3dgen
-   evidence：用于换头的动态神经高斯肖像先验
-4. [RealMaster: Lifting Rendered Scenes into Photorealistic Video](/202603/30/2603.23462v1-realmaster-lifting-rendered-scenes-into-photorealistic-video)  
-   标签：评分：8.0/10、query:3dgen
-   evidence：将渲染场景提升为具有3D一致性的真实视频
-5. [Stochastic Ray Tracing for the Reconstruction of 3D Gaussian Splatting](/202603/30/2603.23637v1-stochastic-ray-tracing-for-the-reconstruction-of-3d-gaussian-splatting)  
-   标签：评分：8.0/10、query:3dgen
+1. [Pose-Free Omnidirectional Gaussian Splatting for 360-Degree Videos with Consistent Depth Priors](/202603/31/2603.23324v1-pose-free-omnidirectional-gaussian-splatting-for-360-degree-videos-with-consistent-depth-priors)  
+   标签：评分：8.0/10、query:ff3dr
+   evidence：利用前馈姿态估计从无姿态全景视频中重建3D高斯点云
+2. [Stochastic Ray Tracing for the Reconstruction of 3D Gaussian Splatting](/202603/31/2603.23637v2-stochastic-ray-tracing-for-the-reconstruction-of-3d-gaussian-splatting)  
+   标签：评分：8.0/10、query:ff3dr
    evidence：用于3D高斯泼溅重建的随机光线追踪
-6. [FluidGaussian: Propagating Simulation-Based Uncertainty Toward Functionally-Intelligent 3D Reconstruction](/202603/30/2603.21356v1-fluidgaussian-propagating-simulation-based-uncertainty-toward-functionally-intelligent-3d-reconstruction)  
+3. [Grounding Vision and Language to 3D Masks for Long-Horizon Box Rearrangement](/202603/31/2603.23676v1-grounding-vision-and-language-to-3d-masks-for-long-horizon-box-rearrangement)  
+   标签：评分：8.0/10、query:partseg
+   evidence：将视觉和语言关联到3D掩码
+4. [SLAT-Phys: Fast Material Property Field Prediction from Structured 3D Latents](/202603/31/2603.23973v1-slat-phys-fast-material-property-field-prediction-from-structured-3d-latents)  
+   标签：评分：8.0/10、query:ff3dr
+   evidence：使用神经解码器直接从单张RGB图像预测材质场
+5. [VERIA: Verification-Centric Multimodal Instance Augmentation for Long-Tailed 3D Object Detection](/202603/31/2603.24294v1-veria-verification-centric-multimodal-instance-augmentation-for-long-tailed-3d-object-detection)  
+   标签：评分：8.0/10、query:3dgen
+   evidence：利用基础模型合成同步的RGB-LiDAR实例
+6. [Mitigating Objectness Bias and Region-to-Text Misalignment for Open-Vocabulary Panoptic Segmentation](/202603/31/2603.21386v1-mitigating-objectness-bias-and-region-to-text-misalignment-for-open-vocabulary-panoptic-segmentation)  
+   标签：评分：7.0/10、query:partseg
+   evidence：全景分割框架
+7. [Cross-Instance Gaussian Splatting Registration via Geometry-Aware Feature-Guided Alignment](/202603/31/2603.21936v1-cross-instance-gaussian-splatting-registration-via-geometry-aware-feature-guided-alignment)  
    标签：评分：7.0/10、query:ff3dr
-   evidence：从多视图2D图像进行真实场景的3D重建
-7. [Learning Trajectory-Aware Multimodal Large Language Models for Video Reasoning Segmentation](/202603/30/2603.21488v1-learning-trajectory-aware-multimodal-large-language-models-for-video-reasoning-segmentation)  
+   evidence：通过几何感知特征对齐3D高斯泼溅模型
+8. [Uncertainty-guided Compositional Alignment with Part-to-Whole Semantic Representativeness in Hyperbolic Vision-Language Models](/202603/31/2603.22042v2-uncertainty-guided-compositional-alignment-with-part-to-whole-semantic-representativeness-in-hyperbolic-vision-language-models)  
    标签：评分：7.0/10、query:partseg
-   evidence：使用多模态大模型进行视频推理分割
-8. [Back to Point: Exploring Point-Language Models for Zero-Shot 3D Anomaly Detection](/202603/30/2603.21511v1-back-to-point-exploring-point-language-models-for-zero-shot-3d-anomaly-detection)  
+   evidence：层级化的部分与整体语义关系
+9. [Adapting Point Cloud Analysis via Multimodal Bayesian Distribution Learning](/202603/31/2603.22070v1-adapting-point-cloud-analysis-via-multimodal-bayesian-distribution-learning)  
    标签：评分：7.0/10、query:partseg
-   evidence：用于点云零样本3D异常检测和定位的点语言模型
-9. [Uncertainty-guided Compositional Alignment with Part-to-Whole Semantic Representativeness in Hyperbolic Vision-Language Models](/202603/30/2603.22042v1-uncertainty-guided-compositional-alignment-with-part-to-whole-semantic-representativeness-in-hyperbolic-vision-language-models)  
-   标签：评分：7.0/10、query:partseg
-   evidence：建模部分到整体的语义代表性和层级关系
-10. [A Large-Scale Remote Sensing Dataset and VLM-based Algorithm for Fine-Grained Road Hierarchy Classification](/202603/30/2603.21222v1-a-large-scale-remote-sensing-dataset-and-vlm-based-algorithm-for-fine-grained-road-hierarchy-classification)  
+   evidence：通过多模态学习调整点云分析
+10. [Multi-View Deformable Convolution Meets Visual Mamba for Coronary Artery Segmentation](/202603/31/2603.21829v1-multi-view-deformable-convolution-meets-visual-mamba-for-coronary-artery-segmentation)  
    标签：评分：6.0/10、query:partseg
-   evidence：用于分割和拓扑重建的分层道路数据集和框架
-11. [PGR-Net: Prior-Guided ROI Reasoning Network for Brain Tumor MRI Segmentation](/202603/30/2603.21626v1-pgr-net-prior-guided-roi-reasoning-network-for-brain-tumor-mri-segmentation)  
+   evidence：冠状动脉分割与多分支形态
+11. [SHAPE: Structure-aware Hierarchical Unsupervised Domain Adaptation with Plausibility Evaluation for Medical Image Segmentation](/202603/31/2603.21904v1-shape-structure-aware-hierarchical-unsupervised-domain-adaptation-with-plausibility-evaluation-for-medical-image-segmentation)  
    标签：评分：6.0/10、query:partseg
-   evidence：脑肿瘤MRI分割与感兴趣区域推理
-12. [Camera-Agnostic Pruning of 3D Gaussian Splats via Descriptor-Based Beta Evidence](/202603/30/2603.21933v1-camera-agnostic-pruning-of-3d-gaussian-splats-via-descriptor-based-beta-evidence)  
-   标签：评分：6.0/10、query:ff3dr
-   evidence：相机无关的3D高斯泼溅剪枝，用于高效存储和处理
-13. [SegMaFormer: A Hybrid State-Space and Transformer Model for Efficient Segmentation](/202603/30/2603.22002v1-segmaformer-a-hybrid-state-space-and-transformer-model-for-efficient-segmentation)  
+   evidence：用于分割的结构感知分层无监督领域自适应
+12. [Cross-Instance Gaussian Splatting Registration via Geometry-Aware Feature-Guided Alignment](/202603/31/2603.21936v2-cross-instance-gaussian-splatting-registration-via-geometry-aware-feature-guided-alignment)  
+   标签：评分：6.0/10、query:3dgen
+   evidence：对齐不同实例的3D高斯泼溅模型
+13. [Adapting Point Cloud Analysis via Multimodal Bayesian Distribution Learning](/202603/31/2603.22070v2-adapting-point-cloud-analysis-via-multimodal-bayesian-distribution-learning)  
    标签：评分：6.0/10、query:partseg
-   evidence：使用混合Mamba和Transformer进行高效的3D医学图像分割
+   evidence：用于点云分析的多模态3D视觉语言模型
 
 
 <div class="dpr-home-promo-card">
