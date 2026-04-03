@@ -6,85 +6,94 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-04-02
-- 运行时间：2026-04-02 20:10:28 UTC
+- 最新运行日期：2026-04-03
+- 运行时间：2026-04-03 19:56:48 UTC
 - 运行状态：成功
-- 本次总论文数：21
-- 精读区：8
+- 本次总论文数：24
+- 精读区：11
 - 速读区：13
 
 ### 今日简报（AI）
-今日聚焦 3D 重建与场景扩展，21 篇前沿成果揭示了从几何标注解耦到自由视角生成的最新突破。
-满分论文 Reliev3R 重新定义了前馈重建效率，SceneExpander 则为 3D 场景的无限延展提供了新方案。
-推荐深入探索动态高斯泼溅与语义分割的结合，
-- 详情：[/202604/02/README](/202604/02/README)
+今日深挖 24 篇 3D 视觉前沿，重点攻克三维重建与场景生成的跨模态统一难题。
+满分神作 UniRecGen 实现了重建与生成的架构大一统，SDesc3D 则展示了仅凭短文本即可构建复杂室内布局的惊人潜力。
+推荐优先研读 3D 统一模型架构，把握从“被动重建”向“主动生成”演进的技术红利。
+- 详情：[/202604/03/README](/202604/03/README)
 
 ### 精读区论文标签
-1. [Reliev3R: Relieving Feed-forward Reconstruction from Multi-View Geometric Annotations](/202604/02/2604.00548v1-reliev3r-relieving-feed-forward-reconstruction-from-multi-view-geometric-annotations)  
-   标签：评分：10.0/10、query:ff3dr
-   evidence：基于单目深度的前馈重建模型（FFRMs）弱监督训练
-2. [SceneExpander: Expanding 3D Scenes with Free-Form Inserted Views](/202604/02/2603.27084v1-sceneexpander-expanding-3d-scenes-with-free-form-inserted-views)  
+1. [UniRecGen: Unifying Multi-View 3D Reconstruction and Generation](/202604/03/2604.01479v1-unirecgen-unifying-multi-view-3d-reconstruction-and-generation)  
+   标签：评分：10.0/10、query:3dgen
+   evidence：统一多视图3D重建与生成
+2. [SDesc3D: Towards Layout-Aware 3D Indoor Scene Generation from Short Descriptions](/202604/03/2604.01972v1-sdesc3d-towards-layout-aware-3d-indoor-scene-generation-from-short-descriptions)  
+   标签：评分：10.0/10、query:3dgen
+   evidence：从文本提示生成3D模型
+3. [Omni123: Exploring 3D Native Foundation Models with Limited 3D Data by Unifying Text to 2D and 3D Generation](/202604/03/2604.02289v1-omni123-exploring-3d-native-foundation-models-with-limited-3d-data-by-unifying-text-to-2d-and-3d-generation)  
+   标签：评分：10.0/10、query:3dgen
+   evidence：统一文本到2D和文本到3D生成
+4. ["I Just Need GPT to Refine My Prompts": Rethinking Onboarding and Help-Seeking with Generative 3D Modeling Tools](/202604/03/2603.29118v1-i-just-need-gpt-to-refine-my-prompts-rethinking-onboarding-and-help-seeking-with-generative-3d-modeling-tools)  
    标签：评分：9.0/10、query:3dgen
-   evidence：利用生成模型和插入视图扩展3D场景
-3. [ARGS: Auto-Regressive Gaussian Splatting via Parallel Progressive Next-Scale Prediction](/202604/02/2604.00494v1-args-auto-regressive-gaussian-splatting-via-parallel-progressive-next-scale-prediction)  
+   evidence：基于提示的生成式3D建模工具的用户研究
+5. [ReFlow: Self-correction Motion Learning for Dynamic Scene Reconstruction](/202604/03/2604.01561v1-reflow-self-correction-motion-learning-for-dynamic-scene-reconstruction)  
    标签：评分：9.0/10、query:3dgen
-   evidence：使用高斯泼溅的3D物体生成自回归框架
-4. [ReinDriveGen: Reinforcement Post-Training for Out-of-Distribution Driving Scene Generation](/202604/02/2604.01129v1-reindrivegen-reinforcement-post-training-for-out-of-distribution-driving-scene-generation)  
+   evidence：从原始视频进行单目动态场景重建
+6. [LivingWorld: Interactive 4D World Generation with Environmental Dynamics](/202604/03/2604.01641v1-livingworld-interactive-4d-world-generation-with-environmental-dynamics)  
    标签：评分：9.0/10、query:3dgen
-   evidence：生成式驾驶场景生成与3D点云构建
-5. [TRACE: High-Fidelity 3D Scene Editing via Tangible Reconstruction and Geometry-Aligned Contextual Video Masking](/202604/02/2604.01207v1-trace-high-fidelity-3d-scene-editing-via-tangible-reconstruction-and-geometry-aligned-contextual-video-masking)  
+   evidence：从单张图像生成具有动态效果的 4D 世界
+7. [GardenDesigner: Encoding Aesthetic Principles into Jiangnan Garden Construction via a Chain of Agents](/202604/03/2604.01777v1-gardendesigner-encoding-aesthetic-principles-into-jiangnan-garden-construction-via-a-chain-of-agents)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：3D园林构建的程序化建模与资产创建
+8. [Semantic Segmentation of Textured Non-manifold 3D Meshes using Transformers](/202604/03/2604.01836v1-semantic-segmentation-of-textured-non-manifold-3d-meshes-using-transformers)  
    标签：评分：9.0/10、query:partseg
-   evidence：细粒度部件级操作与组件替换
-6. [SparseCam4D: Spatio-Temporally Consistent 4D Reconstruction from Sparse Cameras](/202604/02/2603.26481v1-sparsecam4d-spatio-temporally-consistent-4d-reconstruction-from-sparse-cameras)  
-   标签：评分：8.0/10、query:3dgen
-   evidence：利用生成式观测进行4D重建
-7. [SGS-Intrinsic: Semantic-Invariant Gaussian Splatting for Sparse-View Indoor Inverse Rendering](/202604/02/2603.27516v1-sgs-intrinsic-semantic-invariant-gaussian-splatting-for-sparse-view-indoor-inverse-rendering)  
-   标签：评分：8.0/10、query:3dgen
-   evidence：用于室内逆向渲染和几何重建的神经渲染
-8. [GRVS: a Generalizable and Recurrent Approach to Monocular Dynamic View Synthesis](/202604/02/2603.29734v1-grvs-a-generalizable-and-recurrent-approach-to-monocular-dynamic-view-synthesis)  
-   标签：评分：8.0/10、query:3dgen
-   evidence：单目动态视图合成与4D表示
+   evidence：纹理3D网格的语义分割
+9. [SHARC: Reference point driven Spherical Harmonic Representation for Complex Shapes](/202604/03/2604.01894v1-sharc-reference-point-driven-spherical-harmonic-representation-for-complex-shapes)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：使用球谐函数表示合成任意形状
+10. [ProDiG: Progressive Diffusion-Guided Gaussian Splatting for Aerial to Ground Reconstruction](/202604/03/2604.02003v1-prodig-progressive-diffusion-guided-gaussian-splatting-for-aerial-to-ground-reconstruction)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：从航空图像重建3D场景模型
+11. [HyVGGT-VO: Tightly Coupled Hybrid Dense Visual Odometry with Feed-Forward Models](/202604/03/2604.02107v1-hyvggt-vo-tightly-coupled-hybrid-dense-visual-odometry-with-feed-forward-models)  
+   标签：评分：9.0/10、query:ff3dr
+   evidence：用于稠密映射和3D重建的前馈模型
 
 ### 速读区论文标签
-1. [SemLayer: Semantic-aware Generative Segmentation and Layer Construction for Abstract Icons](/202604/02/2603.24039v1-semlayer-semantic-aware-generative-segmentation-and-layer-construction-for-abstract-icons)  
+1. [AdaSFormer: Adaptive Serialized Transformers for Monocular Semantic Scene Completion from Indoor Environments](/202604/03/2603.25494v1-adasformer-adaptive-serialized-transformers-for-monocular-semantic-scene-completion-from-indoor-environments)  
+   标签：评分：8.0/10、query:3dgen
+   evidence：单目语义场景补全与重建
+2. [Meta-Learned Adaptive Optimization for Robust Human Mesh Recovery with Uncertainty-Aware Parameter Updates](/202604/03/2603.26447v1-meta-learned-adaptive-optimization-for-robust-human-mesh-recovery-with-uncertainty-aware-parameter-updates)  
+   标签：评分：8.0/10、query:ff3dr
+   evidence：结合回归与优化方法从单张图像恢复人体网格
+3. [Detailed Geometry and Appearance from Opportunistic Motion](/202604/03/2603.26665v1-detailed-geometry-and-appearance-from-opportunistic-motion)  
+   标签：评分：8.0/10、query:3dgen
+   evidence：利用稀疏相机和物体运动重建3D几何
+4. [Evaluating Large and Lightweight Vision Models for Irregular Component Segmentation in E-Waste Disassembly](/202604/03/2603.27441v1-evaluating-large-and-lightweight-vision-models-for-irregular-component-segmentation-in-e-waste-disassembly)  
    标签：评分：8.0/10、query:partseg
-   evidence：物体组件和子部件的语义标注
-2. [EndoVGGT: GNN-Enhanced Depth Estimation for Surgical 3D Reconstruction](/202604/02/2603.24577v1-endovggt-gnn-enhanced-depth-estimation-for-surgical-3d-reconstruction)  
-   标签：评分：8.0/10、query:ff3dr
-   evidence：用于手术3D重建的GNN增强深度估计
-3. [Relaxed Rigidity with Ray-based Grouping for Dynamic Gaussian Splatting](/202604/02/2603.24994v2-relaxed-rigidity-with-ray-based-grouping-for-dynamic-gaussian-splatting)  
-   标签：评分：8.0/10、query:ff3dr
-   evidence：使用高斯泼溅进行动态3D场景重建
-4. [Scene Grounding In the Wild](/202604/02/2603.26584v1-scene-grounding-in-the-wild)  
-   标签：评分：8.0/10、query:ff3dr
-   evidence：重建大规模真实场景的精确3D模型
-5. [Unblur-SLAM: Dense Neural SLAM for Blurry Inputs](/202604/02/2603.26810v1-unblur-slam-dense-neural-slam-for-blurry-inputs)  
-   标签：评分：8.0/10、query:ff3dr
-   evidence：用于SLAM中3D重建的前馈图像去模糊
-6. [GenMask: Adapting DiT for Segmentation via Direct Mask Generation](/202604/02/2603.23906v2-genmask-adapting-dit-for-segmentation-via-direct-mask-generation)  
-   标签：评分：7.0/10、query:partseg
-   evidence：分割掩码的直接生成式训练
-7. [Relaxed Rigidity with Ray-based Grouping for Dynamic Gaussian Splatting](/202604/02/2603.24994v1-relaxed-rigidity-with-ray-based-grouping-for-dynamic-gaussian-splatting)  
+   evidence：电子垃圾中不规则部件的分割
+5. [SGS-Intrinsic: Semantic-Invariant Gaussian Splatting for Sparse-View Indoor Inverse Rendering](/202604/03/2603.27516v2-sgs-intrinsic-semantic-invariant-gaussian-splatting-for-sparse-view-indoor-inverse-rendering)  
+   标签：评分：8.0/10、query:3dgen
+   evidence：用于室内逆渲染和几何重建的3D高斯泼溅技术
+6. [Accurate Surface and Reflectance Modelling from 3D Radar Data with Neural Radiance Fields](/202604/03/2603.25623v1-accurate-surface-and-reflectance-modelling-from-3d-radar-data-with-neural-radiance-fields)  
+   标签：评分：7.0/10、query:ff3dr
+   evidence：使用神经隐式方法从雷达点云进行3D表面重建
+7. [VGGRPO: Towards World-Consistent Video Generation with 4D Latent Reward](/202604/03/2603.26599v1-vggrpo-towards-world-consistent-video-generation-with-4d-latent-reward)  
    标签：评分：7.0/10、query:3dgen
-   evidence：使用3D高斯泼溅重建动态3D场景
-8. [Few TensoRF: Enhance the Few-shot on Tensorial Radiance Fields](/202604/02/2603.25008v2-few-tensorf-enhance-the-few-shot-on-tensorial-radiance-fields)  
+   evidence：用于世界一致性视频生成的几何感知对齐
+8. [Towards Intrinsic-Aware Monocular 3D Object Detection](/202604/03/2603.27059v1-towards-intrinsic-aware-monocular-3d-object-detection)  
    标签：评分：7.0/10、query:3dgen
-   evidence：用于人体和合成基准的3D重建框架
-9. [HiSpatial: Taming Hierarchical 3D Spatial Understanding in Vision-Language Models](/202604/02/2603.25411v1-hispatial-taming-hierarchical-3d-spatial-understanding-in-vision-language-models)  
+   evidence：从单张RGB图像进行单目3D物体检测
+9. [DiffSoup: Direct Differentiable Rasterization of Triangle Soup for Extreme Radiance Field Simplification](/202604/03/2603.27151v1-diffsoup-direct-differentiable-rasterization-of-triangle-soup-for-extreme-radiance-field-simplification)  
    标签：评分：7.0/10、query:3dgen
-   evidence：视觉语言模型中的分层3D空间理解
-10. [An Adapter-free Fine-tuning Approach for Tuning 3D Foundation Models](/202604/02/2603.23730v1-an-adapter-free-fine-tuning-approach-for-tuning-3d-foundation-models)  
+   evidence：用于辐射场简化和3D表示的可微光栅化
+10. [R-PGA: Robust Physical Adversarial Camouflage Generation via Relightable 3D Gaussian Splatting](/202604/03/2603.26067v1-r-pga-robust-physical-adversarial-camouflage-generation-via-relightable-3d-gaussian-splatting)  
+   标签：评分：6.0/10、query:3dgen
+   evidence：用于对抗性纹理生成的可重光照3D高斯泼溅
+11. [Finding Distributed Object-Centric Properties in Self-Supervised Transformers](/202604/03/2603.26127v1-finding-distributed-object-centric-properties-in-self-supervised-transformers)  
    标签：评分：6.0/10、query:partseg
-   evidence：为下游任务微调3D基础模型
-11. [Lookalike3D: Seeing Double in 3D](/202604/02/2603.24713v1-lookalike3d-seeing-double-in-3d)  
-   标签：评分：6.0/10、query:3dgen
-   evidence：场景中重复物体的3D物体理解与检测
-12. [Calibri: Enhancing Diffusion Transformers via Parameter-Efficient Calibration](/202604/02/2603.24800v1-calibri-enhancing-diffusion-transformers-via-parameter-efficient-calibration)  
-   标签：评分：6.0/10、query:3dgen
-   evidence：增强扩散 Transformer 的生成任务
-13. [ICTPolarReal: A Polarized Reflection and Material Dataset of Real World Objects](/202604/02/2603.24912v1-ictpolarreal-a-polarized-reflection-and-material-dataset-of-real-world-objects)  
-   标签：评分：6.0/10、query:3dgen
-   evidence：用于逆渲染的偏振反射和材料数据集
+   evidence：自监督Transformer中的以物体为中心的属性和定位
+12. [GLASS: Geometry-aware Local Alignment and Structure Synchronization Network for 2D-3D Registration](/202604/03/2603.26262v1-glass-geometry-aware-local-alignment-and-structure-synchronization-network-for-2d-3d-registration)  
+   标签：评分：6.0/10、query:partseg
+   evidence：2D-3D配准与几何感知点云特征
+13. [Live Interactive Training for Video Segmentation](/202604/03/2603.26929v1-live-interactive-training-for-video-segmentation)  
+   标签：评分：6.0/10、query:partseg
+   evidence：物体实例分割算法与交互式视频分割
 
 
 <div class="dpr-home-promo-card">
