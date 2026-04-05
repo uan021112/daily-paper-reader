@@ -6,85 +6,85 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-04-04
-- 运行时间：2026-04-04 19:52:11 UTC
+- 最新运行日期：2026-04-05
+- 运行时间：2026-04-05 19:19:10 UTC
 - 运行状态：成功
 - 本次总论文数：21
 - 精读区：8
 - 速读区：13
 
 ### 今日简报（AI）
-今日深度解析 21 篇前沿论文，聚焦 3D Gaussian Splatting 在微分优化、个性化头像及动态场景重建的突破。
-重点关注 Diff3R 引入的不确定性感知优化与 DipGuava 实现的高精度单目视频头像解耦。
-建议优先研读 3DGS 与语义 SLAM 及光影和谐化结合的跨领域应用。
-- 详情：[/202604/04/README](/202604/04/README)
+今日精选 21 篇前沿论文，深度聚焦自动驾驶全景占用预测与 3D 场景理解的最新突破。
+重点关注评分 9.0 的实例中心全景占用预测基准，以及针对任意 LiDAR 的自监督地面分割技术。
+建议优先研读如何利用海量无标签互联网数据提升 3D 感知，并关注视频实例分割的轻量化提效方案。
+- 详情：[/202604/05/README](/202604/05/README)
 
 ### 精读区论文标签
-1. [Diff3R: Feed-forward 3D Gaussian Splatting with Uncertainty-aware Differentiable Optimization](/202604/04/2604.01030v1-diff3r-feed-forward-3d-gaussian-splatting-with-uncertainty-aware-differentiable-optimization)  
-   标签：评分：10.0/10、query:ff3dr
-   evidence：桥接前馈预测与测试时优化以进行3D重建
-2. [DipGuava: Disentangling Personalized Gaussian Features for 3D Head Avatars from Monocular Video](/202604/04/2603.28003v1-dipguava-disentangling-personalized-gaussian-features-for-3d-head-avatars-from-monocular-video)  
-   标签：评分：9.0/10、query:3dgen
-   evidence：从单目视频创建3D头部头像
-3. [TerraSky3D: Multi-View Reconstructions of European Landmarks in 4K](/202604/04/2603.28287v1-terrasky3d-multi-view-reconstructions-of-european-landmarks-in-4k)  
-   标签：评分：9.0/10、query:ff3dr
-   evidence：用于训练模型的大规模3D重建数据集
-4. [Think, Act, Build: An Agentic Framework with Vision Language Models for Zero-Shot 3D Visual Grounding](/202604/04/2604.00528v1-think-act-build-an-agentic-framework-with-vision-language-models-for-zero-shot-3d-visual-grounding)  
-   标签：评分：9.0/10、query:3dgen
-   evidence：利用VLM从多视图2D图像重建3D结构
-5. [DVGT-2: Vision-Geometry-Action Model for Autonomous Driving at Scale](/202604/04/2604.00813v1-dvgt-2-vision-geometry-action-model-for-autonomous-driving-at-scale)  
-   标签：评分：9.0/10、query:ff3dr
-   evidence：用于高效大规模3D重建的流式驾驶视觉几何
-6. [Dense Point-to-Mask Optimization with Reinforced Point Selection for Crowd Instance Segmentation](/202604/04/2604.01742v1-dense-point-to-mask-optimization-with-reinforced-point-selection-for-crowd-instance-segmentation)  
+1. [An Instance-Centric Panoptic Occupancy Prediction Benchmark for Autonomous Driving](/202604/05/2603.27238v1-an-instance-centric-panoptic-occupancy-prediction-benchmark-for-autonomous-driving)  
    标签：评分：9.0/10、query:partseg
-   evidence：使用点标签的人群实例分割
-7. [Hierarchy-Guided Topology Latent Flow for Molecular Graph Generation](/202604/04/2603.27113v1-hierarchy-guided-topology-latent-flow-for-molecular-graph-generation)  
+   evidence：以实例为中心的3D全景占据预测基准
+2. [TerraSeg: Self-Supervised Ground Segmentation for Any LiDAR](/202604/05/2603.27344v1-terraseg-self-supervised-ground-segmentation-for-any-lidar)  
+   标签：评分：8.0/10、query:partseg
+   evidence：利用大规模数据集对 LiDAR 点云进行自监督地面分割
+3. [To View Transform or Not to View Transform: NeRF-based Pre-training Perspective](/202604/05/2603.28090v1-to-view-transform-or-not-to-view-transform-nerf-based-pre-training-perspective)  
+   标签：评分：8.0/10、query:ff3dr
+   evidence：基于NeRF的3D几何与外观理解预训练
+4. [SHOW3D: Capturing Scenes of 3D Hands and Objects in the Wild](/202604/05/2603.28760v1-show3d-capturing-scenes-of-3d-hands-and-objects-in-the-wild)  
    标签：评分：8.0/10、query:3dgen
-   evidence：使用潜流生成化学有效的3D分子
-8. [Think, Act, Build: An Agentic Framework with Vision Language Models for Zero-Shot 3D Visual Grounding](/202604/04/2604.00528v2-think-act-build-an-agentic-framework-with-vision-language-models-for-zero-shot-3d-visual-grounding)  
+   evidence：在自然场景下捕捉3D手部和物体以进行3D理解
+5. [3D Architect: An Automated Approach to Three-Dimensional Modeling](/202604/05/2603.29191v1-3d-architect-an-automated-approach-to-three-dimensional-modeling)  
    标签：评分：8.0/10、query:3dgen
-   evidence：用于视觉定位的生成式 2D 到 3D 重建范式
+   evidence：利用计算几何从正交视图重建3D物体
+6. [M2H-MX: Multi-Task Dense Visual Perception for Real-Time Monocular Spatial Understanding](/202604/05/2603.29236v1-m2h-mx-multi-task-dense-visual-perception-for-real-time-monocular-spatial-understanding)  
+   标签：评分：8.0/10、query:ff3dr
+   evidence：从像素到深度和语义预测的直接映射以实现空间理解
+7. [Hi-LOAM: Hierarchical Implicit Neural Fields for LiDAR Odometry and Mapping](/202604/05/2604.01720v1-hi-loam-hierarchical-implicit-neural-fields-for-lidar-odometry-and-mapping)  
+   标签：评分：8.0/10、query:ff3dr
+   evidence：用于大规模3D重建的分层隐式神经场
+8. [Generative World Renderer](/202604/05/2604.02329v1-generative-world-renderer)  
+   标签：评分：8.0/10、query:3dgen
+   evidence：用于3D内容的生成式逆向与前向渲染
 
 ### 速读区论文标签
-1. [GS3LAM: Gaussian Semantic Splatting SLAM](/202604/04/2603.27781v1-gs3lam-gaussian-semantic-splatting-slam)  
-   标签：评分：8.0/10、query:ff3dr
-   evidence：使用高斯泼溅进行高效且可扩展的3D场景表示
-2. [LightHarmony3D: Harmonizing Illumination and Shadows for Object Insertion in 3D Gaussian Splatting](/202604/04/2603.29209v1-lightharmony3d-harmonizing-illumination-and-shadows-for-object-insertion-in-3d-gaussian-splatting)  
-   标签：评分：8.0/10、query:3dgen
-   evidence：用于3DGS中光照一致网格插入的生成模块
-3. [MotionScale: Reconstructing Appearance, Geometry, and Motion of Dynamic Scenes with Scalable 4D Gaussian Splatting](/202604/04/2603.29296v1-motionscale-reconstructing-appearance-geometry-and-motion-of-dynamic-scenes-with-scalable-4d-gaussian-splatting)  
-   标签：评分：8.0/10、query:ff3dr
-   evidence：利用可扩展的4D高斯泼溅重建几何与运动
-4. [Excite, Attend and Segment (EASe): Domain-Agnostic Fine-Grained Mask Discovery with Feature Calibration and Self-Supervised Upsampling](/202604/04/2604.00276v1-excite-attend-and-segment-ease-domain-agnostic-fine-grained-mask-discovery-with-feature-calibration-and-self-supervised-upsampling)  
+1. [Industrial3D: A Terrestrial LiDAR Point Cloud Dataset and CrossParadigm Benchmark for Industrial Infrastructure](/202604/05/2603.28660v1-industrial3d-a-terrestrial-lidar-point-cloud-dataset-and-crossparadigm-benchmark-for-industrial-infrastructure)  
    标签：评分：8.0/10、query:partseg
-   evidence：针对复杂多组件形态的细粒度掩码发现
-5. [DirectFisheye-GS: Enabling Native Fisheye Input in Gaussian Splatting with Cross-View Joint Optimization](/202604/04/2604.00648v1-directfisheye-gs-enabling-native-fisheye-input-in-gaussian-splatting-with-cross-view-joint-optimization)  
-   标签：评分：8.0/10、query:ff3dr
-   evidence：使用高斯泼溅进行高效3D场景重建
-6. [GeoReFormer: Geometry-Aware Refinement for Lane Segment Detection and Topology Reasoning](/202604/04/2603.26018v1-georeformer-geometry-aware-refinement-for-lane-segment-detection-and-topology-reasoning)  
+   evidence：具有专家标注点的地面激光雷达点云数据集
+2. [Video Patch Pruning: Efficient Video Instance Segmentation via Early Token Reduction](/202604/05/2604.00827v1-video-patch-pruning-efficient-video-instance-segmentation-via-early-token-reduction)  
+   标签：评分：8.0/10、query:partseg
+   evidence：通过补丁剪枝实现高效的视频实例分割
+3. [Lifting Unlabeled Internet-level Data for 3D Scene Understanding](/202604/05/2604.01907v1-lifting-unlabeled-internet-level-data-for-3d-scene-understanding)  
+   标签：评分：8.0/10、query:partseg
+   evidence：用于3D物体检测和实例分割的自动数据生成
+4. [MultiLoc: Multi-view Guided Relative Pose Regression for Fast and Robust Visual Re-Localization](/202604/05/2603.27170v1-multiloc-multi-view-guided-relative-pose-regression-for-fast-and-robust-visual-re-localization)  
    标签：评分：7.0/10、query:ff3dr
-   evidence：基于Transformer查询预测的3D车道线检测
-7. [DRUM: Diffusion-based Raydrop-aware Unpaired Mapping for Sim2Real LiDAR Segmentation](/202604/04/2603.26263v1-drum-diffusion-based-raydrop-aware-unpaired-mapping-for-sim2real-lidar-segmentation)  
+   evidence：前馈相对姿态回归
+5. [SpatialStack: Layered Geometry-Language Fusion for 3D VLM Spatial Reasoning](/202604/05/2603.27437v1-spatialstack-layered-geometry-language-fusion-for-3d-vlm-spatial-reasoning)  
+   标签：评分：7.0/10、query:ff3dr
+   evidence：视觉与几何的层次化融合，用于视觉语言模型中的 3D 空间推理
+6. [Chat-Scene++: Exploiting Context-Rich Object Identification for 3D LLM](/202604/05/2603.27507v1-chat-scene-exploiting-context-rich-object-identification-for-3d-llm)  
    标签：评分：7.0/10、query:partseg
-   evidence：基于扩散模型的Sim2Real转换用于LiDAR点云语义分割
-8. [UniDAC: Universal Metric Depth Estimation for Any Camera](/202604/04/2603.27105v1-unidac-universal-metric-depth-estimation-for-any-camera)  
+   evidence：3D场景中的细粒度对象定位和上下文推理
+7. [MV-RoMa: From Pairwise Matching into Multi-View Track Reconstruction](/202604/05/2603.27542v1-mv-roma-from-pairwise-matching-into-multi-view-track-reconstruction)  
    标签：评分：7.0/10、query:ff3dr
-   evidence：用于空间理解的单目度量深度估计
-9. [NimbusGS: Unified 3D Scene Reconstruction under Hybrid Weather](/202604/04/2603.27228v1-nimbusgs-unified-3d-scene-reconstruction-under-hybrid-weather)  
-   标签：评分：7.0/10、query:ff3dr
-   evidence：从退化的多视图输入中进行统一的3D场景重建
-10. [DUGAE: Unified Geometry and Attribute Enhancement via Spatiotemporal Correlations for G-PCC Compressed Dynamic Point Clouds](/202604/04/2603.26183v1-dugae-unified-geometry-and-attribute-enhancement-via-spatiotemporal-correlations-for-g-pcc-compressed-dynamic-point-clouds)  
-   标签：评分：6.0/10、query:partseg
-   evidence：动态点云的几何与属性增强
-11. [ARTA: Adaptive Mixed-Resolution Token Allocation for Efficient Dense Feature Extraction](/202604/04/2603.26258v1-arta-adaptive-mixed-resolution-token-allocation-for-efficient-dense-feature-extraction)  
-   标签：评分：6.0/10、query:partseg
-   evidence：预测语义边界以进行高效的稠密特征提取
-12. [Adapting Frozen Mono-modal Backbones for Multi-modal Registration via Contrast-Agnostic Instance Optimization](/202604/04/2603.26393v1-adapting-frozen-mono-modal-backbones-for-multi-modal-registration-via-contrast-agnostic-instance-optimization)  
+   evidence：多视图轨迹重建与稠密匹配
+8. [Physically Inspired Gaussian Splatting for HDR Novel View Synthesis](/202604/05/2603.28020v1-physically-inspired-gaussian-splatting-for-hdr-novel-view-synthesis)  
+   标签：评分：7.0/10、query:3dgen
+   evidence：用于HDR新视角合成的神经渲染
+9. [Adapting SAM to Nuclei Instance Segmentation and Classification via Cooperative Fine-Grained Refinement](/202604/05/2603.28027v1-adapting-sam-to-nuclei-instance-segmentation-and-classification-via-cooperative-fine-grained-refinement)  
+   标签：评分：7.0/10、query:partseg
+   evidence：将SAM模型应用于细胞核实例分割
+10. [Weakly Convex Ridge Regularization for 3D Non-Cartesian MRI Reconstruction](/202604/05/2603.27158v1-weakly-convex-ridge-regularization-for-3d-non-cartesian-mri-reconstruction)  
    标签：评分：6.0/10、query:ff3dr
-   evidence：3D配准中的前馈预测与实例优化对比
-13. [VIRST: Video-Instructed Reasoning Assistant for SpatioTemporal Segmentation](/202604/04/2603.27060v1-virst-video-instructed-reasoning-assistant-for-spatiotemporal-segmentation)  
+   evidence：基于深度学习的3D MRI重建
+11. [K$α$LOS finds Consensus: A Meta-Algorithm for Evaluating Inter-Annotator Agreement in Complex Vision Tasks](/202604/05/2603.27197v1-klos-finds-consensus-a-meta-algorithm-for-evaluating-inter-annotator-agreement-in-complex-vision-tasks)  
    标签：评分：6.0/10、query:partseg
-   evidence：端到端视频对象分割框架
+   evidence：评估实例对应等复杂视觉任务中的标注者间一致性
+12. [Demo-Pose: Depth-Monocular Modality Fusion For Object Pose Estimation](/202604/05/2603.27533v1-demo-pose-depth-monocular-modality-fusion-for-object-pose-estimation)  
+   标签：评分：6.0/10、query:ff3dr
+   evidence：用于3D几何推理和姿态估计的前馈架构
+13. [RINO: Rotation-Invariant Non-Rigid Correspondences](/202604/05/2603.27773v1-rino-rotation-invariant-non-rigid-correspondences)  
+   标签：评分：6.0/10、query:partseg
+   evidence：稠密3D形状对应及从原始几何中提取特征
 
 
 <div class="dpr-home-promo-card">
