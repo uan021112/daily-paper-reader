@@ -1011,15 +1011,15 @@
             <div class="secret-setup-step2-block">
               <div class="secret-setup-step2-title">聊天模型来源</div>
               <p class="secret-setup-step2-note">
-                BLT 是工作流必填项；OpenAI-compatible 仅作为聊天区模型来源。
+                BLT 是工作流必填项；OpenAI-compatible 入口已重新开放，但仍属于实验性能力，仅作为聊天区模型来源。
               </p>
               <label class="secret-setup-provider-choice">
                 <input type="radio" name="secret-setup-provider" value="plato" />
                 <span><strong>聊天区也使用 BLT</strong>工作流总结、过滤、reranker 与聊天区统一使用柏拉图（BLTCY）模型。</span>
               </label>
-              <label class="secret-setup-provider-choice" style="opacity:0.5; cursor:not-allowed;">
-                <input type="radio" name="secret-setup-provider" value="openai-compatible" disabled />
-                <span><strong>聊天区使用 OpenAI-compatible（暂时禁用）</strong>工作流总结与 reranker 仍强制使用 BLT，最多 3 个自定义模型仅用于聊天区。</span>
+              <label class="secret-setup-provider-choice">
+                <input type="radio" name="secret-setup-provider" value="openai-compatible" />
+                <span><strong>聊天区使用 OpenAI-compatible（实验性）</strong>工作流总结与 reranker 仍强制使用 BLT，最多 3 个自定义模型仅用于聊天区。</span>
               </label>
             </div>
 
