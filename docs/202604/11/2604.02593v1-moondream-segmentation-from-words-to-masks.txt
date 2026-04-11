@@ -1,0 +1,626 @@
+Title: Moondream Segmentation: From Words to Masks
+
+URL Source: https://arxiv.org/pdf/2604.02593v1
+
+Published Time: Mon, 06 Apr 2026 00:19:33 GMT
+
+Number of Pages: 16
+
+Markdown Content:
+# Moondream Segmentation: From Words to Masks 
+
+Ethan Reid 1
+
+# Abstract 
+
+We present Moondream Segmentation, a referring image segmentation extension of Moondream 3, a vision-language model. Given an image and a re-ferring expression, the model autoregressively de-codes a vector path and iteratively refines the ras-terized mask into a final detailed mask. We intro-duce a reinforcement learning stage that resolves ambiguity in the supervised signal by directly opti-mizing mask quality. Rollouts from this stage pro-duce coarse-to-ground-truth targets for the refiner. To mitigate evaluation noise from polygon anno-tations, we release RefCOCO-M, a cleaned Ref-COCO validation split with boundary-accurate masks. Moondream Segmentation achieves a cIoU of 80.2% on RefCOCO (val) and 62.6% mIoU on LVIS (val). 
+
+# 1. Introduction 
+
+Pixel-accurate segmentation is a core visual primitive for in-teractive and high-fidelity applications such as image editing and compositing. While modern vision-language models (VLMs) can localize and describe visual content, producing masks with precise boundaries, thin structures, and clean interiors from natural language remains challenging. Referring image segmentation (RIS) (Hu et al., 2016) takes an image and a referring expression (e.g., “the car on the left”) and predicts a binary mask for the described region. RIS couples two failure modes: semantic grounding (identi-fying which instance the expression refers to) and boundary recovery (tracing exact contours under occlusion and fine detail). In practice, many systems either rely on multi-stage orchestration, where a language model produces prompts for a separate segmenter, as in SAM 3 Agent (Carion et al., 2025), or decode dense masks directly. Moondream Segmentation produces masks in two stages (Figure 2). First, we autoregressively decode a vector path in an SVG-style syntax conditioned on the image and referring  
+
+> 1M87 Labs, San Francisco, CA, USA. Correspondence to: Ethan Reid <ethan@m87.ai, @EthanReidMorro >.
+
+expression using Moondream 3 (Korrapati et al., 2025). Second, we rasterize the vector path into a coarse mask and iteratively refine the rasterization into a final detailed mask. Representative predictions on diverse scenes are shown in Figure 1. Supervising vector paths is inherently ambiguous: many different paths can rasterize to nearly identical masks. We address this with a reinforcement learning (RL) stage that directly optimizes mask overlap after rasterization. Rollouts from this stage produce intermediate coarse masks, which we reuse as coarse-to-ground-truth targets for training the refiner under the same iterative interface used at inference. As models approach pixel-level accuracy, evaluation is increasingly limited by annotation fidelity. We evaluate on RefCOCO (UNC) and RefCOCO+ (UNC) (Yu et al., 2016) and RefCOCOg (Google) (Mao et al., 2016); to miti-gate evaluation noise from polygon annotations, we release RefCOCO-M, a cleaned RefCOCO validation split with boundary-accurate masks and a small set of filtered expres-sions. 
+
+Contributions. 
+
+• Vector paths for RIS: an extension of Moondream 3 that decodes a vector path as a compact intermediate representation and refines its rasterization into a de-tailed pixel mask. • RL for ambiguous supervision: an RL stage that optimizes mask quality after rasterization and produces rollout-derived coarse masks used to train a refiner. • Boundary-accurate evaluation: RefCOCO-M, a cleaned RefCOCO validation split with refined masks that reduces evaluation noise from polygon annota-tions. 
+
+# 2. Related Work 
+
+Language-guided segmentation. RIS benchmarks such as RefCOCO couple language grounding with mask an-notations. Universal segmentation architectures (e.g., Mask2Former (Cheng et al., 2022)) provide flexible transformer-based mask decoding across segmentation tasks. LISA (Lai et al., 2024) extends a large language model with 1 
+
+> arXiv:2604.02593v1 [cs.CV] 3 Apr 2026 Moondream Segmentation
+> Figure 1. Example masks produced by Moondream Segmentation. Prompts are shown in white boxes.
+
+a segmentation token that triggers a decoder to produce masks from referring and reasoning queries. Our goal is to expose a segmentation interface for an autoregressive VLM, while keeping boundary recovery in a dedicated refiner. 
+
+Regions as sequences. Several works cast localization and shape prediction as structured generation. Pix2Seq (Chen et al., 2022) models boxes as discretized coordinate to-kens, while polygon-based methods such as Polygon-RNN++ (Acuna et al., 2018) and PolyFormer (Liu et al., 2023) predict polygon vertices sequentially. More recently, VLMs have explored representing regions using special to-ken sequences, e.g., discretized location tokens for detection and dedicated segmentation tokens for mask outputs (Beyer et al., 2024). We instead generate an explicit vector path whose rasterization defines a coarse region, then optimize the path with an overlap-based RL objective. 
+
+Promptable segmentation and refiners. Segment Any-thing (SAM) introduced a promptable segmentation inter-face with multiple mask hypotheses and a learned mask-quality predictor (Kirillov et al., 2023). We reuse this mask-token and quality-head pattern in our refiner, but the prompt is a model-generated coarse mask obtained by rasterizing the decoded vector path. 
+
+# 3. Moondream 3 Backbone 
+
+We build on Moondream 3, a 2B active / 9B total parameter mixture-of-experts (MoE) vision-language model (Shazeer et al., 2017) that pairs a Vision Transformer (ViT) vision encoder (Dosovitskiy et al., 2021) with a decoder-only language model. The vision encoder is initialized from SigLIP 2 weights (Tschannen et al., 2025), and the text backbone has 24 layers at width D = 2048 ; from layer 4 onward, its feed-forward blocks are MoE with 64 experts and top-8 routing. In this paper we only describe the com-ponents needed for segmentation: the vision tokenization scheme (which defines the 27 × 27 grid used by our re-finer) and the RegionModel, a region-tokenizer interface for binned spatial values (used for points and boxes). 
+
+3.1. Vision Encoder 
+
+Moondream 3 converts an image into a fixed-length set of patch tokens by running a ViT over 378 × 378 crops with patch size 14 , producing a 27 × 27 grid (729 tokens) with width 1152 . To support high-resolution images, it uses one global crop and up to 12 overlapping local crops (overlap margin 4 patches). Local token grids are stitched with overlap-aware reconstruction and pooled back to 27 ×
+
+27 ; the global and pooled-local features are concatenated (2304-dim) and projected to the text width D = 2048 before entering the text transformer. 
+
+3.2. RegionModel 
+
+Moondream represents spatial values using a small region tokenizer implemented with special tokens 
+
+<|coord|> and <|size|> . A point is represented as 
+
+<|coord|><|coord|> (center (cx, c y )). A box is rep-resented as <|coord|><|coord|><|size|> (center 
+
+(cx, c y ) and size (w, h )). At generation time, when the model emits a coordinate or size token, a small RegionModel decodes a 1024-dim dis-tribution from the current hidden state, maps the selected bin back to a real value, and immediately re-embeds it for the next decoding step. This enables structured spatial out-puts without introducing a large numeric vocabulary. Ap-pendix A.2 provides the RegionModel encoding/decoding equations and the decode-then-re-embed procedure. 
+
+# 4. Moondream Segmentation 
+
+4.1. Task 
+
+Given an image I ∈ RH×W ×3 and a referring expression 
+
+x (text and/or a spatial reference), the goal is to predict a binary mask M ∈ { 0, 1}H×W for the region described by 2Moondream Segmentation  
+
+> Figure 2. High-level overview of Moondream Segmentation. The VLM decodes a vector path from the image and prompt, which is rasterized into a coarse mask. An iterative refiner conditioned on frozen vision features produces the final mask.
+
+x. We evaluate using intersection-over-union: 
+
+IoU( ˆM , M ) = | ˆM ∩ M || ˆM ∪ M | , (1) where ˆM is the predicted mask. We view masks as sets of foreground pixels, where | · | counts pixels. 
+
+4.2. Output Representation 
+
+We represent the coarse mask as a predicted bounding box b
+
+and a set of closed vector paths p represented as a command-and-coordinate sequence, with commands such as M, L, C,and Z. The box is produced using Moondream’s Region-Model interface (special <|coord|> and <|size|> to-kens; Appendix A.2). The path is then emitted autoregres-sively as text tokens conditioned on (I, x, b ). A determin-istic rasterizer maps (b, p ) into an initial coarse mask. We rasterize at the native image resolution and resize to the refiner resolution: 
+
+˜M (0)  
+
+> nat
+
+= Rasterize( b, p ; H, W ) ∈ [0 , 1] H×W ,
+
+˜M (0) = Resize( ˜M (0)  
+
+> nat
+
+; H0, W 0) ∈ [0 , 1] H0×W0 . (2) We use a fixed refiner resolution H0 = W0 = 378 in all experiments. 
+
+Decoding constraints. We constrain decoding to ensure syntactic validity and stable geometry. Concretely, we en-force a maximum path complexity Len( p) ≤ Lmax and reject invalid paths; Appendix A.1 provides the full token sequence format and vector path token grammar. 
+
+4.3. Mask Refiner 
+
+The mask refiner maps a coarse raster mask to a boundary-accurate prediction conditioned on frozen Moondream vi-sion features. Architecturally, it separates dense evidence 
+
+(image tokens) from mask hypotheses (a small set of learned output tokens) and updates both via two-way attention. This mirrors the “mask token + quality head” pattern introduced by SAM, but our refiner is used iteratively with a coarse mask as a dense prompt. 
+
+Inputs and outputs. The refiner operates on features from the global crop only, using the 1152-dim vision en-coder output before the multi-crop concatenation and pro-jection to D. At refinement step t, inputs are final-layer patch tokens Ffinal ∈ RB×729 ×1152 , early-layer patch to-kens Fearly ∈ RB×729 ×1152 , and the current mask esti-mate ˜M (t) ∈ [0 , 1] B×1×H0×W0 . We obtain Fearly by ex-posing an intermediate token grid from an earlier ViT block (block 8) in addition to the final tokens, providing higher-frequency cues for refinement. The refiner outputs K
+
+mask logits L(t) ∈ RB×K×H0×W0 and mask-quality scores 
+
+q(t) ∈ RB×K .
+
+Grid features and HQ fusion. We reshape patch tokens to a 27 × 27 grid (729 tokens) and project the 1152-dim Moondream patch embeddings to a refiner width dr = 256 .This matches the vision encoder’s patch size of 14 at our fixed refiner resolution H0 = W0 = 378 (since 27 · 14 = 378 ). Let Ffused ∈ RB×dr ×27 ×27 denote fused features obtained by combining early and final vision features with lightweight convolutions, following the high-quality feature fusion design as seen in HQ-SAM (Ke et al., 2023). 
+
+Dense mask prompting. A convolutional mask encoder downsamples ˜M (t) to 27 × 27 and lifts it to dr channels, producing Emask ∈ RB×dr ×27 ×27 . We prompt the refiner by additive fusion: 
+
+Xgrid = Ffused + Emask . (3) We then flatten Xgrid into image tokens X ∈ RB×729 ×dr .
+
+Two-way token interaction. We maintain a set of learned output tokens Z ∈ RB×(K+1) ×dr consisting of K mask tokens and one quality token. Let X ∈ RB×N ×dr be the 3Moondream Segmentation 
+
+image tokens ( N = 729 ). A two-way transformer alternates self-attention on Z, cross-attention Z → X, an MLP on 
+
+Z, and cross-attention X → Z, updating both token sets. Abstractly, each block can be written as 
+
+(Z′, X ′) = TwoWayBlock( Z, X ), (4) where attention uses learned positional embeddings on Q/K 
+
+(SAM-style). 
+
+Hypernetwork decoding and mask-quality head. We upsample image tokens to a high-resolution feature map 
+
+U ∈ RB×C×216 ×216 (three 2× upsampling stages from the 
+
+27 × 27 grid). Each mask token Zm is first projected and refined by high-resolution cross-attention, yielding a per-mask summary vector sm ∈ RC . A small per-mask MLP (hypernetwork) maps sm to channel weights wm ∈ RC , and mask logits are computed by a channel-weighted sum 
+
+L(t) 
+
+> m
+
+(i, j ) = 
+
+> C
+
+X
+
+> c=1
+
+wm,c Uc(i, j ), (5) followed by resizing to (H0, W 0). The quality token is mapped by an MLP to per-mask scores q(t), which we use to select the hypothesis at each iteration, following SAM. 
+
+Iterative refinement. Refinement is applied for T = 5 
+
+iterations at both training and inference. At each iteration we select the highest-scoring mask and feed it back as the next estimate. We obtain the final prediction at the native image resolution by resizing the last refined mask: ˆM =Resize( ˜M (T ); H, W ). During training, we apply a stop-gradient operator to the updated mask between iterations; inference does not require stop-gradient. Pseudocode for the inference loop is provided in Appendix A.3. We evaluate refiner quality with ablations in Table 3. 
+
+# 5. Training 
+
+We train the system in three stages: supervised fine-tuning (SFT) for vector path generation, RL to align the path de-coder with mask quality, and supervised refiner training using rollout-generated coarse masks. 
+
+5.1. Supervised Training Data pipeline. We construct a training set of over 10M samples from internet images. For each image, an ensemble of VLMs produces tags, referring expressions, descriptions, and grounded bounding boxes. We verify the text–box pairs with Moondream. For a given image and text prompt, we discard samples where Moondream predicts more than one box or the predicted box has less than 90% IoU with the annotation. Surviving image–box pairs are fed to a segmen-tation model that produces and iteratively refines a mask for each box. We apply a second filter, discarding samples where the mask-derived bounding box falls below 92% IoU with the Moondream box. Train splits of public datasets such as RefCOCO/+/g and LVIS are not used directly; we run their images through the same pipeline, optionally re-taining original referring expressions subject to the same filtering. Each final sample pairs an image and referring expression with a mask. 
+
+Training objective. We train the path decoder with SFT on this corpus. Each mask is converted to a target vector path token sequence p1: L. We train with teacher forcing and minimize the standard token-level cross-entropy objective 
+
+LSFT = −
+
+> L
+
+X
+
+> k=1
+
+log πθ (pk | p<k , I, x ), (6) without any additional format-specific penalties. 
+
+5.2. RL for Path Optimization Why next-token supervision is misaligned. SFT treats vector path generation as a standard next-token prediction problem. However, vector paths admit many equivalent tokenizations: different starting points, equivalent segment decompositions, or alternative control points can rasterize to essentially the same mask. This induces a one-to-many mapping from an underlying region to token sequences. In practice, this ambiguity is most damaging at the begin-ning of decoding. The “first few tokens” (e.g., initial M com-mand and early coordinates) are effectively arbitrary choices among many equivalent parameterizations; as a result, the model is penalized for producing a valid but differently parameterized path. This creates high-variance gradients and can destabilize learning, even when the downstream rasterized mask would be correct. 
+
+RL aligns learning to what matters. To resolve this mis-match, we fine-tune the path policy πθ with RL so that any 
+
+valid sequence that yields a high-quality mask is rewarded. Rather than matching an arbitrary reference tokenization, the objective is defined on the rasterized output and validity constraints: 
+
+max  
+
+> θ
+
+E(b,p )∼πθ (·| I,x )
+
+R(Rasterize( b, p ), M ). (7) We optimize this objective using Group Relative Policy Optimization (GRPO) (Shao et al., 2024). As a result, RL can improve both correctness (IoU/boundary metrics) and generation stability (valid path rate and reduced sensitivity to early-token choices). 4Moondream Segmentation  
+
+> Figure 3. Training data generation pipeline. Web images are labeled by an ensemble of VLMs with text annotations and bounding boxes, verified by Moondream, filtered for consistency and accuracy, and passed to a segmentation model to propose masks. Surviving image–text–box–mask tuples are added to the final dataset; rejected samples are discarded.
+
+5.2.1. P IECEWISE REWARD 
+
+We use a piecewise reward that changes with model com-petence to maximize learning signal while avoiding reward noise early in training. 
+
+Group reward with invalid-trace filtering. We sample a group G of rollouts for each (I, x ) and use rollout-excluded (unbiased) reward selection. Some rollouts may be invalid paths (e.g., wrong arity for a C command). We assign these rollouts reward 0 and exclude them from the group-average used to choose the reward regime. Let Gvalid ⊆ G be valid rollouts, and let ¯IoU box and ¯Tv α,β denote means over Gvalid .
+
+Bounding-box IoU. Let b∗ denote the tight bounding box of the target mask M . For boxes b and b∗ with areas | · | , we define 
+
+IoU box (b, b ∗) = |b ∩ b∗||b ∪ b∗| . (8) 
+
+Tversky for coverage. For masks, define TP = | ˜M ∩
+
+M |, FN = |M \ ˜M |, and FP = | ˜M \ M |. The Tversky index (Tversky, 1977) is 
+
+Tv α,β ( ˜M , M ) = TP TP + α FP + β FN . (9) We set β > α , which penalizes false negatives more than false positives, biasing the model toward coverage (reducing missed parts), which we found important early in training. 
+
+Boundary IoU for edge tightening. Following Bound-ary IoU (Cheng et al., 2021), we define a boundary band operator that keeps only pixels inside a mask and within distance ε of that mask’s boundary. Let dist A(i, j ) denote the distance from pixel (i, j ) to the boundary of a binary mask A measured from inside A. We define 
+
+ Bε(A) 
+
+> i,j
+
+= Ai,j · Idist A(i, j ) ≤ ε. (10) We then define boundary IoU as the IoU between the bound-ary bands of the prediction and target: 
+
+IoU ∂ ( ˜M , M ) = IoU  Bε( ˜M ), Bε(M ), (11) which concentrates reward on edges and thin structures once coarse coverage is achieved. For RL training, we set ε to 5% of the image diagonal. 
+
+Unbiased piecewise reward. For each valid rollout g
+
+producing a box bg and mask ˜Mg , we define the per-rollout reward 
+
+rg =
+
+
+
+IoU box (bg , b ∗) if ¯IoU box < τ box ,
+
+Tv α,β ( ˜Mg , M ) if ¯IoU box ≥ τbox 
+
+and ¯Tv α,β < τ mask 
+
+,
+
+IoU ∂ ( ˜Mg , M ) otherwise. (12) Invalid rollouts receive rg = 0 but are excluded from the group means ¯IoU box and ¯Tv α,β .This curriculum aims to accelerate learning: box IoU teaches object discovery, Tversky improves coverage, and boundary IoU sharpens edges, producing high-quality coarse masks that become easy-to-optimize targets for the refiner. 
+
+5.3. Refiner Training 
+
+We train the refiner on an offline dataset of rollout snapshots, denoted D, where each example provides an image I, an initial coarse mask ˜M (0) obtained by rasterizing a model-generated vector path, and a target mask M . We unroll refinement for T = 5 steps, matching the iterative test-time interface. Let E denote the frozen vision encoder (used only to compute (Fearly , F final )), and let fϕ denote the refiner. We write σ for the elementwise sigmoid. We also define a per-step loss Lref-step (L(t), q (t), M ) as the bracketed term in Eq. (13). 5Moondream Segmentation                                                                                     
+
+> Table 1. RIS benchmark comparison (%; higher is better). RefCOCO/+/g and RefCOCO-M report cIoU; the final RefCOCO-M column reports BIoU@0.05. RefCOCO RefCOCO+ RefCOCOg RefCOCO-M Model val testA testB val testA testB val test val BIoU@0.05 LISA (LLaVA 7B) 74.9 79.1 72.3 65.1 70.8 58.1 67.9 70.6 72.7 68.1 Text4Seg (InternVL2-8B) 74.7 77.4 71.6 68.5 63.6 62.9 70.7 71.6 70.4 68.9 SimpleSeg (Qwen2.5-VL) 80.9 77.8 75.2 72.4 77.3 66.1 73.3 74.1 85.2 68.9 Gemini 2.5 Flash 63.7 64.8 65.6 52.8 57.3 50.8 56.2 57.4 70.4 67.5 SAM 3 Agent (Gemini 2.5 Pro) 75.5 77.6 71.0 67.3 71.1 63.4 73.4 74.0 86.7 81.5 SAM 3 54.9 59.9 52.4 43.0 49.7 36.7 55.4 54.6 63.0 64.0 Moondream Seg. 80.2 80.3 75.9 72.5 77.8 65.1 73.7 73.9 87.6 85.4
+
+Algorithm 1 Refiner training on rollout-derived coarse masks (T=5)  
+
+> 1:
+
+Input: rollout dataset D of (I, ˜M (0) , M ); frozen en-coder E; refiner fϕ; steps T = 5  
+
+> 2:
+
+for each minibatch (I, ˜M (0) , M ) ∼ D do  
+
+> 3:
+
+(Fearly , F final ) ← stopgrad( E(I))  
+
+> 4:
+
+˜M ← ˜M (0) ; L ← 0 
+
+> 5:
+
+for t = 0 to T − 1 do  
+
+> 6:
+
+(L(t), q (t)) ← fϕ(Ffinal , F early , ˜M ) 
+
+> 7:
+
+L += Lref-step (L(t), q (t), M ) {Eq. (13); losses ap-ply to all K masks } 
+
+> 8:
+
+m∗ ← arg max m q(t) 
+
+> m
+> 9:
+
+˜M ← stopgrad 
+
+
+
+σ(L(t) 
+
+> m∗
+
+)
+
+ 
+
+> 10:
+
+end for  
+
+> 11:
+
+Update ϕ on L/T  
+
+> 12:
+
+end for Feedback and stop-gradient. At each refinement step we select m∗ = arg max m q(t) 
+
+> m
+
+and feed back ˜M (t+1) =stopgrad 
+
+
+
+σ(L(t) 
+
+> m∗
+
+)
+
+
+
+during training. This matches the it-erative test-time interface while keeping gradients local to each refinement step. 
+
+Loss. We supervise every step against the same target mask M . In Algorithm 1 we write Lref-step (L(t), q (t), M )
+
+for the per-step refiner loss, defined as the bracketed term in Eq. (13). Crucially, the segmentation loss is applied to 
+
+all K mask hypotheses at each step (not just the selected hypothesis), which provides dense gradient signal while still training the model to select the best mask via the quality head. Concretely, we optimize 
+
+Lref = 1
+
+T 
+
+> T−1
+
+X
+
+> t=0
+
+h
+
+SegLoss( L(t), M )+ λiou ∥q(t) − ˆq(t)∥22
+
++ λ∂ (s) BoundaryLoss( σ(L(t)), M )
+
+i
+
+,
+
+(13) where SegLoss combines binary cross-entropy (BCE) with a Dice loss term (Milletari et al., 2016) (averaged over the K
+
+hypotheses), ˆq(t) = stopgrad  SoftIoU( σ(L(t)), M ) is a differentiable soft-IoU target (Appendix A.4) used to super-vise the quality head (computed without backprop through the target), and BoundaryLoss is a boundary-weighted BCE term (also averaged over hypotheses). We use a boundary-loss schedule λ∂ (s) that is 0 early in training and is linearly warmed up to 1 over a fixed step window; we elaborate the exact schedule and weighting in Appendix A.4. The quality head is trained in the SAM style via regression to SoftIoU targets. 
+
+# 6. Experiments 
+
+6.1. Datasets RefCOCO/+/g. We evaluate referring image segmenta-tion on the RefCOCO (UNC), RefCOCO+ (UNC), and RefCOCOg (Google) evaluation splits, which pair COCO images (Lin et al., 2014) with referring expressions and instance-level masks. 
+
+RefCOCO-M. RefCOCO’s polygon-derived masks can be coarse at object boundaries and may miss thin structures, introducing evaluation noise as models approach pixel-level accuracy. We release RefCOCO-M 1, a cleaned version of the RefCOCO (UNC) validation split. For each referred in-stance, we run a re-segmentation pipeline with an ensemble of models and retain only high-confidence masks, removing 47% of instances due to unrecoverable mask quality. A sep-arate model filters a further 0.5% of samples (46 examples) for harmful language, including slurs, sexualized language, and degrading phrases (Figure 8). The final dataset contains 1,190 images, 2,080 instance masks, and 5,598 referring expressions. For retained examples, the images and refer-ring expressions are unchanged and only the masks differ (Figure 4). 
+
+> 1https://huggingface.co/datasets/ moondream/refcoco-m
+
+6Moondream Segmentation   
+
+> Figure 4. Original RefCOCO polygon masks (top) and RefCOCO-M refined masks (bottom). RefCOCO-M tightens boundaries and recovers fine structure that is often missing from the original annotations.
+
+For RefCOCO/+/g and RefCOCO-M, we report cIoU, 
+
+cIoU = 
+
+P 
+
+> n
+
+| ˆMn ∩ Mn|
+
+P 
+
+> n
+
+| ˆMn ∪ Mn| , (14) where the sums run over all n evaluated samples. For RefCOCO-M, we additionally report BIoU@0.05, com-puted using the Boundary IoU in Eq. (11) with boundary width set to 5% of the image diagonal. 
+
+LVIS. To measure instance segmentation performance on the LVIS validation split (Gupta et al., 2019), we report mIoU. For each image, we prompt the model with every annotated category name and collect the predicted masks. Predicted and ground-truth masks are paired via Hungarian matching on IoU; any unpaired mask scores zero, penalizing both under- and over-prediction. 
+
+6.2. Baselines 
+
+We compare against six external baselines spanning prompt-able segmentation, direct VLM mask generation, tool-augmented pipelines, and recent open referring segmen-tation models: SAM 3, Gemini 2.5 Flash, SAM 3 Agent (Gemini 2.5 Pro), LISA (LLaVA 7B), Text4Seg (InternVL2-8B), and SimpleSeg (Qwen2.5-VL). 
+
+SAM 3. We evaluate SAM 3 as a promptable segmentation model with text prompts. It is important to note that SAM 3 is not presented as an RIS model, but as a Promptable Con-cept Segmentation model, where a prompt is a short noun phrase, an image exemplar, or a combination of both, and the model returns masks for all matching object instances. In our RefCOCO-family evaluation, this restricted language ability is the main bottleneck: the dominant failure mode is semantic grounding of referring expressions, rather than mask quality once the target region has been identified. For each referring expression, we pass the referring text directly as the SAM 3 text prompt and select the highest-scoring predicted mask. 
+
+Gemini 2.5 Flash. We follow the official Gemini API segmentation recipe (Google AI for Developers, 2026). We prompt the model to return a JSON list that includes a 2D bounding box and a base64-encoded segmentation mask cropped to that box. We resize the returned mask to the box size and paste it into the full image canvas for evaluation. 
+
+SAM 3 Agent (Gemini 2.5 Pro). We implement a SAM 3 Agent (Gemini 2.5 Pro) using the Gemini API (Google AI for Developers, 2026) and the official SAM 3 reposi-tory (Facebook Research, 2025). The agent iteratively pro-poses short text phrases, calls SAM 3 for mask proposals, and selects the final mask to match the original referring expression. 
+
+LISA (LLaVA 7B). We evaluate the official LISA-7B-v1 release using the official LISA inference code path (JIA-Lab Research, 2024). For each referring expression, we use the prompt template from the repository, “ {expr } Please output segmentation mask.” 
+
+Text4Seg (InternVL2-8B). We evaluate Text4Seg (InternVL2-8B) using the released Text4Seg inference stack (Lan et al., 2025; Lan, 2025). The model uses InternVL2-8B with a SAM ViT-H refinement stage, and we use the prompt template from the repository, “Please segment only the {expr } in the image.” 
+
+SimpleSeg (Qwen2.5-VL). We evaluate the released SimpleSeg-Qwen2.5-VL model using the official Simple-Seg repository guidance (Song, 2026). We use the prompt template from the repository, “Output the polygon coordi-nates of {expr } in the image.”, and the slow processor path for best performance. 
+
+6.3. Main Results       
+
+> Table 2. LVIS (val) instance segmentation comparison (mIoU, %; higher is better). Model LVIS Gemini 2.5 Flash 45.5 SAM 3 Agent (Gemini 2.5 Pro) 59.3 SAM 3 62.6
+> Moondream Seg. 62.6
+
+Quantitative results. Table 1 shows that Moondream Seg-mentation outperforms SAM 3, Gemini 2.5 Flash, LISA, and Text4Seg on all RefCOCO variants, and is competitive with SimpleSeg, leading on RefCOCO testA and testB while trailing by 0.7 percentage points on RefCOCO val. Relative to SAM 3 Agent (Gemini 2.5 Pro), Moondream Segmenta-tion scores higher on all reported RefCOCO-family splits except RefCOCOg test, while requiring no external tool 7Moondream Segmentation    
+
+> Figure 5. Boundary-focused qualitative comparison (prompt:
+> car ). Moondream masks are typically sharper at edges and better preserve fine structure than SAM 3.
+> Figure 6. Qualitative comparison against Gemini 2.5 Flash (prompt: car ). Gemini masks can contain small isolated false positives (salt-and-pepper noise) and boundary noise, while Moon-dream produces cleaner masks with sharper edges.
+
+orchestration. On RefCOCO-M, Moondream Segmentation achieves the strongest results, reaching 87.6 cIoU and 85.4 BIoU@0.05. Table 2 shows that Moondream Segmenta-tion and SAM 3 both reach 62.6 mIoU on LVIS, ahead of SAM 3 Agent (Gemini 2.5 Pro) at 59.3 and Gemini 2.5 Flash at 45.5. RefCOCO and LVIS validation samples are shown in Appendix Figures 10 and 11. 
+
+Boundary fidelity. Beyond aggregate metrics, boundary sharpness matters for high-fidelity downstream use, where small boundary errors are visually salient. Figures 5 and 6 compare Moondream Segmentation against SAM 3 and Gemini 2.5 Flash. SAM 3 often produces softer boundaries around fine structure, while our vector path decoding fol-lowed by refinement yields sharper edges that better align to visible contours. Gemini 2.5 Flash can contain small isolated false positives, a failure mode commonly described as “salt-and-pepper” artifacts in pixel-wise segmentation outputs, while our masks are typically cleaner and more spatially consistent. 
+
+6.4. Refiner Comparison 
+
+We compare our refiner against SAM-based alternatives on RefCOCO-M using rollout-derived coarse masks con-   
+
+> Figure 7. mIoU on a held-out set of RefCOCO-M rollout-derived coarse masks conditioned on the ground-truth bounding box, as a function of refinement steps.
+> Table 3. Refiner comparison. mIoU (%) on a held-out set of RefCOCO-M rollout-derived coarse masks conditioned on the ground-truth bounding box (higher is better).
+
+Refiner RefCOCO-M SAM 2 90.8 HQ-SAM 2 91.7 Moondream Seg. 93.8 
+
+ditioned on the ground-truth bounding box. This isolates refinement quality from semantic grounding errors by avoid-ing cases where the coarse mask does not correspond to the target instance. Each method takes the same rollout-derived coarse mask as input and runs for T = 5 refine-ment steps. We report mIoU between the final refined mask and the ground truth. Note that the SAM-based refiners, SAM 2 (Ravi et al., 2024) and HQ-SAM 2 (Ke, 2024), use their own vision encoder and do not use Moondream vision features, while our refiner conditions on Moondream vision tokens. To select the number of refinement steps, we train separate refiners with T ranging from 1 to 10 and evaluate each at its training step count (Figure 7). T = 5 is selected as it is approximately the point of diminishing returns. 
+
+# 7. Limitations and Future Work 
+
+Our vector-path representation can struggle with disjoint regions and extremely thin structures. Multi-instance masks require multiple passes: a first pass to obtain a point or bounding box for each instance, followed by a second pass for each instance conditioned on the text prompt and spa-tial reference. Future work includes direct multi-instance masking and extensions to video. 8Moondream Segmentation 
+
+# 8. Conclusion 
+
+We presented Moondream Segmentation, a VLM-based re-ferring segmentation model that combines compact vector-path prediction with iterative mask refinement. Across RefCOCO-family benchmarks, it achieves state-of-the-art results on multiple splits and ties SAM 3 at 62.6 mIoU on LVIS. We introduce RefCOCO-M to reduce evaluation noise from coarse polygon annotations and better measure boundary quality. Together, these results show that compact vector intermediates paired with iterative refinement are an effective way to bring high-fidelity segmentation to VLMs. 
+
+# 9. Impact Statement 
+
+Moondream Segmentation enables language-driven, pixel-accurate mask generation with sharp boundaries, which can improve workflows such as image editing, composit-ing, and data annotation. The accompanying RefCOCO-M masks can reduce evaluation noise and support more reliable benchmarking of boundary quality. Like other segmentation models, it could also be misused for non-consensual image manipulation or creating misleading media. 
+
+# 10. Acknowledgments 
+
+We thank Vik Korrapati and Jay Allen for their guidance and contributions on this work. 
+
+# References 
+
+Acuna, D., Ling, H., Kar, A., and Fidler, S. Efficient inter-active annotation of segmentation datasets with Polygon-RNN++. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , pp. 859–868, 2018. doi: 10.1109/CVPR.2018.00096. URL 
+
+http://openaccess.thecvf.com/content_ cvpr_2018/html/Acuna_Efficient_ Interactive_Annotation_CVPR_2018_ paper.html .Beyer, L., Steiner, A., Pinto, A. S., Kolesnikov, A., Wang, X., Salz, D., Neumann, M., Alabdulmohsin, I., Tschan-nen, M., Bugliarello, E., Unterthiner, T., Keysers, D., Koppula, S., Liu, F., Grycner, A., Gritsenko, A., Houlsby, N., Kumar, M., Rong, K., Eisenschlos, J., Kabra, R., Bauer, M., Bo ˇsnjak, M., Chen, X., Minderer, M., Voigt-laender, P., Bica, I., Balazevic, I., Puigcerver, J., Papalam-pidi, P., Henaff, O., Xiong, X., Soricut, R., Harmsen, J., and Zhai, X. PaliGemma: A versatile 3B VLM for transfer. arXiv preprint arXiv:2407.07726 , 2024. Carion, N., Gustafson, L., Hu, Y.-T., Debnath, S., Hu, R., Suris, D., Ryali, C., Alwala, K. V., Khedr, H., Huang, A., Lei, J., Ma, T., Guo, B., Kalla, A., Marks, M., Greer, J., Wang, M., Sun, P., R ¨adle, R., Afouras, T., Mavroudi, E., Xu, K., Wu, T.-H., Zhou, Y., Momeni, L., Hazra, R., Ding, S., Vaze, S., Porcher, F., Li, F., Li, S., Kamath, A., Cheng, H. K., Doll ´ar, P., Ravi, N., Saenko, K., Zhang, P., and Feichtenhofer, C. SAM 3: Segment Anything with concepts, 2025. URL https://arxiv.org/abs/ 2511.16719 .Chen, T., Saxena, S., Li, L., Fleet, D. J., and Hinton, G. E. Pix2Seq: A language modeling framework for object detection. In International Conference on Learning Rep-resentations (ICLR) , 2022. arXiv:2109.10852. Cheng, B., Girshick, R., Dollar, P., Berg, A. C., and Kirillov, A. Boundary IoU: Improving object-centric image seg-mentation evaluation. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , pp. 15334–15342, 2021. Cheng, B., Misra, I., Schwing, A. G., Kirillov, A., and Gird-har, R. Masked-attention mask transformer for universal image segmentation. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , pp. 1290–1299, 2022. Dosovitskiy, A., Beyer, L., Kolesnikov, A., Weissenborn, D., Zhai, X., Unterthiner, T., Dehghani, M., Minderer, M., Heigold, G., Gelly, S., Uszkoreit, J., and Houlsby, N. An image is worth 16x16 words: Transform-ers for image recognition at scale. In International Conference on Learning Representations (ICLR) , 2021. arXiv:2010.11929. Facebook Research. SAM 3 repository. https:// github.com/facebookresearch/sam3 , 2025. Accessed: 2026-03-20. Google AI for Developers. Image understanding. 
+
+https://ai.google.dev/gemini-api/ docs/image-understanding , 2026. Accessed: 2026-01-29. Gupta, A., Doll ´ar, P., and Girshick, R. LVIS: A dataset for large vocabulary instance segmentation. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , 2019. Hu, R., Rohrbach, M., and Darrell, T. Segmenta-tion from natural language expressions. In Proceed-ings of the European Conference on Computer Vi-sion (ECCV) , pp. 108–124, 2016. doi: 10.1007/ 978-3-319-46448-0 7. URL https://doi.org/10. 1007/978-3-319-46448-0_7 .JIA-Lab Research. LISA repository. https://github. com/JIA-Lab-research/LISA , 2024. Accessed: 2026-04-01. 9Moondream Segmentation 
+
+Ke, L. HQ-SAM 2: Segment Anything in high quality for images and videos. https://github.com/SysCV/ sam-hq , 2024. Ke, L., Ye, M., Danelljan, M., Liu, Y., Tai, Y.-W., Tang, C.-K., and Yu, F. Segment Anything in high quality. In Advances in Neural Information Processing Systems (NeurIPS) , 2023. Kirillov, A., Mintun, E., Ravi, N., Mao, H., Rolland, C., Gustafson, L., Xiao, T., Whitehead, S., Berg, A. C., Lo, W.-Y., Dollar, P., and Girshick, R. Segment Anything. In Proceedings of the IEEE/CVF International Confer-ence on Computer Vision (ICCV) , pp. 4015–4026, 2023. arXiv:2304.02643. Korrapati, V., Reid, E., et al. Moondream 3 (pre-view). https://huggingface.co/moondream/ moondream3-preview , 2025. Model card. Accessed: 2026-03-20. Lai, X., Tian, Z., Chen, Y., Li, Y., Yuan, Y., Liu, S., and Jia, J. LISA: Reasoning segmentation via large language model. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , 2024. arXiv:2308.00692. Lan, M. Text4Seg repository. https://github.com/ mc-lan/Text4Seg , 2025. Accessed: 2026-04-01. Lan, M., Chen, C., Zhou, Y., Xu, J., Ke, Y., Wang, X., Feng, L., and Zhang, W. Text4Seg: Reimagining image seg-mentation as text generation. In International Conference on Learning Representations (ICLR) , 2025. Lin, T.-Y., Maire, M., Belongie, S., Hays, J., Perona, P., Ramanan, D., Doll ´ar, P., and Zitnick, C. L. Microsoft COCO: Common objects in context. In European Con-ference on Computer Vision (ECCV) , pp. 740–755, 2014. Liu, J., Ding, H., Cai, Z., Zhang, Y., Satzoda, R. K., Ma-hadevan, V., and Manmatha, R. PolyFormer: Refer-ring image segmentation as sequential polygon gener-ation. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , 2023. arXiv:2302.07387. Mao, J., Huang, J., Toshev, A., Camburu, O., Yuille, A. L., and Murphy, K. Generation and comprehension of unam-biguous object descriptions. In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR) , pp. 11–20, 2016. doi: 10.1109/CVPR.2016.9. URL https://doi.org/10.1109/CVPR.2016. 9.Milletari, F., Navab, N., and Ahmadi, S.-A. V-Net: Fully convolutional neural networks for volumetric medical image segmentation. In Proceedings of the IEEE Inter-national Conference on 3D Vision (3DV) , pp. 565–571, 2016. doi: 10.1109/3DV.2016.79. arXiv:1606.04797. Ravi, N., Gabeur, V., Hu, Y.-T., Hu, R., Ryali, C., Ma, T., Khedr, H., R ¨adle, R., Rolland, C., Gustafson, L., Mintun, E., Pan, J., Alwala, K. V., Carion, N., Wu, C.-Y., Gir-shick, R., Doll ´ar, P., and Feichtenhofer, C. SAM 2: Seg-ment Anything in images and videos. arXiv preprint arXiv:2408.00714 , 2024. Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang, H., Zhang, M., Li, Y. K., Wu, Y., and Guo, D. DeepSeek-Math: Pushing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300 ,2024. Shazeer, N., Mirhoseini, A., Maziarz, K., Davis, A., Le, Q., Hinton, G., and Dean, J. Outrageously large neural networks: The sparsely-gated mixture-of-experts layer. In International Conference on Learning Representations (ICLR) , 2017. arXiv:1701.06538. Song, T. SimpleSeg repository. https://github. com/songtianhui/SimpleSeg , 2026. Accessed: 2026-04-01. Tancik, M., Srinivasan, P. P., Mildenhall, B., Fridovich-Keil, S., Raghavan, N., Singhal, U., Ramamoorthi, R., Barron, J. T., and Ng, R. Fourier features let networks learn high frequency functions in low dimensional domains. In Advances in Neural Information Processing Systems (NeurIPS) , 2020. Tschannen, M., Gritsenko, A., Wang, X., Naeem, M. F., Alabdulmohsin, I., Parthasarathy, N., Evans, T., Beyer, L., Xia, Y., Mustafa, B., Henaff, O., Harmsen, J., Steiner, A., and Zhai, X. SigLIP 2: Multilingual vision-language encoders with improved semantic understand-ing, localization, and dense features. arXiv preprint arXiv:2502.14786 , 2025. Tversky, A. Features of similarity. Psychological Review ,84(4):327–352, 1977. doi: 10.1037/0033-295X.84.4.327. Yu, L., Poirson, P., Yang, S., Berg, A. C., and Berg, T. L. Modeling context in referring expressions. In 
+
+Proceedings of the European Conference on Computer Vision (ECCV) , pp. 69–85, 2016. doi: 10.1007/ 978-3-319-46475-6 5. URL https://doi.org/10. 1007/978-3-319-46475-6_5 .10 Moondream Segmentation 
+
+# A. Appendix 
+
+A.1. Vector Path Tokenization and Rasterization Segmentation prompt and answer sequence. A single segmentation query is serialized as one token sequence. We use a PrefixLM-style layout where the image token grid is inserted immediately after the first token (the BOS token). Conceptually, the sequence is:                   
+
+> <BOS> [IMG] x729 <|mode|> segment <|prompt|> [optional spatial prompt] <referring expression> <|answer|> <|coord|> <|coord|> <|size|> [<|svg start|>] <vector path tokens> [<|svg end|>] <EOS>
+
+The optional spatial prompt can be a point prompt (<|coord|><|coord|> ) or a box prompt (<|coord|><|coord|><|size|> ) placed after <|prompt|> and before the referring expression. The an-swer begins with a predicted box (center and size) represented by <|coord|><|coord|><|size|> and decoded by the RegionModel (Appendix A.2). 
+
+Vector path token grammar. In the vector path portion of the answer (optionally bracketed by <|svg start|> and 
+
+<|svg end|> ), the model emits a flat stream of vector path tokens: • Commands: M, L, C, Z/z (absolute commands only). • Integers: coordinate values are quantized to integers, each represented by a single text token (we use values in 
+
+[−39 , 999] and typically scale a [0 , 1] box-normalized path by a viewBox size of 960 ). • Negative values: a negative integer is represented as the two-token sequence - followed by its magnitude. The token -
+
+only has meaning as a sign for the immediately following integer token. Parsing is deterministic: we read a command token, then consume all following integer tokens until the next command token. Integers are grouped into (x, y ) pairs. For a C command, the sequence is interpreted as triples of pairs (control point 1, control point 2, end point). We do not require the model to emit separators such as commas; instead, separators are inserted deterministically when converting the token stream into an SVG d string. 
+
+Rasterization. Given a predicted box b = ( cx, c y , w, h ) in normalized image coordinates and a decoded path p, we serialize the vector path as an SVG string with a fixed viewBox and use an affine translate+scale to map the box-normalized path into the image. We rasterize the resulting SVG deterministically to obtain ˜M (0)  
+
+> nat
+
+at (H, W ), then resize to the refiner working resolution (H0, W 0).
+
+A.2. RegionModel Encoding and Decoding Overview. Moondream represents binned spatial values using special tokens <|coord|> and <|size|> . A point is represented as <|coord|><|coord|> (center (cx, c y )). A box is represented as <|coord|><|coord|><|size|> 
+
+(center (cx, c y ) and size (w, h )). When a spatial token is generated, the RegionModel decodes a discretized value from the current hidden state and we immediately re-embed the resulting real value for the next decoding step (“decode-then-re-embed”). 
+
+Fourier features and encoders. We use fixed random Fourier features (Tancik et al., 2020). For an input u ∈ Rdin and a random matrix W ∈ R(dϕ/2) ×din , we define 
+
+ϕ(u) =  cos(2 πuW ⊤), sin(2 πuW ⊤) ∈ Rdϕ . (15) Let D be the transformer width (e.g., D = 2048 ). The RegionModel maps a scalar coordinate c ∈ [0 , 1] to an embedding 
+
+ecoord (c) ∈ RD , and maps a size vector s = ( w, h ) ∈ (0 , 1] 2 to an embedding esize (s) ∈ RD using learned linear projections of Fourier features. 11 Moondream Segmentation 
+
+Algorithm 2 RegionModel decode-then-re-embed 
+
+1: Input: next token ids yt; hidden states ht; embeddings ecoord (·), esize (·); bins V = 1024 
+
+2: for each position i where yt[i] = <|coord|> do 
+
+3: ˜h ← LN( ht[i]) 
+
+4: z ← Wcoord ˜h + bcoord ∈ RV
+
+5: v ← arg max z {or sample from softmax( z)}
+
+6: ˆc ← v/V 
+
+7: Replace the transformer input embedding at position i with ecoord (ˆ c)
+
+8: end for 
+
+9: for each position i where yt[i] = <|size|> do 
+
+10: ˜h ← LN( ht[i]) 
+
+11: z ← reshape 
+
+
+
+Wsize ˜h + bsize , 2, V 
+
+
+
+∈ R2×V
+
+12: (vw, v h) ← arg max z {per row (or sample) }
+
+13: ( ˆ w, ˆh) ←  2(vw /(V −1)) ·10 −10 , 2(vh/(V −1)) ·10 −10 
+
+14: Replace the transformer input embedding at position i with esize (( ˆ w, ˆh)) 
+
+15: end for Decoders. Let LN( ·) denote layer normalization and let V = 1024 be the number of bins. Given a hidden state h ∈ RD
+
+at a spatial token position, we compute ˜h = LN( h), (16) and decode logits with linear maps: 
+
+zcoord = Wcoord ˜h + bcoord ∈ RV ,
+
+zsize = reshape 
+
+
+
+Wsize ˜h + bsize , 2, V 
+
+
+
+∈ R2×V , (17) where Wcoord ∈ RV ×D , bcoord ∈ RV , Wsize ∈ R(2 V )×D , and bsize ∈ R2V . The two rows of zsize correspond to width and height logits respectively. 
+
+De-quantization for decode-then-re-embed. We interpret a coordinate bin v ∈ { 0, . . . , V − 1} as the real value 
+
+ˆc = vV . (18) For sizes we use log-space bins. Given a size bin v ∈ { 0, . . . , V − 1}, we map it to a positive extent 
+
+ˆs = 2 ( vV −1 )·10 −10 , (19) and apply this independently to (vw, v h) to obtain ( ˆ w, ˆh).
+
+A.3. Refiner Inference Loop 
+
+For completeness, we provide the refiner inference procedure used at test time. Given frozen encoder features (Fearly , F final )
+
+and an initial coarse mask ˜M (0) (obtained by rasterizing the decoded vector path), we iteratively refine for T steps by selecting the highest-scoring mask at each iteration. 
+
+A.4. Implementation Details Refiner training schedule. We train the refiner by unrolling T = 5 refinement iterations at a fixed refiner resolution (H0 = W0 = 378 ). The vision encoder is frozen and the refiner is optimized with AdamW. 
+
+Boundary-weighted loss and warmup. To emphasize edge alignment, we add a boundary-weighted BCE term based on a signed distance transform of the target mask. Let Ddist ∈ RH0×W0 be a normalized signed distance map (negative inside 12 Moondream Segmentation 
+
+Algorithm 3 Refiner inference (iterative mask refinement) 
+
+1: Input: frozen features Ffinal , F early ; initial mask ˜M (0) ; steps T ; refiner fϕ
+
+2: ˜M ← ˜M (0) 
+
+3: for t = 0 to T − 1 do 
+
+4: (L(t), q (t)) ← fϕ(Ffinal , F early , ˜M )
+
+5: m∗ ← arg max m q(t)
+
+> m
+
+6: ˜M ← σ(L(t) 
+
+> m∗
+
+)
+
+7: end for 
+
+8: Return: ˜M
+
+the mask, positive outside, and Ddist = 0 on the boundary), and define per-pixel weights wij = exp( −γ|Ddist (i, j )|) (we use γ = 10 ). For predicted probabilities P ∈ [0 , 1] H0×W0 and target M ∈ { 0, 1}H0×W0 , we use 
+
+BoundaryLoss( P, M ) = 
+
+P 
+
+> i,j
+
+wij BCE  Pij , M ij 
+
+P 
+
+> i,j
+
+wij + ε . (20) We apply a warmup schedule on its weight λ∂ (s) over global training step s: λ∂ (s) = 0 for the first 1000 steps, then it increases linearly to 1 over the next 500 steps and remains at 1 thereafter. 
+
+SoftIoU. For predicted probabilities P ∈ [0 , 1] H0×W0 and target M ∈ { 0, 1}H0×W0 , we define 
+
+SoftIoU( P, M ) = 
+
+P 
+
+> i,j
+
+Pij Mij 
+
+P 
+
+> i,j
+
+Pij + P 
+
+> i,j
+
+Mij − P 
+
+> i,j
+
+Pij Mij 
+
+. (21) 
+
+A.5. RefCOCO-M Additional Details 
+
+Figure 8. Examples of referring expressions removed from RefCOCO-M by the safety pipeline. 
+
+13 Moondream Segmentation 
+
+A.6. Additional Qualitative Samples 
+
+Figure 9. Additional qualitative samples produced by Moondream Segmentation. Prompts are shown in white boxes. 
+
+14 Moondream Segmentation 
+
+Figure 10. RefCOCO validation samples produced by Moondream Segmentation. Prompts are shown in white boxes. 
+
+15 Moondream Segmentation 
+
+Figure 11. LVIS validation samples produced by Moondream Segmentation. Prompts are shown in white boxes. 
+
+16
