@@ -6,88 +6,115 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-04-12
-- 运行时间：2026-04-12 20:00:12 UTC
+- 最新运行日期：2026-04-13
+- 运行时间：2026-04-13 20:45:53 UTC
 - 运行状态：成功
-- 本次总论文数：22
-- 精读区：9
+- 本次总论文数：31
+- 精读区：18
 - 速读区：13
 
 ### 今日简报（AI）
-今日聚焦 3D 高斯泼溅（3DGS）的重大突破，深度解析了非网格对齐重建与部件级车辆生成等 22 篇前沿成果。
-满分论文重点展示了 Free-Range Gaussians 的灵活重建能力，以及结合关节轴估计实现的精细化 3D 车辆建模。
-建议读者关注 3DGS 在多模态风格迁移与拓扑对齐领域的跨界应用，探索三维场景构建的新范式。
-- 详情：[/202604/12/README](/202604/12/README)
+今日深度解析 31 篇论文，聚焦高保真物体重建与野外视频驱动的 3D 人体建模。
+LSRM 与 GenLCA 凭借缩放上下文窗口和 3D 扩散技术实现满分突破，定义了三维重建的新精度。
+建议重点关注 3D 扩散模型
+- 详情：[/202604/13/README](/202604/13/README)
 
 ### 精读区论文标签
-1. [Free-Range Gaussians: Non-Grid-Aligned Generative 3D Gaussian Reconstruction](/202604/12/2604.04874v1-free-range-gaussians-non-grid-aligned-generative-3d-gaussian-reconstruction)  
-   标签：评分：10.0/10、query:3dgen
-   evidence：基于图像的生成式3D高斯重建
-2. [Part-Level 3D Gaussian Vehicle Generation with Joint and Hinge Axis Estimation](/202604/12/2604.05070v1-part-level-3d-gaussian-vehicle-generation-with-joint-and-hinge-axis-estimation)  
-   标签：评分：10.0/10、query:3dgen
-   evidence：从单张或稀疏图像生成部件级3D高斯车辆模型
-3. [LSRM: High-Fidelity Object-Centric Reconstruction via Scaled Context Windows](/202604/12/2604.05182v1-lsrm-high-fidelity-object-centric-reconstruction-via-scaled-context-windows)  
+1. [LSRM: High-Fidelity Object-Centric Reconstruction via Scaled Context Windows](/202604/13/2604.05182v1-lsrm-high-fidelity-object-centric-reconstruction-via-scaled-context-windows)  
    标签：评分：10.0/10、query:ff3dr
    evidence：扩展Transformer上下文窗口用于前馈3D重建
-4. [GenLCA: 3D Diffusion for Full-Body Avatars from In-the-Wild Videos](/202604/12/2604.07273v1-genlca-3d-diffusion-for-full-body-avatars-from-in-the-wild-videos)  
+2. [GenLCA: 3D Diffusion for Full-Body Avatars from In-the-Wild Videos](/202604/13/2604.07273v1-genlca-3d-diffusion-for-full-body-avatars-from-in-the-wild-videos)  
    标签：评分：10.0/10、query:3dgen
-   evidence：基于扩散模型的文本和图像生成全身3D化身
-5. [CGHair: Compact Gaussian Hair Reconstruction with Card Clustering](/202604/12/2604.03716v1-cghair-compact-gaussian-hair-reconstruction-with-card-clustering)  
+   evidence：基于文本和图像的化身3D扩散生成
+3. [A Semi-Automated Framework for 3D Reconstruction of Medieval Manuscript Miniatures](/202604/13/2604.08610v1-a-semi-automated-framework-for-3d-reconstruction-of-medieval-manuscript-miniatures)  
+   标签：评分：10.0/10、query:3dgen
+   evidence：评估用于手稿重建的图像转3D方法
+4. [AniGen: Unified $S^3$ Fields for Animatable 3D Asset Generation](/202604/13/2604.08746v1-anigen-unified-s3-fields-for-animatable-3d-asset-generation)  
+   标签：评分：10.0/10、query:3dgen
+   evidence：利用统一场从单张图像生成可动画化的3D资产
+5. [SIC3D: Style Image Conditioned Text-to-3D Gaussian Splatting Generation](/202604/13/2604.08760v1-sic3d-style-image-conditioned-text-to-3d-gaussian-splatting-generation)  
+   标签：评分：10.0/10、query:3dgen
+   evidence：带风格条件的文本转3D高斯泼溅生成
+6. [MV3DIS: Multi-View Mask Matching via 3D Guides for Zero-Shot 3D Instance Segmentation](/202604/13/2604.08916v1-mv3dis-multi-view-mask-matching-via-3d-guides-for-zero-shot-3d-instance-segmentation)  
+   标签：评分：10.0/10、query:partseg
+   evidence：利用多视图掩码匹配进行零样本3D实例分割
+7. [Part-Level 3D Gaussian Vehicle Generation with Joint and Hinge Axis Estimation](/202604/13/2604.05070v1-part-level-3d-gaussian-vehicle-generation-with-joint-and-hinge-axis-estimation)  
    标签：评分：9.0/10、query:3dgen
-   evidence：利用高斯泼溅从多视图图像进行高保真头发重建
-6. [Training a Student Expert via Semi-Supervised Foundation Model Distillation](/202604/12/2604.03841v1-training-a-student-expert-via-semi-supervised-foundation-model-distillation)  
-   标签：评分：9.0/10、query:partseg
-   evidence：在像素级标签昂贵的实例分割任务中实例化该框架
-7. [MemoryDiorama: Generating Dynamic 3D Diorama from Everyday Photos for Memory Recall](/202604/12/2604.06773v1-memorydiorama-generating-dynamic-3d-diorama-from-everyday-photos-for-memory-recall)  
+   evidence：从单张图像生成可动画化3D高斯车辆的生成框架
+8. [MemoryDiorama: Generating Dynamic 3D Diorama from Everyday Photos for Memory Recall](/202604/13/2604.06773v1-memorydiorama-generating-dynamic-3d-diorama-from-everyday-photos-for-memory-recall)  
    标签：评分：9.0/10、query:3dgen
-   evidence：结合大模型场景分析与3D物体生成
-8. [GEAR: GEometry-motion Alternating Refinement for Articulated Object Modeling with Gaussian Splatting](/202604/12/2604.07728v1-gear-geometry-motion-alternating-refinement-for-articulated-object-modeling-with-gaussian-splatting)  
-   标签：评分：9.0/10、query:partseg
-   evidence：将部件分割视为关节对象建模的隐变量
-9. [Image-Guided Geometric Stylization of 3D Meshes](/202604/12/2604.07795v1-image-guided-geometric-stylization-of-3d-meshes)  
+   evidence：将基于LLM的场景分析与3D物体生成相结合
+9. [Mem3R: Streaming 3D Reconstruction with Hybrid Memory via Test-Time Training](/202604/13/2604.07279v1-mem3r-streaming-3d-reconstruction-with-hybrid-memory-via-test-time-training)  
+   标签：评分：9.0/10、query:ff3dr
+   evidence：基于前馈循环模型的流式3D重建
+10. [Fast Spatial Memory with Elastic Test-Time Training](/202604/13/2604.07350v1-fast-spatial-memory-with-elastic-test-time-training)  
+   标签：评分：9.0/10、query:ff3dr
+   evidence：长上下文3D重建与快速权重更新
+11. [DailyArt: Discovering Articulation from Single Static Images via Latent Dynamics](/202604/13/2604.07758v1-dailyart-discovering-articulation-from-single-static-images-via-latent-dynamics)  
    标签：评分：9.0/10、query:3dgen
-   evidence：在保留部件级语义的同时对 3D 网格进行几何风格化
+   evidence：从单张图像重建3D关节物体
+12. [Image-Guided Geometric Stylization of 3D Meshes](/202604/13/2604.07795v1-image-guided-geometric-stylization-of-3d-meshes)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：保留部件级语义的图像引导3D网格几何风格化
+13. [Generative Simulation for Policy Learning in Physical Human-Robot Interaction](/202604/13/2604.08664v1-generative-simulation-for-policy-learning-in-physical-human-robot-interaction)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：从文本提示合成3D场景的生成式模拟
+14. [MASS: Mesh-inellipse Aligned Deformable Surfel Splatting for Hand Reconstruction and Rendering from Egocentric Monocular Video](/202604/13/2604.08943v1-mass-mesh-inellipse-aligned-deformable-surfel-splatting-for-hand-reconstruction-and-rendering-from-egocentric-monocular-video)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：利用面片点云从单目视频中进行3D手部重建
+15. [Physically Grounded 3D Generative Reconstruction under Hand Occlusion using Proprioception and Multi-Contact Touch](/202604/13/2604.09100v1-physically-grounded-3d-generative-reconstruction-under-hand-occlusion-using-proprioception-and-multi-contact-touch)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：利用扩散模型和多模态信号进行3D生成式重建
+16. [Strips as Tokens: Artist Mesh Generation with Native UV Segmentation](/202604/13/2604.09132v1-strips-as-tokens-artist-mesh-generation-with-native-uv-segmentation)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：具有原生UV分割的艺术级网格生成
+17. [Hitem3D 2.0: Multi-View Guided Native 3D Texture Generation](/202604/13/2604.09231v1-hitem3d-20-multi-view-guided-native-3d-texture-generation)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：原生3D纹理生成框架
+18. [Structure-Aware Fine-Grained Gaussian Splatting for Expressive Avatar Reconstruction](/202604/13/2604.09324v1-structure-aware-fine-grained-gaussian-splatting-for-expressive-avatar-reconstruction)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：从单目视频序列重建3D人体化身
 
 ### 速读区论文标签
-1. [FunFact: Building Probabilistic Functional 3D Scene Graphs via Factor-Graph Reasoning](/202604/12/2604.03696v1-funfact-building-probabilistic-functional-3d-scene-graphs-via-factor-graph-reasoning)  
-   标签：评分：8.0/10、query:partseg
-   evidence：构建以部件为中心的 3D 地图和功能场景图
-2. [M2StyleGS: Multi-Modality 3D Style Transfer with Gaussian Splatting](/202604/12/2604.03773v1-m2stylegs-multi-modality-3d-style-transfer-with-gaussian-splatting)  
+1. [WaterSplat-SLAM: Photorealistic Monocular SLAM in Underwater Environment](/202604/13/2604.04642v1-watersplat-slam-photorealistic-monocular-slam-in-underwater-environment)  
    标签：评分：8.0/10、query:3dgen
-   evidence：使用高斯泼溅和CLIP进行3D风格迁移
-3. [TORA: Topological Representation Alignment for 3D Shape Assembly](/202604/12/2604.04050v1-tora-topological-representation-alignment-for-3d-shape-assembly)  
-   标签：评分：8.0/10、query:partseg
-   evidence：3D形状组装与部件交互对齐
-4. [4C4D: 4 Camera 4D Gaussian Splatting](/202604/12/2604.04063v1-4c4d-4-camera-4d-gaussian-splatting)  
+   evidence：双视图3D重建与照片级真实感稠密建图
+2. [Fully Procedural Synthetic Data from Simple Rules for Multi-View Stereo](/202604/13/2604.04925v1-fully-procedural-synthetic-data-from-simple-rules-for-multi-view-stereo)  
    标签：评分：8.0/10、query:3dgen
-   evidence：从稀疏多视图视频中恢复4D动态场景
-5. [BiTDiff: Fine-Grained 3D Conducting Motion Generation via BiMamba-Transformer Diffusion](/202604/12/2604.04395v1-bitdiff-fine-grained-3d-conducting-motion-generation-via-bimamba-transformer-diffusion)  
-   标签：评分：8.0/10、query:3dgen
-   evidence：从音乐中生成和合成3D指挥动作
-6. [PR-IQA: Partial-Reference Image Quality Assessment for Diffusion-Based Novel View Synthesis](/202604/12/2604.04576v1-pr-iqa-partial-reference-image-quality-assessment-for-diffusion-based-novel-view-synthesis)  
-   标签：评分：7.0/10、query:3dgen
-   evidence：基于扩散模型的新视角合成与3D重建的质量评估
-7. [PR-IQA: Partial-Reference Image Quality Assessment for Diffusion-Based Novel View Synthesis](/202604/12/2604.04576v2-pr-iqa-partial-reference-image-quality-assessment-for-diffusion-based-novel-view-synthesis)  
-   标签：评分：7.0/10、query:3dgen
-   evidence：3D重建中基于扩散的新视角合成质量评估
-8. [Pickalo: Leveraging 6D Pose Estimation for Low-Cost Industrial Bin Picking](/202604/12/2604.04690v1-pickalo-leveraging-6d-pose-estimation-for-low-cost-industrial-bin-picking)  
+   evidence：用于多视图立体几何的程序化合成数据生成
+3. [Boxer: Robust Lifting of Open-World 2D Bounding Boxes to 3D](/202604/13/2604.05212v1-boxer-robust-lifting-of-open-world-2d-bounding-boxes-to-3d)  
+   标签：评分：8.0/10、query:ff3dr
+   evidence：基于Transformer的网络将2D框提升至3D
+4. [Let Geometry GUIDE: Layer-wise Unrolling of Geometric Priors in Multimodal LLMs](/202604/13/2604.05695v1-let-geometry-guide-layer-wise-unrolling-of-geometric-priors-in-multimodal-llms)  
+   标签：评分：8.0/10、query:ff3dr
+   evidence：用于空间感知的前馈几何基础模型
+5. [Appearance Decomposition Gaussian Splatting for Multi-Traversal Reconstruction](/202604/13/2604.05908v1-appearance-decomposition-gaussian-splatting-for-multi-traversal-reconstruction)  
+   标签：评分：8.0/10、query:ff3dr
+   evidence：使用高斯泼溅的多轨迹3D场景重建
+6. [Hierarchical Point-Patch Fusion with Adaptive Patch Codebook for 3D Shape Anomaly Detection](/202604/13/2604.03972v1-hierarchical-point-patch-fusion-with-adaptive-patch-codebook-for-3d-shape-anomaly-detection)  
    标签：评分：7.0/10、query:partseg
-   evidence：使用Mask-RCNN模型进行物体实例分割
-9. [LEAN-3D: Low-latency Hierarchical Point Cloud Codec for Mobile 3D Streaming](/202604/12/2604.04737v1-lean-3d-low-latency-hierarchical-point-cloud-codec-for-mobile-3d-streaming)  
+   evidence：建模区域部件特征的分层点片融合
+7. [TORA: Topological Representation Alignment for 3D Shape Assembly](/202604/13/2604.04050v1-tora-topological-representation-alignment-for-3d-shape-assembly)  
+   标签：评分：7.0/10、query:partseg
+   evidence：3D形状组装及部件间的关系结构
+8. [A Persistent Homology Design Space for 3D Point Cloud Deep Learning](/202604/13/2604.04299v1-a-persistent-homology-design-space-for-3d-point-cloud-deep-learning)  
+   标签：评分：7.0/10、query:partseg
+   evidence：用于3D点云形状结构和预测任务的持续同调方法
+9. [G-EDF-Loc: 3D Continuous Gaussian Distance Field for Robust Gradient-Based 6DoF Localization](/202604/13/2604.04525v1-g-edf-loc-3d-continuous-gaussian-distance-field-for-robust-gradient-based-6dof-localization)  
    标签：评分：7.0/10、query:ff3dr
-   evidence：用于低延迟3D流的高效点云编解码器
-10. [UniSurgSAM: A Unified Promptable Model for Reliable Surgical Video Segmentation](/202604/12/2604.03645v1-unisurgsam-a-unified-promptable-model-for-reliable-surgical-video-segmentation)  
-   标签：评分：6.0/10、query:partseg
-   evidence：用于手术视频对象分割的统一提示模型
-11. [SymphoMotion: Joint Control of Camera Motion and Object Dynamics for Coherent Video Generation](/202604/12/2604.03723v1-symphomotion-joint-control-of-camera-motion-and-object-dynamics-for-coherent-video-generation)  
+   evidence：高保真空间重建与实时定位
+10. [Surface Quadrilateral Meshing from Integrable Odeco Fields](/202604/13/2604.03889v1-surface-quadrilateral-meshing-from-integrable-odeco-fields)  
    标签：评分：6.0/10、query:3dgen
-   evidence：视频生成中摄像机运动与物体动态的联合控制
-12. [Confidence-Driven Facade Refinement of 3D Building Models Using MLS Point Clouds](/202604/12/2604.03797v1-confidence-driven-facade-refinement-of-3d-building-models-using-mls-point-clouds)  
+   evidence：为3D表面生成正交四边形网格
+11. [DINO-VO: Learning Where to Focus for Enhanced State Estimation](/202604/13/2604.04055v1-dino-vo-learning-where-to-focus-for-enhanced-state-estimation)  
    标签：评分：6.0/10、query:ff3dr
-   evidence：利用点云对3D建筑模型进行精细化处理
-13. [InCaRPose: In-Cabin Relative Camera Pose Estimation Model and Dataset](/202604/12/2604.03814v1-incarpose-in-cabin-relative-camera-pose-estimation-model-and-dataset)  
+   evidence：具有几何先验的端到端单目视觉里程计，适用于大规模环境
+12. [NAIMA: Semantics Aware RGB Guided Depth Super-Resolution](/202604/13/2604.04407v1-naima-semantics-aware-rgb-guided-depth-super-resolution)  
    标签：评分：6.0/10、query:ff3dr
-   evidence：基于Transformer的架构，用于相对位姿预测和几何关系捕捉
+   evidence：用于深度估计和超分辨率的语义先验
+13. [MAVEN: A Mesh-Aware Volumetric Encoding Network for Simulating 3D Flexible Deformation](/202604/13/2604.04474v1-maven-a-mesh-aware-volumetric-encoding-network-for-simulating-3d-flexible-deformation)  
+   标签：评分：6.0/10、query:ff3dr
+   evidence：用于模拟3D柔性变形的网格感知体积编码网络
 
 
 <div class="dpr-home-promo-card">
