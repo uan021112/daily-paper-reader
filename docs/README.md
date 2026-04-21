@@ -6,100 +6,98 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-04-20
-- 运行时间：2026-04-20 20:37:04 UTC
+- 最新运行日期：2026-04-21
+- 运行时间：2026-04-21 20:04:08 UTC
 - 运行状态：成功
-- 本次总论文数：26
-- 精读区：13
+- 本次总论文数：25
+- 精读区：12
 - 速读区：13
 
 ### 今日简报（AI）
-今日聚焦 3D 空间智能与场景建模，深度解析了包括两篇满分神作在内的 26 篇前沿成果。
-重点推荐无位姿多视图 3D 表征学习与前馈式建模新范式，标志着机器空间感知能力的重大跨越。
-建议普通读者从 3D 场景的大规模扩展及硬件加速入手，把握从算法理论到实时应用落地的演进趋势。
-- 详情：[/202604/20/README](/202604/20/README)
+- 今日共生成 25 篇推荐（精读 12 篇，速读 13 篇）
+- 精读：《Feed-Forward 3D Scene Modeling: A Problem-Driven Perspective》（10.0/10）, 《Free Geometry: Refining 3D Reconstruction from Longer Versions of Itself》（10.0/10）
+- 速读：《Cross-Attentive Multiview Fusion of Vision-Language Embeddings》（8.5/10）, 《NG-GS: NeRF-Guided 3D Gaussian Splatting Segmentation》（8.5/10）, 《TowerDataset: A Heterogeneous Benchmark for Transmission Corridor Segmentation with a Global-Local Fusion Framework》（8.5/10）
+- 这些结果覆盖了当下较热的方向，建议先看精读区论文的关键问题与方法。
+- 详情：[/202604/21/README](/202604/21/README)
 
 ### 精读区论文标签
-1. [Learning 3D Representations for Spatial Intelligence from Unposed Multi-View Images](/202604/20/2604.10573v1-learning-3d-representations-for-spatial-intelligence-from-unposed-multi-view-images)  
+1. [Feed-Forward 3D Scene Modeling: A Problem-Driven Perspective](/202604/21/2604.14025v1-feed-forward-3d-scene-modeling-a-problem-driven-perspective)  
    标签：评分：10.0/10、query:ff3dr
-   evidence：旨在统一几何、外观和语义的前馈框架
-2. [Feed-Forward 3D Scene Modeling: A Problem-Driven Perspective](/202604/20/2604.14025v1-feed-forward-3d-scene-modeling-a-problem-driven-perspective)  
+   evidence：关于将图像直接映射到3D的通用前馈3D重建综述
+2. [Free Geometry: Refining 3D Reconstruction from Longer Versions of Itself](/202604/21/2604.14048v1-free-geometry-refining-3d-reconstruction-from-longer-versions-of-itself)  
    标签：评分：10.0/10、query:ff3dr
-   evidence：关于将图像映射到3D的可泛化前馈3D重建综述
-3. [Free Geometry: Refining 3D Reconstruction from Longer Versions of Itself](/202604/20/2604.14048v1-free-geometry-refining-3d-reconstruction-from-longer-versions-of-itself)  
-   标签：评分：10.0/10、query:ff3dr
-   evidence：在测试时优化前馈3D重建模型
-4. [HY-World 2.0: A Multi-Modal World Model for Reconstructing, Generating, and Simulating 3D Worlds](/202604/20/2604.14268v1-hy-world-20-a-multi-modal-world-model-for-reconstructing-generating-and-simulating-3d-worlds)  
+   evidence：通过测试时自我演化改进前馈 3D 重建模型
+3. [HY-World 2.0: A Multi-Modal World Model for Reconstructing, Generating, and Simulating 3D Worlds](/202604/21/2604.14268v1-hy-world-20-a-multi-modal-world-model-for-reconstructing-generating-and-simulating-3d-worlds)  
    标签：评分：10.0/10、query:3dgen
-   evidence：从文本提示、单视图图像和多视图图像生成3D世界
-5. [TokenGS: Decoupling 3D Gaussian Prediction from Pixels with Learnable Tokens](/202604/20/2604.15239v1-tokengs-decoupling-3d-gaussian-prediction-from-pixels-with-learnable-tokens)  
+   evidence：用于从文本、图像和视频重建和生成3D世界的超模态世界模型
+4. [TokenGS: Decoupling 3D Gaussian Prediction from Pixels with Learnable Tokens](/202604/21/2604.15239v1-tokengs-decoupling-3d-gaussian-prediction-from-pixels-with-learnable-tokens)  
    标签：评分：10.0/10、query:ff3dr
-   evidence：使用基于Transformer的编码器-解码器进行前馈3D高斯泼溅预测
-6. [GlobalSplat: Efficient Feed-Forward 3D Gaussian Splatting via Global Scene Tokens](/202604/20/2604.15284v1-globalsplat-efficient-feed-forward-3d-gaussian-splatting-via-global-scene-tokens)  
+   evidence：使用可学习Token的前馈3D高斯泼溅预测
+5. [GlobalSplat: Efficient Feed-Forward 3D Gaussian Splatting via Global Scene Tokens](/202604/21/2604.15284v1-globalsplat-efficient-feed-forward-3d-gaussian-splatting-via-global-scene-tokens)  
    标签：评分：10.0/10、query:ff3dr
-   evidence：通过全局场景令牌实现高效的前馈3D高斯泼溅
-7. [GlobalSplat: Efficient Feed-Forward 3D Gaussian Splatting via Global Scene Tokens](/202604/20/2604.15284v2-globalsplat-efficient-feed-forward-3d-gaussian-splatting-via-global-scene-tokens)  
-   标签：评分：10.0/10、query:ff3dr
-   evidence：通过全局场景令牌实现高效的前馈3D高斯泼溅
-8. [MR.ScaleMaster: Scale-Consistent Collaborative Mapping from Crowd-Sourced Monocular Videos](/202604/20/2604.11372v2-mrscalemaster-scale-consistent-collaborative-mapping-from-crowd-sourced-monocular-videos)  
+   evidence：通过全局场景Token实现高效的前馈3D高斯泼溅
+6. [Co-generation of Layout and Shape from Text via Autoregressive 3D Diffusion](/202604/21/2604.16552v1-co-generation-of-layout-and-shape-from-text-via-autoregressive-3d-diffusion)  
+   标签：评分：10.0/10、query:3dgen
+   evidence：使用3D自回归扩散模型进行文本到场景生成
+7. [Lyra 2.0: Explorable Generative 3D Worlds](/202604/21/2604.13036v1-lyra-20-explorable-generative-3d-worlds)  
    标签：评分：9.0/10、query:ff3dr
-   evidence：从众包单目视频中进行可扩展的3D重建
-9. [SceneCritic: A Symbolic Evaluator for 3D Indoor Scene Synthesis](/202604/20/2604.13035v1-scenecritic-a-symbolic-evaluator-for-3d-indoor-scene-synthesis)  
-   标签：评分：9.0/10、query:3dgen
-   evidence：3D室内场景合成与生成模型的符号评估器
-10. [Lyra 2.0: Explorable Generative 3D Worlds](/202604/20/2604.13036v1-lyra-20-explorable-generative-3d-worlds)  
-   标签：评分：9.0/10、query:ff3dr
-   evidence：通过前馈重建技术将相机控制的视频提升到3D
-11. [VGGT-Segmentor: Geometry-Enhanced Cross-View Segmentation](/202604/20/2604.13596v1-vggt-segmentor-geometry-enhanced-cross-view-segmentation)  
+   evidence：通过前馈重建技术将视频提升为3D
+8. [STEP-Parts: Geometric Partitioning of Boundary Representations for Large-Scale CAD Processing](/202604/21/2604.14927v2-step-parts-geometric-partitioning-of-boundary-representations-for-large-scale-cad-processing)  
    标签：评分：9.0/10、query:partseg
-   evidence：跨第一人称和第三人称视角的实例级物体分割
-12. [STEP-Parts: Geometric Partitioning of Boundary Representations for Large-Scale CAD Processing](/202604/20/2604.14927v1-step-parts-geometric-partitioning-of-boundary-representations-for-large-scale-cad-processing)  
+   evidence：CAD 边界表示的几何分区，用于实例级分析
+9. [One-Shot Cross-Geometry Skill Transfer through Part Decomposition](/202604/21/2604.15455v1-one-shot-cross-geometry-skill-transfer-through-part-decomposition)  
    标签：评分：9.0/10、query:partseg
-   evidence：直接从原始STEP B-Reps中提取几何实例分区
-13. [Repurposing 3D Generative Model for Autoregressive Layout Generation](/202604/20/2604.16299v1-repurposing-3d-generative-model-for-autoregressive-layout-generation)  
+   evidence：将物体分解为语义部件以进行技能迁移
+10. [From Seeing to Simulating: Generative High-Fidelity Simulation with Digital Cousins for Generalizable Robot Learning and Evaluation](/202604/21/2604.15805v1-from-seeing-to-simulating-generative-high-fidelity-simulation-with-digital-cousins-for-generalizable-robot-learning-and-evaluation)  
    标签：评分：9.0/10、query:3dgen
-   evidence：将3D生成模型重新用于自回归3D布局生成
+   evidence：用于高保真模拟场景的生成式3D建模与合成
+11. [Repurposing 3D Generative Model for Autoregressive Layout Generation](/202604/21/2604.16299v1-repurposing-3d-generative-model-for-autoregressive-layout-generation)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：将3D生成模型重新用于布局生成
+12. [Asset Harvester: Extracting 3D Assets from Autonomous Driving Logs for Simulation](/202604/21/2604.18468v1-asset-harvester-extracting-3d-assets-from-autonomous-driving-logs-for-simulation)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：将稀疏观测转换为完整资产的图像到3D模型
 
 ### 速读区论文标签
-1. [PartNerFace: Part-based Neural Radiance Fields for Animatable Facial Avatar Reconstruction](/202604/20/2604.13918v1-partnerface-part-based-neural-radiance-fields-for-animatable-facial-avatar-reconstruction)  
+1. [Cross-Attentive Multiview Fusion of Vision-Language Embeddings](/202604/21/2604.12551v1-cross-attentive-multiview-fusion-of-vision-language-embeddings)  
    标签：评分：8.5/10、query:partseg
-   evidence：基于部件的神经辐射场用于面部化身重建与变形
-2. [FreeScale: Scaling 3D Scenes via Certainty-Aware Free-View Generation](/202604/20/2604.10512v1-freescale-scaling-3d-scenes-via-certainty-aware-free-view-generation)  
-   标签：评分：8.0/10、query:3dgen
-   evidence：通过确定性感知自由视角生成扩展3D场景
-3. [L-PCN: A Point Cloud Accelerator Exploiting Spatial Locality through Octree-based Islandization](/202604/20/2604.10716v1-l-pcn-a-point-cloud-accelerator-exploiting-spatial-locality-through-octree-based-islandization)  
+   evidence：将多视图视觉语言描述符融合为统一的3D实例嵌入
+2. [NG-GS: NeRF-Guided 3D Gaussian Splatting Segmentation](/202604/21/2604.14706v1-ng-gs-nerf-guided-3d-gaussian-splatting-segmentation)  
+   标签：评分：8.5/10、query:partseg
+   evidence：3D高斯泼溅表示中的对象分割
+3. [TowerDataset: A Heterogeneous Benchmark for Transmission Corridor Segmentation with a Global-Local Fusion Framework](/202604/21/2604.16848v1-towerdataset-a-heterogeneous-benchmark-for-transmission-corridor-segmentation-with-a-global-local-fusion-framework)  
+   标签：评分：8.5/10、query:partseg
+   evidence：输电走廊点云的细粒度语义分割及安全关键部件识别
+4. [Ψ-Map: Panoptic Surface Integrated Mapping Enables Real2Sim Transfer](/202604/21/2604.10982v1--map-panoptic-surface-integrated-mapping-enables-real2sim-transfer)  
    标签：评分：8.0/10、query:partseg
-   evidence：用于物体部件分割的点云网络
-4. [Ψ-Map: Panoptic Surface Integrated Mapping Enables Real2Sim Transfer](/202604/20/2604.10982v1--map-panoptic-surface-integrated-mapping-enables-real2sim-transfer)  
+   evidence：全景重建与端到端全景学习
+5. [AffordSim: A Scalable Data Generator and Benchmark for Affordance-Aware Robotic Manipulation](/202604/21/2604.11674v1-affordsim-a-scalable-data-generator-and-benchmark-for-affordance-aware-robotic-manipulation)  
    标签：评分：8.0/10、query:partseg
-   evidence：全景表面集成映射与连贯的全景理解
-5. [LumiMotion: Improving Gaussian Relighting with Scene Dynamics](/202604/20/2604.10994v1-lumimotion-improving-gaussian-relighting-with-scene-dynamics)  
-   标签：评分：8.0/10、query:3dgen
-   evidence：使用高斯泼溅进行神经渲染和逆向渲染
-6. [CV-HoloSR: Hologram to hologram super-resolution through volume-upsampling three-dimensional scenes](/202604/20/2604.10393v1-cv-holosr-hologram-to-hologram-super-resolution-through-volume-upsampling-three-dimensional-scenes)  
-   标签：评分：7.0/10、query:ff3dr
-   evidence：用于3D场景上采样的前馈复值网络
-7. [BareBones: Benchmarking Zero-Shot Geometric Comprehension in VLMs](/202604/20/2604.10528v1-barebones-benchmarking-zero-shot-geometric-comprehension-in-vlms)  
+   evidence：针对功能区域的开放词汇3D意图预测
+6. [HyperLiDAR: Adaptive Post-Deployment LiDAR Segmentation via Hyperdimensional Computing](/202604/21/2604.12331v1-hyperlidar-adaptive-post-deployment-lidar-segmentation-via-hyperdimensional-computing)  
+   标签：评分：7.5/10、query:partseg
+   evidence：用于3D场景理解的轻量级部署后LiDAR语义分割
+7. [GeoLink: A 3D-Aware Framework Towards Better Generalization in Cross-View Geo-Localization](/202604/21/2604.13183v1-geolink-a-3d-aware-framework-towards-better-generalization-in-cross-view-geo-localization)  
+   标签：评分：7.5/10、query:3dgen
+   evidence：从多视图图像重建场景点云以进行地理定位
+8. [Instant Colorization of Gaussian Splats](/202604/21/2604.17155v1-instant-colorization-of-gaussian-splats)  
+   标签：评分：7.5/10、query:partseg
+   evidence：将2D分割掩码映射回3D高斯泼溅以进行3D语义分割
+9. [GeomPrompt: Geometric Prompt Learning for RGB-D Semantic Segmentation Under Missing and Degraded Depth](/202604/21/2604.11585v1-geomprompt-geometric-prompt-learning-for-rgb-d-semantic-segmentation-under-missing-and-degraded-depth)  
    标签：评分：7.0/10、query:partseg
-   evidence：使用轮廓进行几何形状理解的基准测试
-8. [CDPR: Cross-modal Diffusion with Polarization for Reliable Monocular Depth Estimation](/202604/20/2604.11097v1-cdpr-cross-modal-diffusion-with-polarization-for-reliable-monocular-depth-estimation)  
-   标签：评分：7.0/10、query:3dgen
-   evidence：单目深度估计，作为单图3D重建的前置任务
-9. [ViserDex: Visual Sim-to-Real for Robust Dexterous In-hand Reorientation](/202604/20/2604.11138v1-viserdex-visual-sim-to-real-for-robust-dexterous-in-hand-reorientation)  
-   标签：评分：7.0/10、query:3dgen
-   evidence：集成3D高斯泼溅(3DGS)以弥合视觉虚实差异
-10. [PostureObjectstitch: Anomaly Image Generation Considering Assembly Relationships in Industrial Scenarios](/202604/20/2604.13863v1-postureobjectstitch-anomaly-image-generation-considering-assembly-relationships-in-industrial-scenarios)  
-   标签：评分：6.5/10、query:3dgen
-   evidence：考虑工业组件装配关系的图像生成
-11. [BareBones: Benchmarking Zero-Shot Geometric Comprehension in VLMs](/202604/20/2604.10528v2-barebones-benchmarking-zero-shot-geometric-comprehension-in-vlms)  
+   evidence：使用合成几何提示进行语义分割
+10. [Efficient KernelSHAP Explanations for Patch-based 3D Medical Image Segmentation](/202604/21/2604.11775v1-efficient-kernelshap-explanations-for-patch-based-3d-medical-image-segmentation)  
    标签：评分：6.0/10、query:partseg
-   evidence：基准测试零样本几何理解和形状理解
-12. [TAMISeg: Text-Aligned Multi-scale Medical Image Segmentation with Semantic Encoder Distillation](/202604/20/2604.10912v1-tamiseg-text-aligned-multi-scale-medical-image-segmentation-with-semantic-encoder-distillation)  
-   标签：评分：6.0/10、query:partseg
-   evidence：使用临床语言提示进行语义理解的文本引导分割框架
-13. [FlowCoMotion: Text-to-Motion Generation via Token-Latent Flow Modeling](/202604/20/2604.11083v1-flowcomotion-text-to-motion-generation-via-token-latent-flow-modeling)  
+   evidence：3D医学图像分割的可解释性
+11. [Neural Dynamic GI: Random-Access Neural Compression for Temporal Lightmaps in Dynamic Lighting Environments](/202604/21/2604.12625v1-neural-dynamic-gi-random-access-neural-compression-for-temporal-lightmaps-in-dynamic-lighting-environments)  
    标签：评分：6.0/10、query:3dgen
-   evidence：文本到动作合成的生成式建模
+   evidence：用于 3D 渲染中压缩时序光照贴图的神经网络
+12. [Scaling In-Context Segmentation with Hierarchical Supervision](/202604/21/2604.12752v1-scaling-in-context-segmentation-with-hierarchical-supervision)  
+   标签：评分：6.0/10、query:partseg
+   evidence：具有多级监督的上下文分割分层框架
+13. [PatchPoison: Poisoning Multi-View Datasets to Degrade 3D Reconstruction](/202604/21/2604.13153v1-patchpoison-poisoning-multi-view-datasets-to-degrade-3d-reconstruction)  
+   标签：评分：6.0/10、query:ff3dr
+   evidence：通过对抗性投毒破坏3D高斯泼溅重建
 
 
 <div class="dpr-home-promo-card">
