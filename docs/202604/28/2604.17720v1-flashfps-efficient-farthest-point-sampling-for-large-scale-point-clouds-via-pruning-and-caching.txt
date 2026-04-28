@@ -1,0 +1,616 @@
+Title: FlashFPS: Efficient Farthest Point Sampling for Large-Scale Point Clouds via Pruning and Caching
+
+URL Source: https://arxiv.org/pdf/2604.17720v1
+
+Published Time: Tue, 21 Apr 2026 01:46:31 GMT
+
+Number of Pages: 7
+
+Markdown Content:
+# FlashFPS: Efficient Farthest Point Sampling for Large-Scale Point Clouds via Pruning and Caching 
+
+## Yuzhe Fu, Hancheng Ye, Cong Guo †, Junyao Zhang, Qinsi Wang, Yueqian Lin, Changchun Zhou †,Hai (Helen) Li and Yiran Chen 
+
+Duke University Durham, North Carolina, USA {yuzhe.fu,cong.guo,changchun.zhou,hai.li,yiran.chen}@duke.edu 
+
+Abstract 
+
+Point-based Neural Networks (PNNs) have become a key approach for point cloud processing. However, a core operation in these models, Farthest Point Sampling (FPS), often introduces significant inference latency, especially for large-scale processing. Despite existing CUDA- and hardware-level optimizations, FPS remains a major bottleneck due to exhaustive computations across multi-ple network layers in PNNs, which hinders scalability. Through systematic analysis, we identify three substantial redundancies in FPS, including unnecessary full-cloud computations, redundant late-stage iterations, and predictable inter-layer outputs that make later FPS computations avoidable. To address these, we propose 
+
+FlashFPS , a hardware-agnostic, plug-and-play framework for FPS acceleration, composed of FPS-Prune and FPS-Cache . FPS-Prune in-troduces candidate pruning and iteration pruning to reduce redun-dant computations in FPS while preserving sampling quality, and 
+
+FPS-Cache eliminates layer-wise redundancy via cache-and-reuse. Integrated into existing CUDA libraries and state-of-the-art PNN accelerators, FlashFPS achieves 5.16 × speedup over the standard CUDA baseline on GPU and 2.69 × on PNN accelerators, with negli-gible accuracy loss, enabling efficient and scalable PNN inference. Codes are released at https://github.com/Yuzhe-Fu/FlashFPS. 
+
+ACM Reference Format: 
+
+Yuzhe Fu, Hancheng Ye, Cong Guo †, Junyao Zhang, Qinsi Wang, Yueqian Lin, Changchun Zhou †, Hai (Helen) Li and Yiran Chen. 2026. FlashFPS: Efficient Farthest Point Sampling for Large-Scale Point Clouds via Pruning and Caching. In 63rd ACM/IEEE Design Automation Conference (DAC ’26), July 26–29, 2026, Long Beach, CA, USA. ACM, NEW YORK, NY, USA, 7 pages. https://doi.org/10.1145/3770743.3803907 
+
+1 Introduction 
+
+Point-based Neural Networks (PNNs) have become the foundation for 3D perception in applications such as robotics [ 30 ], autonomous driving [ 10 ], and AR/VR systems [ 16 ]. PNNs typically adopt a hier-archical architecture [ 18 , 19 ], as shown in Fig. 1, where each stage downsamples the point cloud via Farthest Point Sampling (FPS) and performs local feature aggregation. FPS has thus become a standard component in modern PNNs [ 4 , 13 , 21 ], valued for its ability to maintain geometric coverage and spatial uniformity. However, as PNNs scale toward real-world deployment, the num-ber of input points has increased drastically, from 1K in early bench-marks [ 23 ] to over 200K in semantic segmentation datasets [ 1 , 2 ],       
+
+> †Corresponding Author: Cong Guo and Changchun Zhou
+> This work is licensed under a Creative Commons Attribution 4.0 International License.
+> DAC ’26, Long Beach, CA, USA
+> ©2026 Copyright held by the owner/author(s). ACM ISBN 979-8-4007-2254-7/2026/07 https://doi.org/10.1145/3770743.3803907 1024 Points
+> 512
+> 256
+> 128
+> FPS
+> FPS
+> FPS
+> 512
+> 256
+> 128
+> Cache
+> Original FlashFPS
+> Stage0
+> Stage1
+> Stage2
+> Reuse
+> Input
+> PNN
+> FPS FlashFPS
+> 0289K Points
+> Latency  FPS
+> FlashFPS
+> Maintained
+> Geometric Features
+> 5.16 x
+> Speedup
+> FP S-Prune
+
+Figure 1: (Left) Comparison between the original FPS-based (CUDA-optimized) and FlashFPS-based PNN architecture. (Right) FlashFPS well maintains geometric features and achieves an average 5.16x inference speedup for PNNs. 
+
+and around 300K per frame in real LiDAR applications [ 22 ]. This rapid growth leads to quadratically increased inference latency. Profiling results show that FPS alone contributes over 90% of the total runtime on GPUs for large-scale point clouds, as shown in Fig. 2. The inefficiency stems from the iterative greedy nature of FPS (Fig. 3): at each iteration, it computes the distances from all input points to the current sampled set and selects the farthest un-sampled point as the next sample (highlighted in blue in Fig. 2). In large-scale processing scenarios, FPS remains essential, as simpler alternatives (e.g., random sampling) cause a 3%–5% accuracy drop that retraining cannot recover. As a result, when input size grows, this exhaustive computation becomes prohibitive, making FPS the dominant bottleneck in modern PNN pipelines. Prior FPS acceleration methods fall into two categories: CUDA-based and hardware-specific. The standard CUDA approaches [ 19 ,20 ] improve intra-iteration parallelism but retain exhaustive com-putations and fully greedy loops. QuickFPS [ 12 ] further improves CUDA efficiency by leveraging a kd-tree to organize memory, but its construction overhead outweighs the benefits when the input size is below 30K points. Hardware-specific works [ 5 , 7, 9, 25 , 29 ]mainly focus on memory streaming and reducing exhaustive oper-ations via partitioning or prediction, but they demand dedicated hardware accelerators, often leading to low GPU utilization and even accuracy degradation, thus limiting scalability and flexibility. Furthermore, a common limitation of existing optimizations is their neglect of the intrinsic algorithmic redundancy in FPS, redun-dancy that worsens as point clouds grow. While FPS ensures geo-metric coverage, its purely distance-based criterion is misaligned with the semantic objectives of 3D understanding tasks. This mis-match causes FPS to oversample semantically similar regions. For example, selecting both tips of an airplane wing due to geomet-ric distance, despite their semantic redundancy. Such inefficiency becomes more pronounced at scale. Internally, this redundancy     
+
+> arXiv:2604.17720v1 [cs.LG] 20 Apr 2026 DAC ’26, July 26–29, 2026, Long Beach, CA, USA Y. Fu, H. Ye, C. Guo, J. Zhang, Q. Wang, Y. Lin, C. Zhou, H. Li, Y. Chen 4K 16K 66K 289K
+> 10 0
+> 10 1
+> 10 2
+> 10 3
+> 10 4
+> Latency (ms)
+> 19.8%
+> 66.8%
+> 84.2%
+> 91.8%
+> 14.4%
+> 67.0%
+> 84.6%
+> 91.4%
+> PointNeXt - Total
+> PointNeXt - FPS
+> PointVector - Total
+> PointVector - FPS
+
+Figure 2: The latency breakdown for PointNeXt-L and PointVector-L inference on a GPU for S3DIS segmentation workloads under varying input scales. a
+
+## g
+
+## c
+
+## f b
+
+## a
+
+## g
+
+## c
+
+## f
+
+## e b
+
+## d
+
+## far. 
+
+## Sampled points 
+
+a b
+
+Sampled points Remained points 
+
+a b
+
+c
+
+## 2nd iteration 
+
+Argmax (Distance from {Sampled Points}) 
+
+## 2nd iteration 
+
+## a
+
+## g
+
+## c
+
+## f b
+
+## a
+
+## g
+
+## c
+
+## f
+
+## e b
+
+## d
+
+## far. 
+
+## Sampled points 
+
+a b
+
+Sampled points Remained points 
+
+a b
+
+c
+
+## 2nd iteration 
+
+Argmax (Distance from {Sampled Points}) 
+
+## 2nd iteration 
+
+Figure 3: Illustration of iteratively greedy selection in FPS. 0 1 2 3 4
+
+> Distance to Center
+> 0.0
+> 0.3
+> 0.6
+> 0.9
+> Prob. Density (Norm.)  Point Distribution
+
+(a) Original. 0 1 2 3 4 
+
+> Distance to Center
+> 0.0
+> 0.3
+> 0.6
+> 0.9
+> Prob. Density (Norm.)  Point Distribution
+
+(b) 50% random sparsification. 
+
+Figure 4: Point distributions after FPS for (a) the original and (b) sparsified input. The X-axis is the distance to the point cloud center and the Y-axis is the normalized probability density. 
+
+manifests in two aspects: (1) Exhaustive full-cloud computa-tion across all points; (2) Repeated iterations inherent to the algorithm, both of which contribute to excessive computation. 
+
+Redundancy in Full-Cloud Computations. FPS selects the point farthest from the current sampled set (Fig. 3), making it unlikely for nearby points to be selected. In large-scale point clouds, many densely clustered points are rarely selected yet still involved in re-dundant distance computations, causing overhead that scales with input size. To demonstrate this redundancy, we randomly sparsify the input to remove clustered, non-informative points before ap-plying FPS. As shown in Fig. 4, even with 50% sparsification, the spatial distribution after FPS remains well preserved. This reveals the inherent inefficiency of full-cloud computations in FPS and motivates our candidates pruning in FlashFPS .
+
+Redundancy in Iterations. FPS prioritizes points farthest from the current sampled set. As shown in Fig. 5a, early-selected points (dark blue) capture the global contour and key structures, while later ones (light blue) mainly refine local details. Since PNNs rely more on early-stage samples for hierarchical feature propagation [ 4, 13 ], later FPS iterations offer diminishing returns. Fig. 5b confirms this: Last 5% FPS Point  First 5% 
+
+(a) Spatial distribution of early (5%, dark blue) vs. late (5%, light blue) FPS samples. 0% 20% 40% 60% 80% 100% 
+
+> 67.5
+> 68.0
+> 68.5
+> 69.0
+> 69.5
+> MloU
+
+(b) PointNeXt-L accuracy after re-placing last 𝑝 % of FPS samples with random points. 
+
+Figure 5: Analysis of sampling order (a) and iteration redun-dancy (b) in Farthest Point Sampling (FPS). 
+
+replacing the final 𝑝 % of FPS samples with random points has minimal impact on accuracy. These insights motivate our strategy to skip late-stage iterations for faster sampling with negligible accuracy loss. Beyond the algorithmic redundancy within FPS itself, additional 
+
+computational redundancy exists at the hierarchical level .In the original FPS algorithm, the initial seed point is randomly selected. State-of-the-art (SOTA) PNNs typically fix this initial seed point to a default value [ 4 , 13 , 21 ], making the FPS process fully deterministic for a given input point cloud—the farthest-point order becomes uniquely determined and produces a consistent sequence of sampled points. Under this deterministic setting, we discover that the FPS outputs across layers exhibit a strict prefix property :the sampled set of any deeper layer is always a prefix (i.e., sub-set) of the first-layer output. We formally prove this property and show that reusing the first-layer FPS results incurs no accuracy loss 
+
+(Section 3.3), which directly motivates our FPS-Cache design. To this end, we design FlashFPS , a plug-and-play framework tailored to address both algorithmic and hierarchical redundancies in FPS, with three key contributions: 
+
+• We propose FPS-Prune , a two-level pruning strategy that re-duces both the input candidates and the number of iterations to accelerate FPS computation. 
+
+• We propose FPS-Cache , a caching mechanism that eliminates redundant layer-wise recomputation by reusing sampling results across network hierarchies. 
+
+• We provide theoretical insights and extensive empirical results demonstrating that the hardware-agnostic FlashFPS achieves an average 5.16 × speedup on GPUs and 2.69 × on PNN accel-erators, without any network modification or retraining .
+
+2 Related Work 
+
+Efforts to accelerate FPS fall into two main categories: GPU-based optimizations and customized hardware designs. GPU-based FPS works mainly focus on CUDA-level paralleliza-tion [ 19 , 20 ]. They exploit point-level parallelism within each it-eration, processing multiple points simultaneously to update the farthest point. However, they retain full-cloud computation and require complete iterative loops, resulting in high latency for large-scale point clouds despite improved intra-iteration throughput. QuickFPS [ 12 ] organizes memory access using a kd-tree and skips partially redundant computations. However, the additional kd-tree construction introduces extra latency, outweighing the saved FPS time and resulting in an average of 63% higher latency when the input size is below 30K points. FlashFPS: Efficient Farthest Point Sampling for Large-Scale Point Clouds via Pruning and Caching DAC ’26, July 26–29, 2026, Long Beach, CA, USA da bh …… fi ec
+
+ba dc fe hg
+
+ba dc
+
+ba
+
+da bh fi ec
+
+ba dc ih ef
+
+ba dc
+
+ba
+
+FPS  FPS -Prune 
+
+FPS -Cache 
+
+Global Candidate 
+
+FPS -Cache 
+
+Cached 
+
+Stage 1 
+
+Stage 2    
+
+> Reduce Comp.
+> Skip Comp.
+> Skip Comp.
+
+FPS 
+
+FPS 
+
+3 Full FPS  1 Partial FPS Stage 3 
+
+Iteration Prune: 4 Iteration 
+
+Reuse 
+
+Reuse 
+
+> Hierarchical PNNs
+
+8 Iterations 
+
+4 Iterations 
+
+2 Iterations 
+
+Candidate Pruning 
+
+j y j y …… 
+
+FPS  FlashFPS 
+
+5.2x Speedup 
+
+Point Cloud  Visualization Stage 1 Stage 2 Stage 3  Stage 1  Stage 2  Stage 3 
+
+Figure 6: FlashFPS: a plug-and-play acceleration framework that integrates FPS-Prune (in-layer pruning) and FPS-Cache (cross-layer reuse) to reduce redundancy and enable efficient FPS processing in PNNs. 
+
+Customized hardware optimizations employ fine-grained strate-gies to accelerate FPS [ 5, 8, 17 ]. Tree-based partitioning meth-ods [ 7, 28 , 29 ] mitigate the full-cloud computation by hierarchi-cally dividing point clouds into blocks and restricting FPS within each block. Prediction-based approaches [ 25 ] estimate sampling distances using one-dimensional features to skip redundant com-putations. However, these methods rely on dedicated hardware support and are poorly suited for GPUs. For example, block-level partitioning requires distinct and imbalanced data for each FPS in-stance, preventing data broadcasting and limiting parallel execution, while the irregular and sequential prediction steps in [ 25 ] further hinder GPU parallelism. As a result, these approaches often yield low GPU utilization and may perform worse than CUDA-based FPS. Beyond limited scalability, these methods substantially modify the standard FPS procedure, necessitating extensive fine-tuning to recover performance and still incurring 1–5% accuracy degradation in many cases [5, 14, 28, 29]. These limitations highlight the need for a plug-and-play and hardware-agnostic FPS optimization that generalizes across plat-forms and PNN architectures. 
+
+3 Proposed Approach 3.1 Preliminaries 
+
+Farthest Point Sampling (FPS). Given an unordered point cloud 
+
+P = {p1, . . . , p𝑁 }, where 𝑁 is the input point size, FPS constructs an ordered subset P1 = [ ˜p1, . . . , ˜p𝑀 1 ] via the iterative and greedy rule: 
+
+˜p𝑘 +1 = arg max 
+
+> p∈ P\P 1,𝑘
+
+min 
+
+> q∈ P 1,𝑘
+
+∥p − q∥2, (1) where 𝑀 1 is the sampled point size, P1,𝑘 = [ ˜p1, . . . , ˜p𝑘 ] is the prefix of the first 𝑘 sampled points. 
+
+Latency Profile of Hierarchical PNNs. Profiling PointNeXt [ 21 ]and its successors [ 4] shows that FPS can account for over 90% of total inference time, with the first layer alone contributing the lion’s share. The rest of the paper, therefore, focuses on two orthogonal optimizations: FPS-Prune — algorithmic pruning inside the first FPS layer, and FPS-Cache — architecture-level reuse across layers, with theoretical guarantees ensuring identical sampling correctness. The 
+
+Algorithm 1 FlashFPS: Accelerated Farthest Point Sampling via Pruning and Cross-Layer Reuse                                                                                    
+
+> Require: Point cloud P; Point Size 𝑁 ; pruning ratio 𝑝 ∈ [ 0,1)
+> Require: Sampling sizes 𝑀 1, 𝑀 2, . . . , 𝑀 𝐿 (where 𝑀 𝐿 =| P 𝐿 |,𝐿 is the number of layers)
+> Ensure: Sampled subsets P1,P2, . . . , P𝐿
+> 1: Layer 1: FPS-Prune with Dual Pruning
+> 2: P′←UniformSample( P,(1−𝑝 ) · 𝑁 )⊲Candidate pruning 3: 𝑘 ← ( 1−𝑝 ) · 𝑀 1⊲Iteration pruning 4: Pfps ←FPS ( P ′, 𝑘 )
+> 5: Prand ←RandomSample ( P \ P fps , 𝑝 ·𝑀 1)
+> 6: P1← P fps ∪ P rand ⊲Sampled points for Layer 1 7: 𝐶𝑎𝑐ℎ𝑒 ( P 1)⊲Cache sampled points for FPS-Cache 8: Layer 2 to 𝐿 : Cross-Layer Reuse via FPS-Cache
+> 9: for 𝑖 =2to 𝐿 do
+> 10: P𝑖 ← P 1[0 : 𝑀 𝑖 ]⊲Reuse prefix from cached P1
+> 11: end for
+> 12: return P1,P2, . . . , P𝐿
+
+overall pipeline of FlashFPS is illustrated in Fig 6, and its pseudocode is provided in Algorithm 1. 
+
+3.2 FPS-Prune: Intra-Layer Pruning 
+
+FPS-Prune is a plug-and-play drop-in that prunes both the input full cloud and iterations while retaining the essential farthest point ordering for key points. Let the pruning ratio be 𝑝 ∈ [ 0, 1). 𝑝 = 0 is the standard FPS. The algorithm of FPS-Prune consists of two steps: 
+
+Step 1. Candidate Pruning. To mitigate the densely clustered regions, we apply a uniform pre-sampling step that retains only 
+
+(1 − 𝑝 )𝑁 points before running FPS, namely candidate pruning, as described in Line 2 of Algorithm 1. Because point clouds are inher-ently unordered and permutation-invariant [ 19 ], uniform pruning produces an unbiased approximation of the original spatial distribu-tion. Consequently, the reduced input maintains the same overall geometric coverage, and the subsequent distance computations in FPS continue to reflect the statistical representativeness of the retained subset. 
+
+Step 2. Iteration Pruning. The late-stage iterations of FPS primar-ily refine local details, which tend to be diminished in deeper PNN layers. Therefore, we apply an iteration pruning, as shown in Lines 3–6 of Algorithm 1. FPS now runs for only (1 − 𝑝 )𝑀 1 iterations on DAC ’26, July 26–29, 2026, Long Beach, CA, USA Y. Fu, H. Ye, C. Guo, J. Zhang, Q. Wang, Y. Lin, C. Zhou, H. Li, Y. Chen 
+
+the pruned set 𝑃 ′, generating Pfps with the first (1 − 𝑝 )𝑀 1 critical farthest points that matter most for downstream receptive-field expansion. The remaining 𝑝𝑀 1 required samples can be filled via random sampling from the input cloud P, excluding the already selected Pfps , which causes negligible accuracy impact ( < 0.2% ) in practice. This process can be efficiently implemented by directly slicing the input, leveraging the unordered nature of point clouds. This hybrid pruning strategy in FPS-Prune mitigates the full-cloud computation in standard FPS, achieving a ∼ 1/( 1 − 𝑝 )2 re-duction in pairwise-distance computations. Meanwhile, FPS-Prune 
+
+preserves the crucial “farthest-first” ordering for early-sampled points. As illustrated in Fig. 4 and Fig. 5, pruning partial candidates and late iterations maintains the sampling distribution of standard FPS, providing the theoretical intuition for FPS-Prune . Empirically, 
+
+FPS-Prune achieves a 3.6 × end-to-end speedup on large-scale bench-marks in a training-free manner with negligible overall accuracy loss (less than 0.3%), making it a practical, plug-and-play alternative for standard FPS. 
+
+3.3 FPS-Cache: Inter-Layer Reuse 
+
+Motivation: In hierarchical PNNs, 𝐿 sampling layers with budgets 
+
+𝑀 1 ≥ 𝑀 2 ≥ · · · ≥ 𝑀 𝐿 are applied sequentially, where each layer performs FPS on the output of the previous one. Although every layer launches a fresh FPS pass in the existing implementations [ 4,17 , 21 ], the prefix property of FPS implies that all FPS operations in deeper layers merely require prefixes of the first-layer result, which is formally proven later in this section. Thus, recomputing FPS 
+
+𝐿 −1 times is redundant. FPS-Cache is proposed to save redundant computation. ∗
+
+FPS-Cache stores the ordered output of the first FPS layer (Line 7 of Algorithm 1) and directly reuses its prefixes for subsequent layers according to their required sample sizes (Line 9-11 of Algorithm 1), completely eliminating repeated sampling operations. Since the cached points are exactly those that an independent FPS would have produced, sampling correctness and model accuracy are fully preserved. As shown in Fig 6, once the first FPS layer completes, its ordered output is cached and later accessed by deeper layers (e.g., the second and third), fully eliminating redundant FPS computations. This simple yet effective optimization yields a 1.35 × end-to-end speedup while incurring negligible memory overhead (3.3 MB for 289K-point inputs with < 0.1% memory overhead), which is negligible compared to the overall model memory footprint. 
+
+Theoretical Analysis: Let P1 = [ ˜p1, . . . , ˜p𝑀 1 ] be the first-layer order obtained by running 𝑀 1 iterations of FPS on P with fixed seed ˜p1. For any 𝑚 ≤ 𝑀 1, write its prefix P1,𝑚 = [ ˜p1, . . . , ˜p𝑚 ]. layer 
+
+2 performs an independent FPS run on the candidate set P1, again initialized at ˜p1 and using FPS to select 𝑀 2 points. Similarly, layer ℓ
+
+runs on Pℓ −1 to select 𝑀 ℓ points. 
+
+Prefix Equivalence: We claim that, under the above consis-tency conditions, running FPS for 𝑚 iterations on the restricted candidate set P1 returns exactly the prefix P1,𝑚 . The argument is by induction on 𝑚 . For 𝑚 =1, the claim is trivial. Assume the statement holds for 𝑚 =𝑘 : the first 𝑘 selections on P1 equal P1,𝑘 = [ ˜p1, . . . , ˜p𝑘 ].At iteration 𝑘 +1, standard FPS on the full set P chooses 
+
+˜p𝑘 +1 ∈ arg max  
+
+> p∈ P
+
+min 
+
+> q∈ P 1,𝑘
+
+∥p − q∥2. (2)   
+
+> ∗The idea parallels the KV-cache in Transformer inference, where key–value pairs computed for early tokens are reused for later decoding steps. [15, 26]
+
+Because P1 ⊆ P , restricting the maximization to P1 cannot produce a point with larger objective value than ˜p𝑘 +1; Otherwise, that point would also have been chosen in the full-set run at step 𝑘 +1, con-tradicting the definition of ˜p𝑘 +1. Maximizer within P1 thus equals 
+
+˜p𝑘 +1, completing the induction. 
+
+Hierarchical Reuse: Applying the above with 𝑚 = 𝑀 2 shows that the layer-2 FPS on P1 with seed ˜p1 returns P1,𝑀 2 , i.e., the length-𝑀 2 prefix of the first-layer order. Repeating this argument on P2 = P1,𝑀 2 , then on P3 = P1,𝑀 3 , and so on, yields for every layer ℓ:Output of layer ℓ = P1,𝑀 ℓ . (3) Therefore, caching the order P1 computed once at layer 1 and handing out prefixes P1,𝑀 ℓ to layers ℓ=2, . . . , 𝐿 exactly reproduces 
+
+their independent FPS outputs under the same seed, metric, and tie–breaking rule. No approximation is introduced, and model ac-curacy is preserved. 
+
+4 Experiments 
+
+We evaluate FlashFPS through five main experiments: (1) accuracy and speedup on SOTA PNNs, (2) speedup compared with CUDA-based works across input scales, (3) performance gains on diverse hardware platforms, (4) FPS-Cache memory footprint, and (5) per-formance in emerging point-cloud LLM scenarios. 
+
+4.1 Experimental Setups 
+
+We evaluate FlashFPS on two SOTA hierarchical PNNs, PointNeXt-L [ 21 ] and PointVector-L [ 4], using two standard semantic segmen-tation benchmarks, S3DIS [ 1] and ScanNet [ 2]. S3DIS comprises six indoor areas (271 rooms, 13 categories) with point counts ranging from 13K–289K, while ScanNet covers 20 indoor categories with 23K–297K points per sample. We adopt the official open-source configurations and report three standard metrics: overall accuracy 
+
+(OA) , mean accuracy (mAcc) , and mean Intersection-over-Union 
+
+(mIoU) , to evaluate the network accuracy. In addition, FlashFPS is evaluated on PointLLM [ 24 ] to assess its applicability in emerging LLM-based point-cloud scenarios. For GPU speedup, baselines in-clude the standard CUDA-optimized FPS [ 20 ] and QuickFPS [ 12 ]. These experiments are conducted on a workstation equipped with an NVIDIA TITAN RTX GPU (24 GB) and a 48-core Intel Xeon CPU (3.0 GHz). For cross-platform evaluation, we further test FlashFPS 
+
+on two state-of-the-art PNN accelerators, PointAcc [ 17 ] and Cres-cent [ 5]. Accelerator results are obtained from a cycle-accurate sim-ulator built on an open-source framework [ 11 ] and cross-validated against published performance for fidelity. 
+
+4.2 Evaluation on SOTA PNNs 
+
+Table 1 summarizes the evaluation results of FlashFPS on SOTA PNNs. “FPS-CUDA” denotes the baseline using the standard CUDA implementation of farthest point sampling, while “ FlashFPS -𝑝 ” rep-resents inference with FPS replaced by FlashFPS , under identical network weights. Here, 𝑝 indicates the pruning ratio, applied con-sistently to both candidate pruning and iteration pruning. Speedup is measured by the total inference time across all test samples for each dataset. As expected, a higher pruning ratio yields greater speedup at the cost of slight accuracy degradation. When 𝑝 = 25% ,FlashFPS achieves an average 1.62 × speedup with less than 0.1% 
+
+drop across all three metrics (OA, mAcc, and mIoU). Even at an aggressive pruning ratio of 𝑝 = 75% , FlashFPS achieves an average 
+
+5.16 × speedup, while maintaining accuracy losses within 0.3% , 0.7% ,and 0.8% for OA, mAcc, and mIoU, respectively. FlashFPS: Efficient Farthest Point Sampling for Large-Scale Point Clouds via Pruning and Caching DAC ’26, July 26–29, 2026, Long Beach, CA, USA 
+
+Table 1: Evaluation of FPS and FlashFPS for semantic seg-mentation on S3DIS and ScanNet. FlashFPS-p integrates FPS-Prune and FPS-Cache, where 𝑝 denotes the pruning ratio. 
+
+Workload Method OA 
+
+(%) 
+
+mAcc 
+
+(%) 
+
+mIoU 
+
+(%) Speedup S3DIS PointNeXt-L 
+
+FPS-CUDA 90.09 75.76 69.33 1FlashFPS-25% 90.05 75.7 69.21 1.76 
+
+FlashFPS-50% 90.00 75.6 69.13 2.72 
+
+FlashFPS-75% 89.92 75.48 69.01 5.28 S3DIS PointVector-L 
+
+FPS-CUDA 90.97 76.75 70.83 1FlashFPS-25% 90.93 76.74 70.79 1.5 
+
+FlashFPS-50% 90.84 76.56 70.55 2.76 
+
+FlashFPS-75% 90.7 76.32 70.27 4.98 ScanNet PointNeXt-L 
+
+FPS-CUDA 89.07 78.66 70.54 1FlashFPS-25% 89.07 78.62 70.45 1.7 
+
+FlashFPS-50% 89.01 78.41 70.17 2.67 
+
+FlashFPS-75% 88.87 78.1 69.79 5.27 ScanNet PointVector-L 
+
+FPS-CUDA 89.1 77.95 70.03 1FlashFPS-25% 89.12 77.97 70.07 1.5 
+
+FlashFPS-50% 89.05 77.92 69.97 2.8 
+
+FlashFPS-75% 88.78 77.24 69.27 5.13 
+
+These results show that FlashFPS incurs negligible accuracy loss in SOTA PNNs, well below the commonly accepted 1% threshold [ 5,6 , 27 , 28 ], while significantly accelerating PNNs inference. This validates FlashFPS as an effective plug-and-play replacement for FPS, improving efficiency without sacrificing performance. 
+
+4.3 Speedup with CUDA-Based works 
+
+Fig. 7 shows the detailed GPU speedup of FlashFPS on PointNeXt-L and PointVector-L using the S3DIS and ScanNet datasets under four representative point numbers. We compare against the CUDA-optimized FPS baseline (FPS-CUDA, from OpenPoints [ 20 ]) and QuickFPS [ 12 ], which is integrated into the same framework for a fair end-to-end comparison. QuickFPS improves memory access and skips partial redundant computations, with slight accuracy degradation (within 0.5%). However, its kd-tree construction incurs additional overhead, resulting in an average of 63.4% longer latency than FPS-CUDA for inputs below 30K points. In contrast, FlashFPS exhibits strong scalability, consistently out-performing both FPS-CUDA and QuickFPS across all input scales through its dual-level optimization. At the algorithmic level, FPS-Prune prunes the input candidates and shortens the iteration loop, yielding average speedups of 3.47 × and 3.28 × over the baseline for PointNeXt-L and PointVector-L, respectively. At the hierarchical level, FPS-Cache eliminates redundant sampling in deeper network layers, contributing an additional 1.36 × and 1.35 × speedup for the two models. Overall, with all workloads involved as in Table 1, 
+
+FlashFPS achieves average 5.16 × and 1.96 × end-to-end speedup over FPS-CUDA and QuickFPS, respectively, making it particularly effective for scalable 3D perception workloads. 
+
+4.4 Speedup on Various Hardware Platforms 
+
+FlashFPS is designed to be hardware-agnostic and does not rely on any specialized hardware support, making it readily deployable across diverse hardware platforms. We evaluate its effectiveness on a server-class GPU (NVIDIA RTX TITAN) and two SOTA PNN ac-celerators, PointAcc [ 17 ] and Crescent [ 5 ]. Fig. 8 shows the speedup of FlashFPS on different hardware platforms based on PointNeXt-L 13k 110k 205k 289k                           
+
+> (a) PointNeXt-L + S3DIS
+> 0
+> 2
+> 4
+> 6
+> Speedup
+> 1.00 1.00 1.00 1.00
+> 0.40
+> 2.64
+> 4.15
+> 5.16
+> 1.20
+> 5.20
+> 6.30
+> 6.94
+> 13k 110k 205k 289k
+> (b) PointVector-L + S3DIS
+> 0
+> 2
+> 4
+> 6
+> Speedup
+> 1.00 1.00 1.00 1.00
+> 0.63
+> 2.51
+> 3.11
+> 4.52
+> 1.23
+> 4.93 5.00
+> 6.70
+> 27k 117k 207k 297k
+> (c) PointNeXt-L + ScanNet
+> 0
+> 2
+> 4
+> 6
+> Speedup
+> 1.00 1.00 1.00 1.00 0.95
+> 2.30
+> 3.93
+> 4.64
+> 2.07
+> 4.91
+> 5.95 6.26
+> 27k 117k 207k 297k
+> (d) PointVector-L + ScanNet
+> 0
+> 2
+> 4
+> 6
+> Speedup
+> 1.00 1.00 1.00 1.00
+> 0.71
+> 2.58
+> 3.92
+> 4.66
+> 1.97
+> 4.77
+> 5.93 6.12
+> FPS-Cuda QuickFPS FlashFPS
+
+Figure 7: GPU inference speedup of FlashFPS on PointNeXt-L and PointVector-L for segmenting S3DIS and ScanNet datasets, compared with FPS-CUDA (baseline) and QuickFPS. PointAcc Crescent GPU        
+
+> (a) PointNeXt-L
+> 0
+> 2
+> 4
+> 6
+> Speedup
+> 1.00 1.00 1.00
+> 1.63
+> 3.93
+> 6.94
+> PointAcc Crescent GPU
+> (b) PointVector-L
+> 0
+> 2
+> 4
+> 6
+> Speedup
+> 1.00 1.00 1.00
+> 1.85
+> 3.33
+> 6.70
+> baseline FlashFPS
+
+Figure 8: Speedup of FlashFPS on different hardware plat-forms based on the S3DIS dataset with 289K as input. 
+
+and PointVector-L, with each work’s native optimization as base-line. While existing PNN accelerators focus on parallelism and memory efficiency, they overlook the latency from redundant FPS computations. FlashFPS addresses this via pruning and caching, reducing both computation and memory access while preserving farthest-selection behavior. Therefore, FlashFPS achieves additional end-to-end speedups of 1.74 × on PointAcc, 3.63 × on Crescent, and 
+
+6.81 × on GPU, demonstrating high efficiency and cross-platform adaptability. On average, FlashFPS delivers a 2.69 × speedup on PNN accelerators. 
+
+4.5 Light Memory of FPS-Cache 
+
+FPS-Cache stores the results of the first-layer FPS in PNNs to elimi-nate redundant computations in subsequent FPS layers, introducing negligible memory overhead. The cached data contains only 𝑁𝑟 
+
+points, where 𝑁 is the input size and 𝑟 is the sampling rate in net-works ( 𝑟 < 1), making the memory requirement grow linearly with input size 𝑁 . As shown in Fig. 9, FPS-Cache adds merely 0.15 MB (0.08%) memory overhead for 13K points and 3.3 MB (0.1%) mem-ory overhead for 289K points, remaining insignificant compared to total network memory. Moreover, the overall network memory grows much faster than the cache overhead, confirming that the additional cost remains negligible even at larger point-cloud scales. Consequently, FPS-Cache achieves an average of 1.35 × speedup without accuracy loss, while adding only ∼0.1% extra memory. DAC ’26, July 26–29, 2026, Long Beach, CA, USA Y. Fu, H. Ye, C. Guo, J. Zhang, Q. Wang, Y. Lin, C. Zhou, H. Li, Y. Chen 0 50k 100k 150k 200k 250k 300k 
+
+> 0
+> 500
+> 1000
+> 1500
+> 2000
+> 2500
+> 3000
+> 3500
+> Memory (MB)
+> Network Memory (MB)
+> FPS-Cache (MB)
+
+Figure 9: Memory footprint comparison of network infer-ence and FPS-Cache across varying input point scales using PointNeXt-L on the S3DIS dataset. Table 2: FPS and end-to-end speedups of FlashFPS in PointLLM across different input point-cloud sizes. #Points FPS Speedup Overall Speedup 
+
+16,384 15.0 × 2.10 ×
+
+32,768 15.5 × 2.90 ×
+
+65,536 15.7 × 4.56 ×
+
+Average 15.4 × 3.19 ×
+
+4.6 Speedup for Point-Cloud LLM 
+
+FlashFPS also accelerates large language models (LLMs) for point cloud understanding. We integrate it into PointLLM [ 24 ], an open-vocabulary 3D reasoning model, where large scenes are first down-sampled by FPS into 8K points before being processed by the LLM. Replacing the standard FPS with FlashFPS greatly reduces latency. On the Objaverse [ 3] dataset using an NVIDIA A100 GPU, FlashFPS 
+
+preserves similar geometric structures and identical keyword pre-dictions as standard FPS, while achieving an average 15 .4× sampling and 3.19 × end-to-end speedup, as listed in Table 2. These results highlight the efficiency and scalability of FlashFPS in LLM-based point cloud pipelines. 
+
+4.7 Ablation Study of FlashFPS Components 
+
+We conduct an ablation study to evaluate the individual and com-bined effects of the three components in FlashFPS : candidate prun-ing (CP) and iteration pruning (IP) from FPS-Prune , and cross-layer reuse via FPS-Cache (FC). As shown in Table 3 using mIoU as the primary accuracy metric, experiments on PointNeXt-L (S3DIS, 75% pruning) reveal that all components contribute to speedup, with the full configuration (CP+IP+FC) achieving 5.28 ×. CP alone yields 
+
+2.44 × with only 0.32% accuracy drop, while FC is inherently lossless. Notably, network accuracy remains unchanged across CP, CP+IP, and CP+IP+FC, a behavior observed exclusively under the 75% pruning setting. This invariance stems from alignment with the network’s 25% sampling ratio. CP prunes 75% of input points, retain-ing the 25% required by the downstream layer, which introduces a slight accuracy loss. IP then skips 75% of FPS iterations on this reduced set, leaving the first 25% of reordered points identical to standard full-loop FPS and therefore not affecting network accuracy. Finally, FC reuses these sampled points across layers without modi-fication, preserving network accuracy. These results confirm that all components are effective and that FlashFPS achieves substantial acceleration without compromising performance. 
+
+Table 3: Ablation of FlashFPS components on PointNeXt-L (S3DIS, segmentation task) with 75% pruning rate. The mIoU is used as the network accuracy metric. 
+
+w/ CP w/ IP w/ FC mIoU (%) Speedup FPS-CUDA (baseline) 69.33 1.00 
+
+✓ 69.01 2.44 
+
+✓ 69.13 2.31 
+
+✓ 69.33 1.10 
+
+✓ ✓ 69.01 3.63 
+
+✓ ✓ 69.01 2.87 
+
+✓ ✓ 69.13 2.77 
+
+✓ ✓ ✓ 69.01 5.28 
+
+5 Conclusion 
+
+We propose FlashFPS , a plug-and-play acceleration framework for farthest point sampling in point-based neural networks. FlashFPS 
+
+incorporates two complementary optimizations: FPS-Prune , which accelerates FPS through pruning, and FPS-Cache , which removes redundant operations across network layers. Experiments demon-strate that FlashFPS achieves average end-to-end speedups of 5.16 ×
+
+on GPUs and 2.69 × on PNN accelerators, while maintaining net-work accuracy, enabling efficient and scalable PNN inference. 
+
+Acknowledgments 
+
+This work was supported in part by NSF grants 2112562 and by ARO W911NF-23-2-0224. The authors would like to thank the anonymous reviewers. FlashFPS: Efficient Farthest Point Sampling for Large-Scale Point Clouds via Pruning and Caching DAC ’26, July 26–29, 2026, Long Beach, CA, USA 
+
+References 
+
+[1] Iro Armeni, Ozan Sener, Amir R Zamir, Helen Jiang, Ioannis Brilakis, Martin Fischer, and Silvio Savarese. 2016. 3d semantic parsing of large-scale indoor spaces. In Proceedings of the IEEE conference on computer vision and pattern recognition . 1534–1543. [2] Angela Dai, Angel X Chang, Manolis Savva, Maciej Halber, Thomas Funkhouser, and Matthias Nießner. 2017. Scannet: Richly-annotated 3d reconstructions of indoor scenes. In Proceedings of the IEEE conference on computer vision and pattern recognition . 5828–5839. [3] Matt Deitke, Dustin Schwenk, Jordi Salvador, Luca Weihs, Oscar Michel, Eli VanderBilt, Ludwig Schmidt, Kiana Ehsani, Aniruddha Kembhavi, and Ali Farhadi. 2023. Objaverse: A universe of annotated 3d objects. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition . 13142–13153. [4] Xin Deng, WenYu Zhang, Qing Ding, and XinMing Zhang. 2023. Pointvector: A vector representation in point cloud analysis. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition . 9455–9465. [5] Yu Feng, Gunnar Hammonds, Yiming Gan, and Yuhao Zhu. 2022. Crescent: taming memory irregularities for accelerating deep point cloud analytics. In 
+
+Proceedings of the 49th Annual International Symposium on Computer Architecture .962–977. [6] Yu Feng, Boyuan Tian, Tiancheng Xu, Paul Whatmough, and Yuhao Zhu. 2020. Mesorasi: Architecture support for point cloud analytics via delayed-aggregation. In 2020 53rd Annual IEEE/ACM International Symposium on Microarchitecture (MICRO) . IEEE, 1037–1050. [7] Yuzhe Fu, Changchun Zhou, Hancheng Ye, Bowen Duan, Qiyu Huang, Chiyue Wei, Cong Guo, Hai Helen Li, and Yiran Chen. 2026. FractalCloud: A Fractal-Inspired Architecture for Efficient Large-Scale Point Cloud Processing. In 2026 IEEE International Symposium on High Performance Computer Architecture (HPCA) .IEEE, 1–15. [8] Yiming Gao, Chao Jiang, Wesley Piard, Xiangru Chen, Bhavesh Patel, and Herman Lam. 2024. Hgpcn: A heterogeneous architecture for e2e embedded point cloud inference. In 2024 57th IEEE/ACM International Symposium on Microarchitecture (MICRO) . IEEE, 1588–1600. [9] Yiming Gao, Jieming Yin, Yuxiang Wang, Xiangru Chen, Zhilei Chai, Bowen Jiang, Jiliang Zhang, and Herman Lam. 2026. L-PCN: A Point Cloud Accelerator Exploiting Spatial Locality through Octree-based Islandization. arXiv preprint arXiv:2604.10716 (2026). [10] Runwei Guan, Jianan Liu, Ningwei Ouyang, Daizong Liu, Xiaolou Sun, Lianqing Zheng, Ming Xu, Yutao Yue, and Hui Xiong. 2025. Talk2PC: Enhancing 3D Visual Grounding through LiDAR and Radar Point Clouds Fusion for Autonomous Driving. arXiv preprint arXiv:2503.08336 (2025). [11] Cong Guo, Jiaming Tang, Weiming Hu, Jingwen Leng, Chen Zhang, Fan Yang, Yunxin Liu, Minyi Guo, and Yuhao Zhu. 2023. Olive: Accelerating large language models via hardware-friendly outlier-victim pair quantization. In Proceedings of the 50th Annual International Symposium on Computer Architecture . 1–15. [12] Meng Han, Liang Wang, Limin Xiao, Hao Zhang, Chenhao Zhang, Xiangrong Xu, and Jianfeng Zhu. 2023. Quickfps: Architecture and algorithm co-design for farthest point sampling in large-scale point clouds. IEEE Transactions on Computer-Aided Design of Integrated Circuits and Systems 42, 11 (2023), 4011– 4024. [13] Qingdong He, Jiangning Zhang, Jinlong Peng, Haoyang He, Xiangtai Li, Yabiao Wang, and Chengjie Wang. 2025. Pointrwkv: Efficient rwkv-like model for hier-archical point cloud learning. In Proceedings of the AAAI Conference on Artificial Intelligence , Vol. 39. 3410–3418. [14] Sangjin Kim, Juhyoung Lee, Dongseok Im, and Hoi-Jun Yoo. 2021. PNNPU: A 11.9 TOPS/W high-speed 3D point cloud-based neural network processor with block-based point processing for regular DRAM access. In 2021 Symposium on VLSI Circuits . IEEE, 1–2. [15] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu, Joseph Gonzalez, Hao Zhang, and Ion Stoica. 2023. Efficient memory management for large language model serving with pagedattention. In 
+
+Proceedings of the 29th symposium on operating systems principles . 611–626. [16] Sixu Li, Yang Zhao, Chaojian Li, Bowei Guo, Jingqun Zhang, Wenbo Zhu, Zhifan Ye, Cheng Wan, and Yingyan Celine Lin. 2024. Fusion-3D: Integrated Acceleration for Instant 3D Reconstruction and Real-Time Rendering. In 2024 57th IEEE/ACM International Symposium on Microarchitecture (MICRO) . IEEE, 78–91. [17] Yujun Lin, Zhekai Zhang, Haotian Tang, Hanrui Wang, and Song Han. 2021. Pointacc: Efficient point cloud accelerator. In MICRO-54: 54th Annual IEEE/ACM International Symposium on Microarchitecture . 449–461. [18] Charles R Qi, Hao Su, Kaichun Mo, and Leonidas J Guibas. 2017. Pointnet: Deep learning on point sets for 3d classification and segmentation. In Proceedings of the IEEE conference on computer vision and pattern recognition . 652–660. [19] Charles Ruizhongtai Qi, Li Yi, Hao Su, and Leonidas J Guibas. 2017. Pointnet++: Deep hierarchical feature learning on point sets in a metric space. Advances in neural information processing systems 30 (2017). [20] Guocheng Qian. 2023. OpenPoints: An Open-Source Library for Point Cloud Analysis. https://github.com/guochengqian/openpoints. Accessed: July 10, 2025. [21] Guocheng Qian, Yuchen Li, Houwen Peng, Jinjie Mai, Hasan Hammoud, Mo-hamed Elhoseiny, and Bernard Ghanem. 2022. Pointnext: Revisiting pointnet++ with improved training and scaling strategies. Advances in neural information processing systems 35 (2022), 23192–23204. [22] Ricardo Roriz, Heitor Silva, Francisco Dias, and Tiago Gomes. 2024. A survey on data compression techniques for automotive lidar point clouds. Sensors 24, 10 (2024), 3185. [23] Jiachen Sun, Qingzhao Zhang, Bhavya Kailkhura, Zhiding Yu, Chaowei Xiao, and Z Morley Mao. 2022. Modelnet40-c: A robustness benchmark for 3d point cloud recognition under corruption. In ICLR 2022 Workshop on Socially Responsible Machine Learning , Vol. 7. [24] Runsen Xu, Xiaolong Wang, Tai Wang, Yilun Chen, Jiangmiao Pang, and Dahua Lin. 2024. Pointllm: Empowering large language models to understand point clouds. In European Conference on Computer Vision . Springer, 131–147. [25] Hyunsung Yoon and Jae-Joon Kim. 2023. Efficient sampling and grouping accel-eration for point cloud deep learning via single coordinate comparison. In 2023 IEEE/ACM International Conference on Computer Aided Design (ICCAD) . IEEE, 1–9. [26] Lianmin Zheng, Liangsheng Yin, Zhiqiang Xie, Chuyue Livia Sun, Jeff Huang, Cody Hao Yu, Shiyi Cao, Christos Kozyrakis, Ion Stoica, Joseph E Gonzalez, et al . 2024. Sglang: Efficient execution of structured language model programs. 
+
+Advances in neural information processing systems 37 (2024), 62557–62583. [27] Changchun Zhou, Yuzhe Fu, Min Liu, Siyuan Qiu, Ge Li, Yifan He, and Hailong Jiao. 2023. An energy-efficient 3D point cloud neural network accelerator with efficient filter pruning, MLP fusion, and dual-stream sampling. In 2023 IEEE/ACM International Conference on Computer Aided Design (ICCAD) . IEEE, 1–9. [28] Changchun Zhou, Yuzhe Fu, Yanzhe Ma, Eryi Han, Yifan He, and Hailong Jiao. 2024. Adjustable Multi-Stream Block-Wise Farthest Point Sampling Acceleration in Point Cloud Analysis. IEEE Transactions on Circuits and Systems II: Express Briefs 71, 7 (2024), 3523–3527. [29] Changchun Zhou, Tianling Huang, Yanzhe Ma, Yuzhe Fu, Xiangjie Song, Siyuan Qiu, Jiacong Sun, Min Liu, Ge Li, Yifan He, et al . 2025. 23.4 Nebula: A 28nm 109.8 TOPS/W 3D PNN Accelerator Featuring Adaptive Partition, Multi-Skipping, and Block-Wise Aggregation. In 2025 IEEE International Solid-State Circuits Conference (ISSCC) , Vol. 68. IEEE, 412–414. [30] Haoyi Zhu, Yating Wang, Di Huang, Weicai Ye, Wanli Ouyang, and Tong He. 2024. Point cloud matters: Rethinking the impact of different observation spaces on robot learning. Advances in Neural Information Processing Systems 37 (2024), 77799–77830.
