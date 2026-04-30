@@ -6,95 +6,100 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-04-29
-- 运行时间：2026-04-29 21:10:56 UTC
+- 最新运行日期：2026-04-30
+- 运行时间：2026-04-30 20:27:49 UTC
 - 运行状态：成功
-- 本次总论文数：24
-- 精读区：11
+- 本次总论文数：26
+- 精读区：13
 - 速读区：13
 
 ### 今日简报（AI）
-- 今日共生成 24 篇推荐（精读 11 篇，速读 13 篇）
-- 精读：《UniCon3R: Contact-aware 3D Human-Scene Reconstruction from Monocular Video》（10.0/10）, 《SpaCeFormer: Fast Proposal-Free Open-Vocabulary 3D Instance Segmentation》（10.0/10）
-- 速读：《You Only Gaussian Once: Controllable 3D Gaussian Splatting for Ultra-Densely Sampled Scenes》（8.5/10）, 《Monocular Depth Estimation via Neural Network with Learnable Algebraic Group and Ring Structures》（8.5/10）, 《An Object-Centered Data Acquisition Method for 3D Gaussian Splatting using Mobile Phones》（8.0/10）
-- 这些结果覆盖了当下较热的方向，建议先看精读区论文的关键问题与方法。
-- 详情：[/202604/29/README](/202604/29/README)
+今日深度解析 26 篇前沿论文，重点突破了从 Web 视频自监督学习 3D 模型及单图生成可动画 3D 化身的技术瓶颈。
+SS3D 实现了端到端的视频转 3D 自监督进化，MeshLAM 则通过单次前馈完成了高质量带纹理的人体重建。
+建议优先关注 3D 高斯泼溅的轻量化训练与空间智能生成，这些进展正显著降低高质量 3D 建模的算力与数据门槛。
+- 详情：[/202604/30/README](/202604/30/README)
 
 ### 精读区论文标签
-1. [UniCon3R: Contact-aware 3D Human-Scene Reconstruction from Monocular Video](/202604/29/2604.19923v1-unicon3r-contact-aware-3d-human-scene-reconstruction-from-monocular-video)  
-   标签：评分：10.0/10、query:ff3dr
-   evidence：用于在线人景4D重建的统一前馈框架
-2. [SpaCeFormer: Fast Proposal-Free Open-Vocabulary 3D Instance Segmentation](/202604/29/2604.20395v1-spaceformer-fast-proposal-free-open-vocabulary-3d-instance-segmentation)  
-   标签：评分：10.0/10、query:partseg
-   evidence：快速开放词汇3D实例分割及大规模数据集
-3. [SS3D: End2End Self-Supervised 3D from Web Videos](/202604/29/2604.22686v1-ss3d-end2end-self-supervised-3d-from-web-videos)  
+1. [SS3D: End2End Self-Supervised 3D from Web Videos](/202604/30/2604.22686v1-ss3d-end2end-self-supervised-3d-from-web-videos)  
    标签：评分：10.0/10、query:ff3dr
    evidence：单目视频的前馈3D估计
-4. [MeshLAM: Feed-Forward One-Shot Animatable Textured Mesh Avatar Reconstruction](/202604/29/2604.22865v1-meshlam-feed-forward-one-shot-animatable-textured-mesh-avatar-reconstruction)  
+2. [MeshLAM: Feed-Forward One-Shot Animatable Textured Mesh Avatar Reconstruction](/202604/30/2604.22865v1-meshlam-feed-forward-one-shot-animatable-textured-mesh-avatar-reconstruction)  
    标签：评分：10.0/10、query:ff3dr
-   evidence：用于单次3D头部重建的前馈框架
-5. [PhyloSDF: Phylogenetically-Conditioned Neural Generation of 3D Skull Morphology via Residual Flow Matching](/202604/29/2604.25371v1-phylosdf-phylogenetically-conditioned-neural-generation-of-3d-skull-morphology-via-residual-flow-matching)  
-   标签：评分：9.5/10、query:3dgen
-   evidence：使用流匹配和DeepSDF进行3D形态的神经生成
-6. [VecHeart: Holistic Four-Chamber Cardiac Anatomy Modeling via Hybrid VecSets](/202604/29/2604.19403v1-vecheart-holistic-four-chamber-cardiac-anatomy-modeling-via-hybrid-vecsets)  
-   标签：评分：9.0/10、query:partseg
-   evidence：具有部件间相关性的四腔心脏结构整体重建与生成
-7. [Context Unrolling in Omni Models](/202604/29/2604.21921v1-context-unrolling-in-omni-models)  
+   evidence：从单张图像进行单次动画网格头部重建的前馈框架
+3. [3D Generation for Embodied AI and Robotic Simulation: A Survey](/202604/30/2604.26509v1-3d-generation-for-embodied-ai-and-robotic-simulation-a-survey)  
+   标签：评分：10.0/10、query:3dgen
+   evidence：具身智能和机器人仿真的3D生成综述
+4. [AnimateAnyMesh++: A Flexible 4D Foundation Model for High-Fidelity Text-Driven Mesh Animation](/202604/30/2604.26917v1-animateanymesh-a-flexible-4d-foundation-model-for-high-fidelity-text-driven-mesh-animation)  
+   标签：评分：10.0/10、query:3dgen
+   evidence：文本驱动3D网格动画的前馈框架
+5. [ProcFunc: Function-Oriented Abstractions for Procedural 3D Generation in Python](/202604/30/2604.26943v1-procfunc-function-oriented-abstractions-for-procedural-3d-generation-in-python)  
+   标签：评分：10.0/10、query:3dgen
+   evidence：用于创建语义组件的过程化3D生成库
+6. [SpaCeFormer: Fast Proposal-Free Open-Vocabulary 3D Instance Segmentation](/202604/30/2604.20395v1-spaceformer-fast-proposal-free-open-vocabulary-3d-instance-segmentation)  
+   标签：评分：9.5/10、query:partseg
+   evidence：快速开放词汇3D实例分割及大规模数据集
+7. [GSCompleter: A Distillation-Free Plugin for Metric-Aware 3D Gaussian Splatting Completion in Seconds](/202604/30/2604.20155v1-gscompleter-a-distillation-free-plugin-for-metric-aware-3d-gaussian-splatting-completion-in-seconds)  
    标签：评分：9.0/10、query:3dgen
-   evidence：用于3D几何生成和推理的多模态模型
-8. [Distance Field Rasterization for End-to-End Mesh Reconstruction](/202604/29/2604.23537v1-distance-field-rasterization-for-end-to-end-mesh-reconstruction)  
+   evidence：3D高斯泼溅补全与度量尺度3D原语合成
+8. [Context Unrolling in Omni Models](/202604/30/2604.21921v1-context-unrolling-in-omni-models)  
    标签：评分：9.0/10、query:3dgen
-   evidence：使用可光栅化SDF表示进行端到端网格重建
-9. [Learning to Identify Out-of-Distribution Objects for 3D LiDAR Anomaly Segmentation](/202604/29/2604.23604v1-learning-to-identify-out-of-distribution-objects-for-3d-lidar-anomaly-segmentation)  
-   标签：评分：9.0/10、query:partseg
-   evidence：直接在特征空间中运行的3D LiDAR异常分割
-10. [Generalizable 3D Gaussian Splatting enabled Semantic Coding for Real-Time Immersive Video Communications](/202604/29/2604.25330v1-generalizable-3d-gaussian-splatting-enabled-semantic-coding-for-real-time-immersive-video-communications)  
+   evidence：包括从文本和图像生成3D几何的多模态生成
+9. [Prox-E: Fine-Grained 3D Shape Editing via Primitive-Based Abstractions](/202604/30/2604.23774v2-prox-e-fine-grained-3d-shape-editing-via-primitive-based-abstractions)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：通过基于基元的抽象进行细粒度3D形状编辑
+10. [WildLIFT: Lifting monocular drone video to 3D for species-agnostic wildlife monitoring](/202604/30/2604.24718v1-wildlift-lifting-monocular-drone-video-to-3d-for-species-agnostic-wildlife-monitoring)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：将单目无人机视频提升为3D场景几何
+11. [Generalizable 3D Gaussian Splatting enabled Semantic Coding for Real-Time Immersive Video Communications](/202604/30/2604.25330v1-generalizable-3d-gaussian-splatting-enabled-semantic-coding-for-real-time-immersive-video-communications)  
    标签：评分：9.0/10、query:ff3dr
-   evidence：集成了可泛化的前馈3D高斯泼溅技术用于实时重建
-11. [Sketch2Arti: Sketch-based Articulation Modeling of CAD Objects](/202604/29/2604.25781v1-sketch2arti-sketch-based-articulation-modeling-of-cad-objects)  
+   evidence：用于实时重建的前馈3D高斯泼溅
+12. [AlphaJet: Automated Conceptual Aircraft Synthesis via Disentangled Generative Priors and Topology-Preserving Evolutionary Search](/202604/30/2604.26337v1-alphajet-automated-conceptual-aircraft-synthesis-via-disentangled-generative-priors-and-topology-preserving-evolutionary-search)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：根据文本任务规范演化出可行的3D飞机模型
+13. [FeatureFox: Sample-Efficient Panoptic Graph Segmentation for Machining Feature Recognition in B-Rep 3D-CAD Models](/202604/30/2604.26770v1-featurefox-sample-efficient-panoptic-graph-segmentation-for-machining-feature-recognition-in-b-rep-3d-cad-models)  
    标签：评分：9.0/10、query:partseg
-   evidence：推断3D CAD对象的活动部件和运动参数
+   evidence：用于3D-CAD模型加工特征识别的全景图分割
 
 ### 速读区论文标签
-1. [You Only Gaussian Once: Controllable 3D Gaussian Splatting for Ultra-Densely Sampled Scenes](/202604/29/2604.21400v1-you-only-gaussian-once-controllable-3d-gaussian-splatting-for-ultra-densely-sampled-scenes)  
+1. [SnapPose3D: Diffusion-Based Single-Frame 2D-to-3D Lifting of Human Poses](/202604/30/2604.26620v1-snappose3d-diffusion-based-single-frame-2d-to-3d-lifting-of-human-poses)  
    标签：评分：8.5/10、query:3dgen
-   evidence：用于3D高斯泼溅的神经渲染及生产级部署
-2. [Monocular Depth Estimation via Neural Network with Learnable Algebraic Group and Ring Structures](/202604/29/2604.24328v1-monocular-depth-estimation-via-neural-network-with-learnable-algebraic-group-and-ring-structures)  
-   标签：评分：8.5/10、query:ff3dr
-   evidence：利用代数结构的前馈神经网络实现从像素到深度几何的直接映射
-3. [An Object-Centered Data Acquisition Method for 3D Gaussian Splatting using Mobile Phones](/202604/29/2604.19216v1-an-object-centered-data-acquisition-method-for-3d-gaussian-splatting-using-mobile-phones)  
+   evidence：单帧图像的人体姿态2D到3D提升
+2. [Gaussians on a Diet: High-Quality Memory-Bounded 3D Gaussian Splatting Training](/202604/30/2604.20046v1-gaussians-on-a-diet-high-quality-memory-bounded-3d-gaussian-splatting-training)  
    标签：评分：8.0/10、query:3dgen
-   evidence：以物体为中心的3D重建数据采集
-4. [TransSplat: Unbalanced Semantic Transport for Language-Driven 3DGS Editing](/202604/29/2604.19571v1-transsplat-unbalanced-semantic-transport-for-language-driven-3dgs-editing)  
+   evidence：高质量内存受限的3D高斯溅射训练
+3. [Exploring Spatial Intelligence from a Generative Perspective](/202604/30/2604.20570v1-exploring-spatial-intelligence-from-a-generative-perspective)  
    标签：评分：8.0/10、query:3dgen
-   evidence：基于语言驱动的3D高斯泼溅编辑与神经渲染技术用于3D内容创作
-5. [GSCompleter: A Distillation-Free Plugin for Metric-Aware 3D Gaussian Splatting Completion in Seconds](/202604/29/2604.20155v1-gscompleter-a-distillation-free-plugin-for-metric-aware-3d-gaussian-splatting-completion-in-seconds)  
+   evidence：生成式空间智能和3D先验引导的生成
+4. [SparseGF: A Height-Aware Sparse Segmentation Framework with Context Compression for Robust Ground Filtering Across Urban to Natural Scenes](/202604/30/2604.21356v1-sparsegf-a-height-aware-sparse-segmentation-framework-with-context-compression-for-robust-ground-filtering-across-urban-to-natural-scenes)  
+   标签：评分：8.0/10、query:partseg
+   evidence：将点云分为地面和非地面部分
+5. [You Only Gaussian Once: Controllable 3D Gaussian Splatting for Ultra-Densely Sampled Scenes](/202604/30/2604.21400v2-you-only-gaussian-once-controllable-3d-gaussian-splatting-for-ultra-densely-sampled-scenes)  
    标签：评分：8.0/10、query:3dgen
-   evidence：3D高斯泼溅补全与场景生成
-6. [PAGaS: Pixel-Aligned 1DoF Gaussian Splatting for Depth Refinement](/202604/29/2604.22129v1-pagas-pixel-aligned-1dof-gaussian-splatting-for-depth-refinement)  
-   标签：评分：7.5/10、query:3dgen
-   evidence：将高斯泼溅应用于多视图立体深度任务和几何保真度
-7. [NRGS: Neural Regularization for Robust 3D Semantic Gaussian Splatting](/202604/29/2604.22439v1-nrgs-neural-regularization-for-robust-3d-semantic-gaussian-splatting)  
-   标签：评分：7.5/10、query:partseg
-   evidence：优化3D语义场以实现鲁棒的3D语义高斯泼溅，支持分割等下游任务。
-8. [ESICA: A Scalable Framework for Text-Guided 3D Medical Image Segmentation](/202604/29/2604.24876v1-esica-a-scalable-framework-for-text-guided-3d-medical-image-segmentation)  
-   标签：评分：7.5/10、query:partseg
-   evidence：文本引导的3D医学图像分割与语义对齐
-9. [EgoMotion: Hierarchical Reasoning and Diffusion for Egocentric Vision-Language Motion Generation](/202604/29/2604.19105v1-egomotion-hierarchical-reasoning-and-diffusion-for-egocentric-vision-language-motion-generation)  
+   evidence：用于神经渲染的可控3D高斯泼溅
+6. [Gaussians on a Diet: High-Quality Memory-Bounded 3D Gaussian Splatting Training](/202604/30/2604.20046v2-gaussians-on-a-diet-high-quality-memory-bounded-3d-gaussian-splatting-training)  
+   标签：评分：7.0/10、query:ff3dr
+   evidence：3D高斯泼溅重建的内存受限训练
+7. [Semantic-Fast-SAM: Efficient Semantic Segmenter](/202604/30/2604.20169v2-semantic-fast-sam-efficient-semantic-segmenter)  
+   标签：评分：7.0/10、query:partseg
+   evidence：高效的语义标注与实例掩码生成
+8. [Random Walk on Point Clouds for Feature Detection](/202604/30/2604.20474v1-random-walk-on-point-clouds-for-feature-detection)  
+   标签：评分：7.0/10、query:partseg
+   evidence：从点云中提取特征点以勾勒形状
+9. [MAPRPose: Mask-Aware Proposal and Amodal Refinement for Multi-Object 6D Pose Estimation](/202604/30/2604.20650v1-maprpose-mask-aware-proposal-and-amodal-refinement-for-multi-object-6d-pose-estimation)  
    标签：评分：7.0/10、query:3dgen
-   evidence：结合视觉和语言合成3D人体运动
-10. [Camera Control for Text-to-Image Generation via Learning Viewpoint Tokens](/202604/29/2604.19954v1-camera-control-for-text-to-image-generation-via-learning-viewpoint-tokens)  
+   evidence：从图像中重建完整的物体几何形状以进行姿态估计
+10. [Reshoot-Anything: A Self-Supervised Model for In-the-Wild Video Reshooting](/202604/30/2604.21776v1-reshoot-anything-a-self-supervised-model-for-in-the-wild-video-reshooting)  
    标签：评分：6.5/10、query:3dgen
-   evidence：利用3D渲染几何监督实现文本到图像生成的精确相机控制
-11. [Pre-process for segmentation task with nonlinear diffusion filters](/202604/29/2604.21422v1-pre-process-for-segmentation-task-with-nonlinear-diffusion-filters)  
-   标签：评分：6.5/10、query:partseg
-   evidence：非线性扩散滤波器作为分割的前处理
-12. [SketchVLM: Vision language models can annotate images to explain thoughts and guide users](/202604/29/2604.22875v1-sketchvlm-vision-language-models-can-annotate-images-to-explain-thoughts-and-guide-users)  
-   标签：评分：6.5/10、query:partseg
-   evidence：用于部件标注和在物体周围绘制形状的VLM框架
-13. [Breaking the Resource Wall: Geometry-Guided Sequence Modeling for Efficient Semantic Segmentation](/202604/29/2604.23399v1-breaking-the-resource-wall-geometry-guided-sequence-modeling-for-efficient-semantic-segmentation)  
-   标签：评分：6.5/10、query:partseg
-   evidence：几何引导的序列建模用于高效语义分割和结构感知
+   evidence：用于视频重拍和视图合成的自监督框架
+11. [Reshoot-Anything: A Self-Supervised Model for In-the-Wild Video Reshooting](/202604/30/2604.21776v2-reshoot-anything-a-self-supervised-model-for-in-the-wild-video-reshooting)  
+   标签：评分：6.5/10、query:3dgen
+   evidence：用于视频重拍和视图合成的自监督框架
+12. [Topology-Aware Skeleton Detection via Lighthouse-Guided Structured Inference](/202604/30/2604.20123v1-topology-aware-skeleton-detection-via-lighthouse-guided-structured-inference)  
+   标签：评分：6.0/10、query:partseg
+   evidence：拓扑感知骨架检测与完整几何形状恢复
+13. [Semantic-Fast-SAM: Efficient Semantic Segmenter](/202604/30/2604.20169v1-semantic-fast-sam-efficient-semantic-segmenter)  
+   标签：评分：6.0/10、query:partseg
+   evidence：用于掩码生成和分类的语义标注流水线
 
 
 <div class="dpr-home-promo-card">
