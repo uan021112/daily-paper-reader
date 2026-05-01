@@ -6,100 +6,110 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-04-30
-- 运行时间：2026-04-30 20:27:49 UTC
+- 最新运行日期：2026-05-01
+- 运行时间：2026-05-01 20:35:43 UTC
 - 运行状态：成功
-- 本次总论文数：26
-- 精读区：13
+- 本次总论文数：29
+- 精读区：16
 - 速读区：13
 
 ### 今日简报（AI）
-今日深度解析 26 篇前沿论文，重点突破了从 Web 视频自监督学习 3D 模型及单图生成可动画 3D 化身的技术瓶颈。
-SS3D 实现了端到端的视频转 3D 自监督进化，MeshLAM 则通过单次前馈完成了高质量带纹理的人体重建。
-建议优先关注 3D 高斯泼溅的轻量化训练与空间智能生成，这些进展正显著降低高质量 3D 建模的算力与数据门槛。
-- 详情：[/202604/30/README](/202604/30/README)
+- 今日共生成 29 篇推荐（精读 16 篇，速读 13 篇）
+- 精读：《MeshLAM: Feed-Forward One-Shot Animatable Textured Mesh Avatar Reconstruction》（10.0/10）, 《Generalizable 3D Gaussian Splatting enabled Semantic Coding for Real-Time Immersive Video Communications》（10.0/10）
+- 速读：《NRGS: Neural Regularization for Robust 3D Semantic Gaussian Splatting》（8.5/10）, 《BIMStruct3D: A Fully Automated Hybrid Learning Scan-to-BIM Pipeline with Integrated Topology Refinement》（8.5/10）, 《Target-depth sensing with metasurface-encoder integrated optoelectronic neural network》（8.5/10）
+- 这些结果覆盖了当下较热的方向，建议先看精读区论文的关键问题与方法。
+- 详情：[/202605/01/README](/202605/01/README)
 
 ### 精读区论文标签
-1. [SS3D: End2End Self-Supervised 3D from Web Videos](/202604/30/2604.22686v1-ss3d-end2end-self-supervised-3d-from-web-videos)  
+1. [MeshLAM: Feed-Forward One-Shot Animatable Textured Mesh Avatar Reconstruction](/202605/01/2604.22865v1-meshlam-feed-forward-one-shot-animatable-textured-mesh-avatar-reconstruction)  
    标签：评分：10.0/10、query:ff3dr
-   evidence：单目视频的前馈3D估计
-2. [MeshLAM: Feed-Forward One-Shot Animatable Textured Mesh Avatar Reconstruction](/202604/30/2604.22865v1-meshlam-feed-forward-one-shot-animatable-textured-mesh-avatar-reconstruction)  
+   evidence：基于单张图像的一次性前馈网格头部重建框架
+2. [Generalizable 3D Gaussian Splatting enabled Semantic Coding for Real-Time Immersive Video Communications](/202605/01/2604.25330v1-generalizable-3d-gaussian-splatting-enabled-semantic-coding-for-real-time-immersive-video-communications)  
    标签：评分：10.0/10、query:ff3dr
-   evidence：从单张图像进行单次动画网格头部重建的前馈框架
-3. [3D Generation for Embodied AI and Robotic Simulation: A Survey](/202604/30/2604.26509v1-3d-generation-for-embodied-ai-and-robotic-simulation-a-survey)  
+   evidence：用于实时重建的前馈3D高斯泼溅
+3. [3D Generation for Embodied AI and Robotic Simulation: A Survey](/202605/01/2604.26509v1-3d-generation-for-embodied-ai-and-robotic-simulation-a-survey)  
    标签：评分：10.0/10、query:3dgen
-   evidence：具身智能和机器人仿真的3D生成综述
-4. [AnimateAnyMesh++: A Flexible 4D Foundation Model for High-Fidelity Text-Driven Mesh Animation](/202604/30/2604.26917v1-animateanymesh-a-flexible-4d-foundation-model-for-high-fidelity-text-driven-mesh-animation)  
+   evidence：具身智能与机器人仿真的3D生成综述
+4. [AnimateAnyMesh++: A Flexible 4D Foundation Model for High-Fidelity Text-Driven Mesh Animation](/202605/01/2604.26917v1-animateanymesh-a-flexible-4d-foundation-model-for-high-fidelity-text-driven-mesh-animation)  
    标签：评分：10.0/10、query:3dgen
    evidence：文本驱动3D网格动画的前馈框架
-5. [ProcFunc: Function-Oriented Abstractions for Procedural 3D Generation in Python](/202604/30/2604.26943v1-procfunc-function-oriented-abstractions-for-procedural-3d-generation-in-python)  
+5. [Reconstruction by Generation: 3D Multi-Object Scene Reconstruction from Sparse Observations](/202605/01/2604.27106v1-reconstruction-by-generation-3d-multi-object-scene-reconstruction-from-sparse-observations)  
    标签：评分：10.0/10、query:3dgen
-   evidence：用于创建语义组件的过程化3D生成库
-6. [SpaCeFormer: Fast Proposal-Free Open-Vocabulary 3D Instance Segmentation](/202604/30/2604.20395v1-spaceformer-fast-proposal-free-open-vocabulary-3d-instance-segmentation)  
-   标签：评分：9.5/10、query:partseg
-   evidence：快速开放词汇3D实例分割及大规模数据集
-7. [GSCompleter: A Distillation-Free Plugin for Metric-Aware 3D Gaussian Splatting Completion in Seconds](/202604/30/2604.20155v1-gscompleter-a-distillation-free-plugin-for-metric-aware-3d-gaussian-splatting-completion-in-seconds)  
+   evidence：用于物体和部件形状联合估计的生成式框架
+6. [REVIVE 3D: Refinement via Encoded Voluminous Inflated prior for Volume Enhancement](/202605/01/2604.27504v1-revive-3d-refinement-via-encoded-voluminous-inflated-prior-for-volume-enhancement)  
+   标签：评分：10.0/10、query:3dgen
+   evidence：从2D图像生成具有部件感知细节的3D资产
+7. [3D-ReGen: A Unified 3D Geometry Regeneration Framework](/202605/01/2604.28134v1-3d-regen-a-unified-3d-geometry-regeneration-framework)  
+   标签：评分：10.0/10、query:3dgen
+   evidence：从二维图像和初始三维形状再生三维物体，用于增强和重建
+8. [Generalizable Sparse-View 3D Reconstruction from Unconstrained Images](/202605/01/2604.28193v1-generalizable-sparse-view-3d-reconstruction-from-unconstrained-images)  
+   标签：评分：10.0/10、query:ff3dr
+   evidence：用于稀疏视图室外重建的前馈框架
+9. [CasLayout: Cascaded 3D Layout Diffusion for Indoor Scene Synthesis with Implicit Relation Modeling](/202605/01/2604.27361v1-caslayout-cascaded-3d-layout-diffusion-for-indoor-scene-synthesis-with-implicit-relation-modeling)  
+   标签：评分：9.5/10、query:3dgen
+   evidence：基于扩散模型的3D室内场景合成
+10. [SpatialGrammar: A Domain-Specific Language for LLM-Based 3D Indoor Scene Generation](/202605/01/2604.27555v1-spatialgrammar-a-domain-specific-language-for-llm-based-3d-indoor-scene-generation)  
+   标签：评分：9.5/10、query:3dgen
+   evidence：使用大语言模型从自然语言生成交互式3D室内场景
+11. [3D Reconstruction Techniques in the Manufacturing Domain: Applications, Research Opportunities and Use Cases](/202605/01/2604.28064v1-3d-reconstruction-techniques-in-the-manufacturing-domain-applications-research-opportunities-and-use-cases)  
+   标签：评分：9.5/10、query:ff3dr
+   evidence：对包括深度学习在内的最先进3D重建技术的综述
+12. [OmniFit: Multi-modal 3D Body Fitting via Scale-agnostic Dense Landmark Prediction](/202605/01/2604.21575v1-omnifit-multi-modal-3d-body-fitting-via-scale-agnostic-dense-landmark-prediction)  
    标签：评分：9.0/10、query:3dgen
-   evidence：3D高斯泼溅补全与度量尺度3D原语合成
-8. [Context Unrolling in Omni Models](/202604/30/2604.21921v1-context-unrolling-in-omni-models)  
-   标签：评分：9.0/10、query:3dgen
-   evidence：包括从文本和图像生成3D几何的多模态生成
-9. [Prox-E: Fine-Grained 3D Shape Editing via Primitive-Based Abstractions](/202604/30/2604.23774v2-prox-e-fine-grained-3d-shape-editing-via-primitive-based-abstractions)  
-   标签：评分：9.0/10、query:3dgen
-   evidence：通过基于基元的抽象进行细粒度3D形状编辑
-10. [WildLIFT: Lifting monocular drone video to 3D for species-agnostic wildlife monitoring](/202604/30/2604.24718v1-wildlift-lifting-monocular-drone-video-to-3d-for-species-agnostic-wildlife-monitoring)  
-   标签：评分：9.0/10、query:3dgen
-   evidence：将单目无人机视频提升为3D场景几何
-11. [Generalizable 3D Gaussian Splatting enabled Semantic Coding for Real-Time Immersive Video Communications](/202604/30/2604.25330v1-generalizable-3d-gaussian-splatting-enabled-semantic-coding-for-real-time-immersive-video-communications)  
-   标签：评分：9.0/10、query:ff3dr
-   evidence：用于实时重建的前馈3D高斯泼溅
-12. [AlphaJet: Automated Conceptual Aircraft Synthesis via Disentangled Generative Priors and Topology-Preserving Evolutionary Search](/202604/30/2604.26337v1-alphajet-automated-conceptual-aircraft-synthesis-via-disentangled-generative-priors-and-topology-preserving-evolutionary-search)  
-   标签：评分：9.0/10、query:3dgen
-   evidence：根据文本任务规范演化出可行的3D飞机模型
-13. [FeatureFox: Sample-Efficient Panoptic Graph Segmentation for Machining Feature Recognition in B-Rep 3D-CAD Models](/202604/30/2604.26770v1-featurefox-sample-efficient-panoptic-graph-segmentation-for-machining-feature-recognition-in-b-rep-3d-cad-models)  
+   evidence：从图像和扫描等多种模态输入重建3D人体模型
+13. [Semantic Foam: Unifying Spatial and Semantic Scene Decomposition](/202605/01/2604.26262v1-semantic-foam-unifying-spatial-and-semantic-scene-decomposition)  
    标签：评分：9.0/10、query:partseg
-   evidence：用于3D-CAD模型加工特征识别的全景图分割
+   evidence：统一空间与语义场景分解
+14. [FeatureFox: Sample-Efficient Panoptic Graph Segmentation for Machining Feature Recognition in B-Rep 3D-CAD Models](/202605/01/2604.26770v1-featurefox-sample-efficient-panoptic-graph-segmentation-for-machining-feature-recognition-in-b-rep-3d-cad-models)  
+   标签：评分：9.0/10、query:partseg
+   evidence：3D-CAD模型中加工特征识别的全景分割
+15. [D-Rex : Diffusion Rendering for Relightable Expressive Avatars](/202605/01/2604.27871v1-d-rex--diffusion-rendering-for-relightable-expressive-avatars)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：高质量3D人体化身生成与渲染
+16. [ResiHMR: Residual-Limb Aware Single-Image 3D Human Mesh Recovery for Individuals with Limb Loss](/202605/01/2604.28025v1-resihmr-residual-limb-aware-single-image-3d-human-mesh-recovery-for-individuals-with-limb-loss)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：单张图像的3D人体网格恢复与重建
 
 ### 速读区论文标签
-1. [SnapPose3D: Diffusion-Based Single-Frame 2D-to-3D Lifting of Human Poses](/202604/30/2604.26620v1-snappose3d-diffusion-based-single-frame-2d-to-3d-lifting-of-human-poses)  
+1. [NRGS: Neural Regularization for Robust 3D Semantic Gaussian Splatting](/202605/01/2604.22439v1-nrgs-neural-regularization-for-robust-3d-semantic-gaussian-splatting)  
+   标签：评分：8.5/10、query:partseg
+   evidence：优化高斯泼溅中的噪声3D语义场
+2. [BIMStruct3D: A Fully Automated Hybrid Learning Scan-to-BIM Pipeline with Integrated Topology Refinement](/202605/01/2604.24311v1-bimstruct3d-a-fully-automated-hybrid-learning-scan-to-bim-pipeline-with-integrated-topology-refinement)  
+   标签：评分：8.5/10、query:partseg
+   evidence：基于学习的3D点云结构元素语义分割
+3. [Target-depth sensing with metasurface-encoder integrated optoelectronic neural network](/202605/01/2604.25160v1-target-depth-sensing-with-metasurface-encoder-integrated-optoelectronic-neural-network)  
+   标签：评分：8.5/10、query:ff3dr
+   evidence：用于3D传感和深度编码的光电神经网络
+4. [Unified 4D World Action Modeling from Video Priors with Asynchronous Denoising](/202605/01/2604.26694v1-unified-4d-world-action-modeling-from-video-priors-with-asynchronous-denoising)  
    标签：评分：8.5/10、query:3dgen
-   evidence：单帧图像的人体姿态2D到3D提升
-2. [Gaussians on a Diet: High-Quality Memory-Bounded 3D Gaussian Splatting Training](/202604/30/2604.20046v1-gaussians-on-a-diet-high-quality-memory-bounded-3d-gaussian-splatting-training)  
-   标签：评分：8.0/10、query:3dgen
-   evidence：高质量内存受限的3D高斯溅射训练
-3. [Exploring Spatial Intelligence from a Generative Perspective](/202604/30/2604.20570v1-exploring-spatial-intelligence-from-a-generative-perspective)  
-   标签：评分：8.0/10、query:3dgen
-   evidence：生成式空间智能和3D先验引导的生成
-4. [SparseGF: A Height-Aware Sparse Segmentation Framework with Context Compression for Robust Ground Filtering Across Urban to Natural Scenes](/202604/30/2604.21356v1-sparsegf-a-height-aware-sparse-segmentation-framework-with-context-compression-for-robust-ground-filtering-across-urban-to-natural-scenes)  
-   标签：评分：8.0/10、query:partseg
-   evidence：将点云分为地面和非地面部分
-5. [You Only Gaussian Once: Controllable 3D Gaussian Splatting for Ultra-Densely Sampled Scenes](/202604/30/2604.21400v2-you-only-gaussian-once-controllable-3d-gaussian-splatting-for-ultra-densely-sampled-scenes)  
-   标签：评分：8.0/10、query:3dgen
-   evidence：用于神经渲染的可控3D高斯泼溅
-6. [Gaussians on a Diet: High-Quality Memory-Bounded 3D Gaussian Splatting Training](/202604/30/2604.20046v2-gaussians-on-a-diet-high-quality-memory-bounded-3d-gaussian-splatting-training)  
-   标签：评分：7.0/10、query:ff3dr
-   evidence：3D高斯泼溅重建的内存受限训练
-7. [Semantic-Fast-SAM: Efficient Semantic Segmenter](/202604/30/2604.20169v2-semantic-fast-sam-efficient-semantic-segmenter)  
-   标签：评分：7.0/10、query:partseg
-   evidence：高效的语义标注与实例掩码生成
-8. [Random Walk on Point Clouds for Feature Detection](/202604/30/2604.20474v1-random-walk-on-point-clouds-for-feature-detection)  
-   标签：评分：7.0/10、query:partseg
-   evidence：从点云中提取特征点以勾勒形状
-9. [MAPRPose: Mask-Aware Proposal and Amodal Refinement for Multi-Object 6D Pose Estimation](/202604/30/2604.20650v1-maprpose-mask-aware-proposal-and-amodal-refinement-for-multi-object-6d-pose-estimation)  
-   标签：评分：7.0/10、query:3dgen
-   evidence：从图像中重建完整的物体几何形状以进行姿态估计
-10. [Reshoot-Anything: A Self-Supervised Model for In-the-Wild Video Reshooting](/202604/30/2604.21776v1-reshoot-anything-a-self-supervised-model-for-in-the-wild-video-reshooting)  
+   evidence：基于视频先验的4D世界合成，包括视频和3D重建
+5. [Beyond Gaussian Bottlenecks: Topologically Aligned Encoding of Vision-Transformer Feature Spaces](/202605/01/2604.28122v1-beyond-gaussian-bottlenecks-topologically-aligned-encoding-of-vision-transformer-feature-spaces)  
+   标签：评分：8.5/10、query:ff3dr
+   evidence：用于压缩和表示潜在3D状态的几何优先潜空间学习框架
+6. [Vista4D: Video Reshooting with 4D Point Clouds](/202605/01/2604.21915v1-vista4d-video-reshooting-with-4d-point-clouds)  
+   标签：评分：7.5/10、query:3dgen
+   evidence：从输入视频进行4D重建，以从不同视角重新合成场景
+7. [GenMatter: Perceiving Physical Objects with Generative Matter Models](/202605/01/2604.22160v1-genmatter-perceiving-physical-objects-with-generative-matter-models)  
+   标签：评分：7.5/10、query:partseg
+   evidence：将运动线索分层分组为粒子和簇以进行实体分割
+8. [Light 'em Up: Enabling Few-Shot Low-Light 3D Gaussian Splatting with Multi-Scale Explicit Retinex Illumination Decoupling](/202605/01/2604.24053v1-light-em-up-enabling-few-shot-low-light-3d-gaussian-splatting-with-multi-scale-explicit-retinex-illumination-decoupling)  
+   标签：评分：7.5/10、query:3dgen
+   evidence：用于3D合成的神经渲染
+9. [Multivariate Gaussian NeRF for Wide Field-of-View Ultrasound Reconstruction](/202605/01/2604.24187v1-multivariate-gaussian-nerf-for-wide-field-of-view-ultrasound-reconstruction)  
+   标签：评分：7.5/10、query:ff3dr
+   evidence：使用多元高斯NeRF进行3D超声重建
+10. [TopoStyle: Supporting Iterative Design with Generative AI for 2.5D Topology Optimization](/202605/01/2604.21315v1-topostyle-supporting-iterative-design-with-generative-ai-for-25d-topology-optimization)  
    标签：评分：6.5/10、query:3dgen
-   evidence：用于视频重拍和视图合成的自监督框架
-11. [Reshoot-Anything: A Self-Supervised Model for In-the-Wild Video Reshooting](/202604/30/2604.21776v2-reshoot-anything-a-self-supervised-model-for-in-the-wild-video-reshooting)  
+   evidence：用于拓扑优化的生成式人工智能
+11. [ArchSym: Detecting 3D-Grounded Architectural Symmetries in the Wild](/202605/01/2604.22202v1-archsym-detecting-3d-grounded-architectural-symmetries-in-the-wild)  
    标签：评分：6.5/10、query:3dgen
-   evidence：用于视频重拍和视图合成的自监督框架
-12. [Topology-Aware Skeleton Detection via Lighthouse-Guided Structured Inference](/202604/30/2604.20123v1-topology-aware-skeleton-detection-via-lighthouse-guided-structured-inference)  
-   标签：评分：6.0/10、query:partseg
-   evidence：拓扑感知骨架检测与完整几何形状恢复
-13. [Semantic-Fast-SAM: Efficient Semantic Segmenter](/202604/30/2604.20169v1-semantic-fast-sam-efficient-semantic-segmenter)  
-   标签：评分：6.0/10、query:partseg
-   evidence：用于掩码生成和分类的语义标注流水线
+   evidence：从单张野外RGB图像中检测基于3D的反射对称性
+12. [FILTR: Extracting Topological Features from Pretrained 3D Models](/202605/01/2604.22334v3-filtr-extracting-topological-features-from-pretrained-3d-models)  
+   标签：评分：6.5/10、query:partseg
+   evidence：从预训练的3D模型中提取拓扑特征和摘要
+13. [PASR: Pose-Aware 3D Shape Retrieval from Occluded Single Views](/202605/01/2604.22658v1-pasr-pose-aware-3d-shape-retrieval-from-occluded-single-views)  
+   标签：评分：6.5/10、query:3dgen
+   evidence：使用前馈对齐从单视图进行3D形状检索
 
 
 <div class="dpr-home-promo-card">
