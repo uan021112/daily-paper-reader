@@ -1,0 +1,432 @@
+Title: PointTransformerX:Portable and Efficient 3D Point Cloud Processing without Sparse Algorithms
+
+URL Source: https://arxiv.org/pdf/2604.24169v1
+
+Published Time: Tue, 28 Apr 2026 01:37:57 GMT
+
+Number of Pages: 10
+
+Markdown Content:
+# PointTransformerX: Portable and Efficient 3D Point Cloud Processing without Sparse Algorithms 
+
+# Laurenz Reichardt Nikolas Ebert Oliver Wasenm¨ uller Mannheim University of Applied Sciences, Germany   
+
+> {l.reichardt, n.ebert, o.wasenmueller }@th-mannheim.de
+
+# Abstract 
+
+3D point cloud perception remains tightly coupled to cus-tom CUDA operators for spatial operations, limiting porta-bility and efficiency on non-NVIDIA, AMD, and embedded hardware. We introduce PointTransformerX (PTX), a fully PyTorch-native vision transformer backbone for 3D point clouds, removing all custom CUDA operators and exter-nal libraries while retaining competitive accuracy. PTX in-troduces 3D-GS-RoPE, a rotary positional embedding that encodes 3D spatial relationships directly in self-attention without neighborhood construction, and further replaces sparse convolutional patch embedding with a linear pro-jection. PTX explores inference-time scaling of attention windows to improve accuracy without retraining. With a redesigned feed-forward network, PTX achieves 98.7% of PointTransformer V3’s accuracy on ScanNet with 79.2% fewer parameters and executing 1.6 × faster while requir-ing just 253 MB memory . PTX runs natively on NVIDIA GPUs, AMD GPUs (ROCm), and CPUs, providing an ef-ficient and portable foundation for point cloud perception. 
+
+# 1. Introduction 
+
+Point cloud perception is fundamental to a wide range of applications, including robotics, industrial automation, au-tonomous driving, and augmented and virtual reality. How-ever, point cloud data is spatially unordered, and neural net-works therefore rely on explicit spatial algorithms such as neighborhood grouping, voxelization, and radius search to extract geometric features, while other approaches rely on improved data coverage [34]. Such algorithms are com-putationally and memory intensive, and in practice neural networks almost exclusively integrate custom CUDA op-erators and dedicated libraries [4, 12, 13, 19, 41, 48, 52]. This creates a structural dependency on high-end NVIDIA hardware, preventing deployment on hardware from other vendors. Furthermore this relies on a fragmented library ecosystem which is often not maintained and lags well be-hind the standard PyTorch framework. As a result, modern capabilities such as BF16 and FP8 precision formats, JIT compilation, and kernel fusion are poorly supported across the dominant 3D perception stack. Recent point cloud transformers have begun reducing re-liance on custom algorithms to better scale self-attention [43], though this trend has not directly targeted the broader portability problem. Because attending to an entire point cloud is computationally intractable, initial point transform-ers [19, 20, 26, 29, 46, 52] form local attention windows through neighborhood grouping ( e.g ., K-Nearest Neigh-bors) or volumetric grouping ( e.g ., radius search, voxel windows). Neighborhood grouping is memory-inefficient, while volumetric grouping produces windows of unequal point density, leading to irregular parallelization and poor hardware utilization. Fixed-sequence transformers [22, 44, 47] address these issues with the goal of better model scal-ing by sorting or unfolding point clouds into equal-length patches, trading precise spatial locality for computational regularity and scaling efficiency. This allows self-attention to be implemented without external libraries and allows op-timizations such as FlashAttention [8]. However, these ar-chitectures remain hybrid, retaining sparse 3D convolution [13] and dedicated scatter/gather libraries [12] that limit portability to embedded and non-NVIDIA hardware. We introduce PointTransformerX (PTX), a PyTorch-native point cloud transformer that eliminates all reliance on custom CUDA operators and external libraries, estab-lishing a fully portable transformer backbone for 3D point clouds across diverse hardware targets. PTX builds on the serialization-based architecture of PointTransformer V3 (PTv3) [47], but takes the approach further by completely removing sparse algorithms, resulting in a lightweight net-work with only 20.8% of PTv3’s parameter count. To main-tain competitive accuracy, we make three targeted contribu-tions. First, we replace sparse convolution with 3D-GS-RoPE and a standard linear projection for patch embed-ding. 3D-GS-RoPE is a novel Rotary Position Embed-ding [40] that avoids materializing neighborhood matrices 
+
+> arXiv:2604.24169v1 [cs.CV] 27 Apr 2026
+
+and allows each attention head to independently learn an orthonormal coordinate rotation, enabling cross-axis posi-tional relationships without custom operators. Second, we show that inference-time attention window scaling is ben-eficial in conjunction with 3D-GS-RoPE, improving accu-racy while reducing the window size during training. Third, we redesign the feed-forward network (FFN) within the transformer block to further improve efficiency. Together, these contributions yield a model that achieves 98 .7% of PTv3’s accuracy on ScanNet [7] at just 9.6M parameters and 253 MB memory (BF16+FP8), effectively matching PTv3 performance without hard dependencies on special-ized libraries or CUDA kernels. PTX is implemented fully in the standard PyTorch ecosystem and runs natively on NVIDIA, AMD, and CPU hardware. 
+
+# 2. Related Work 
+
+2.1. Point Cloud Backbones 
+
+Point cloud backbones fall into three main families: point-based, voxel-based, and projection-based methods [35]. Point-based methods such as PointNet++ [33], KPConv [42], and Edge Convolution [45] operate on unstructured point sets and rely on kNN or radius search for local aggre-gation. These approaches require O(N 2) pairwise distance computations, which makes them prohibitively expensive at high resolutions. Voxel-based methods face a similar lim-itation since naive convolution or attention on dense voxel grids of resolution R scales as O(R3). Because most voxels are empty, methods such as SECOND [48], MinkUNet [4], and StratifiedTransformer [19] employ sparse algorithms that operate only on occupied voxels to reduce computa-tional and memory costs. Projection-based methods such as BEV pillar encodings [21] use standard 2D convolution but incur irreversible geometric information loss. Further-more, projection and unprojection as well as pooling and interpolation often rely on custom scatter and gather oper-ators for efficiency [28]. Across all families, spatial algo-rithms heavily depend on custom CUDA operators across a fragmented ecosystem with limited support for modern compute and memory optimizations available in PyTorch. 
+
+2.2. Point Cloud Transformers 
+
+As in other spaces, transformer based backbones see widespread adoption for point cloud perception. Early point cloud transformers [19, 20, 26, 29, 46, 52] used kNN or vol-umetric grouping for local window attention, producing ir-regular workloads incompatible with efficient attention im-plementations and limiting the receptive field. More re-cently, fixed-sequence transformers have emerged as a scal-able alternative. These methods impose a one-dimensional ordering on the point cloud and divide the resulting se-quence into fixed-length patches. OctFormer [44] adopts the z-order traversal used in octree construction for one-dimensional sequence ordering. FlatFormer [22] unfolds BEV pillars, while PointTransformer V3 (PTv3) [47] seri-alizes voxels in three-dimensional space using z-order [27] and Hilbert [17] space-filling curves, partitioning the sorted voxels into fixed-size patches processed with window at-tention. PTv3 and FlatFormer further apply shuffle-order strategies to improve inter-patch connectivity across layers, whereas OctFormer uses dilated attention. Since no total or-dering can preserve exact three-dimensional neighborhood relationships, this design trades precise spatial locality for computational efficiency. In PTv3, this increases the re-ceptive field from 16 to 1024 points while achieving 3×
+
+higher throughput and 10 × lower memory usage compared to its kNN-based predecessor PointTransformer V2 (PTv2) [46]. OctFormer, FlatFormer, and PTv3 therefore exhibit a consistent reduction in custom operators along the atten-tion pathway. However, OctFormer and PTv3 still rely on sparse convolution for positional encoding and patch em-bedding, which results in a hybrid pipeline dependent on external libraries, while FlatFormer remains limited to two-dimensional projected point clouds. OctFormer is notable in that it provides PyTorch fallbacks to their CUDA kernels, allowing for portability, at the cost of efficiency. 
+
+2.3. Coordinate Position Embedding 
+
+Point cloud transformers typically use relative position em-bedding (RPE) based on pairwise distances between points [19, 49, 52]. However while spatially precise, the O(N 2)
+
+complexity of RPE is computationally expensive and is a primary factor in preventing attention window scaling. In contrast, fixed-sequence transformers such as OctFormer and PTv3 rely on hybrid sparse convolution architectures which provide an implicit form of conditional position em-bedding [5], whereas FlatFormer employs a sinusoidal po-sition embedding defined on the BEV grid. Rotary Posi-tion Embedding (RoPE) [40] has demonstrated strong accu-racy gains and computational efficiency in natural language processing, however has not seen adoption for point cloud perception. It was originally proposed for one-dimensional sequences and later extended to the multidimensional case through Axial-RoPE [11, 25] by partitioning the embed-ding dimension d into equal subspaces per axis and apply-ing standard one-dimensional RoPE to each subspace. Con-current with this work, LitePT [50] adopts standard Axial-RoPE for point cloud processing. In contrast, PTX goes one step further by introducing our novel 3D-GS-RoPE, a per-head learned orthonormal coordinate rotation applied be-fore Axial-RoPE that enables cross-axis sensitivity. 
+
+# 3. Method 
+
+Point cloud networks are typically coupled to custom CUDA operators, restricting deployment to high-end NVIDIA hardware and preventing use of standard Py-Torch optimizations on embedded and non-NVIDIA plat-forms. These limitations motivate the design of PointTrans-formerX, whose architectural design goal is to implement the entire network using only native PyTorch operators, thereby removing vendor-specific dependencies while re-taining state-of-the-art performance. 
+
+3.1. Preliminary: PointTransformer V3 
+
+We build on PointTransformer V3 (PTv3) [47], which rep-resents the current state of the art in point cloud process-ing. The PTv3 architecture follows a hierarchical U-Net-style [36] encoder-decoder with multiple stages, each com-posed of identical blocks. Each block consists of a 3D con-volutional layer with skip connection, followed by a pre-normalization transformer block. The transformer block uses window attention and a feed-forward network with ex-pansion ratio 4 and GeLU [15] activation. Positional em-bedding is provided implicitly by the convolutional layer. Within each block, voxels are sorted and partitioned into patches for fixed-sequence attention, alternating between z-Order [27], translated z-Order, Hilbert-curve [17], and translated Hilbert-curve to foster cross-patch interaction. PTv3’s sparse convolution accounts for approximately 67% 
+
+of parameters and requires external libraries for both sparse convolution and scatter/gather operations, forming the pri-mary portability bottleneck in PTv3. 
+
+3.2. Replacing Sparse Convolution through Rota-tional Position Embedding 
+
+Removing sparse convolution necessitates explicit posi-tional encoding, as self-attention is permutation invariant and requires geometric context to learn spatial relationships within an unordered point set. Our objective is to recover PTv3-level accuracy within standard self-attention. 
+
+RoPE. Rotary Position Embedding (RoPE) [40] encodes relative positions so that the inner product between query q′
+
+> n
+
+and key k′ 
+
+> m
+
+tokens depends only on their relative position 
+
+m−n, effectively encoding pairwise distance through rota-tion. For this, each embedding is split into 2D pairs and rotated proportionally to the token position, which can be expressed as complex multiplication via Euler’s formula. 
+
+q′ 
+
+> n
+
+= qneiθn , k′ 
+
+> m
+
+= kmeiθm (1) RoPE utilizes multiple rotation frequencies θt in Eq. 1, one for each of the dh/2 embedding pairs in the head dimension. 
+
+θt = θ−t/ (dh/2) base , t ∈ { 0, 1, . . . , d h/2 − 1} (2) The full rotation of Eq. 1 applied to a token at position n
+
+can then be written as 
+
+R(n) = eiθ tn (3) 
+
+Axial-RoPE. Axial-RoPE [11, 25] extends Eq. 3 to multidi-mensional inputs by partitioning the dh/2 embedding pairs into equally sized subsets, one per spatial axis, and apply-ing standard 1D RoPE within each subset. For three di-mensions, the head embedding is divided into three groups of dh/6 pairs each. Each group encodes position along a single coordinate axis using its own set of frequencies θt
+
+according to Eq. 2 with t ∈ { 0, 1, . . . , d h/6 − 1}:
+
+R(x, y, z ) = 
+
+
+
+eiθ tx
+
+eiθ ty
+
+eiθ tz
+
+ (4) where each row corresponds to one of the three subsets of the head embedding. This preserves the relative-position property along each individual axis as the attention contri-bution from one axis depends only on the relative distance along that axis. However, because each axis is encoded in-dependently, the resulting attention score is separable across axes. This means that two tokens with the same set of per-axis distances but in different spatial arrangements ( e.g ., offsets (a, b, c ) and (b, a, c )) can produce identical atten-tion scores. In practice, Axial-RoPE therefore lacks cross-axis sensitivity, limiting its ability to capture spatial rela-tionships aligned along the diagonals. 
+
+Mixed-RoPE. To address this limitation, Mixed-RoPE [16] was proposed for the 2D image domain. Instead of par-titioning the embedding into per-axis subsets, Mixed-RoPE uses the full dh/2 pairs and assigns learned frequencies θt
+
+per axis to each pair, allowing each pair to jointly encode all axes. Generalized to 3D coordinates, the rotation becomes 
+
+R(x, y, z ) = ei(θxt x+θyt y+θzt z) (5) where θxt , θ yt , θ zt are learnable frequencies that control the mixing of axes for each embedding pair. While this en-ables cross-axis interaction, the unconstrained learning of per-axis frequencies introduces a risk. If frequencies be-come imbalanced, an axis can dominate the rotation, distort-ing the spatial relationships encoded in the position embed-ding. Although a network could in principle learn balanced frequencies, there is no structural guarantee that it will. 
+
+3D Gram-Schmidt RoPE. We propose 3D-Gram-Schmidt-RoPE (3D-GS-RoPE), which retains the axial structure of Axial-RoPE but introduces a learned orthonor-mal coordinate rotation per attention head. Concurrent work LitePT [50] differs in that it adopts standard Axial-RoPE, but does not address the cross-axis issue. Rather than relying on unconstrained frequency learning to achieve cross-axis interaction, 3D-GS-RoPE applies a rigid head-wise rotation to the input coordinates before encoding them with Axial-RoPE. Because an orthonormal rotation pre-serves distances and angles, the geometric relationships be-tween points are maintained in the transformed coordinate 0 distance similarity 1Axial-RoPE Mixed-RoPE 3D-GS-RoPE Euclidean (ground truth) 
+
+Figure 1. Visualization of spatial relationships modeled by Axial- [11, 25], Mixed- [16], and our 3D-GS-RoPE for points sampled from a unit sphere relative to the query point at (x = 0 , y = 1 , z = 0) . The rightmost image shows the Euclidean distance ideal. Axial-RoPE lacks cross-axis sensitivity, causing axis-aligned distant points to appear more similar to the query than closer diagonal points. Mixed-RoPE provides no structural guarantee and encodes spatial relationships quasi-randomly at initialization. 3D-GS-RoPE effectively encodes spatial structure via Gram-Schmidt constraints. Mixed- and 3D-GS-RoPE are randomly initialized, while all RoPE variants are shown with d=64 and h=4 heads. 
+
+frame. Each head learns a different rotation, so the axis-aligned limitations of Axial-RoPE differ across heads, col-lectively restoring cross-axis sensitivity without introducing additional spatial operators. Axial-RoPE corresponds to a coordinate transform with the identity matrix, which we generalize from Eq. 4 into a learned orthonormal transform: 
+
+R(x, y, z ) = 
+
+
+
+eiθ tx
+
+eiθ ty
+
+eiθ tz
+
+ =
+
+
+
+eiθ t(1 ·x+0 ·y+0 ·z)
+
+eiθ t(0 ·x+1 ·y+0 ·z)
+
+eiθ t(0 ·x+0 ·y+1 ·z)
+
+
+
+=
+
+
+
+eiθ t(r11 x+r12 y+r13 z)
+
+eiθ t(r21 x+r22 y+r23 z)
+
+eiθ t(r31 x+r32 y+r33 z)
+
+
+
+(6) where θt with t ∈ { 0, 1, . . . , d h/6 − 1} are the per-group frequencies, and the rows r1, r2, r3 of the coordinate trans-form matrix are 
+
+r1
+
+r2
+
+r3
+
+ =
+
+(r11 , r 12 , r 13 )(r21 , r 22 , r 23 )(r31 , r 32 , r 33 )
+
+ =
+
+(1 , 0, 0) (0 , 1, 0) (0 , 0, 1) 
+
+ = I3 (7) In 3D-GS-RoPE, we allow r1, r2, r3 and θt to be learned, constrained to form an orthonormal basis via Gram-Schmidt orthonormalization [14, 37]. Concretely, r1
+
+is a freely learned vector that is normalized to unit length, r2
+
+is learned and orthonormalized with respect to r1, and r3 is fully determined as the cross product r1 ×r2. This adds only six learnable parameters per head (three components for r1
+
+and three for r2, before orthonormalization) plus learnable frequencies θt, resulting in negligible overhead relative to sparse convolution. Since all three vectors have unit norm by construction, projecting a point coordinate pi = ( x, y, z )
+
+onto the rotated axes simplifies to 
+
+x′ = r⊤ 
+
+> 1
+
+pi, y′ = r⊤ 
+
+> 2
+
+pi, z′ = r⊤ 
+
+> 3
+
+pi (8) Applied to Eq. 7 the final rotation applied to a head embed-ding becomes 
+
+R(x, y, z ) = 
+
+
+
+eiθ t r⊤ 
+
+> 1pi
+
+eiθ t r⊤ 
+
+> 2pi
+
+eiθ t r⊤ 
+
+> 3pi
+
+ (9) Each attention head learns its own orthonormal basis 
+
+{r1, r2, r3}, resulting in a different rotated coordinate frame per head. Between attention heads, we cyclically permute the order in which the Gram-Schmidt constraints are ap-plied, using {r1 → r2 → r3}, {r2 → r3 → r1}, and 
+
+{r3 → r1 → r2}. This ensures that no single axis is con-sistently treated as the primary unconstrained direction, pre-venting bias toward any particular basis vector. Fig. 1 shows the distance similarity of a query point to its spatial neighbors on the unit sphere, as encoded by Axial-, Mixed-, and 3D-GS-RoPE. The lack of cross-axis sensitiv-ity in Axial-RoPE is clearly evident, with points diagonal to the query point showing less similarity in comparison to those aligned with the axes. The lack of structural guaran-tee to maintain axis balancing in Mixed-RoPE is also clearly evident. Here, both Mixed- and 3D-GS-RoPE are initialized randomly. The Gram-Schmidt constraint more accurately models spatial relationships by reducing the cross-axis ef-fect of Axial-RoPE, approaching Euclidean structure while remaining fully PyTorch-native. 
+
+Linear Embedding We replace the remaining sparse convolutional patch embedding with a standard linear pro-jection layer and remove all custom scatter and gather oper-ations. This enables a fully PyTorch-native implementation without sacrificing downstream accuracy. 
+
+3.3. Window-Size Inference Scaling 
+
+RoPE’s position-independent multi-frequency structure, where low frequencies capture long-range relationships and high frequencies capture local context, allows generaliza-tion to coordinate ranges unseen during training. This property is well established in natural language process-ing [3, 10, 30], where RoPE-based LLMs trained on short sequences can be extended to much longer contexts after training, but has not been studied in the context of point cloud transformers. We observe this effect through 3D-GS-RoPE and propose scaling the window size at inference beyond the training window size. Our experiments Sec. 4 identify a universal scaling factor s for PTX that improves accuracy with negligible training cost, further closing the gap to PTv3 while preserving the sparse-free design. 
+
+3.4. Efficient Feed-Forward Network 
+
+PTv3 employs a feed-forward network (FFN) with two lin-ear projections and a non-linear activation in between: 
+
+FFN( x) = x + W2 σ(W1x + b1) + b2 (10) where W1 ∈ Rrd ×d expands the feature dimension by an expansion ratio r, and W2 ∈ Rd×rd projects it back to the original dimension. GeLU serves as the activation function, and the expansion ratio is set to r=4 . This configuration originates from the original Transformer and has remained largely unchanged in the point cloud domain. In con-trast, modern large language models have widely adopted SwiGLU [39], while recent research proposes ReLU 2 [51] as a more efficient alternative. However, point cloud datasets are orders of magnitude smaller than language or image datasets, making the large FFN ( r=4 ) prone to overfitting. Since the FFN operates in-dependently per token without contributing spatial interac-tion, it is a natural target for efficiency optimization, allow-ing parameter reduction without degrading geometric mod-eling capacity. We revisit the FFN design across activation function and expansion ratio. Specifically, we evaluate three activation functions σ (GeLU, SwiGLU, and ReLU 2) across expansion ratios r ∈ 0.5, 1, 2, 4, resulting in 30 configura-tions. We also experiment with a DenseNet [18] style skip connection, increasing the hidden dimension to rd + d and enabling the second linear layer to access richer features, while maintaining the overall sparse-free and hardware-agnostic architecture. 
+
+# 4. Experiments 
+
+We follow the architecture and training settings of Point-Transformer V3 (PTv3) [47]. The model follows PTv3’s hierarchical U-Net encoder-decoder with 5 encoder stages (depths 2, 2, 2, 6, 2; channels 32 , 64 , 128 , 256 , 512 ) and 4
+
+decoder stages (depth 2, channels 256 , 128 , 64 , 64 ). We em-ploy (2 , 4, 8, 16 , 32) heads in the encoder and (16 , 8, 4, 4) 
+
+in the decoder. All layers use a window size of 1024 unless otherwise stated. The model is trained using the AdamW [24] optimizer with a learning rate of 0.006 and weight decay of 0.05, scheduled with a period followed by co-sine decay [23]. We combine CrossEntropyLoss and Lo-vaszLoss [1] as our training objectives for semantic seg-mentation with equal weighting. Unlike PTv3, which re-quires mixed FP16/BF16 precision due to sparse convolu-tion library constraints, PTX uses uniform BF16 through-out. Points are voxelized at 2 cm. Training is performed with a batch size of 12 on a single NVIDIA H100 on the ScanNet [7] dataset with 20 semantic classes. We imple-ment our training pipeline in the Pointcept [6] framework. Final results are reported with test-time augmentation. 
+
+4.1. 3D-GS-RoPE Position Embedding 
+
+As the first step toward a PyTorch-native network, we re-move all sparse-convolution layers from PTv3, leaving a pure transformer architecture. We ablate the choice of posi-tion embedding, comparing our proposed 3D-GS-RoPE to various RoPE variants. Our results, shown in Tab. 1, highlight the need for an ef-fective position embedding, as removing sparse convolution results in an accuracy drop of −12 .1% . Standard 1D RoPE can be applied to the fixed-sequence order, but does not pre-serve spatial information. Expanding this into Axial-RoPE recovers 96 .6% of the original accuracy. In contrast to 3D-GS-RoPE and Axial-RoPE, Mixed-RoPE performs worse, which can be attributed to a learned imbalance as a result of mixing coordinate axes through θx, θ y and θz and evident in the model weights. We also experiment with partial 3D-GS-RoPE, where rotation is not applied across the entire embedding dimension d. Applying partial-RoPE [2] only to the last encoder stage with C = 256 improves accuracy slightly, recovering 97 .2% of baseline accuracy. 
+
+4.2. Linear Embedding 
+
+Continuing with our goal of a PyTorch-native network, we replace the sparse-convolutional embedding (which uses a stride of one) with a simple linear layer. We also exper-iment with a PointNet-style [32] MLP made up of three linear layers. Other common embedding operators require custom CUDA operators and are not studied as they defeat the goal of PTX. The results of this change are depicted in Tab. 2. At a slight cost of accuracy, this change in conjunc-tion with replacing the custom scatter and gather operations with PyTorch operators results in a PyTorch-native network and unlocks the associated efficiency improvements. Table 1. Evaluation of RoPE-based position embeddings and their effectiveness in replacing the inductive bias of sparse convolution.             
+
+> Position Embedding mIoU Params (M) PTv3 baseline* 0.7560 46.1 – Convolution 0.6641 14.2
+> + RoPE-Variants: 14.2
+> 1D RoPE 0.6791 Axial RoPE 0.7308 Mixed RoPE 0.6876 3D-GS-RoPE 0.7331 3D-GS-RoPE + partial RoPE 0.7351 * Re-implemented
+
+Table 2. By trading performance and replacing sparse convolution with a linear layer for input embedding, PointTransformerX can be fully implemented efficiently with PyTorch native operators. 
+
+Embedding Layer mIoU Params (M) PyTorch-native Convolution 0.7351 14.2 ✗
+
+Linear 0.7232 14.2 ✓
+
+mini-PointNet 0.7225 14.2 ✓
+
+4.3. Window Size Scaling 
+
+Having removed all sparse convolutions and their associ-ated inductive biases, we investigate window size scaling during inference. We observe that training with a reduced window size of 512 and scaling to 2048 during inference yields superior accuracy compared to curriculum learning approaches. Tab. 3 shows different training configurations and we consistently find an optimal inference scaling factor of s = 4 . Notably, we find that the first encoder stage does not benefit from scaling and therefore do not scale the at-tention in that layer. We use this setting for the remaining experiments. We hypothesize this improvement arises because the net-work specializes to its training window size, acquiring ben-eficial local inductive biases. We tested curriculum learn-ing that linearly increases the window size during training to prevent overspecialization to the window size. However, training with a curriculum up to a window size of 2048 re-duces this benefit, achieving only 0.729 mIoU compared to 
+
+0.741 mIoU with window size inference scaling. Inference scaling therefore not only compensates for the removal of sparse convolution, but slightly surpasses the fixed-window baseline. We also tested YaRN [30] scaling but observed no improvement. This is likely attributable to two factors. First, patches of serialized point clouds exhibit varying vol-umes and coordinate distributions, exposing RoPE frequen-cies to a broad range of coordinates during training. Second, YaRN frequency compression assumes certain dimensions are out-of-distribution, whereas here they are already well-conditioned by the continuous spatial coordinates. 
+
+Table 3. Inference scaling the attention window size after train-ing with a fixed window size consistently improves results. Colors reflect the improvement relative to the baseline setting in each col-umn, which trains and evaluates with the same window size. 0.6017 
+
+> 0.6685
+> 0.7067
+> 0.7195
+> 0.7273
+> 0.7212
+> 0.6980
+> 0.6486
+> 0.5826
+> 0.5047
+> 0.4358
+> 0.5080
+> 0.6288
+> 0.6893
+> 0.7220
+> 0.7359
+> 0.7409
+> 0.7297
+> 0.7140
+> 0.6772
+> 0.6352
+> 0.5983
+> 0.3594
+> 0.5378
+> 0.6449
+> 0.6982
+> 0.7232
+> 0.7376
+> 0.7389
+> 0.7354
+> 0.7231
+> 0.7030
+> 0.6715
+> 0.2415
+> 0.4048
+> 0.5566
+> 0.6493
+> 0.7028
+> 0.7287
+> 0.7392
+> 0.7371
+> 0.7298
+> 0.7204
+> 0.7099
+> 0.1594
+> 0.2709
+> 0.4218
+> 0.5529
+> 0.6399
+> 0.6858
+> 0.7180
+> 0.7305
+> 0.7345
+> 0.7288
+> 0.7246
+> 0.1209
+> 0.2016
+> 0.3332
+> 0.4790
+> 0.5911
+> 0.6661
+> 0.7034
+> 0.7219
+> 0.7263
+> 0.7269
+> 0.7249
+> 0.1130
+> 0.1758
+> 0.2832
+> 0.4190
+> 0.5460
+> 0.6390
+> 0.6824
+> 0.7082
+> 0.7190
+> 0.7221
+> 0.7226
+
+256 512 1024 2048 4096 8192 16384 
+
+64 
+
+128 
+
+256 
+
+512 
+
+1024 
+
+2048 
+
+4096 
+
+8192 
+
+16384 
+
+32768 
+
+65536 
+
+Training Window Size 
+
+> Inference Window Size
+
+4.4. Efficient FFN 
+
+Our final contribution is the redesign of the standard feed-forward network (FFN) within each transformer blocks. We ablate the choice of activation function (GeLU, SwiGLU and ReLU 2), the embedding dimension ratio r, as well as a DenseNet style skip connection to artificially increase the hidden dimension. Results are shown in Tab. 5. 
+
+ReLU 2 consistently outperforms GeLU in all but the standard r = 4 setting, while being simpler than SwiGLU. The use of a DenseNet-style skip connection (DN) adds ad-ditional computational and memory overhead. As the adop-tion of DN is not conclusive across variants, we utilize a 
+
+r = 2 and ReLU 2 configuration for our final network, re-ducing parameters while preserving PTv3-level accuracy. 
+
+4.5. Results 
+
+Component Contributions and Efficiency. We analyze the efficiency gains of PTX relative to the PTv3 baseline, with component impact summarized in Tab. 4. Initially, replacing custom CUDA operators for scat-ter/gather operations in the network’s pooling and unpool-Table 4. Impact of our contributions on PointTransformerX’s accuracy, parameter count, average runtime and average peak allocated memory for ScanNet [7] in comparison to the baseline PointTransformer V3 [47] on an NVIDIA H100.                                         
+
+> Table 5. Ablation of the FFN design, varying the expansion ratio r∈{1,2,4}, activation function (GeLU, SwiGLU [39],
+> ReLU 2[51]), and the use of DenseNet (DN) [18] skip connec-tions. ReLU 2improves performance consistently, while DN skip connections yield mixed results at added complexity.
+> Ratio
+> r
+> Activation Function mIoU w/o DN Skip w/ DN Skip 0.5 GeLU 0.7362 0.7299 SwiGLU 0.7409 0.7329
+> ReLU 20.7468 0.7399 1GeLU 0.7392 0.7305 SwiGLU 0.7416 0.7456
+> ReLU 20.7469 0.7334 2GeLU 0.7458 0.7359 SwiGLU 0.7388 0.7485
+> ReLU 20.7495 0.7503
+> 3GeLU 0.7381 0.7294 SwiGLU 0.7407 0.7343
+> ReLU 20.7405 0.7416 4GeLU 0.7409 0.7311 SwiGLU 0.7440 0.7353
+> ReLU 20.7349 0.7469
+
+ing layers with native PyTorch operators preserves accuracy but detrimentally increases runtime. The following opti-mizations recover this regression. Removing sparse con-volution is the most impactful and substantially reduces pa-rameter count, memory use and runtime. In contrast 3D-GS-RoPE is lightweight, as the decomposition of rotations means that distance matrices are not materialized. The embedding layer replacement is particularly impact-ful for memory. As the point cloud resolution is highest in the first encoder stage, sparse convolutional embedding is especially memory-intensive there, making it the dominant stage for peak memory allocation. Removing sparse convo-lution further allows uniform BF16 precision throughout the network, eliminating the frequent FP16/BF16 type conver-sions required by PTv3 and reducing memory operations. As discussed in Sec. 4.3, scaling the inference window from 512 to 2048 but keeping the first encoder stage win-dow size fixed has the benefit that peak memory alloca-tion remains unchanged, as voxel resolution and memory requirements are highest at this stage. Runtime, however, slightly increases. Our optimized FFN provides modest improvements in runtime and accuracy, and upgrading from FlashAttention-2 [8] to -3 [38] offers similar gains. Further improvements are achieved by partially downcasting linear layers with an embedding dimension divisible by 128 to Float8. How-ever, while the improved FFN, FA3 and Float8 provide marginal improvements, profiling reveals that PTX has be-come highly efficient in GPU compute utilization, making other limitations dominant. Pooling and unpooling in point cloud networks remain inefficient due to the unordered na-ture of the data, which requires identifying unique indices for scatter and gather operations. Both the serialization of point clouds and pooling introduce sequential sorting oper-ations throughout the network, limiting parallelization and causing CPU/GPU synchronization. This results in steps with high CPU utilization, blocking further operations and capping efficiency gains. 
+
+Comparison to State of the Art. We compare PTX against Transformer-based, convolutional, and hybrid ar-chitectures across accuracy, average peak memory utiliza-tion, and average inference runtime, with results reported in Tab. 6. PTX is the only architecture that relies entirely on native PyTorch operators, requiring no third-party CUDA libraries or custom CUDA kernels, yet it ranks compet-itively across most metrics while matching the accuracy of PTv3. Notably, PTX operates with the largest atten-tion window among all compared methods at 2048 tokens, versus 1024 for PTv3 and LitePT, while consuming only 
+
+253 MB of average peak memory at BF16/FP8 precision on an H100. In terms of GPU-accelerated inference, PTX at 52 .52 ms is only surpassed by SpUNet with 43 .02 ms, which lags behind in accuracy. However, this advantage Table 6. Comparison of point cloud segmentation backbones across hardware platforms. Peak memory and runtimes are averaged over the ScanNet evaluation split [7]. CPU refers to Intel Core i5-10400F. mIoU is reported with test-time augmentation. PTX uses BF16 on all hardware, except FP8 for applicable linear layers on the NVIDIA H100. For fair comparison, all applicable networks are upgraded to FlashAttention-3 [38] on the H100.                                                                                                                                                 
+
+> NVIDIA H100 AMD MI300X Jetson Orin AGX CPU Backbone Architecture PyTorch Native Params (M) mIoU Mem. (GB) Rt. (ms) Mem. (GB) Rt. (ms) Mem. (GB) Rt. (ms) Rt. (s) PTX (ours) Transformer ✓9.6 0.765 0.253 52.52 0.390 53.98 0.239 259.54 3.40 PTv1 [29] 3Transformer ✗7.8 0.706 0.749 1036.21 ✗✗0.722 2288.57 ✗
+> PTv2 [46] 3Transformer ✗11.3 0.754 1.652 173.16 ✗✗1.625 948.41 ✗
+> ST [19] Transformer ✗18.8 0.743 ––✗✗––✗
+> Swin3D-S [49] 3,4 Transformer ✗28.2 0.764 0.525 81.00 ✗✗0.803 2007.28 ✗
+> LitePT-S [50] 2Hybrid ✗12.7 0.765 0.314 56.81 ✗✗0.283 196.34 1.75 Octformer [44] 1Hybrid ✓44.0 0.757 2.073 58.23 1.585 72.33 2.038 426.17 6.68 PTv3 [47] 2Hybrid ✗46.2 0.775 0.562 83.73 ✗✗0.541 285.55 3.48 MinkUNet-34C [4] 3Convolution ✗37.9 0.722 0.525 81.00 ✗✗0.503 465.84 5.68 SpUNet [48] 2Convolution ✗39.2 0.693 0.487 43.02 ✗✗0.464 138.58 1.80 OACNN [31] 2Convolution ✗51.5 0.761 0.708 132.89 ✗✗0.566 489.27 1.65
+> 1CUDA kernels with PyTorch fallback 2Implementation adapted for CPU 3Manual update of CUDA kernels 4Extra data
+
+is directly tied to SpUNet’s use of the spconv [48] li-brary, as the MinkowskiEngine [4] sparse convolution used by MinkUNet is significantly slower. We also note that spconv , MinkowskiEngine , and most third-party CUDA kernels used by other methods are no longer ac-tively maintained and required manual updates to run under CUDA 12 .6 on the Hopper architecture. We also compare runtime and memory on an NVIDIA Jetson Orin AGX us-ing BFloat16 precision. PTX has the lowest memory con-sumption at a competitive runtime, showing its potential for embedded hardware. 
+
+Performance on CPU and AMD Hardware. As a PyTorch-native architecture, PTX transfers seamlessly to non-NVIDIA hardware without modification. On an AMD Instinct MI300X, PTX achieves an average runtime of 
+
+53 .98 ms with a peak memory allocation of 390 MB with BF16 precision. For a fair comparison, we adapted other models to enable CPU inference. For example, we removed all biases in convolutional layers using the spconv frame-work, as it does not support bias addition on CPU, and re-placed CUDA-specific operations with PyTorch operators for CPU execution. On an Intel i5 CPU, PTX achieves an average runtime of 3.4 s under BF16 precision. Among all compared methods, OctFormer is the only architecture with comparable portability, offering a PyTorch-native fallback for its CUDA depthwise octree convolution. However, with this fallback OctFormer incurs the highest memory usage of all evaluated models and has the worst runtime on both CPU and AMD hardware. These results position PTX in a class of its own as a portable, hardware-agnostic architec-ture for 3D perception. As a further testament to this, PTX is exportable to ONNX [9], verified under opset 18 .
+
+# 5. Conclusion 
+
+We introduced PointTransformerX (PTX), a fully portable PyTorch-native transformer backbone for 3D point clouds, eliminating all custom CUDA operators, removing the ven-dor lock and portability barriers that pervade existing point cloud networks. PTX addresses these limitations with 3D-GS-RoPE for position encoding, window-size inference scaling, and an efficient feed-forward network design, col-lectively achieving PTv3-level accuracy without sparse con-volution while substantially improving efficiency. By re-moving framework and hardware dependencies, PTX es-tablishes a clean transformer-only baseline that generalizes seamlessly across GPU vendors and CPUs. Experiments revealed remaining areas for future im-provement. Specifically, indexing for pooling and serializa-tion operations introduce sequential sorting, which incurs CPU/GPU synchronizations and introduces operations that are difficult to parallelize. Token pruning offers an alterna-tive direction, as a large fraction of tokens usually do not contribute to accuracy. A second approach could be inherit-ing the serialized order of the point cloud and using strided 1D convolution over spatial pooling for hierarchical aggre-gation. Finally, PTX’s lightweight transformer-only archi-tecture opens up new possibilities for studying data and ar-chitectural scaling. 
+
+# Acknowledgements 
+
+This work was partially funded by the German Federal Min-istry of Research, Technology and Space (BMFTR) under grant Safe3D (12FH568KX2) and by Pepperl+Fuchs SE. References 
+
+[1] Maxim Berman, Amal Rannen Triki, and Matthew BBlaschko. The lov´ asz-softmax loss: A tractable surrogate for the optimization of the intersection-over-union measure in neural networks. In CVPR , 2018. 5 [2] Sid Black, Leo Gao, Phil Wang, Connor Leahy, and Stella Biderman. GPT-Neo: Large Scale Autoregressive Language Modeling with Mesh-Tensorflow, 2021. 5 [3] bloc97. Add ntk-aware interpolation “by parts” correction. 
+
+https : / / github . com / jquesnelle / scaled -rope/pull/1 , 2023. 5 [4] Christopher Choy, JunYoung Gwak, and Silvio Savarese. 4d spatio-temporal convnets: Minkowski convolutional neural networks. In CVPR , 2019. 1, 2, 8 [5] Xiangxiang Chu, Zhi Tian, Bo Zhang, Xinlong Wang, and Chunhua Shen. Conditional positional encodings for vision transformers. In ICLR , 2023. 2 [6] Pointcept Contributors. Pointcept: A codebase for point cloud perception research. https://github.com/ Pointcept/Pointcept , 2023. 5 [7] Angela Dai, Angel X. Chang, Manolis Savva, Maciej Hal-ber, Thomas Funkhouser, and Matthias Nießner. Scannet: Richly-annotated 3d reconstructions of indoor scenes. In 
+
+CVPR , 2017. 2, 5, 7, 8 [8] Tri Dao. FlashAttention-2: Faster attention with better par-allelism and work partitioning. In ICLR , 2024. 1, 7 [9] ONNX Runtime developers. Onnx runtime. https:// onnxruntime.ai/ , 2021. 8 [10] emozilla. Dynamically scaled rope further increases perfor-mance of long context llama with zero fine-tuning, 2023. 5 [11] Yuxin Fang, Quan Sun, Xinggang Wang, Tiejun Huang, Xin-long Wang, and Yue Cao. Eva-02: A visual representation for neon genesis. Image and Vision Computing , 2024. 2, 3, 4[12] Matthias Fey and Jan E. Lenssen. Fast graph representation learning with PyTorch Geometric. In ICLR , 2019. 1 [13] Ben Graham. Sparse 3d convolutional neural networks. In 
+
+BMVC , 2015. 1 [14] Jørgen Pedersen Gram. Ueber die entwickelung reeller func-tionen in reihen mittelst der methode der kleinsten quadrate. 
+
+Journal f¨ ur die reine und angewandte Mathematik , 1883. 4 [15] Dan Hendrycks and Kevin Gimpel. Gaussian error linear units (gelus). arXiv preprint arXiv:1606.08415 , 2016. 3 [16] Byeongho Heo, Song Park, Dongyoon Han, and Sangdoo Yun. Rotary position embedding for vision transformer. In 
+
+ECCV , 2024. 3, 4 [17] David Hilbert. ¨Uber die stetige abbildung einer linie auf ein fl¨ achenst¨ uck. In Dritter Band: Analysis· Grundlagen der Mathematik· Physik Verschiedenes: Nebst Einer Lebens-geschichte . Springer, 1935. 2, 3 [18] Gao Huang, Zhuang Liu, and Kilian Q. Weinberger. Densely connected convolutional networks. In CVPR , 2017. 5, 7 [19] Xin Lai, Jianhui Liu, Li Jiang, Liwei Wang, Hengshuang Zhao, Shu Liu, Xiaojuan Qi, and Jiaya Jia. Stratified trans-former for 3d point cloud segmentation. In CVPR , 2022. 1, 2, 8 [20] Xin Lai, Yukang Chen, Fanbin Lu, Jianhui Liu, and Jiaya Jia. Spherical transformer for lidar-based 3d recognition. In 
+
+CVPR , 2023. 1, 2 [21] Alex H Lang, Sourabh Vora, Holger Caesar, Lubing Zhou, Jiong Yang, and Oscar Beijbom. Pointpillars: Fast encoders for object detection from point clouds. In CVPR , 2019. 2 [22] Zhijian Liu, Xinyu Yang, Haotian Tang, Shang Yang, and Song Han. Flatformer: Flattened window attention for effi-cient point cloud transformer. In CVPR , 2023. 1, 2 [23] Ilya Loshchilov and Frank Hutter. SGDR: stochastic gradient descent with warm restarts. In ICLR , 2017. 5 [24] Ilya Loshchilov and Frank Hutter. Decoupled weight decay regularization. In ICLR , 2018. 5 [25] Jiasen Lu, Christopher Clark, Sangho Lee, Zichen Zhang, Savya Khosla, Ryan Marten, Derek Hoiem, and Aniruddha Kembhavi. Unified-io 2: Scaling autoregressive multimodal models with vision language audio and action. In CVPR ,2024. 2, 3, 4 [26] Jiageng Mao, Yujing Xue, Minzhe Niu, et al. Voxel trans-former for 3d object detection. In ICCV , 2021. 1, 2 [27] Guy M Morton. A Computer Oriented Geodetic Data Base and a New Technique in File Sequencing . International Busi-ness Machines Company, 1966. 2, 3 [28] Alexander Musiat, Laurenz Reichardt, Michael Schulze, and Oliver Wasenm¨ uller. Radarpillars: Efficient object detection from 4d radar point clouds. In ITSC , 2024. 2 [29] Xuran Pan, Zhuofan Xia, Shiji Song, Li Erran Li, and Gao Huang. 3d object detection with pointformer. In CVPR ,2021. 1, 2, 8 [30] Bowen Peng, Jeffrey Quesnelle, Honglu Fan, and Enrico Shippole. Yarn: Efficient context window extension of large language models. In ICLR , 2024. 5, 6 [31] Bohao Peng, Xiaoyang Wu, Li Jiang, Yukang Chen, Heng-shuang Zhao, Zhuotao Tian, and Jiaya Jia. Oa-cnns: Omni-adaptive sparse cnns for 3d semantic segmentation. In CVPR ,2024. 8 [32] Charles Ruizhongtai Qi, Hao Su, Kaichun Mo, and Leonidas J. Guibas. Pointnet: Deep learning on point sets for 3d classification and segmentation. In CVPR , 2017. 5 [33] Charles Ruizhongtai Qi, Li Yi, Hao Su, and Leonidas J Guibas. Pointnet++: Deep hierarchical feature learning on point sets in a metric space. In NeurIPS , 2017. 2 [34] Laurenz Reichardt, Luca Uhr, and Oliver Wasenm¨ uller. Text3daug-prompted instance augmentation for lidar percep-tion. In IROS , 2024. 1 [35] Laurenz Reichardt, Mario Speckert, Alexander Musiat, and Oliver Wasenm¨ uller. Revisiting point cloud representations across heterogeneous sensors. In ICPR , 2026. 2 [36] Olaf Ronneberger, Philipp Fischer, and Thomas Brox. U-net: Convolutional networks for biomedical image segmentation. In MICCAI , 2015. 3 [37] Erhard Schmidt. Zur theorie der linearen und nichtlinearen integralgleichungen. Mathematische Annalen , 1907. 4 [38] Jay Shah, Ganesh Bikshandi, Ying Zhang, Vijay Thakkar, Pradeep Ramani, and Tri Dao. Flashattention-3: Fast and accurate attention with asynchrony and low-precision. In 
+
+NeurIPS , 2024. 7, 8 [39] Noam Shazeer. Glu variants improve transformer. arXiv preprint arXiv:2002.05202 , 2020. 5, 7 [40] Jianlin Su, Murtadha Ahmed, Yu Lu, Shengfeng Pan, Wen Bo, and Yunfeng Liu. Roformer: Enhanced transformer with rotary position embedding. Neurocomputing , 2024. 1, 2, 3 [41] Haotian Tang, Zhijian Liu, Xiuyu Li, Yujun Lin, and Song Han. TorchSparse: Efficient Point Cloud Inference Engine. In Conference on Machine Learning and Systems (MLSys) ,2022. 1 [42] Hugues Thomas, Charles R Qi, Jean-Emmanuel Deschaud, Beatriz Marcotegui, Franc ¸ois Goulette, and Leonidas J Guibas. Kpconv: Flexible and deformable convolution for point clouds. In ICCV , 2019. 2 [43] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszko-reit, Llion Jones, Aidan N. Gomez, Lukasz Kaiser, and Illia Polosukhin. Attention is all you need. In NeurIPS , 2017. 1 [44] Peng-Shuai Wang. Octformer: Octree-based transformers for 3D point clouds. ACM TOG , 2023. 1, 2, 8 [45] Yue Wang, Yongbin Sun, Ziwei Liu, Sanjay E Sarma, Michael M Bronstein, and Justin M Solomon. Dynamic graph cnn for learning on point clouds. ACM TOG , 2019. 2[46] Xiaoyang Wu, Yixing Lao, Li Jiang, Xihui Liu, and Heng-shuang Zhao. Point transformer v2: Grouped vector atten-tion and partition-based pooling. In NeurIPS , 2022. 1, 2, 8[47] Xiaoyang Wu, Li Jiang, Peng-Shuai Wang, Zhijian Liu, Xi-hui Liu, Yu Qiao, Wanli Ouyang, Tong He, and Hengshuang Zhao. Point transformer v3: Simpler, faster, stronger. In 
+
+CVPR , 2024. 1, 2, 3, 5, 7, 8 [48] Yan Yan, Yuxing Mao, and Bo Li. Second: Sparsely embed-ded convolutional detection. Sensors , 2018. 1, 2, 8 [49] Yu-Qi Yang, Yu-Xiao Guo, Jian-Yu Xiong, Yang Liu, Hao Pan, Peng-Shuai Wang, Xin Tong, and Baining Guo. Swin3d: A pretrained transformer backbone for 3d indoor scene understanding. Computational Visual Media , 2023. 2, 8[50] Yuanwen Yue, Damien Robert, Jianyuan Wang, Sunghwan Hong, Jan Dirk Wegner, Christian Rupprecht, and Konrad Schindler. LitePT: Lighter Yet Stronger Point Transformer. In CVPR , 2026. 2, 3, 8 [51] Zhengyan Zhang, Yixin Song, Guanghui Yu, Xu Han, Yankai Lin, Chaojun Xiao, Chenyang Song, Zhiyuan Liu, Zeyu Mi, and Maosong Sun. Relu 2 wins: Discovering ef-ficient activation functions for sparse llms. arXiv preprint arXiv:2402.03804 , 2024. 5, 7 [52] Hengshuang Zhao, Li Jiang, Jiaya Jia, Philip HS Torr, and Vladlen Koltun. Point transformer. In ICCV , 2021. 1, 2
