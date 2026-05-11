@@ -6,85 +6,97 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-05-10
-- 运行时间：2026-05-10 20:30:42 UTC
+- 最新运行日期：2026-05-11
+- 运行时间：2026-05-11 21:24:53 UTC
 - 运行状态：成功
-- 本次总论文数：21
-- 精读区：8
+- 本次总论文数：25
+- 精读区：12
 - 速读区：13
 
 ### 今日简报（AI）
-聚焦 3D 重建技术突破，今日 21 篇论文深度解析了多视图对齐与流式三维感知的最新进展。
-满分论文 Mix3R 创新性地融合生成先验实现联合位姿估计，Ray-Aware 内存机制则为流式重建提供了高效更新方案。
-建议重点研读 3D 重建在医疗 MRI 优化及开放词汇语义地图中的跨领域落地实践。
-- 详情：[/202605/10/README](/202605/10/README)
+今日精选 25 篇前沿论文，深度聚焦高精度 3D 人头重建与多视图对齐重建的满分突破。
+重点关注 Mix3R 的联合估计框架与 Embody4D 具身世界模型，展现了从静态 3D 到动态 4D 感知的技术跨越。
+建议优先研读 3D 高斯头重建与 PicoEyes 框架，探索其在混合现实与高保真数字人领域的应用潜力。
+- 详情：[/202605/11/README](/202605/11/README)
 
 ### 精读区论文标签
-1. [Mix3R: Mixing Feed-forward Reconstruction and Generative 3D Priors for Joint Multi-view Aligned 3D Reconstruction and Pose Estimation](/202605/10/2605.03359v1-mix3r-mixing-feed-forward-reconstruction-and-generative-3d-priors-for-joint-multi-view-aligned-3d-reconstruction-and-pose-estimation)  
+1. [Mix3R: Mixing Feed-forward Reconstruction and Generative 3D Priors for Joint Multi-view Aligned 3D Reconstruction and Pose Estimation](/202605/11/2605.03359v1-mix3r-mixing-feed-forward-reconstruction-and-generative-3d-priors-for-joint-multi-view-aligned-3d-reconstruction-and-pose-estimation)  
    标签：评分：10.0/10、query:ff3dr
-   evidence：结合前馈重建和生成式3D先验，用于多视图对齐的3D重建
-2. [Ray-Aware Pointer Memory with Adaptive Updates for Streaming 3D Reconstruction](/202605/10/2605.05749v1-ray-aware-pointer-memory-with-adaptive-updates-for-streaming-3d-reconstruction)  
+   evidence：混合前馈重建与生成式3D先验
+2. [Large-Scale High-Quality 3D Gaussian Head Reconstruction from Multi-View Captures](/202605/11/2605.04035v2-large-scale-high-quality-3d-gaussian-head-reconstruction-from-multi-view-captures)  
    标签：评分：10.0/10、query:ff3dr
-   evidence：前馈重建框架通过持久化记忆表示整合观测结果
-3. [First Shape, Then Meaning: Efficient Geometry and Semantics Learning for Indoor Reconstruction](/202605/10/2605.03463v1-first-shape-then-meaning-efficient-geometry-and-semantics-learning-for-indoor-reconstruction)  
-   标签：评分：9.5/10、query:ff3dr
-   evidence：使用神经表面重建和SDF进行高效室内3D重建
-4. [Embody4D: A Generalist 4D World Model for Embodied AI](/202605/10/2605.01799v1-embody4d-a-generalist-4d-world-model-for-embodied-ai)  
+   evidence：用于3D高斯头部重建的可扩展前馈方法
+3. [SatSurfGS: Generalizable 2D Gaussian Splatting for Sparse-View Satellite Surface Reconstruction](/202605/11/2605.07181v1-satsurfgs-generalizable-2d-gaussian-splatting-for-sparse-view-satellite-surface-reconstruction)  
+   标签：评分：10.0/10、query:ff3dr
+   evidence：用于表面重建的可泛化前馈 2DGS 框架
+4. [DVD: Discrete Voxel Diffusion for 3D Generation and Editing](/202605/11/2605.07971v1-dvd-discrete-voxel-diffusion-for-3d-generation-and-editing)  
+   标签：评分：10.0/10、query:3dgen
+   evidence：用于3D体素生成和编辑的离散扩散框架
+5. [Seeing Across Skies and Streets: Feedforward 3D Reconstruction from Satellite, Drone, and Ground Images](/202605/11/2605.07978v1-seeing-across-skies-and-streets-feedforward-3d-reconstruction-from-satellite-drone-and-ground-images)  
+   标签：评分：10.0/10、query:ff3dr
+   evidence：跨视图图像的前馈3D重建
+6. [SAM 3D Animal: Promptable Animal 3D Reconstruction from Images in the Wild](/202605/11/2605.07604v1-sam-3d-animal-promptable-animal-3d-reconstruction-from-images-in-the-wild)  
+   标签：评分：9.5/10、query:3dgen
+   evidence：使用可提示框架从单张图像进行3D动物重建
+7. [Rollback-Free Stable Brick Structures Generation](/202605/11/2605.06947v1-rollback-free-stable-brick-structures-generation)  
    标签：评分：9.0/10、query:3dgen
-   evidence：从单目视频合成任意新视角和3D几何体
-5. [MaMi-HOI: Harmonizing Global Kinematics and Local Geometry for Human-Object Interaction Generation](/202605/10/2605.05756v1-mami-hoi-harmonizing-global-kinematics-and-local-geometry-for-human-object-interaction-generation)  
+   evidence：积木结构的算法和程序化3D内容生成
+8. [High-Fidelity Surface Splatting-Based 3D Reconstruction from Multi-View Images](/202605/11/2605.07254v1-high-fidelity-surface-splatting-based-3d-reconstruction-from-multi-view-images)  
    标签：评分：9.0/10、query:3dgen
-   evidence：为虚拟内容创作生成真实的 3D 人机交互
-6. [Velox: Learning Representations of 4D Geometry and Appearance](/202605/10/2605.04527v1-velox-learning-representations-of-4d-geometry-and-appearance)  
-   标签：评分：8.5/10、query:ff3dr
-   evidence：从点云中学习4D几何和外观的潜表征
-7. [QuadBox: Accelerating 3D Gaussian Splatting with Geometry-Aware Boxes](/202605/10/2605.04844v1-quadbox-accelerating-3d-gaussian-splatting-with-geometry-aware-boxes)  
-   标签：评分：8.0/10、query:3dgen
-   evidence：加速3D高斯泼溅以实现实时新视角合成
-8. [3DSS: 3D Surface Splatting for Inverse Rendering](/202605/10/2605.05876v1-3dss-3d-surface-splatting-for-inverse-rendering)  
-   标签：评分：8.0/10、query:3dgen
-   evidence：用于多视图图像逆向渲染的可微表面点云渲染
+   evidence：使用表面泼溅从多视图图像进行3D重建
+9. [Sat3R: Satellite DSM Reconstruction via RPC-Aware Depth Fine-tuning](/202605/11/2605.07264v1-sat3r-satellite-dsm-reconstruction-via-rpc-aware-depth-fine-tuning)  
+   标签：评分：9.0/10、query:ff3dr
+   evidence：用于大规模卫星DSM重建的前馈框架
+10. [ST-Gen4D: Embedding 4D Spatiotemporal Cognition into World Model for 4D Generation](/202605/11/2605.07390v1-st-gen4d-embedding-4d-spatiotemporal-cognition-into-world-model-for-4d-generation)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：用于时空一致性的4D生成框架
+11. [Mind the Gap: Geometrically Accurate Generative Reconstruction from Disjoint Views](/202605/11/2605.07550v1-mind-the-gap-geometrically-accurate-generative-reconstruction-from-disjoint-views)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：不相交视图的生成式重建与多视图一致性
+12. [SpatialPrompt: XR-Based Spatial Intent Expression as Executable Constraints for AI Generative 3D Design](/202605/11/2605.07894v1-spatialprompt-xr-based-spatial-intent-expression-as-executable-constraints-for-ai-generative-3d-design)  
+   标签：评分：9.0/10、query:3dgen
+   evidence：将空间草图和语音提示转化为3D生成的执行约束
 
 ### 速读区论文标签
-1. [MK-ResRecon: Multi-Kernel Residual Framework for Texture-Aware 3D MRI Refinement from Sparse 2D Slices](/202605/10/2605.03432v1-mk-resrecon-multi-kernel-residual-framework-for-texture-aware-3d-mri-refinement-from-sparse-2d-slices)  
-   标签：评分：8.0/10、query:ff3dr
-   evidence：使用神经网络从稀疏2D切片进行3D MRI重建
-2. [FUS3DMaps: Scalable and Accurate Open-Vocabulary Semantic Mapping by 3D Fusion of Voxel- and Instance-Level Layers](/202605/10/2605.03669v1-fus3dmaps-scalable-and-accurate-open-vocabulary-semantic-mapping-by-3d-fusion-of-voxel--and-instance-level-layers)  
-   标签：评分：8.0/10、query:partseg
-   evidence：共同维护稠密和实例级的开放词汇图层
-3. [GeoTopoDiff: Learning Geometry--Topology Graph Priors through Boundary-Constrained Mixed Diffusion for Sparse-Slice 3D Porous Reconstruction](/202605/10/2605.03764v1-geotopodiff-learning-geometry--topology-graph-priors-through-boundary-constrained-mixed-diffusion-for-sparse-slice-3d-porous-reconstruction)  
-   标签：评分：8.0/10、query:ff3dr
-   evidence：利用扩散先验进行大规模3D多孔结构重建
-4. [UniCorrn: Unified Correspondence Transformer Across 2D and 3D](/202605/10/2605.04044v1-unicorrn-unified-correspondence-transformer-across-2d-and-3d)  
-   标签：评分：8.0/10、query:ff3dr
-   evidence：跨2D和3D视觉任务的统一对应Transformer
-5. [Topology-Constrained Quantized nnUNet for Efficient and Anatomically Accurate 3D Tooth Segmentation](/202605/10/2605.04201v1-topology-constrained-quantized-nnunet-for-efficient-and-anatomically-accurate-3d-tooth-segmentation)  
-   标签：评分：8.0/10、query:partseg
-   evidence：3D牙齿分割与解剖结构保护
-6. [Hyp2Former: Hierarchy-Aware Hyperbolic Embeddings for Open-Set Panoptic Segmentation](/202605/10/2605.02580v1-hyp2former-hierarchy-aware-hyperbolic-embeddings-for-open-set-panoptic-segmentation)  
+1. [Height-Guided Projection Reparameterization for Camera-LiDAR Occupancy](/202605/11/2605.05072v1-height-guided-projection-reparameterization-for-camera-lidar-occupancy)  
+   标签：评分：8.5/10、query:ff3dr
+   evidence：利用前馈2D到3D视图转换从传感器观测中进行3D占据预测
+2. [PicoEyes: Unified Gaze Estimation Framework for Mixed Reality with a Large-Scale Multi-View Dataset](/202605/11/2605.07188v1-picoeyes-unified-gaze-estimation-framework-for-mixed-reality-with-a-large-scale-multi-view-dataset)  
+   标签：评分：8.5/10、query:3dgen
+   evidence：通过端到端联合估计眼睛参数和深度图进行3D眼睛重建
+3. [Embody4D: A Generalist 4D World Model for Embodied AI](/202605/11/2605.01799v1-embody4d-a-generalist-4d-world-model-for-embodied-ai)  
+   标签：评分：8.0/10、query:3dgen
+   evidence：用于从视频合成3D几何和新视角的4D世界模型
+4. [MK-ResRecon: Multi-Kernel Residual Framework for Texture-Aware 3D MRI Refinement from Sparse 2D Slices](/202605/11/2605.03432v1-mk-resrecon-multi-kernel-residual-framework-for-texture-aware-3d-mri-refinement-from-sparse-2d-slices)  
+   标签：评分：8.0/10、query:3dgen
+   evidence：从稀疏2D切片重建3D MRI卷
+5. [First Shape, Then Meaning: Efficient Geometry and Semantics Learning for Indoor Reconstruction](/202605/11/2605.03463v1-first-shape-then-meaning-efficient-geometry-and-semantics-learning-for-indoor-reconstruction)  
+   标签：评分：8.0/10、query:3dgen
+   evidence：室内重建中学习几何与语义的统一方法
+6. [Hyp2Former: Hierarchy-Aware Hyperbolic Embeddings for Open-Set Panoptic Segmentation](/202605/11/2605.02580v1-hyp2former-hierarchy-aware-hyperbolic-embeddings-for-open-set-panoptic-segmentation)  
    标签：评分：7.5/10、query:partseg
-   evidence：用于开集全景分割的分层语义相似性
-7. [Multi-Scale Gaussian-Language Map for Zero-shot Embodied Navigation and Reasoning](/202605/10/2605.01736v1-multi-scale-gaussian-language-map-for-zero-shot-embodied-navigation-and-reasoning)  
-   标签：评分：7.0/10、query:3dgen
-   evidence：用于语义映射和快速渲染的3D高斯表示
-8. [PointCSP: Cross-Sample Semantic Propagation and Stability Preservation in Self-Supervised Point Cloud Learning](/202605/10/2605.01759v1-pointcsp-cross-sample-semantic-propagation-and-stability-preservation-in-self-supervised-point-cloud-learning)  
-   标签：评分：7.0/10、query:partseg
-   evidence：点云自监督学习，用于跨场景的一致语义表示
-9. [DataEvolver: Let Your Data Build and Improve Itself via Goal-Driven Loop Agents](/202605/10/2605.01789v1-dataevolver-let-your-data-build-and-improve-itself-via-goal-driven-loop-agents)  
-   标签：评分：7.0/10、query:3dgen
-   evidence：用于生成网格和3D人工制品的视觉数据引擎
-10. [Geometry-Aware Neural Optimizer for Shape Optimization and Inversion](/202605/10/2605.04474v1-geometry-aware-neural-optimizer-for-shape-optimization-and-inversion)  
-   标签：评分：6.5/10、query:ff3dr
-   evidence：用于几何表示和形状优化的可微框架
-11. [Open-Source Image Editing Models Are Zero-Shot Vision Learners](/202605/10/2605.04566v1-open-source-image-editing-models-are-zero-shot-vision-learners)  
-   标签：评分：6.5/10、query:3dgen
-   evidence：使用生成模型进行单目深度估计和语义分割
-12. [Prompt-Free and Efficient SAM2 Adaptation for Biomedical Semantic Segmentation via Dual Adapters](/202605/10/2605.05979v1-prompt-free-and-efficient-sam2-adaptation-for-biomedical-semantic-segmentation-via-dual-adapters)  
+   evidence：识别未知对象为独立实例的开放集全景分割
+7. [Learning a Delighting Prior for Facial Appearance Capture in the Wild](/202605/11/2605.05636v1-learning-a-delighting-prior-for-facial-appearance-capture-in-the-wild)  
+   标签：评分：7.5/10、query:3dgen
+   evidence：神经去光照网络作为面部外观捕捉的先验
+8. [Differentiable Adaptive 4D Structured Illumination for Joint Capture of Shape and Reflectance](/202605/11/2605.06214v1-differentiable-adaptive-4d-structured-illumination-for-joint-capture-of-shape-and-reflectance)  
+   标签：评分：7.5/10、query:3dgen
+   evidence：从图像测量中重建深度图和反射率
+9. [Implicit Multi-Camera System Calibration Using Gaussian Processes](/202605/11/2605.07491v1-implicit-multi-camera-system-calibration-using-gaussian-processes)  
+   标签：评分：7.5/10、query:ff3dr
+   evidence：使用前馈回归将2D图像坐标映射到3D世界坐标
+10. [RD-ViT: Recurrent-Depth Vision Transformer for Semantic Segmentation with Reduced Data Dependence Extending the Recurrent-Depth Transformer Architecture to Dense Prediction](/202605/11/2605.03999v1-rd-vit-recurrent-depth-vision-transformer-for-semantic-segmentation-with-reduced-data-dependence-extending-the-recurrent-depth-transformer-architecture-to-dense-prediction)  
    标签：评分：6.5/10、query:partseg
-   evidence：生物医学语义分割与边界建模
-13. [LIE: LiDAR-only HD Map Construction with Intensity Enhancement via Online Knowledge Distillation](/202605/10/2605.01478v1-lie-lidar-only-hd-map-construction-with-intensity-enhancement-via-online-knowledge-distillation)  
-   标签：评分：6.0/10、query:partseg
-   evidence：仅LiDAR的语义地图构建与分割
+   evidence：支持3D输入的用于语义分割的循环深度视觉Transformer
+11. [Threshold-Guided Optimization for Visual Generative Models](/202605/11/2605.04653v1-threshold-guided-optimization-for-visual-generative-models)  
+   标签：评分：6.5/10、query:3dgen
+   evidence：大型视觉生成模型的对齐
+12. [A Flow Matching Algorithm for Many-Shot Adaptation to Unseen Distributions](/202605/11/2605.06272v1-a-flow-matching-algorithm-for-many-shot-adaptation-to-unseen-distributions)  
+   标签：评分：6.5/10、query:3dgen
+   evidence：用于生成建模和适应未见分布的流匹配算法
+13. [Rethinking Dense Optical Flow without Test-Time Scaling](/202605/11/2605.08000v1-rethinking-dense-optical-flow-without-test-time-scaling)  
+   标签：评分：6.5/10、query:ff3dr
+   evidence：利用基础模型的几何先验，通过单次前向传递估计稠密光流
 
 
 <div class="dpr-home-promo-card">
