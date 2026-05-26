@@ -6,104 +6,95 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-05-25
-- 运行时间：2026-05-25 21:18:31 UTC
+- 最新运行日期：2026-05-26
+- 运行时间：2026-05-26 20:55:27 UTC
 - 运行状态：成功
-- 本次总论文数：28
-- 精读区：15
+- 本次总论文数：25
+- 精读区：12
 - 速读区：13
 
 ### 今日简报（AI）
-今日精读15篇、速读13篇，最高分聚焦3D重建与几何学习。最值得关注：Trust3R用证据不确定性提升前馈3D重建可信度，UniT以组自回归Transformer统一几何建模。建议优先精读这两篇满分论文，再探索速读中的OPTNet后灾害分割和LongDPM长视频4D重建等实用方向。
-- 详情：[/202605/25/README](/202605/25/README)
+今天精读了两篇满分论文《F-RNG》与《TriSplat》，并速读了三篇高分论文，涵盖3D重建、内容生成与对应方法。最值得关注的方向是可重光照神经高斯渲染与仿真级前馈3D场景重建。建议普通读者优先速读《Efficient 3D Content Reconstruction and Generation》，以了解高效内容生成的基础思路。
+- 详情：[/202605/26/README](/202605/26/README)
 
 ### 精读区论文标签
-1. [Trust It or Not: Evidential Uncertainty for Feed-Forward 3D Reconstruction with Trust3R](/202605/25/2605.19539v1-trust-it-or-not-evidential-uncertainty-for-feed-forward-3d-reconstruction-with-trust3r)  
+1. [F-RNG: Feed-Forward Relightable Neural Gaussians](/202605/26/2605.25975v1-f-rng-feed-forward-relightable-neural-gaussians)  
    标签：评分：10.0/10、query:ffdr
-   evidence：直接针对前馈三维重建提出证据不确定性估计方法
-2. [UniT: Unified Geometry Learning with Group Autoregressive Transformer](/202605/25/2605.21131v1-unit-unified-geometry-learning-with-group-autoregressive-transformer)  
+   evidence：直接从稀疏视图生成可重光照3D高斯的前馈框架
+2. [TriSplat: Simulation-Ready Feed-Forward 3D Scene Reconstruction](/202605/26/2605.26115v1-trisplat-simulation-ready-feed-forward-3d-scene-reconstruction)  
    标签：评分：10.0/10、query:ffdr
-   evidence：使用分组自回归Transformer的前馈统一几何学习
-3. [No Pose, No Problem in 4D: Feed-Forward Dynamic Gaussians from Unposed Multi-View Videos](/202605/25/2605.22190v1-no-pose-no-problem-in-4d-feed-forward-dynamic-gaussians-from-unposed-multi-view-videos)  
-   标签：评分：10.0/10、query:ffdr
-   evidence：从无位姿多视角视频的前馈动态3D高斯泼溅
-4. [LangFlash: Feed-forward 3D Language Gaussian Splatting from Sparse Unposed Images](/202605/25/2605.23287v1-langflash-feed-forward-3d-language-gaussian-splatting-from-sparse-unposed-images)  
-   标签：评分：10.0/10、query:ffdr
-   evidence：前馈框架直接从稀疏无位姿图像预测3D高斯泼溅
-5. [UAVFF3D: A Geometry-Aware Benchmark for Feed-Forward UAV 3D Reconstruction](/202605/25/2605.17942v1-uavff3d-a-geometry-aware-benchmark-for-feed-forward-uav-3d-reconstruction)  
+   evidence：使用三角形基元的前馈3D场景重建，直接输出网格
+3. [Fixed External Cameras as Common Prior Maps for Active 3D Scene Graph Generation](/202605/26/2605.18184v1-fixed-external-cameras-as-common-prior-maps-for-active-3d-scene-graph-generation)  
    标签：评分：9.0/10、query:ffdr
-   evidence：前馈无人机3D重建基准
-6. [UAVFF3D: A Geometry-Aware Benchmark for Feed-Forward UAV 3D Reconstruction](/202605/25/2605.17942v2-uavff3d-a-geometry-aware-benchmark-for-feed-forward-uav-3d-reconstruction)  
-   标签：评分：9.0/10、query:ffdr
-   evidence：前馈无人机3D重建基准
-7. [Best Segmentation Buddies for Image-Shape Correspondence](/202605/25/2605.18193v1-best-segmentation-buddies-for-image-shape-correspondence)  
+   evidence：使用前馈3D重建模型进行场景图生成
+4. [ROAR-3D: Routing Arbitrary Views for High-Fidelity 3D Generation](/202605/26/2605.21121v1-roar-3d-routing-arbitrary-views-for-high-fidelity-3d-generation)  
+   标签：评分：9.0/10、query:dgen
+   evidence：单图到3D生成，利用多视角条件
+5. [Stream3D: Sequential Multi-View 3D Generation via Evidential Memory](/202605/26/2605.21472v1-stream3d-sequential-multi-view-3d-generation-via-evidential-memory)  
+   标签：评分：9.0/10、query:dgen
+   evidence：从连续多视图流生成3D对象
+6. [PhysX-Omni: Unified Simulation-Ready Physical 3D Generation for Rigid, Deformable, and Articulated Objects](/202605/26/2605.21572v1-physx-omni-unified-simulation-ready-physical-3d-generation-for-rigid-deformable-and-articulated-objects)  
+   标签：评分：9.0/10、query:dgen
+   evidence：统一的物理3D生成框架
+7. [GIBLy: Improving 3D Semantic Segmentation through an Architecture-Agnostic Lightweight Geometric Inductive Bias Layer](/202605/26/2605.24243v1-gibly-improving-3d-semantic-segmentation-through-an-architecture-agnostic-lightweight-geometric-inductive-bias-layer)  
    标签：评分：9.0/10、query:partseg
-   evidence：建立2D图像与3D形状之间的分割级对应，直接关联3D部件分割
-8. [Resolving Representation Ambiguity in Feedforward Novel View Synthesis Transformer via Semantic-Spatial Decoupling](/202605/25/2605.18599v1-resolving-representation-ambiguity-in-feedforward-novel-view-synthesis-transformer-via-semantic-spatial-decoupling)  
+   evidence：带有几何归纳偏置的3D语义分割
+8. [ArtSplat: Feed-Forward Articulated 3D Gaussian Splatting from Sparse Multi-State Uncalibrated Views](/202605/26/2605.24304v1-artsplat-feed-forward-articulated-3d-gaussian-splatting-from-sparse-multi-state-uncalibrated-views)  
    标签：评分：9.0/10、query:ffdr
-   evidence：前馈新视角合成Transformer，采用语义-空间解耦表示
-9. [CompoSE: Compositional Synthesis and Editing of 3D Shapes via Part-Aware Control](/202605/25/2605.19350v1-compose-compositional-synthesis-and-editing-of-3d-shapes-via-part-aware-control)  
+   evidence：前馈铰接三维高斯泼溅
+9. [Artiverse: A Diverse and Physically Grounded Dataset for Articulated Objects](/202605/26/2605.24403v1-artiverse-a-diverse-and-physically-grounded-dataset-for-articulated-objects)  
+   标签：评分：9.0/10、query:partseg
+   evidence：用于部件分割训练的3D铰接物体数据集
+10. [Multi-view Consistent 3D Gaussian Head Avatars 'without' Multi-view Generation](/202605/26/2605.25220v1-multi-view-consistent-3d-gaussian-head-avatars-without-multi-view-generation)  
    标签：评分：9.0/10、query:dgen
-   evidence：通过部分感知控制进行组合式3D形状合成
-10. [Cross-View Splatter: Feed-Forward View Synthesis with Georeferenced Images](/202605/25/2605.19656v1-cross-view-splatter-feed-forward-view-synthesis-with-georeferenced-images)  
+   evidence：从单张二维图像生成三维头部化身
+11. [Generating 3D models from sketches of human faces using a combined approach of Convolutional Neural Networks, Procedural Modeling, and Contour Mapping](/202605/26/2605.25418v1-generating-3d-models-from-sketches-of-human-faces-using-a-combined-approach-of-convolutional-neural-networks-procedural-modeling-and-contour-mapping)  
+   标签：评分：9.0/10、query:dgen
+   evidence：使用CNN从手绘草图生成三维人脸模型，实现从2D输入到3D几何的直接映射
+12. [Global Structure-from-Motion Meets Feedforward Reconstruction](/202605/26/2605.26103v1-global-structure-from-motion-meets-feedforward-reconstruction)  
    标签：评分：9.0/10、query:ffdr
-   evidence：前馈方法预测像素对齐的高斯泼溅用于室外场景
-11. [Structural Energy Guidance for View-Consistent Text-to-3D Generation](/202605/25/2605.19876v1-structural-energy-guidance-for-view-consistent-text-to-3d-generation)  
-   标签：评分：9.0/10、query:dgen
-   evidence：文本到3D生成中视图一致性的提升
-12. [Feed-Forward Gaussian Splatting from Sparse Aerial Views](/202605/25/2605.19949v1-feed-forward-gaussian-splatting-from-sparse-aerial-views)  
-   标签：评分：9.0/10、query:ffdr
-   evidence：从稀疏航拍视角进行大规模城市重建的前馈3D高斯泼溅
-13. [SphericalDreamer: Generating Navigable Immersive 3D Worlds with Panorama Fusion](/202605/25/2605.19974v1-sphericaldreamer-generating-navigable-immersive-3d-worlds-with-panorama-fusion)  
-   标签：评分：9.0/10、query:dgen
-   evidence：文本到沉浸式3D世界生成
-14. [GenRecon: Bridging Generative Priors for Multi-View 3D Scene Reconstruction](/202605/25/2605.23888v1-genrecon-bridging-generative-priors-for-multi-view-3d-scene-reconstruction)  
-   标签：评分：9.0/10、query:dgen
-   evidence：多视图3D重建，结合生成先验
-15. [Good Token Hunting: A Hitchhiker's Guide to Token Selection for Visual Geometry Transformers](/202605/25/2605.23892v1-good-token-hunting-a-hitchhikers-guide-to-token-selection-for-visual-geometry-transformers)  
-   标签：评分：9.0/10、query:ffdr
-   evidence：视觉几何变换器中的令牌选择提升多视图3D重建效率
+   evidence：比较和结合SfM与前馈重建
 
 ### 速读区论文标签
-1. [OPTNet: Ordering Point Transformer Network for Post-disaster 3D Semantic Segmentation](/202605/25/2605.17197v1-optnet-ordering-point-transformer-network-for-post-disaster-3d-semantic-segmentation)  
-   标签：评分：8.0/10、query:partseg
-   evidence：点云3D语义分割方法，适用于部件级理解
-2. [LongDPM: Overlap-Aware 4D Reconstruction from Long Monocular Videos](/202605/25/2605.17303v1-longdpm-overlap-aware-4d-reconstruction-from-long-monocular-videos)  
-   标签：评分：8.0/10、query:ffdr
-   evidence：针对前馈重建模型在长视频中的局限性，提出可扩展的4D重建方法
-3. [GeoHand: Unlocking Prior Geometry Knowledge for Monocular 3D Hand Reconstruction](/202605/25/2605.17354v1-geohand-unlocking-prior-geometry-knowledge-for-monocular-3d-hand-reconstruction)  
+1. [Efficient 3D Content Reconstruction and Generation](/202605/26/2605.18052v1-efficient-3d-content-reconstruction-and-generation)  
    标签：评分：8.0/10、query:dgen
-   evidence：单张图像的手部3D重建
-4. [Mamba-VGGT: Persistent Long-Sequence Video Geometry Grounded Transformer via External Sliding Window Mamba Memory](/202605/25/2605.17478v1-mamba-vggt-persistent-long-sequence-video-geometry-grounded-transformer-via-external-sliding-window-mamba-memory)  
+   evidence：涵盖重建与生成两种范式的3D内容高效合成论文
+2. [Tango3D: Towards Alignment for Global and Local 2D-3D Correspondence](/202605/26/2605.19727v1-tango3d-towards-alignment-for-global-and-local-2d-3d-correspondence)  
    标签：评分：8.0/10、query:ffdr
-   evidence：改进最先进的VGGT用于长序列3D重建
-5. [Rethinking Point Clouds as Sequences: A Causal Next-Token Predictive Learning Framework](/202605/25/2605.17566v1-rethinking-point-clouds-as-sequences-a-causal-next-token-predictive-learning-framework)  
-   标签：评分：8.0/10、query:partseg
-   evidence：点云自监督学习的因果下一个标记预测
-6. [PanoWorld: A Generative Spatial World Model for Consistent Whole-House Panorama Synthesis](/202605/25/2605.17916v1-panoworld-a-generative-spatial-world-model-for-consistent-whole-house-panorama-synthesis)  
+   evidence：使用几何感知2D骨干网络和3D VAE进行像素到点的直接对齐映射
+3. [Fast 4D Mesh Generation by Spatio-Temporal Attention Chains](/202605/26/2605.19786v1-fast-4d-mesh-generation-by-spatio-temporal-attention-chains)  
+   标签：评分：8.0/10、query:dgen
+   evidence：无需训练的快速4D网格生成方法
+4. [Variance Reduction for Expectations with Diffusion Teachers](/202605/26/2605.21489v2-variance-reduction-for-expectations-with-diffusion-teachers)  
+   标签：评分：8.0/10、query:dgen
+   evidence：文本到3D流程中扩散教师的方差减少
+5. [Fishbone: From One 3D Asset to a Million Controllable Edits](/202605/26/2605.24805v1-fishbone-from-one-3d-asset-to-a-million-controllable-edits)  
+   标签：评分：8.0/10、query:dgen
+   evidence：可控参数化网格变形生成多样3D资产
+6. [GaussianZoom: Progressive Zoom-in Generative 3D Gaussian Splatting with Geometric and Semantic Guidance](/202605/26/2605.18252v1-gaussianzoom-progressive-zoom-in-generative-3d-gaussian-splatting-with-geometric-and-semantic-guidance)  
    标签：评分：7.0/10、query:dgen
-   evidence：生成式空间世界模型用于一致的全屋全景合成
-7. [PanoWorld: A Generative Spatial World Model for Consistent Whole-House Panorama Synthesis](/202605/25/2605.17916v2-panoworld-a-generative-spatial-world-model-for-consistent-whole-house-panorama-synthesis)  
+   evidence：从低分辨率输入生成式放大3D重建
+7. [Text2CAD-Bench: A Benchmark for LLM-based Text-to-Parametric CAD Generation](/202605/26/2605.18430v1-text2cad-bench-a-benchmark-for-llm-based-text-to-parametric-cad-generation)  
    标签：评分：7.0/10、query:dgen
-   evidence：生成式空间世界模型用于一致的全屋全景合成
-8. [Fixed External Cameras as Common Prior Maps for Active 3D Scene Graph Generation](/202605/25/2605.18184v1-fixed-external-cameras-as-common-prior-maps-for-active-3d-scene-graph-generation)  
-   标签：评分：7.0/10、query:ffdr
-   evidence：使用前馈三维重建模型作为主动场景图生成的组件
-9. [CMAG: Concept-Scaffolded Retrieval for Marketplace Avatar Generation](/202605/25/2605.18680v1-cmag-concept-scaffolded-retrieval-for-marketplace-avatar-generation)  
+   evidence：文本到CAD生成基准
+8. [Code-as-Room: Generating 3D Rooms from Top-Down View Images via Agentic Code Synthesis](/202605/26/2605.18451v1-code-as-room-generating-3d-rooms-from-top-down-view-images-via-agentic-code-synthesis)  
    标签：评分：7.0/10、query:dgen
-   evidence：提出文本驱动的3D头像检索与组合生成方法
-10. [SGSoft: Learning Fused Semantic-Geometric Features for 3D Shape Correspondence via Template-Guided Soft Signals](/202605/25/2605.18039v1-sgsoft-learning-fused-semantic-geometric-features-for-3d-shape-correspondence-via-template-guided-soft-signals)  
-   标签：评分：6.0/10、query:partseg
-   evidence：融合语义-几何特征用于3D形状对应，可能用于部件分割
-11. [Who Generated This 3D Asset? Learning Source Attribution for Generative 3D Models](/202605/25/2605.18132v1-who-generated-this-3d-asset-learning-source-attribution-for-generative-3d-models)  
+   evidence：从顶视图图像生成三维房间
+9. [PIXLRelight: Controllable Relighting via Intrinsic Conditioning](/202605/26/2605.18735v1-pixlrelight-controllable-relighting-via-intrinsic-conditioning)  
+   标签：评分：7.0/10、query:dgen
+   evidence：基于内在条件的前馈可控重打光
+10. [DrawMotion: Generating 3D Human Motions by Freehand Drawing](/202605/26/2605.20955v1-drawmotion-generating-3d-human-motions-by-freehand-drawing)  
    标签：评分：6.0/10、query:dgen
-   evidence：分析生成式3D模型的源归因，与3D生成主题相关
-12. [Generative and isoparametric geometric modeling of large-scale and multiscale microstructures](/202605/25/2605.18894v1-generative-and-isoparametric-geometric-modeling-of-large-scale-and-multiscale-microstructures)  
-   标签：评分：6.0/10、query:dgen
-   evidence：微结构的生成式等参建模
-13. [D-Convexity: A Unified Differentiable Convex Shape Prior via Quasi-Concavity for Data-driven Image Segmentation](/202605/25/2605.19210v1-d-convexity-a-unified-differentiable-convex-shape-prior-via-quasi-concavity-for-data-driven-image-segmentation)  
+   evidence：从文本和手绘生成三维运动
+11. [3D LULC classification using multispectral LiDAR and deep learning: current and prospective schemes](/202605/26/2605.22328v1-3d-lulc-classification-using-multispectral-lidar-and-deep-learning-current-and-prospective-schemes)  
    标签：评分：6.0/10、query:partseg
-   evidence：用于分割的可微凸形状先验
+   evidence：用于土地覆盖分类的3D点云语义分割
+12. [GlowGS: Generative Semantic Feature Learning for 3D Gaussian Splatting in Nighttime Glow Scenes](/202605/26/2605.23602v1-glowgs-generative-semantic-feature-learning-for-3d-gaussian-splatting-in-nighttime-glow-scenes)  
+   标签：评分：6.0/10、query:dgen
+   evidence：夜间场景下3D高斯泼溅的生成式语义特征学习
+13. [Learnable Shape Prototypes with Occlusion-Geometry-Guided Injection for Amodal Instance Segmentation](/202605/26/2605.24533v1-learnable-shape-prototypes-with-occlusion-geometry-guided-injection-for-amodal-instance-segmentation)  
+   标签：评分：6.0/10、query:partseg
+   evidence：可学习形状原型的无模态实例分割
 
 
 <div class="dpr-home-promo-card">
