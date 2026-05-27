@@ -6,95 +6,87 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-05-26
-- 运行时间：2026-05-26 20:55:27 UTC
+- 最新运行日期：2026-05-27
+- 运行时间：2026-05-27 21:51:27 UTC
 - 运行状态：成功
-- 本次总论文数：25
-- 精读区：12
+- 本次总论文数：21
+- 精读区：8
 - 速读区：13
 
 ### 今日简报（AI）
-今天精读了两篇满分论文《F-RNG》与《TriSplat》，并速读了三篇高分论文，涵盖3D重建、内容生成与对应方法。最值得关注的方向是可重光照神经高斯渲染与仿真级前馈3D场景重建。建议普通读者优先速读《Efficient 3D Content Reconstruction and Generation》，以了解高效内容生成的基础思路。
-- 详情：[/202605/26/README](/202605/26/README)
+今日精读8篇、速读13篇，聚焦3D重建与人体恢复两大高分方向。
+
+最值得关注的是9分精读：长时序流式3D重建《HorizonStream》与单图联合网格与穿衣人体重建《MuNet》；速读中《OP2GS》的物体感知双透明度高斯溅射、《Pantheon360》的360°视频生成数字孪生、《Full-4D》的单视图全场景4D生成也极具参考价值。
+
+建议优先阅读两篇9分论文，深入理解长时序注意力机制与多任务人体重建思路；速读中可重点关注双透明度原语与360°视频扩散方法，对落地动态场景生成有帮助。
+- 详情：[/202605/27/README](/202605/27/README)
 
 ### 精读区论文标签
-1. [F-RNG: Feed-Forward Relightable Neural Gaussians](/202605/26/2605.25975v1-f-rng-feed-forward-relightable-neural-gaussians)  
-   标签：评分：10.0/10、query:ffdr
-   evidence：直接从稀疏视图生成可重光照3D高斯的前馈框架
-2. [TriSplat: Simulation-Ready Feed-Forward 3D Scene Reconstruction](/202605/26/2605.26115v1-trisplat-simulation-ready-feed-forward-3d-scene-reconstruction)  
-   标签：评分：10.0/10、query:ffdr
-   evidence：使用三角形基元的前馈3D场景重建，直接输出网格
-3. [Fixed External Cameras as Common Prior Maps for Active 3D Scene Graph Generation](/202605/26/2605.18184v1-fixed-external-cameras-as-common-prior-maps-for-active-3d-scene-graph-generation)  
+1. [HorizonStream: Long-Horizon Attention for Streaming 3D Reconstruction](/202605/27/2605.23889v1-horizonstream-long-horizon-attention-for-streaming-3d-reconstruction)  
    标签：评分：9.0/10、query:ffdr
-   evidence：使用前馈3D重建模型进行场景图生成
-4. [ROAR-3D: Routing Arbitrary Views for High-Fidelity 3D Generation](/202605/26/2605.21121v1-roar-3d-routing-arbitrary-views-for-high-fidelity-3d-generation)  
+   evidence：流式3D重建使用长程注意力
+2. [MuNet: A Mutualistic Network for Joint 3D Human Mesh Recovery and 3D Clothed Human Reconstruction from Single Images](/202605/27/2605.25861v2-munet-a-mutualistic-network-for-joint-3d-human-mesh-recovery-and-3d-clothed-human-reconstruction-from-single-images)  
    标签：评分：9.0/10、query:dgen
-   evidence：单图到3D生成，利用多视角条件
-5. [Stream3D: Sequential Multi-View 3D Generation via Evidential Memory](/202605/26/2605.21472v1-stream3d-sequential-multi-view-3d-generation-via-evidential-memory)  
-   标签：评分：9.0/10、query:dgen
-   evidence：从连续多视图流生成3D对象
-6. [PhysX-Omni: Unified Simulation-Ready Physical 3D Generation for Rigid, Deformable, and Articulated Objects](/202605/26/2605.21572v1-physx-omni-unified-simulation-ready-physical-3d-generation-for-rigid-deformable-and-articulated-objects)  
-   标签：评分：9.0/10、query:dgen
-   evidence：统一的物理3D生成框架
-7. [GIBLy: Improving 3D Semantic Segmentation through an Architecture-Agnostic Lightweight Geometric Inductive Bias Layer](/202605/26/2605.24243v1-gibly-improving-3d-semantic-segmentation-through-an-architecture-agnostic-lightweight-geometric-inductive-bias-layer)  
-   标签：评分：9.0/10、query:partseg
-   evidence：带有几何归纳偏置的3D语义分割
-8. [ArtSplat: Feed-Forward Articulated 3D Gaussian Splatting from Sparse Multi-State Uncalibrated Views](/202605/26/2605.24304v1-artsplat-feed-forward-articulated-3d-gaussian-splatting-from-sparse-multi-state-uncalibrated-views)  
+   evidence：从单张图像进行3D人体重建
+3. [Global Structure-from-Motion Meets Feedforward Reconstruction](/202605/27/2605.26103v2-global-structure-from-motion-meets-feedforward-reconstruction)  
    标签：评分：9.0/10、query:ffdr
-   evidence：前馈铰接三维高斯泼溅
-9. [Artiverse: A Diverse and Physically Grounded Dataset for Articulated Objects](/202605/26/2605.24403v1-artiverse-a-diverse-and-physically-grounded-dataset-for-articulated-objects)  
-   标签：评分：9.0/10、query:partseg
-   evidence：用于部件分割训练的3D铰接物体数据集
-10. [Multi-view Consistent 3D Gaussian Head Avatars 'without' Multi-view Generation](/202605/26/2605.25220v1-multi-view-consistent-3d-gaussian-head-avatars-without-multi-view-generation)  
+   evidence：比较前馈重建与经典SfM方法
+4. [AssetGen: Deployable 3D Asset Generation at Interactive Speed](/202605/27/2605.26137v1-assetgen-deployable-3d-asset-generation-at-interactive-speed)  
    标签：评分：9.0/10、query:dgen
-   evidence：从单张二维图像生成三维头部化身
-11. [Generating 3D models from sketches of human faces using a combined approach of Convolutional Neural Networks, Procedural Modeling, and Contour Mapping](/202605/26/2605.25418v1-generating-3d-models-from-sketches-of-human-faces-using-a-combined-approach-of-convolutional-neural-networks-procedural-modeling-and-contour-mapping)  
-   标签：评分：9.0/10、query:dgen
-   evidence：使用CNN从手绘草图生成三维人脸模型，实现从2D输入到3D几何的直接映射
-12. [Global Structure-from-Motion Meets Feedforward Reconstruction](/202605/26/2605.26103v1-global-structure-from-motion-meets-feedforward-reconstruction)  
+   evidence：从单张图像以交互速度生成高质量三维资产
+5. [Geometry-Aware Representation Denoising for Robust Multi-view 3D Reconstruction](/202605/27/2605.26230v1-geometry-aware-representation-denoising-for-robust-multi-view-3d-reconstruction)  
    标签：评分：9.0/10、query:ffdr
-   evidence：比较和结合SfM与前馈重建
+   evidence：通过特征去噪提升前馈多视图三维重建的鲁棒性
+6. [DelowlightSplat: Feed-Forward Gaussian Splatting for Lowlight 3D Scene Reconstruction](/202605/27/2605.26629v1-delowlightsplat-feed-forward-gaussian-splatting-for-lowlight-3d-scene-reconstruction)  
+   标签：评分：9.0/10、query:ffdr
+   evidence：前馈式高斯泼溅用于低光照3D重建
+7. [I2PRef: Image-Driven Point Completion with Iterative Refinement](/202605/27/2605.26914v1-i2pref-image-driven-point-completion-with-iterative-refinement)  
+   标签：评分：9.0/10、query:ffdr
+   evidence：图像到点云的直接映射用于3D重建
+8. [Sketch2MinSurf: Vision-Language Guided Generation of Editable Minimal Surfaces from Hand-Drawn Sketches](/202605/27/2605.20733v1-sketch2minsurf-vision-language-guided-generation-of-editable-minimal-surfaces-from-hand-drawn-sketches)  
+   标签：评分：8.0/10、query:dgen
+   evidence：从手绘草图生成可编辑3D表面，结合视觉语言与几何优化
 
 ### 速读区论文标签
-1. [Efficient 3D Content Reconstruction and Generation](/202605/26/2605.18052v1-efficient-3d-content-reconstruction-and-generation)  
+1. [OP2GS: Object-Aware 3D Gaussian Splatting with Dual-Opacity Primitives](/202605/27/2605.20044v1-op2gs-object-aware-3d-gaussian-splatting-with-dual-opacity-primitives)  
+   标签：评分：8.0/10、query:partseg
+   evidence：面向对象的3D高斯表示用于实例级分割
+2. [Pantheon360: Taming Digital Twin Generation via 3D-Aware 360° Video Diffusion](/202605/27/2605.25449v1-pantheon360-taming-digital-twin-generation-via-3d-aware-360-video-diffusion)  
    标签：评分：8.0/10、query:dgen
-   evidence：涵盖重建与生成两种范式的3D内容高效合成论文
-2. [Tango3D: Towards Alignment for Global and Local 2D-3D Correspondence](/202605/26/2605.19727v1-tango3d-towards-alignment-for-global-and-local-2d-3d-correspondence)  
-   标签：评分：8.0/10、query:ffdr
-   evidence：使用几何感知2D骨干网络和3D VAE进行像素到点的直接对齐映射
-3. [Fast 4D Mesh Generation by Spatio-Temporal Attention Chains](/202605/26/2605.19786v1-fast-4d-mesh-generation-by-spatio-temporal-attention-chains)  
+   evidence：3D感知的全景视频扩散用于数字孪生生成
+3. [Full-4D: Generating Full-Scope 4D Scenes from a Single-View Video](/202605/27/2605.25500v1-full-4d-generating-full-scope-4d-scenes-from-a-single-view-video)  
    标签：评分：8.0/10、query:dgen
-   evidence：无需训练的快速4D网格生成方法
-4. [Variance Reduction for Expectations with Diffusion Teachers](/202605/26/2605.21489v2-variance-reduction-for-expectations-with-diffusion-teachers)  
+   evidence：从单视角视频生成完整4D场景，使用多视角视频合成与优化重建
+4. [InstructSAM: Segment Any Instance with Any Instructions](/202605/27/2605.26102v1-instructsam-segment-any-instance-with-any-instructions)  
+   标签：评分：8.0/10、query:partseg
+   evidence：任意指令驱动的多实例分割，桥接VLM和SAM进行实例感知查询预测
+5. [Helix4D: Complex 4D Mesh Generation](/202605/27/2605.26109v1-helix4d-complex-4d-mesh-generation)  
    标签：评分：8.0/10、query:dgen
-   evidence：文本到3D流程中扩散教师的方差减少
-5. [Fishbone: From One 3D Asset to a Million Controllable Edits](/202605/26/2605.24805v1-fishbone-from-one-3d-asset-to-a-million-controllable-edits)  
+   evidence：视频条件四维网格生成，处理复杂拓扑
+6. [AnySurf: Any Surface Generation with Directed Edge](/202605/27/2605.26149v1-anysurf-any-surface-generation-with-directed-edge)  
    标签：评分：8.0/10、query:dgen
-   evidence：可控参数化网格变形生成多样3D资产
-6. [GaussianZoom: Progressive Zoom-in Generative 3D Gaussian Splatting with Geometric and Semantic Guidance](/202605/26/2605.18252v1-gaussianzoom-progressive-zoom-in-generative-3d-gaussian-splatting-with-geometric-and-semantic-guidance)  
+   evidence：统一框架生成开放/封闭3D表面
+7. [MatPhys: Learning Material-Aware Physics Parameters for Deformable Object Simulation from Videos](/202605/27/2605.19386v1-matphys-learning-material-aware-physics-parameters-for-deformable-object-simulation-from-videos)  
+   标签：评分：7.0/10、query:ffdr
+   evidence：前馈框架从视频预测物理参数，直接映射像素到可变形物体的物理参数
+8. [Learning Structural Latent Points for Efficient Visual Representations in Robotic Manipulation](/202605/27/2605.21258v1-learning-structural-latent-points-for-efficient-visual-representations-in-robotic-manipulation)  
+   标签：评分：7.0/10、query:ffdr
+   evidence：前馈学习的潜在点用于3D表示
+9. [Generator-Refiner-Examiner: A Tri-Module Data Augmentation Framework for 3D Human Avatar Learning from Monocular Videos](/202605/27/2605.23555v1-generator-refiner-examiner-a-tri-module-data-augmentation-framework-for-3d-human-avatar-learning-from-monocular-videos)  
    标签：评分：7.0/10、query:dgen
-   evidence：从低分辨率输入生成式放大3D重建
-7. [Text2CAD-Bench: A Benchmark for LLM-based Text-to-Parametric CAD Generation](/202605/26/2605.18430v1-text2cad-bench-a-benchmark-for-llm-based-text-to-parametric-cad-generation)  
+   evidence：从单目视频重建3D化身
+10. [COSY: Compositional 3DGS Synthesis for Disentangled Human Head Editing](/202605/27/2605.24114v1-cosy-compositional-3dgs-synthesis-for-disentangled-human-head-editing)  
    标签：评分：7.0/10、query:dgen
-   evidence：文本到CAD生成基准
-8. [Code-as-Room: Generating 3D Rooms from Top-Down View Images via Agentic Code Synthesis](/202605/26/2605.18451v1-code-as-room-generating-3d-rooms-from-top-down-view-images-via-agentic-code-synthesis)  
-   标签：评分：7.0/10、query:dgen
-   evidence：从顶视图图像生成三维房间
-9. [PIXLRelight: Controllable Relighting via Intrinsic Conditioning](/202605/26/2605.18735v1-pixlrelight-controllable-relighting-via-intrinsic-conditioning)  
-   标签：评分：7.0/10、query:dgen
-   evidence：基于内在条件的前馈可控重打光
-10. [DrawMotion: Generating 3D Human Motions by Freehand Drawing](/202605/26/2605.20955v1-drawmotion-generating-3d-human-motions-by-freehand-drawing)  
+   evidence：解耦组件的组合式3DGS合成用于人头编辑
+11. [Scene Reconstruction as Mapping Priors for 3D Detection](/202605/27/2605.22997v1-scene-reconstruction-as-mapping-priors-for-3d-detection)  
+   标签：评分：6.0/10、query:ffdr
+   evidence：利用场景重建作为3D检测的地图先验
+12. [OMGTex: One-stage Multi-style Facial Texture Reconstruction without Geometry Guidance](/202605/27/2605.25778v1-omgtex-one-stage-multi-style-facial-texture-reconstruction-without-geometry-guidance)  
    标签：评分：6.0/10、query:dgen
-   evidence：从文本和手绘生成三维运动
-11. [3D LULC classification using multispectral LiDAR and deep learning: current and prospective schemes](/202605/26/2605.22328v1-3d-lulc-classification-using-multispectral-lidar-and-deep-learning-current-and-prospective-schemes)  
+   evidence：无需几何指导的2D到UV纹理直接映射
+13. [PinPoint: Prompting with Informative Interior Points](/202605/27/2605.26689v1-pinpoint-prompting-with-informative-interior-points)  
    标签：评分：6.0/10、query:partseg
-   evidence：用于土地覆盖分类的3D点云语义分割
-12. [GlowGS: Generative Semantic Feature Learning for 3D Gaussian Splatting in Nighttime Glow Scenes](/202605/26/2605.23602v1-glowgs-generative-semantic-feature-learning-for-3d-gaussian-splatting-in-nighttime-glow-scenes)  
-   标签：评分：6.0/10、query:dgen
-   evidence：夜间场景下3D高斯泼溅的生成式语义特征学习
-13. [Learnable Shape Prototypes with Occlusion-Geometry-Guided Injection for Amodal Instance Segmentation](/202605/26/2605.24533v1-learnable-shape-prototypes-with-occlusion-geometry-guided-injection-for-amodal-instance-segmentation)  
-   标签：评分：6.0/10、query:partseg
-   evidence：可学习形状原型的无模态实例分割
+   evidence：通过信息性内部点改进引用图像分割
 
 
 <div class="dpr-home-promo-card">
