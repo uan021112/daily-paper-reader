@@ -1,0 +1,816 @@
+Title: R^3: 3D Reconstruction via Relative Regression
+
+URL Source: https://arxiv.org/pdf/2605.26519v1
+
+Published Time: Wed, 27 May 2026 00:36:47 GMT
+
+Number of Pages: 23
+
+Markdown Content:
+# R3: 3D Reconstruction via Relative Regression 
+
+Congrong Xu 1,2 ∗ Huachen Gao 2 Xingyu Chen 2 Yuliang Xiu 2 Jun Gao 1 Anpei Chen 2†
+
+> 1
+
+University of Michigan 2Westlake University 
+
+## Abstract 
+
+Recent feed-forward geometry foundation models have demonstrated impressive generalization by recovering depth and poses in a single forward pass. However, these models are typically constrained by a global coordinate frame assumption. This dependency becomes a significant bottleneck for long-context and streaming reconstruction, as it forces the network to maintain an arbitrary temporal origin and handle translation magnitudes that grow unbounded over time. Our solu-tion, which we call R3, employs relative regression. We employ a lightweight MLP to predict confidence-weighted relative constraints. These confidences serve as a unified anchor: weighting losses during training and guiding pose aggrega-tion during inference. R3 supports both full-context offline reconstruction and causal, bounded-memory streaming. Our evaluation in both offline and stream-ing settings validates the effectiveness of our relative mechanism. Project Page: https://kevinxu02.github.io/r3-site/ 
+
+## 1 Introduction 
+
+Feed-forward geometry foundation models have made camera and geometry prediction much more robust. Systems such as DUSt3R, VGGT, π3, and DA3 [ 66 , 64 , 69 , 33 ] are able to recover depth, poses, or pointmaps from images in one forward pass. However, most of these models are built around a global coordinate frame: they either predict pointmaps in a shared frame or regress every camera pose relative to one sequence-level world frame, such as the first camera or a learned canonical frame. This design works well for short offline clips, but it becomes problematic for long videos and streaming reconstruction, where the model must keep a consistent global frame as new views arrive. Recent work has begun to relax this global-frame assumption. In particular, π3 [69 ] replaces the fixed absolute pose loss with relative pose supervision, which reduces the bias toward a hard-coded temporal origin. Yet the output is still a set of global poses in one coordinate system. The model can choose the origin more flexibly, but it still has to represent an entire trajectory in a single frame, and translation magnitudes can grow as the sequence becomes longer. For online reconstruction, this keeps a difficult coordinate-choice problem inside the neural network: future poses are heavily biased toward the frame coordinate initialized from earlier observations. We suggest that feed-forward 3D reconstruction should learn local relations between views and assemble the global trajectory afterward. Relative pose is a better target for long-context and streaming settings for two simple reasons: its scale depends on the baseline between two frames rather than on the total trajectory length, which keeps regression in distribution as sequences grow; and an N -frame sequence yields many pairwise constraints instead of only N absolute poses. However, raw pairwise prediction is not sufficient: pairs differ in visibility, texture, motion, and baseline, and the model must regress all of them, and global assembly provides no signal for which predictions to trust. To track this issue, we incorporate a confidence modeling for each relative pose, allowing the model to emphasize reliable pairs. This enables any registered frame to serve as an anchor for a 
+
+> ∗Research done during an internship at Westlake University.
+> †Corresponding author. Preprint.
+> arXiv:2605.26519v1 [cs.CV] 26 May 2026
+
+Figure 1: Consistent, scalable, and efficient streaming geometry via relative pose regression. 
+
+R3 reconstructs camera poses and dense geometry from unbounded video streams via feed-forward relative pose regression. It maintains local consistency, scales to ultra-long sequences with bounded memory, and runs at 20+ FPS with 372M parameters. new one, with the system selecting the most confident reference from the registered set instead of chaining all poses to a fixed origin. More specifically, we introduce 3D Reconstruction via Relative Regression ( R3 for short), a feed-forward reconstruction framework based on pairwise relative pose. Fig. 2 contrasts our supervision target with VGGT’s first-frame-anchored absolute poses and π3’s model-chosen world frame: R3
+
+does not ask the network to regress global poses directly, but instead assembles them downstream from pairwise predictions with learned per-pair confidence. Using camera tokens from a DA3 backbone, a lightweight MLP predicts relative rotation, relative translation, and separate confidence scores for rotation and translation. These confidences are used during training as reliability weights and during inference as aggregation weights that fuse pairwise predictions into a consistent trajectory. By focusing on local relations, the model treats absolute poses as a downstream assembly task. 
+
+R3 is a causal, bounded-memory streaming model. Each incoming frame is placed by aggregating confident relative-pose predictions against a confidence-driven keyframe bank that serves as the active context. For offline use, the same checkpoint can run with the causal mask disabled, providing a full-context inference mode without retraining or a second model. With only 372M parameters and trained on 6 48GB GPUs, R3 is roughly a third the size of recent 1B-class feed-forward reconstruction models and uses substantially smaller training resources, yet matches or surpasses them on pose estimation and dense reconstruction across diverse 3D tasks. Compared with state-of-the-art streaming methods [ 65 , 70 , 29 , 81 , 10 , 76 ], it achieves competitive accuracy while preserving bounded memory usage, even for streams containing thousands of frames. In summary, we make the following contributions: (i) We reformulate feed-forward 3D reconstruction as a pairwise relative-pose regression task, reducing direct dependence on a fixed global coordinate frame and enabling confidence-weighted global assembly. (ii) We introduce a lightweight MLP that predicts separate rotation and translation confidences, reusing them for loss weighting, streaming pose aggregation, and keyframe-bank management. (iii) We present a single causal architecture that supports both bounded-memory streaming and full-context inference via a simple test-time attention switch, achieving high accuracy across short and long sequences. 
+
+## 2 Related Work 
+
+Traditional 3D Reconstruction and Learned Back-ends. Classical pipelines split reconstruction into SfM [ 51 , 45 ], MVS [ 20 , 52 , 74 ], and SLAM [ 28 , 40 , 19 , 7], with learning gradually folded in via features and matchers [ 15 , 50 , 34 , 57 , 68 ], learned SfM/VO/SLAM components [ 63 , 17 , 59 , 60 ], and learned-prior systems that integrate dense 3D predictions with keyframes, pose graphs, sparse 2(a) VGGT world frame = anchor (cam 1)  
+
+> directed edges from anchor
+> (b)
+
+π³ model-chosen world frame  
+
+> all pairs, constant edge con fi dence
+> (c)
+
+Ours   
+
+> all directed pairs, learned per-edge con fi dence anchor (world frame) cam with regressed absolute pose cam without absolute pose output edge con fi dence high low
+
+Figure 2: Three feed-forward pose paradigms, viewed as pose graphs. Edges denote supervised pairwise pose terms; arrowheads encode directional supervision. (a) VGGT [ 64 ] fixes the world frame to the first camera and supervises only edges from this anchor to every other camera. (b) 
+
+π3 [69 ] regresses absolute poses in a model-chosen world frame and supervises every unordered pair with uniform weight. (c) R3 drops the global-pose head and supervises every directed pair (i, j ) with a learned per-edge confidence, yielding a fully-connected directed pose graph. volumes, or trajectory smoothing [ 42 , 38 , 36 , 61 , 58 , 31 ]. We follow the learned-prior direction but keep most of the 3D backbone frozen and use a relative-pose head as a lightweight front-end for aggregation and graph refinement. 
+
+Feed-forward 3D Geometry Models. Feed-forward 3D models replace matching, registration, and optimization with direct geometric prediction. DUSt3R/MASt3R [ 66 , 30 ] made pointmaps a general target, and the paradigm has expanded to multi-view, global, permutation-equivariant, dynamic, and prior- or metric-aware reconstruction [ 73 , 6, 79 , 64 , 69 , 24 , 27 , 77 , 9 , 11 ]. DA3 [ 33 ] is the most relevant prior for us: built on DINOv2 [ 43 ], it predicts spatially consistent geometry through a unified depth-ray target. Instead of training another foundation model, we ask whether DA3 features can support a control layer for view trust, aggregation, and pair rejection through a small relative-pose head with task-aligned confidence. 
+
+Streaming 3D Reconstruction. Feed-forward streaming methods either introduce learned state or explicit memory [ 62 , 65 , 70 ], adapt transformer aggregation through long-context inference, caches, windows, or token-budget management [ 12 , 29 , 81 , 32 , 13 , 54 , 76 , 37 ], or use test-time training as scene memory [ 10 , 18 , 25 , 78 , 72 ]. Concurrent with our work, LingBot-Map [ 8] achieves very strong results with a geometric context transformer combining anchor context, pose-reference windows, and trajectory memory, but is trained on a hundred-GPU cluster with large scale internal datasets, so a fair comparison is unpractical. R3 is architecturally orthogonal: it introduces no recurrent state, TTT modules, or additional transformers. Instead, it reformulates absolute pose prediction as a system of confidence-weighted relative constraints that aggregate into consistent global trajectories for both streaming and offline inference. 
+
+Confidence in 3D Reconstruction. Per-pixel or per-correspondence confidences are standard in pointmap and SLAM models [ 66 , 30 , 64 , 33 , 59 , 60 ], but tied to local uses like depth weighting, correspondence filtering, or optimization residuals. Our contribution is the role of confidence: a pairwise pose confidence decoupled into rotation and translation that serves as loss weight, pairwise-aggregation weight, keyframe-bank utility, and outlier gate in streaming, and as per-pair reliability when fusing pairs in full-context refinement. This cross-module reuse lets a thin head on the backbone act as a learned front-end for online reconstruction and offline refinement, without hand-designed information matrices or a new memory architecture. 
+
+## 3 Method                  
+
+> Attributes VGGT [37] π3[69] R3(Ours)
+> Relative Pose ✗✗✓
+> Relative Loss ✗✓✓
+> All-pair Edges ✗✓✓
+> Learned Confidence ✗✗✓
+
+Table 1: Pose Paradigm Comparison Feed-forward 3D reconstruction from a sequence of N im-ages {I1, . . . , I N } aims to recover a consistent global 3D representation of the scene. Our model ( R3) predicts per-frame depth maps {Di} and focal lengths {fi}, and derives camera-to-world poses {Ti ∈ SE (3) } to produce a consis-tent global point cloud. Unlike prior feed-forward systems that directly regress every Ti in one global coordinate frame [ 64 , 69 , 33 ], R3 predicts the poses indirectly: it outputs a relative transform between every queried frame pair, and the global trajectory is assembled from these pairwise predictions by a downstream confidence-weighted aggregation. 3(Causal) Multi -view  Transformer               
+
+> Relative  Pose MLP
+> Relative Pose Prediction (Sec. 3.1)
+> Pairs w. Confidence
+> …
+> Confidence: LH
+> Global Trajectory Aggregation
+> (Sec. 3.2)
+> Depth  Head
+> Novel? …
+> Keyframe Bank (Sec. 3.3)
+> …
+> Input Frames
+
+Figure 3: Overview of R3. A causal geometry backbone extracts a single camera token from each frame. A lightweight pairwise pose head then predicts directed relative-pose edges from token pairs, along with separate rotation and translation confidences. These confidence-weighted edges are fused into a coherent trajectory, enabling streaming inference with a bounded active keyframe bank. As contrasted in Fig. 2 and Tab. 1, R3 shifts from global anchors to a fully-connected relative pose graph: for each ordered frame pair (i, j ) with i̸ = j, the prediction consists of the relative transform from camera i to camera j, together with two scalar confidences — one for rotation, one for translation. We view these predictions as a directed pose graph (Fig. 2, (c)): frames are nodes, and each queried pair (i, j ) becomes a directed edge whose attributes are the predicted relative pose and its two confidences. Since each edge only relates two cameras, it does not require a global coordinate frame. A shared frame is introduced later, when the edges are fused into a trajectory. The overview of our model and inference pipeline is shown in Fig. 3. 
+
+3.1 Relative Pose Prediction with Learned Confidence 
+
+We realize this pairwise framing with a pairwise pose head : a single lightweight MLP, shared across all frame pairs, that sits on top of the DA3 [ 33 ] geometry backbone. The backbone produces one latent camera token zi per frame. Given two camera tokens (zi, zj ), the pairwise pose head predicts the relative pose from frame i to frame j, together with two scalar confidences: 
+
+ ˆqi→j , ˆti→j , c R 
+
+> i→j
+
+, c T
+
+> i→j
+
+ = MLP rel ([ zi; zj ]) .
+
+Here ˆqi→j is the relative rotation (unit quaternion), ˆti→j is the translation of camera j expressed in i’s coordinate frame, and cR 
+
+> i→j
+
+, c T 
+
+> i→j
+
+> 0 are the rotation and translation confidences. Each such prediction defines one directed edge (i, j ) of the relative-pose graph, with the two confidences as its edge weights. A separate per-frame head predicts the focal length ˆfi from each token zi.
+
+Relative Versus Absolute Pose Prediction. Direct absolute-pose regression [ 64 , 69 , 33 ] requires committing to a single global frame. Especially in streaming inference, that frame is fixed from the first several views, and every later pose must be expressed in the same arbitrary coordinate choice. A pairwise edge instead predicts the displacement between its two endpoint cameras. This displacement is not a camera’s accumulated displacement from a fixed origin. The confidence-weighted loss below then learns how much each pair should contribute, so weakly constrained long-baseline pairs need not be trusted as much as reliable ones. The pairwise head also exposes O(N 2) supervised pose constraints from an N -frame training clip while reusing one shared MLP across all queried pairs. 
+
+Confidence Design. Rotation and translation exhibit different failure modes: translation is often less reliable when geometric cues are weak, whereas rotation can remain well constrained. A single shared confidence cannot express this asymmetry, so the head predicts separate reliability estimates for rotation and translation. The next sections describe how these two confidences enter the training loss and the trajectory aggregation. App. D gives a more detailed comparison of pose-supervision choices and analyzes the learned confidences as pair-reliability estimates. 43.2 Global Trajectory Aggregation 
+
+The trained pairwise pose head produces local edges, but downstream tasks such as depth fusion and point-cloud construction need every camera expressed in a single shared frame. Aggregation closes this gap by stitching the edges into a global trajectory. We first describe aggregation in the causal streaming setting. Frame 1 defines the origin and orientation of the shared coordinate system, i.e., T1 = I. Frame 2 can then be placed directly from pair (1 , 2) .For a later frame j, each available reference frame i proposes one candidate pose for j: we take the already-estimated pose of frame i and compose it with the relative transform predicted for pair (i, j ),
+
+q(i) 
+
+> j
+
+= qi ⊗ ˆqi→j , t(i) 
+
+> j
+
+= ti + qi(ˆ ti→j ),
+
+where qi(·) rotates a vector by qi. We call the available references for frame j the reference set Rj .In streaming, Rj is the active context Ct defined below: it is not the full history, but the subset of earlier frames currently kept in memory. The final pose is obtained by confidence-weighted fusion over these candidate poses. Rotation and translation use separate softmax weights from cR 
+
+> i→j
+
+and cT 
+
+> i→j
+
+, so unreliable pair predictions contribute less to the corresponding component. When computation permits, we fuse all references. For efficiency, we may instead restrict fusion to the top-K references ranked by averaged confidence 
+
+¯ci→j = 12 (cR 
+
+> i→j
+
++ cT 
+
+> i→j
+
+); using all references is recovered when K ≥ |R j |. With NK (j) denoting the retained references, the fused pose is 
+
+tj = X 
+
+> i∈N K(j)
+
+˜cT 
+
+> i→j
+
+t(i) 
+
+> j
+
+, qj = Norm 
+
+ X 
+
+> i∈N K(j)
+
+˜cR 
+
+> i→j
+
+q(i)
+
+> j
+
+ ,
+
+where ˜cR 
+
+> i→j
+
+, ˜cT 
+
+> i→j
+
+are the softmax normalizations of cR 
+
+> i→j
+
+, c T 
+
+> i→j
+
+over NK (j), and Norm( ·) renormal-izes its argument to a unit quaternion. Candidate quaternions are sign-aligned before averaging. 
+
+Confidence-weighted Fusion. The aggregation weights come from the predicted rotation and translation confidences, not from a fixed averaging rule. The top-K neighborhood is only an efficiency cap when many references are available; the all-reference version is evaluated in App. E.1. 
+
+3.3 Causal Streaming and Full-Context Inference 3.3.1 Streaming Inference with an Active Context 
+
+In streaming mode, frames arrive sequentially; each incoming frame is paired only with a small active context rather than the full history. The active context contains frame 1, which fixes the trajectory origin, and a dynamic keyframe bank of previously accepted frames: Ct = {1} ∪ B t. For incoming frame j, the pairwise pose head is evaluated only on edges between j and frames in Ct,and aggregation uses Rj = Ct. This works because frames enter the bank only after their poses have been estimated. The bank Bt is managed by two rules: adding feature-novel frames and removing the least useful keyframes when the bank is full. 
+
+Adding Keyframes. Frame j is admitted to Bt only if its pre-attention backbone token is sufficiently different from the current bank: 
+
+max 
+
+> i∈B t
+
+cos( tok i, tok j ) < τ, 
+
+where tok j is the average of j’s backbone encoder tokens before any cross-frame interaction, and τ
+
+is the novelty threshold. Since the backbone is pretrained for 3D reconstruction, this token provides a cue for local geometric and appearance redundancy. 
+
+Culling. When Bt reaches its capacity Mmax , the entry with the lowest utility uj = dj cj is evicted. Here dj = min i∈B t\{ j}
+
+ 1 − cos( tok i, tok j ) is the token-level distinctiveness of frame j from the closest other bank entry, and cj is the strongest pair confidence between j and the rest of the bank (App. C). The first frame is excluded from eviction. The bank mirrors classical keyframe sparsification [ 28 , 41 , 40 , 19 , 7], but replaces hand-designed motion and covisibility rules with token novelty and pose-head confidence. 53.3.2 Full-context Inference 
+
+When the complete clip is available, we can use the same checkpoint in a full-context mode: removing the causal attention mask at test time lets the backbone see all frames at once, so the pairwise pose head can be queried on every pair (i, j ) with i̸ = j. We initialize the trajectory with a causal streaming pass and then run one lightweight confidence-weighted pose-graph refinement over the predicted relative-pose edges. This refinement is inexpensive because its edges carry only relative-pose residuals and scalar confidences; it does not run bundle adjustment, point reprojection, or depth optimization. Additional implementation details for the keyframe bank and refinement solver are given in App. C. 
+
+3.4 Training Objective 
+
+The pairwise pose head and depth head are supervised with confidence-weighted residual losses. The total objective is L = Lcam + Ldepth .
+
+Confidence-aware Camera Loss. For each pair (i, j ) with i̸ = j, rotation and translation are supervised by confidence-weighted L1 residuals: 
+
+Lrot (i, j ) = cR 
+
+> i→j
+
+ℓL1
+
+> rot
+
+(i, j ) − α log cR 
+
+> i→j
+
+, Ltrans (i, j ) = cT 
+
+> i→j
+
+ℓL1
+
+> trans
+
+(i, j ) − α log cT 
+
+> i→j
+
+,
+
+where ℓL1
+
+> rot
+
+, ℓ L1 
+
+> trans
+
+are L1 residuals against the ground-truth rotation and translation (App. D). In the causal setting, Lcam averages these terms over past-to-current ordered pairs and adds a plain per-frame 
+
+L1 term for the focal-length head. The two parts of each loss work in tension: a large residual makes the product c ℓ costly; consequently; consequently, the optimizer shrinks c on inaccurate pairs, while the − log c regularizer ( α = 0 .2) keeps c from collapsing to zero. As training proceeds, the model assigns higher cR, c T to pairs with small residuals and lower confidence to pairs with large residuals. 
+
+Depth Loss. The depth head is supervised in median-normalized space: each prediction D and target D∗ is divided by its own per-frame median to remove scene-scale ambiguity, yielding ˜D and 
+
+˜D∗. The supervision target D∗ depends on the data source: ground-truth depth on synthetic scenes, and the depth output of a frozen pretrained DA3 [33] model on real-world sequences. The loss is 
+
+Ldepth = 1
+
+|M| 
+
+X
+
+> p∈M
+
+
+
+Σp ˜D(p) − ˜D∗(p) − α log Σ p
+
+
+
+,
+
+where Σp is the learned per-pixel depth confidence and the supervision mask M uses ground-truth validity for synthetic data and DA3-teacher confidence for real-world data. 
+
+Confidence-weighted Supervision. A fixed-weight camera loss λRℓrot + λTℓtrans uses the same 
+
+λR, λ T for every pair, even when the right balance varies across pairs. Our confidence-weighted loss adapts this balance during training, upweighting confident pairs and downweighting unreliable ones; the depth loss applies the same idea per pixel. Architecture updates, optimization schedules, datasets, and other training details are given in App. F. 
+
+## 4 Experiments 
+
+We evaluate R3 across four dimensions: (i) camera pose accuracy, (ii) dense point-map reconstruction quality, (iii) scalability for long sequences, and (iv) robustness to distractor frames. Unless otherwise specified, all evaluations follow the standard protocols of the respective benchmarks. Our single causal checkpoint runs in the default streaming mode with bounded memory; when the complete clip is available, we also report a lightweight full-context switch obtained by removing the causal mask at test time and running one confidence-weighted pose-graph refinement. To assess scalability, all methods are tested under a fixed 48 GiB GPU memory budget, where “OOM” indicates failure to meet this constraint. 
+
+4.1 Camera Pose Estimation 
+
+We evaluate camera pose accuracy on Sintel [ 4], TUM-dynamics [ 56 ], and ScanNet [ 14 ], comparing streaming R3 against existing streaming baselines and also reporting full-sequence context results. 6Table 2: Camera pose estimation on offline (Top) and online (Bottom) settings. ATE / RPE-T / RPE-R, all lower is better; RPE-R is in degrees. VGGT, DA3-Large, and R3 (full context) are full-sequence references. Bold /underlined marks best/second-best within each block. † marks offline methods. ∗ indicates values taken from the paper.                                                                                                                              
+
+> Sintel (50 frames) TUM-dynamics (90 frames) ScanNet (90 frames) Method #Params ATE ↓RPE-T ↓RPE-R ↓ATE ↓RPE-T ↓RPE-R ↓ATE ↓RPE-T ↓RPE-R ↓
+> VGGT †[64] 1.26B 0.172 0.061 0.471 0.012 0.010 0.309 0.035 0.015 0.376
+> DA3-Large †[33] 385M 0.140 0.059 0.450 0.013 0.011 0.310 0.039 0.017 0.590
+> R3†372M 0.130 0.047 0.523 0.012 0.009 0.318 0.037 0.015 0.472 Spann3R [62] —0.329 0.110 4.471 0.056 0.021 0.591 0.096 0.023 0.661 CUT3R [65] 793M 0.213 0.066 0.621 0.046 0.015 0.473 0.099 0.022 0.600 Point3R [70] —0.351 0.128 1.822 0.075 0.029 0.642 0.106 0.035 1.946 StreamVGGT [81] 1.26B 0.251 0.149 1.894 0.061 0.033 3.209 0.161 0.057 3.647 STream3R [29] 1.26B 0.213 0.076 0.868 0.026 0.013 0.330 0.052 0.021 0.850 TTT3R [10] 793M 0.201 0.063 0.617 0.028 0.012 0.379 0.064 0.021 0.592 ZipMap-stream ∗[25] 1.40B 0.159 0.065 0.750 ——————
+> R3372M 0.115 0.068 0.548 0.018 0.010 0.320 0.038 0.016 0.480
+
+As shown in Tab. 2, streaming R3 provides the strongest overall pose accuracy among streaming methods while using a compact 372 M-parameter model. This is substantially smaller than most recent streaming reconstruction baselines with reported model sizes, yet it improves global trajectory accuracy across all three benchmarks, with only one short-term translation metric slightly trailing the best baseline. When the complete sequence is available, the same checkpoint can be switched to full-context inference and remains competitive with DA3/VGGT references without retraining. The slightly worse ATE on Sintel is due to the outlier sequence sintel-temple-3 .
+
+4.2 Point-Map Reconstruction 
+
+Following CUT3R [ 65 ], we evaluate dense reconstruction on 7-Scenes [ 55 ] and NRGBD [ 2 ] with uniform keyframe sampling (strides 200 and 100). In Tab. 3, streaming R3 leads on 7-Scenes, showing that the pose estimates translate into accurate geometry under sparse sampling, and remains competitive with the strongest streaming baseline on NRGBD. The full-context switch improves the primary mean Acc/Comp values on both datasets from the same checkpoint. Table 3: Sparse-view point-map reconstruction. Acc and Comp are lower-is-better; NC is higher-is-better. VGGT, DA3-Large, and R3 (full context) are full-sequence references. Bold /underlined marks best/second-best within each block. † marks offline methods.                                                                                                                      
+
+> 7-Scenes [55] NRGBD [2] Acc ↓Comp ↓NC ↑Acc ↓Comp ↓NC ↑
+> Method Mean Med. Mean Med. Mean Med. Mean Med. Mean Med. Mean Med. VGGT †[64] 0.087 0.039 0.091 0.039 0.787 0.890 0.073 0.018 0.077 0.021 0.910 0.990
+> DA3-Large †[33] 0.086 0.034 0.088 0.033 0.756 0.873 0.045 0.020 0.061 0.025 0.896 0.988
+> R3†(full context) 0.081 0.043 0.070 0.027 0.770 0.881 0.038 0.020 0.044 0.019 0.887 0.990
+> Spann3R [62] 0.298 0.226 0.205 0.112 0.650 0.730 0.416 0.323 0.417 0.285 0.684 0.789 CUT3R [65] 0.126 0.047 0.154 0.031 0.727 0.834 0.099 0.031 0.076 0.026 0.837 0.971 STream3R [29] 0.122 0.044 0.110 0.038 0.746 0.856 0.057 0.014 0.028 0.013 0.910 0.993
+> StreamVGGT [81] 0.129 0.056 0.115 0.041 0.751 0.865 0.084 0.044 0.074 0.041 0.861 0.986
+> R30.092 0.038 0.093 0.040 0.755 0.868 0.047 0.022 0.050 0.020 0.883 0.991
+
+4.3 Long-Sequence Scalability 
+
+We evaluate long-sequence behavior on dense reconstruction of 7-Scenes at sequence lengths up to 1000 frames (Tab. 4) and on ScanNet / TUM-dynamics for pose accuracy (Fig. 4). R3 processes each stream in a single pass without reset . On 7-Scenes, streaming baselines lose Acc/Comp at 1000 frames, while R3 remains roughly flat. On ScanNet / TUM-dynamics, its ATE grows gradually as views are added but avoids the stronger drift observed in the baselines. We attribute this stability to confidence-weighted aggregation over the keyframe bank. Fig. 5 shows the same trend qualitatively on in-the-wild clips. FPS and GPU-memory curves under the same protocol are deferred to App. B. 7Figure 5: Long streaming comparison. Qualitative in-the-wild results show that R3 maintains more consistent trajectories and point-map alignments over hundreds of frames than baselines. Table 4: Long-sequence reconstruction on 7-Scenes. Mean values at sequence lengths 
+
+200 /500 /1000 . Acc / Comp are lower-is-better; NC is higher-is-better. “OOM” marks methods that exceed the 48 GiB GPU memory budget. Bold /underlined marks best/second-best per metric column. 
+
+Length 200 Length 500 Length 1000 Method Acc ↓ Comp ↓ NC ↑ Acc ↓ Comp ↓ NC ↑ Acc ↓ Comp ↓ NC ↑
+
+Spann3R [62] 0.215 0.122 0.535 0.343 0.154 0.515 0.340 0.154 0.508 CUT3R [65] 0.087 0.045 0.566 0.194 0.092 0.527 0.240 0.102 0.513 Point3R [70] 0.041 0.023 0.579 0.056 0.031 0.555 0.068 0.025 0.533 TTT3R [10] 0.027 0.023 0.582 0.065 0.030 0.552 0.126 0.050 0.525 StreamVGGT [81] 0.038 0.029 0.583 OOM OOM OOM OOM OOM OOM InfiniteVGGT [76] 0.046 0.031 0.582 0.040 0.024 0.561 0.061 0.035 0.537 
+
+R3 0.021 0.018 0.600 0.022 0.017 0.562 0.022 0.017 0.538 
+
+Table 5: Long-sequence camera trajectory accuracy on DL3DV-Benchmark. ATE-norm / ATE-RMSE / Rot RMSE, all lower is better; ATE-norm is in %, Rot RMSE is in degrees. Win rate counts scenes (out of 25 ) where each method attains the lowest ATE-norm. Bold marks the best per column. 
+
+Method ATE-norm (%) ↓ ATE-RMSE ↓ Rot RMSE ( ◦)↓ Win rate TTT3R [10] 4.91 0.601 5.65 1/25 InfiniteVGGT [76] 2.85 0.367 3.06 0/25 
+
+R3 1.16 0.155 1.79 24/25 200 400 600 800 1000 
+
+Number of Input Views     
+
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> ATE (m)  ↓ OOM
+> OOM
+> OOM
+> ScanNet
+> R3
+> TTT3R
+> CUT3R
+> Point3R
+> StreamVGGT
+> VGGT (offline) 200 400 600 800 1000
+
+Number of Input Views 
+
+> 0.00
+> 0.05
+> 0.10
+> 0.15
+> ATE (m)  ↓ OOM
+> OOM
+> OOM
+> TUM-Dynamics
+> R3
+> TTT3R
+> CUT3R
+> Point3R
+> StreamVGGT
+> VGGT (offline)
+
+Figure 4: Pose accuracy scaling on long sequences. We plot ATE for ScanNet [ 14 ] and TUM-dynamics [ 56 ] as the number of input frames increases. While several streaming baselines exhibit cumulative drift or trigger out-of-memory (OOM) failures, R3 maintains stable trajectory estimation. We further test pose-only trajectory accuracy on a subset of DL3DV-Benchmark [ 35 ] ( 304 –439 
+
+frames), which contains wider camera baselines and outdoor scenes beyond the mostly indoor TUM-dynamics/ScanNet setting. TTT3R uses a reset interval because it outperforms no-reset inference; the full protocol is provided in App. H. As shown in Tab. 5, R3 wins ATE-norm on 24 /25 scenes and sharply lowers mean ATE-norm versus the strongest streaming baseline. 84.4 Robustness via Confidence Gating 
+
+Table 6: Robustness with distractors. Mean over Small/Medium/Large distractor settings (10 seeds each); SR denotes rejection success.                       
+
+> Method ETH3D [53] RobustNeRF [49] ATE ↓SR ↑ATE ↓SR ↑
+> RobustVGGT-A †0.733 0.914 0.138 0.641 RobustVGGT-F †0.763 0.985 0.138 0.586
+> R30.998 –0.199 –
+> R3+ reject 0.244 1.000 0.152 0.986
+
+The learned confidences is able to further function as an effective outlier gate. Specifically, when the mean confidence of a new frame j against the active con-text Ct falls below a calibrated baseline, we invalidate its KV-cache entries, skip bank admission, and sup-press its pose estimation. This mechanism enables 
+
+R3 to handle transient failures such as motion blur, occlusions, or sudden scene cuts without polluting the keyframe bank. We provide details on calibration, thresholds, and our segment-reset strategy in App. C. Following the Robust-VGGT [ 22 ] protocol, we in-terleave distractor frames into the input stream while maintaining temporal order. As shown in Tab. 6, R3 identifies distractors in a single online pass, whereas Robust-VGGT requires a multi-pass offline detection stage. This validates that our reliability signal effectively doubles as an out-of-scene detector, enabling robust streaming reconstruction using a unified rule across experiments. 
+
+## 5 Ablation Study 
+
+5.1 Effectiveness of Relative-Pose Formulation 
+
+To isolate the intrinsic benefits of the relative-pose formulation, we conduct a controlled comparison against a direct global-pose regression baseline. Within each setting, we keep the backbone archi-tecture, training data, and optimization budget identical, varying only the prediction target and its associated loss. The streaming block uses an absolute-pose-pretrained backbone, which biases the setup toward the direct baseline rather than our relative-pose head. Table 7: Relative-pose prediction objective. ATE / RPE-T / RPE-R, all lower is better. Within each block, the controlled variants share the same backbone setting and differ in the pose prediction target and loss. Bold marks the best result within each block. † marks full-sequence methods.                                 
+
+> Sintel [4] ScanNet [14] Variant ATE ↓RPE-T ↓RPE-R ↓ATE ↓RPE-T ↓RPE-R ↓
+> Full-context (VGGT init, 64 k iters)
+> Backbone direct (Pi3 loss) †0.1583 0.0841 0.9492 0.0683 0.0195 0.5143 Backbone + our rel. target/loss †0.1370 0.0757 0.7282 0.0604 0.0189 0.5039
+> Streaming ( 5k iters, abs-pose-pretrained backbone, pose heads reset)
+> Backbone direct (VGGT abs loss) 0.141 0.079 1.56 0.063 0.026 1.33 Backbone + our rel. target/loss 0.146 0.066 0.67 0.052 0.021 0.93
+
+As shown in Tab. 7, the relative formulation improves most metrics in both full-context and streaming scenarios, especially RPE and ScanNet ATE; the direct baseline remains slightly better on Sintel streaming ATE. Overall, the results indicate that supervised relative-pose regression is a strong geometric prior for long-range sequences, even before any complex aggregation is applied. Additional ablations on full-attention fine-tuning, aggregation strategy, and keyframe admission are in App. E. 
+
+## 6 Conclusion 
+
+We presented R3, a feed-forward 3D reconstruction framework that reformulates global-frame regression as pairwise relative-pose regression. Our approach employs a lightweight MLP to predict relative motion alongside decoupled confidences for rotation and translation. This confidence signal acts as a unified primitive: it weights training losses, guides pose aggregation at inference, and drives keyframe-bank management. Experimental results demonstrate that R3 is competitive with the baselines, even on sequences exceeding thousands of frames. By offloading the coordinate-frame choice to a relative pose aggregation step, R3 demonstrates that local geometric relations are a more natural and scalable learning target for feed-forward 3D reconstruction. 9Acknowledgments 
+
+We gratefully thank Siyuan Bian and Weiwei Xu for their insightful discussions, and the members of Jun Gao Lab and Inception3D Lab for their support throughout this project. 
+
+## References 
+
+[1] Eduardo Arnold, Jamie Wynn, Sara Vicente, Guillermo Garcia-Hernando, Áron Monszpart, Vic-tor Prisacariu, Daniyar Turmukhambetov, and Eric Brachmann. Map-free visual relocalization: Metric pose relative to a single image. In European Conference on Computer Vision (ECCV) ,2022. [2] Dejan Azinovi´ c, Ricardo Martin-Brualla, Dan B Goldman, Matthias Nießner, and Justus Thies. Neural rgb-d surface reconstruction. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , pages 6290–6301, June 2022. [3] Gilad Baruch, Zhuoyuan Chen, Afshin Dehghan, Tal Dimry, Yuri Feigin, Peter Fu, Thomas Gebauer, Brandon Joffe, Daniel Kurz, Arik Schwartz, and Elad Shulman. ARKitScenes: A diverse real-world dataset for 3D indoor scene understanding using mobile RGB-D data. In 
+
+Advances in Neural Information Processing Systems (NeurIPS) Datasets and Benchmarks Track ,2021. [4] Daniel J. Butler, Jonas Wulff, Garrett B. Stanley, and Michael J. Black. A naturalistic open source movie for optical flow evaluation. In European Conference on Computer Vision (ECCV) ,2012. [5] Yohann Cabon, Naila Murray, and Martin Humenberger. Virtual KITTI 2. arXiv preprint arXiv:2001.10773 , 2020. [6] Yohann Cabon, Lucas Stoffl, Leonid Antsfeld, Gabriela Csurka, Boris Chidlovskii, Jérôme Revaud, and Vincent Leroy. MUSt3R: Multi-view network for stereo 3D reconstruction. In 
+
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) ,2025. [7] Carlos Campos, Richard Elvira, Juan J. Gómez Rodríguez, J. M. M. Montiel, and Juan D. Tardós. ORB-SLAM3: An accurate open-source library for visual, visual-inertial, and multimap SLAM. IEEE Transactions on Robotics , 37(6):1874–1890, 2021. [8] Lin-Zhuo Chen, Jian Gao, Yihang Chen, Ka Leong Cheng, Yipengjing Sun, Liangxiao Hu, Nan Xue, Xing Zhu, Yujun Shen, Yao Yao, and Yinghao Xu. Geometric context transformer for streaming 3D reconstruction. arXiv preprint arXiv:2604.14141 , 2026. [9] Xingyu Chen, Yue Chen, Yuliang Xiu, Andreas Geiger, and Anpei Chen. Easi3R: Estimat-ing disentangled motion from DUSt3R without training. In Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV) , 2025. arXiv:2503.24391. [10] Xingyu Chen, Yue Chen, Yuliang Xiu, Andreas Geiger, and Anpei Chen. TTT3R: 3D recon-struction as test-time training. arXiv preprint arXiv:2509.26645 , 2025. [11] Yue Chen, Xingyu Chen, Yuxuan Xue, Anpei Chen, Yuliang Xiu, and Gerard Pons-Moll. Human3R: Everyone everywhere all at once. In International Conference on Learning Repre-sentations (ICLR) , 2026. arXiv:2510.06219. [12] Zhuoguang Chen, Minghui Qin, Tianyuan Yuan, Zhe Liu, and Hang Zhao. LONG3R: Long se-quence streaming 3D reconstruction. In Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV) , 2025. arXiv:2507.18255. [13] Chong Cheng, Xianda Chen, Tao Xie, Wei Yin, Weiqiang Ren, Qian Zhang, Xiaoyang Guo, and Hao Wang. LongStream: Long-sequence streaming autoregressive visual geometry. arXiv preprint arXiv:2602.13172 , 2026. 10 [14] Angela Dai, Angel X. Chang, Manolis Savva, Maciej Halber, Thomas Funkhouser, and Matthias Nießner. ScanNet: Richly-annotated 3D reconstructions of indoor scenes. In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR) , 2017. [15] Daniel DeTone, Tomasz Malisiewicz, and Andrew Rabinovich. SuperPoint: Self-supervised interest point detection and description. In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition Workshops (CVPRW) , 2018. [16] Juechu Dong, Boyuan Feng, Driss Guessous, Yanbo Liang, and Horace He. Flex attention: A pro-gramming model for generating optimized attention kernels. arXiv preprint arXiv:2412.05496 ,2024. [17] Bardienus Pieter Duisterhof, Lojze Zust, Philippe Weinzaepfel, Vincent Leroy, Yohann Cabon, and Jérôme Revaud. MASt3R-SfM: A fully-integrated solution for unconstrained structure-from-motion. In International Conference on 3D Vision (3DV) , 2025. [18] Sven Elflein, Ruilong Li, Sérgio Agostinho, Zan Gojcic, Laura Leal-Taixé, Qunjie Zhou, and Aljosa Osep. VGG-T 3: Offline feed-forward 3D reconstruction at scale. arXiv preprint arXiv:2602.23361 , 2026. [19] Jakob Engel, Vladlen Koltun, and Daniel Cremers. Direct sparse odometry. IEEE Transactions on Pattern Analysis and Machine Intelligence (TPAMI) , 40(3):611–625, 2018. [20] Yasutaka Furukawa and Jean Ponce. Accurate, dense, and robust multi-view stereopsis. IEEE Transactions on Pattern Analysis and Machine Intelligence (TPAMI) , 32(8):1362–1376, 2010. [21] Andreas Geiger, Philip Lenz, and Raquel Urtasun. Are we ready for autonomous driving? the KITTI vision benchmark suite. In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR) , 2012. [22] Jisang Han, Sunghwan Hong, Jaewoo Jung, Wooseok Jang, Honggyu An, Qianqian Wang, Seungryong Kim, and Chen Feng. Emergent outlier view rejection in visual geometry grounded transformers. arXiv preprint arXiv:2512.04012 , 2025. [23] Po-Han Huang, Kevin Matzen, Johannes Kopf, Narendra Ahuja, and Jia-Bin Huang. DeepMVS: Learning multi-view stereopsis. In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR) , 2018. [24] Wonbong Jang, Philippe Weinzaepfel, Vincent Leroy, Lourdes Agapito, and Jérôme Revaud. Pow3R: Empowering unconstrained 3D reconstruction with camera and scene priors. In 
+
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) ,pages 1071–1081, 2025. [25] Haian Jin, Rundi Wu, Tianyuan Zhang, Ruiqi Gao, Jonathan T. Barron, Noah Snavely, and Aleksander Hoły´ nski. ZipMap: Linear-time stateful 3D reconstruction via test-time training. In 
+
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) ,2026. arXiv:2603.04385. [26] Nikita Karaev, Ignacio Rocco, Benjamin Graham, Natalia Neverova, Andrea Vedaldi, and Christian Rupprecht. DynamicStereo: Consistent dynamic depth from stereo videos. In 
+
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) ,2023. [27] Nikhil Keetha, Norman Müller, Johannes Schönberger, Lorenzo Porzi, Yuchen Zhang, To-bias Fischer, Arno Knapitsch, Duncan Zauss, Ethan Weber, Nelson Antunes, Jonathon Luiten, Manuel Lopez-Antequera, Samuel Rota Bulò, Christian Richardt, Deva Ramanan, Sebastian Scherer, and Peter Kontschieder. MapAnything: Universal feed-forward metric 3D reconstruc-tion. arXiv preprint arXiv:2509.13414 , 2025. [28] Georg Klein and David Murray. Parallel tracking and mapping for small AR workspaces. In 
+
+IEEE and ACM International Symposium on Mixed and Augmented Reality (ISMAR) , 2007. 11 [29] Yushi Lan, Yihang Luo, Fangzhou Hong, Shangchen Zhou, Honghua Chen, Zhaoyang Lyu, Shuai Yang, Bo Dai, Chen Change Loy, and Xingang Pan. STream3R: Scalable sequential 3D reconstruction with causal transformer. arXiv preprint arXiv:2508.10893 , 2025. [30] Vincent Leroy, Yohann Cabon, and Jérôme Revaud. Grounding image matching in 3D with MASt3R. In European Conference on Computer Vision (ECCV) , 2024. [31] Zhengqi Li, Richard Tucker, Forrester Cole, Qianqian Wang, Linyi Jin, Vickie Ye, Angjoo Kanazawa, Aleksander Hoły´ nski, and Noah Snavely. MegaSaM: Accurate, fast, and robust structure and motion from casual dynamic videos. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , pages 10486–10496, 2025. [32] Zizun Li, Jianjun Zhou, Yifan Wang, Haoyu Guo, Wenzheng Chang, Yang Zhou, Haoyi Zhu, Junyi Chen, Chunhua Shen, and Tong He. WinT3R: Window-based streaming reconstruction with camera token pool. In International Conference on Learning Representations (ICLR) ,2026. arXiv:2509.05296. [33] Haotong Lin, Sili Chen, Jun Hao Liew, Donny Y. Chen, Zhenyu Li, Guang Shi, Jiashi Feng, and Bingyi Kang. Depth anything 3: Recovering the visual space from any views. arXiv preprint arXiv:2511.10647 , 2025. [34] Philipp Lindenberger, Paul-Edouard Sarlin, and Marc Pollefeys. LightGlue: Local feature matching at light speed. In Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV) , pages 17627–17638, 2023. [35] Lu Ling, Yichen Sheng, Zhi Tu, Wentian Zhao, Cheng Xin, Kun Wan, Lantao Yu, Qianyu Guo, Zixun Yu, Yawen Lu, Xuanmao Li, Xingpeng Sun, Rohan Ashok, Aniruddha Mukherjee, Hao Kang, Xiangrui Kong, Gang Hua, Tianyi Zhang, Bedrich Benes, and Aniket Bera. DL3DV-10K: A large-scale scene dataset for deep learning-based 3D vision. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , 2024. [36] Yuzheng Liu, Siyan Dong, Shuzhe Wang, Yingda Yin, Yanchao Yang, Qingnan Fan, and Baoquan Chen. SLAM3R: Real-time dense scene reconstruction from monocular RGB videos. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , 2025. arXiv:2412.09401. [37] Si-Yu Lu, Po-Ting Chen, Hui-Che Hsu, Sin-Ye Jhong, Wen-Huang Cheng, and Yung-Yao Chen. OVGGT: O(1) constant-cost streaming visual geometry transformer. arXiv preprint arXiv:2603.05959 , 2026. [38] Dominic Maggio, Hyungtae Lim, and Luca Carlone. VGGT-SLAM: Dense RGB SLAM optimized on the SL(4) manifold. arXiv preprint arXiv:2505.12549 , 2025. [39] Lukas Mehl, Jenny Schmalfuss, Azin Jahedi, Yaroslava Nalivayko, and Andrés Bruhn. Spring: A high-resolution high-detail dataset and benchmark for scene flow, optical flow and stereo. In 
+
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) ,2023. [40] Raúl Mur-Artal and Juan D. Tardós. ORB-SLAM2: An open-source SLAM system for monocular, stereo, and RGB-D cameras. IEEE Transactions on Robotics , 33(5):1255–1262, 2017. [41] Raúl Mur-Artal, J. M. M. Montiel, and Juan D. Tardós. ORB-SLAM: A versatile and accurate monocular SLAM system. IEEE Transactions on Robotics , 31(5):1147–1163, 2015. [42] Riku Murai, Eric Dexheimer, and Andrew J. Davison. MASt3R-SLAM: Real-time dense SLAM with 3D reconstruction priors. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , 2025. arXiv:2412.12392. [43] Maxime Oquab, Timothée Darcet, Théo Moutakanni, Huy Vo, Marc Szafraniec, Vasil Khalidov, Pierre Fernandez, Daniel Haziza, Francisco Massa, Alaaeldin El-Nouby, Mahmoud Assran, Nicolas Ballas, Wojciech Galuba, Russell Howes, Po-Yao Huang, Shang-Wen Li, Ishan Misra, Michael Rabbat, Vasu Sharma, Gabriel Synnaeve, Hu Xu, Hervé Jegou, Julien Mairal, Patrick Labatut, Armand Joulin, and Piotr Bojanowski. DINOv2: Learning robust visual features without supervision. Transactions on Machine Learning Research (TMLR) , 2024. 12 [44] Emanuele Palazzolo, Jens Behley, Philipp Lottes, Philippe Giguère, and Cyrill Stachniss. ReFusion: 3D reconstruction in dynamic environments for RGB-D cameras exploiting residuals. In IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS) , 2019. [45] Linfei Pan, Daniel Barath, Marc Pollefeys, and Johannes Lutz Schönberger. Global structure-from-motion revisited. In European Conference on Computer Vision (ECCV) , 2024. [46] Project Aria. Aria synthetic environments dataset. https://www.projectaria.com/ datasets/ase/ , 2024. Meta Reality Labs Research. [47] Jeremy Reizenstein, Roman Shapovalov, Philipp Henzler, Luca Sbordone, Patrick Labatut, and David Novotny. Common objects in 3D: Large-scale learning and evaluation of real-life 3D category reconstruction. In IEEE/CVF International Conference on Computer Vision (ICCV) ,2021. [48] Mike Roberts, Jason Ramapuram, Anurag Ranjan, Atulit Kumar, Miguel Angel Bautista, Nathan Paczan, Russ Webb, and Joshua M. Susskind. Hypersim: A photorealistic synthetic dataset for holistic indoor scene understanding. In IEEE/CVF International Conference on Computer Vision (ICCV) , 2021. [49] Sara Sabour, Suhani Vora, Daniel Duckworth, Ivan Krasin, David J. Fleet, and Andrea Tagliasac-chi. RobustNeRF: Ignoring distractors with robust losses. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , pages 20626–20636, June 2023. [50] Paul-Edouard Sarlin, Daniel DeTone, Tomasz Malisiewicz, and Andrew Rabinovich. SuperGlue: Learning feature matching with graph neural networks. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , 2020. [51] Johannes Lutz Schönberger and Jan-Michael Frahm. Structure-from-motion revisited. In 
+
+Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR) ,2016. [52] Johannes Lutz Schönberger, Enliang Zheng, Jan-Michael Frahm, and Marc Pollefeys. Pixelwise view selection for unstructured multi-view stereo. In European Conference on Computer Vision (ECCV) , 2016. [53] Thomas Schöps, Johannes L. Schönberger, Silvano Galliani, Torsten Sattler, Konrad Schindler, Marc Pollefeys, and Andreas Geiger. A multi-view stereo benchmark with high-resolution images and multi-camera videos. In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR) , 2017. [54] You Shen, Zhipeng Zhang, Yansong Qu, Xiawu Zheng, Jiayi Ji, Shengchuan Zhang, and Liujuan Cao. FastVGGT: Training-free acceleration of visual geometry transformer. In International Conference on Learning Representations (ICLR) , 2026. arXiv:2509.02560. [55] Jamie Shotton, Ben Glocker, Christopher Zach, Shahram Izadi, Antonio Criminisi, and Andrew Fitzgibbon. Scene coordinate regression forests for camera relocalization in RGB-D images. In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR) ,2013. [56] Jürgen Sturm, Nikolas Engelhard, Felix Endres, Wolfram Burgard, and Daniel Cremers. A benchmark for the evaluation of RGB-D SLAM systems. In IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS) , 2012. [57] Jiaming Sun, Zehong Shen, Yuang Wang, Hujun Bao, and Xiaowei Zhou. LoFTR: Detector-free local feature matching with transformers. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , 2021. [58] Marwan Taher, Ignacio Alzugaray, Kirill Mazur, Xin Kong, and Andrew J. Davison. KV-Tracker: Real-time pose tracking with transformers. arXiv preprint arXiv:2512.22581 , 2025. [59] Zachary Teed and Jia Deng. DROID-SLAM: Deep visual SLAM for monocular, stereo, and RGB-D cameras. In Advances in Neural Information Processing Systems (NeurIPS) , 2021. 13 [60] Zachary Teed, Lahav Lipson, and Jia Deng. Deep patch visual odometry. In Advances in Neural Information Processing Systems (NeurIPS) , 2023. [61] Hengyi Wang and Lourdes Agapito. AMB3R: Accurate feed-forward metric-scale 3D recon-struction with backend. arXiv preprint arXiv:2511.20343 , 2025. [62] Hengyi Wang and Lourdes Agapito. 3D reconstruction with spatial memory. In International Conference on 3D Vision (3DV) , 2025. [63] Jianyuan Wang, Nikita Karaev, Christian Rupprecht, and David Novotny. VGGSfM: Visual geometry grounded deep structure from motion. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , 2024. [64] Jianyuan Wang, Minghao Chen, Nikita Karaev, Andrea Vedaldi, Christian Rupprecht, and David Novotny. VGGT: Visual geometry grounded transformer. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , 2025. [65] Qianqian Wang, Yifei Zhang, Aleksander Holynski, Alexei A. Efros, and Angjoo Kanazawa. Continuous 3D perception model with persistent state. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , 2025. [66] Shuzhe Wang, Vincent Leroy, Yohann Cabon, Boris Chidlovskii, and Jerome Revaud. DUSt3R: Geometric 3D vision made easy. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , 2024. [67] Wenshan Wang, Delong Zhu, Xiangwei Wang, Yaoyu Hu, Yuheng Qiu, Chen Wang, Yafei Hu, Ashish Kapoor, and Sebastian Scherer. TartanAir: A dataset to push the limits of visual SLAM. In IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS) , 2020. [68] Yifan Wang, Xingyi He, Sida Peng, Dongli Tan, and Xiaowei Zhou. Efficient LoFTR: Semi-dense local feature matching with sparse-like speed. In Proceedings of the IEEE/CVF Confer-ence on Computer Vision and Pattern Recognition (CVPR) , 2024. [69] Yifan Wang, Jianjun Zhou, Haoyi Zhu, Wenzheng Chang, Yang Zhou, Zizun Li, Junyi Chen, Jiangmiao Pang, Chunhua Shen, and Tong He. π3: Permutation-equivariant visual geometry learning. In International Conference on Learning Representations (ICLR) , 2026. arXiv:2507.13347. [70] Yuqi Wu, Wenzhao Zheng, Jie Zhou, and Jiwen Lu. Point3R: Streaming 3D reconstruction with explicit spatial pointer memory. In Advances in Neural Information Processing Systems (NeurIPS) , 2025. [71] Hongchi Xia, Yang Fu, Sifei Liu, and Xiaolong Wang. RGBD objects in the wild: Scaling real-world 3D object learning from RGB-D videos. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , 2024. [72] Tao Xie, Peishan Yang, Yudong Jin, Yingfeng Cai, Wei Yin, Weiqiang Ren, Qian Zhang, Wei Hua, Sida Peng, Xiaoyang Guo, and Xiaowei Zhou. Scal3R: Scalable test-time training for large-scale 3D reconstruction. arXiv preprint arXiv:2604.08542 , 2026. [73] Jianing Yang, Alexander Sax, Kevin J. Liang, Mikael Henaff, Hao Tang, Ang Cao, Joyce Chai, Franziska Meier, and Matt Feiszli. Fast3R: Towards 3D reconstruction of 1000+ images in one forward pass. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , 2025. [74] Yao Yao, Zixin Luo, Shiwei Li, Tian Fang, and Long Quan. MVSNet: Depth inference for unstructured multi-view stereo. In European Conference on Computer Vision (ECCV) , 2018. [75] Chandan Yeshwanth, Yueh-Cheng Liu, Matthias Nießner, and Angela Dai. ScanNet++: A high-fidelity dataset of 3D indoor scenes. In IEEE/CVF International Conference on Computer Vision (ICCV) , 2023. [76] Shuai Yuan, Yantai Yang, Xiaotian Yang, Xupeng Zhang, Zhonghao Zhao, Lingming Zhang, and Zhipeng Zhang. InfiniteVGGT: Visual geometry grounded transformer for endless streams. 
+
+arXiv preprint arXiv:2601.02281 , 2026. 14 [77] Junyi Zhang, Charles Herrmann, Junhwa Hur, Varun Jampani, Trevor Darrell, Forrester Cole, Deqing Sun, and Ming-Hsuan Yang. MonST3R: A simple approach for estimating geometry in the presence of motion. In International Conference on Learning Representations (ICLR) , 2025. arXiv:2410.03825. [78] Junyi Zhang, Charles Herrmann, Junhwa Hur, Chen Sun, Ming-Hsuan Yang, Forrester Cole, Trevor Darrell, and Deqing Sun. LoGeR: Long-context geometric reconstruction with hybrid memory. arXiv preprint arXiv:2603.03269 , 2026. [79] Shangzhan Zhang, Jianyuan Wang, Yinghao Xu, Nan Xue, Christian Rupprecht, Xiaowei Zhou, Yujun Shen, and Gordon Wetzstein. FLARE: Feed-forward geometry, appearance and camera estimation from uncalibrated sparse views. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , pages 21936–21947, 2025. [80] Yang Zhou, Yifan Wang, Jianjun Zhou, Wenzheng Chang, Haoyu Guo, Zizun Li, Kaijing Ma, Xinyue Li, Yating Wang, Haoyi Zhu, Mingyu Liu, Dingning Liu, Jiange Yang, Zhoujie Fu, Junyi Chen, Chunhua Shen, Jiangmiao Pang, Kaipeng Zhang, and Tong He. OmniWorld: A multi-domain and multi-modal dataset for 4D world modeling. arXiv preprint arXiv:2509.12201 ,2025. [81] Dong Zhuo, Wenzhao Zheng, Jiahe Guo, Yuqi Wu, Jie Zhou, and Jiwen Lu. Streaming 4D visual geometry transformer. In International Conference on Learning Representations (ICLR) ,2026. arXiv:2507.11539. 15 A Reconstruction Gallery 
+
+Figure 6: Reconstruction gallery. Qualitative reconstruction results from R3 in streaming mode across diverse indoor and outdoor scenes. The reconstructed point clouds remain geometrically coherent and visually consistent across varied scene layouts, object scales, and camera trajectories, demonstrating R3’s ability to maintain stable scene structure during online reconstruction of long sequences. 16 B Long-Sequence Compute Cost 
+
+Fig. 7 reports inference FPS and GPU memory usage under the same 7-Scenes protocol used in Sec. 4.3. Global-regression baselines (e.g., StreamVGGT) either hit OOM or slow sharply as N
+
+grows; R3 replaces this O(N 2) growth with a bounded memory increase and a gentler FPS decline, consistent with the bounded keyframe bank. 200 400 600 800 1000 
+
+Number of Input Views     
+
+> 5
+> 10
+> 15
+> 20
+> FPS  ↑
+> OOM
+> OOM
+> OOM
+> R3
+> TTT3R
+> CUT3R
+> Point3R
+> StreamVGGT
+> VGGT (offline) 200 400 600 800 1000
+
+Number of Input Views  
+
+> 0
+> 10
+> 20
+> 30
+> 40
+> 50
+> GPU Usage (GB)  ↓ 48 GB memory bound R3
+> TTT3R
+> CUT3R
+> Point3R
+> StreamVGGT
+> VGGT (offline)
+
+Figure 7: Long-sequence compute cost. Inference FPS (left) and GPU memory usage (right) as the number of input views increases. “OOM” denotes out-of-memory. 
+
+## C Streaming Details and Optional Pose-Graph Refinement 
+
+This appendix provides additional details on the streaming machinery of R3: its connection to classical keyframe selection, the train/inference length-gap argument, outlier rejection, optional pose-graph refinement (used as an end-of-sequence cleanup rather than in the main-body numbers), and segment resets for long streams. The core learned mechanism—the confidence-driven keyframe bank—is described in the main text (Sec. 3.3.1); the components below are auxiliary and follow common practice. 
+
+Comparison to classical keyframe selection. Bt plays the role of a keyframe database in classical SLAM systems such as PTAM [ 28 ], ORB-SLAM [ 41 , 40 , 7], and DSO [ 19 ]: it is a compact subset of frames carried through the pipeline instead of the full stream. Classical systems trigger keyframe insertion using hand-tuned translation, rotation, or covisibility thresholds. Our admission rule replaces these cues with a learned-feature similarity test plus a maximum-staleness cap, leveraging the fact that the DA3 [ 33 ] frame-only encoder is pretrained on large-scale multi-view geometry, so its averaged frame token already reflects both visual content and scene-level geometry. 
+
+Train/inference length gap. The novelty gate keeps the active context informative without increas-ing memory unboundedly and slows long-term saturation, helping bridge the train/inference length gap: we train on sequences of at most 32 frames but deploy on streams of hundreds. A strict novelty threshold keeps the effective context length close to the training regime even as wall-clock sequence length grows. To prevent staleness when scene content evolves slowly and no incoming frame is novel enough to pass the threshold, we force-admit a frame whenever no keyframe has been added in the last ∆max = 20 incoming frames. The culling cap is Mmax = 100 . When this cap is exceeded, we evict the keyframe with the lowest utility 
+
+uj = dj cj , dj = min 
+
+> i∈B t\{ j}
+
+ 1 − cos( tok i, tok j ), cj = max 
+
+> i∈B t\{ j}
+> 12
+
+ cR 
+
+> i→j
+
++ cT
+
+> i→j
+
+.
+
+Here dj is small for frames that are redundant with another bank entry, and cj is small when the frame has no strong pose edge to the bank. The first frame is excluded from eviction. 
+
+Outlier rejection and segment reset. Let ¯cj = 1
+
+> |C t|
+
+P 
+
+> i∈C t
+
+¯ci→j denote the mean averaged-pair confidence of frame j against its current context. We calibrate a baseline ¯cref = 1
+
+> Ncal
+
+PNcal  
+
+> j=1
+
+¯cj
+
+from the first Ncal frames of the stream and reject any subsequent frame whose mean falls below 
+
+τout ¯cref . This check is post-hoc: rejected frames have already passed through the backbone because their tokens are needed to score the pair head. Upon rejection, however, their entries are evicted from the backbone KV cache so they do not pollute later causal attention; they also do not enter 
+
+Bt, contribute no edges to Et, or receive an estimated absolute pose. The threshold is loose enough to retain difficult but recoverable frames while filtering catastrophic cases such as severe motion 17 blur, near-total occlusion, or scene cuts mid-frame. The same test also serves as a tracking-failure detector: after Nrej consecutive rejected frames, we declare loss of track and trigger a segment reset (below) rather than continue with a degraded context. The keyframe-bank cap Mmax is a secondary bound that rarely fires before this confidence trigger in practice. We use Ncal = 3 , τout = 0 .15 , and 
+
+Nrej = 3 in our experiments. 
+
+Optional pose-graph refinement for streaming runs. The full-context mode (Sec. 3.3) closes with a confidence-weighted pose-graph optimization over the full pair edge set. The same step can be invoked as an end-of-stream refinement on a streaming run — using the streaming trajectory as initialization and the edge set E restricted to pairs that were evaluated against the keyframe bank during the stream — or at every segment boundary for jobs that tolerate occasional latency spikes in exchange for tighter mid-stream geometry. We do not apply this refinement to any reported streaming main-body number; it appears only as an ablation. Given an edge set E and an aggregated initialization {Ti}, let eR 
+
+> ij
+
+and eT 
+
+> ij
+
+denote the rotation and translation residuals between the relative pose induced by (Ti, Tj ) and the predicted edge (ˆ qi→j , ˆti→j ). We solve 
+
+min 
+
+> {Ti}
+
+X
+
+> (i,j )∈E
+
+
+
+cR 
+
+> i→j
+
+HδR (eR 
+
+> ij
+
+) + cT 
+
+> i→j
+
+HδT (eT 
+
+> ij
+
+)
+
+
+
+,
+
+with Huber losses HδR , H δT , T1 fixed, and L-BFGS as the solver. This is a lightweight pose-only refinement: edges carry only relative-pose residuals and scalar confidences, with no bundle adjustment, point reprojection, or depth optimization. 
+
+Segment reset and bridges. A segment ends either when sustained low confidence triggers the reset above or when the sequence length cap Lmax is reached on a very long stream. In both cases, we link consecutive segments with a short bridge of 3–10 shared frames. When advancing to a new segment, we clear the DA3 cache and keyframe bank, then rerun the backbone on the bridge frames together with the incoming stream. Global pose continuity follows by composition: each bridge frame b carries an absolute pose Tabs 
+
+> b
+
+from the previous segment, and for each new frame j we recover Tabs  
+
+> j
+
+= Tabs  
+
+> b
+
+· Tb→j , without requiring Sim(3) or SE(3) registration across segments. Scale can drift between independent forward passes. We anchor it by aligning the DA3 depth prediction on each segment’s first frame to a pretrained metric-depth model with a single median-based scalar, which is applied uniformly to all pose translations and depths in that segment. Per-boundary error is therefore reduced to one metric-anchored scalar rather than the joint rotation, translation, and scale drift of Sim(3)-style window fusion. 
+
+## D Pose Supervision and Learned Pair Reliability 
+
+D.1 Pose Loss Formulations 
+
+Fig. 2 compares three feed-forward pose paradigms; here we spell out their corresponding supervision targets. Let Ti = ( qi, ti) denote the camera-to-world pose of frame i, and let Ti→j = T−1 
+
+> i
+
+Tj
+
+denote the relative transform from frame i to frame j.VGGT-style training [ 64 ] supervises poses directly in one canonical coordinate system. Abstractly, with frame 1 used as the global anchor, the loss takes the form 
+
+Labs =
+
+> N
+
+X
+
+> j=1
+
+dpose 
+
+ ˆTj , T∗
+
+> j
+
+
+
+,
+
+where all targets T∗ 
+
+> j
+
+are expressed in the same anchored world frame. This target is simple, but the network must learn a coordinate choice that is arbitrary from the scene’s perspective and increasingly difficult to preserve as the trajectory grows. 
+
+π3 [69 ] moves away from VGGT’s fixed first-frame coordinate target: it predicts one pose per view and supervises them through all-pair relative-pose losses: 
+
+Lπ3 = X
+
+> i̸=j
+
+dpose 
+
+ ˆT−1 
+
+> i
+
+ˆTj , T∗
+
+> i→j
+
+
+
+.
+
+18 45 50 55 60 65 70 75 
+
+> Rotation Confidence (quantile bin center)
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> 3.0
+> 3.5
+> Rotation Error (°)
+> Rotation Error (°) vs. Rotation Confidence Bins
+
+(a) Rotation error binned by rotation confidence. 12.5 15.0 17.5 20.0 22.5 25.0 27.5 30.0   
+
+> Translation Confidence (quantile bin center)
+> 0.00
+> 0.01
+> 0.02
+> 0.03
+> 0.04
+> 0.05
+> 0.06
+> 0.07
+> 0.08
+> Translation Abs Error ||  t||
+> Translation Abs Error || t|| vs. Translation Confidence Bins
+
+(b) Translation error binned by translation confidence. 
+
+Figure 8: Learned confidence behaves as pair reliability. Across all pairs from the first 20 
+
+ScanNet scenes, pairs are grouped into equal-mass confidence quantile bins; the x-axis is the bin center. The solid line shows the per-bin mean pose error and the shaded band shows the within-bin dispersion, so each polyline reports the average error and spread within that confidence quantile interval. Higher predicted confidence corresponds to lower mean error and tighter spread in the corresponding component. This removes the need to match a fixed first-frame coordinate system at the loss level and provides 
+
+O(N 2) pairwise constraints. However, it is still not ideal for online reconstruction. The all-pair loss is defined over a complete set of views, whereas a causal stream must emit estimates from prefixes and cannot use future observations unless it revises past outputs. In addition, every pair contributes with the same weight, so difficult or weakly constrained pairs can consume the same gradient budget as reliable ones. Our formulation predicts each relative transform directly and attaches separate learned confidences to rotation and translation:  ˆqi→j , ˆti→j , c R 
+
+> i→j
+
+, c T
+
+> i→j
+
+ = MLP rel ([ zi; zj ]) .
+
+The pose loss uses confidence-weighted residuals. Omitting the per-frame focal-length term for clarity, we define 
+
+Lrot (i, j ) = cR 
+
+> i→j
+
+ℓL1
+
+> rot
+
+(i, j ) − α log cR 
+
+> i→j
+
+, Ltrans (i, j ) = cT 
+
+> i→j
+
+ℓL1
+
+> trans
+
+(i, j ) − α log cT 
+
+> i→j
+
+,
+
+and average over a set of ordered pairs, 
+
+Lcam = 1
+
+|P| 
+
+X
+
+> (i,j )∈P
+
+
+
+Lrot (i, j ) + Ltrans (i, j )
+
+
+
+.
+
+For the causal checkpoint, P is the past-to-current lower-triangular pair set described in App. F; the all-pair case corresponds to P = {(i, j ) : i̸ = j}. Here cR and cT weight the rotation and translation residuals separately, while the − log c terms prevent the model from assigning uniformly low confidence. This gives the model a way to downweight poorly constrained pairs during training and then reuse the same signal as aggregation weights and online keyframe-bank utilities at inference (and as edge weights in the optional pose-graph refinement of App. C). The next diagnostic asks whether this training signal also behaves as geometric pair reliability. 
+
+D.2 Learned Confidence as Pair Reliability 
+
+To check whether the predicted rotation and translation confidences act as learned pair-reliability estimates rather than only loss weights, we aggregate all image pairs from the first 20 ScanNet test scenes [14] and bin them by the corresponding predicted confidence(Fig. 8). For both components, predicted confidence is monotone in the corresponding error: mean error decreases from low to high confidence bins, and the within-bin spread shrinks accordingly. The trend is sharpest at the low-confidence end, where unreliable pairs carry markedly larger residuals and wider variance. This is the property needed for the three downstream uses of confidence in our system: as a per-component loss weight in the Laplacian likelihood, as an edge weight in the PGO back-end, and as a frame-utility signal in the online keyframe bank. 19 Table 8: Full-attention fine-tuning reference. Pose ATE (lower is better). DA3-Large is the original backbone trained with absolute-pose supervision and substantially more data; R3 uses the relative-pose objective. The comparison is included as a calibration reference, not as a controlled ablation.           
+
+> Variant Sintel TUM-dyn. ScanNet DA3-Large [33] 0.140 0.013 0.039
+> R3(full-attention fine-tuned) 0.117 0.011 0.035
+
+Table 9: Aggregation strategy (left) and acceptance threshold τ (right). Left: ATE on Sintel, TUM-dynamics, and ScanNet for top-k confidence-weighted aggregation, all-pair averaging, and an optional pose-graph optimization (PGO) on top. Right: ScanNet ATE at 100 /300 /500 /800 /1000 
+
+input frames for different τ . Bold /underlined marks best/second-best per column.                                                  
+
+> Variant TUM Sintel ScanNet Avg. Top-1 0.0199 0.1272 0.0401 0.0624 Top-5 0.0188 0.1177 0.0392 0.0586 Top-10 0.0183 0.1153 0.0387 0.0574 All-avg 0.0179 0.1152 0.0384 0.0572 + PGO 0.0179 0.1142 0.0381 0.0567
+> τ100 300 500 800 1k 0.96 0.066 0.200 0.270 0.334 0.357 0.97 0.061 0.180 0.250 0.306 0.332 0.98 0.061 0.171 0.245 0.295 0.318
+> 0.99 0.068 0.172 0.246 0.300 0.329
+
+The two panels also expose an asymmetry between components. Rotation confidence concentrates in a higher numerical range and reaches lower binned error than translation confidence, consistent with rotation being the easier learning target while translation remains more sensitive to baseline, scale, and parallax. A single shared pose confidence would have to average over this asymmetry, either over-trusting translation on rotation-easy pairs or under-using a reliable rotation edge when translation is ambiguous. Predicting the two confidences separately lets the model express this difference directly and lets each downstream consumer read the reliability of the component it actually depends on. 
+
+## E Additional Ablations 
+
+Full-attention fine-tuning reference. We compare a full-attention fine-tuned version of our model against the original DA3-Large [ 33 ] backbone (Tab. 8). This is not a controlled ablation: DA3-Large is trained with substantially more data, whereas our variant uses the relative-pose objective from Sec. 5.1. We therefore treat DA3-Large as a backbone calibration reference rather than a matched baseline. The full-attention fine-tuned variant improves over the original backbone on these pose metrics despite using a relative-pose target rather than DA3’s direct camera-pose supervision. 
+
+E.1 Aggregation and Selection Heuristics 
+
+We further investigate sensitivity to the aggregation strategy and the keyframe admission threshold τ ,which together govern the density and reliability of the reconstructed trajectory. 
+
+Influence of neighborhood size K. We evaluate the impact of the number of reference frames 
+
+K used during pose fusion (Tab. 9, left). Accuracy improves as K grows, and all-pair averaging gives the best closed-form ATE across the three benchmarks; top-K aggregation is therefore best understood as an efficiency cap that trades a small amount of accuracy for lower fusion cost. Adding an optional confidence-weighted pose-graph optimization on top of the all-pair aggregate yields a further small but consistent improvement, indicating that the same confidence also serves as a useful per-pair weight in a global solve. 
+
+Keyframe admission threshold τ . The threshold τ controls the feature novelty required for a frame to enter the keyframe bank. Since admission requires the maximum token similarity to fall below 
+
+τ , a lower threshold is more selective and a higher threshold is more permissive. Empirical results on ScanNet (Tab. 9, right) identify τ = 0 .98 as the best balance across varying sequence lengths: 20 τ = 0 .96 can starve the bank in long-horizon streams, while τ = 0 .99 admits more redundant frames and noisy edges. 
+
+## F Training Details 
+
+Architecture and trainable parameters. We build on the pretrained DA3-Large [ 33 ] backbone and keep most of it frozen: only the global attention layers and the newly introduced pairwise pose head are updated, yielding roughly 110 M trainable parameters out of the 372 M-parameter inference model. The focal-length head is a small MLP that maps each camera token zi to a single scalar ˆfi and is supervised by a plain L1 residual against the ground-truth focal length. Training uses frame-causal global attention. The same checkpoint is used for both streaming and full-context inference; the latter removes the causal mask at test time so global attention runs bidirectionally over the full clip, then applies the lightweight pose-graph refinement described in App. C. 
+
+Implementation details. The model is trained on sequences of 4–32 views. Most batches use clips of up to 16 views, and the relative-pose stage extends the curriculum to 32 views in the second half of training. All training is done on 48 GB GPUs. To fit long streams in this memory budget, we use gradient checkpointing, bfloat16 mixed precision, and a FlexAttention [ 16 ] implementation of frame-causal attention, which lets us pack about 200 views per 48 GB GPU without the depth teacher and 96 views per 48 GB GPU when the DA3 teacher is enabled. For pose supervision, we evaluate the relative-pose head on the causal lower-triangular set of past-to-current ordered pairs after the DA3 forward pass. This provides O(N 2) supervised relative edges during training without a comparable backbone cost, because the all-pair computation is only an MLP over compact camera tokens and is negligible relative to image-token attention. At inference time, streaming does not materialize all historical pairs: each incoming frame is paired only with the bounded active context Ct, so per-frame cost is bounded by the keyframe bank. Confidence logits are passed through a softplus nonlinearity to ensure positive confidence values. 
+
+Optimization schedule. The model is optimized with AdamW in two stages that share the same head and losses. Stage 1 adapts the DA3-Large backbone into a frame-causal absolute-pose checkpoint for 15 k iterations at a constant learning rate of 1e −4 with a dynamic batch size of 4–16 views. Stage 2 
+
+trains the relative-pose head on top of this checkpoint for 25 k iterations, starting at 1e −4 and decaying with a cosine schedule to 1e −5, with gradient accumulation of 2 and a dynamic batch size that begins at 4–16 views and is extended to 4–32 views in the second half of the schedule. 
+
+Training datasets. We train on a diverse collection of 15 publicly available datasets spanning synthetic scenes, LiDAR/RGB-D captures, and COLMAP reconstructions. Table 10 reports the number of training scenes or sequences retained after dataset-specific filtering. For AriaSyntheticENV, we use the first 2,000 scenes, and for OmniWorld we use the OmniWorld-Game subset. 
+
+## G Robustness Details 
+
+Evaluation protocol. We follow the Robust-VGGT [ 22 ] controlled-distractor protocol with two modifications for streaming evaluation. (i) We preserve the dataset’s original frame order: distractor frames are interleaved into the clean stream rather than reshuffled, so R3 is exposed to distractors at arbitrary points along the trajectory. (ii) We keep the first three frames clean as a calibration prefix; this gives the streaming model a short, distractor-free initialization before the gating decision begins. For each trial we sample Nc clean images from a single scene and Nn distractor images drawn uniformly at random from other scenes in the same dataset, with disjoint pools and scene-agnostic selection. Three settings, Small / Medium / Large , differ only in Nn. On RobustNeRF [ 49 ] we use Nc=30 and Nn∈{ 10 , 30 , 50 }. ETH3D [ 53 ] has fewer frames per scene, so we use Nc=14 and 
+
+Nn∈{ 5, 14 , 30 }. Each setting is repeated for 10 trials with different seeds and we report the mean. All methods are evaluated on identical sampled sets, and the same protocol is used for both the pose and depth/point-map evaluations. 
+
+Balanced filtering score. The main robustness table reports the distractor rejection success rate, matching Robust-VGGT. To guard against the degenerate strategy of rejecting too many frames, we 21 Table 10: Training datasets. Counts denote the number of scenes or sequences used for training after dataset-specific filtering.                                 
+
+> Dataset Count Type AriaSyntheticENV [46] 2,000 Synthetic ARKitScenes [3] 4,388 LiDAR/RGB-D CO3Dv2 [47] 30,616 COLMAP DL3DV [35] 6,379 COLMAP HyperSim [48] 344 Synthetic MapFree [1] 921 COLMAP MVS-Synth [23] 121 Synthetic OmniWorld-Game [80] 484 Synthetic ScanNet [14] 1201 LiDAR/RGB-D ScanNet++ [75] 230 LiDAR/RGB-D Spring [39] 47 Synthetic TartanAir [67] 355 Synthetic Dynamic Replica [26] 524 Synthetic Virtual KITTI 2 [5] 50 Synthetic WildRGBD [71] 23,050 LiDAR/RGB-D
+
+Table 11: Video depth estimation on Sintel, Bonn, and KITTI. Abs Rel is lower-is-better; δ < 1.25 
+
+is higher-is-better. Bold marks the best result per column.                        
+
+> Sintel Bonn KITTI Method Abs Rel ↓δ < 1.25 ↑Abs Rel ↓δ < 1.25 ↑Abs Rel ↓δ < 1.25 ↑
+> DA3-Large [33] 0.460 0.518 0.106 0.890 0.122 0.870
+> R30.410 0.479 0.102 0.880 0.130 0.845
+
+additionally compute a balanced filtering score, 
+
+BFS = 12 DistractorReject + 12 CleanAccept .
+
+Under the Small/Medium/Large settings of Tab. 6, the R3 confidence gate obtains balanced filtering scores of 0.84 /0.89 /0.93 on ETH3D and 0.999 /0.992 /0.996 on RobustNeRF, indicating that high distractor rejection does not come from uniformly rejecting clean frames. 
+
+## H Long-Sequence Pose Evaluation on DL3DV-Benchmark 
+
+We provide the protocol details for the DL3DV-Benchmark [ 35 ] evaluation reported in Tab. 5 of the main paper. The evaluation is purely camera-trajectory based. We report Absolute Trajectory Error (ATE) after Sim(3) alignment, together with per-trajectory rotation RMSE. Aggregates are mean values over a random subset of 25 scenes drawn from the 140 DL3DV-Benchmark scenes, with per-scene sequence lengths ranging from 304 to 439 frames. All methods process every frame in the sequence. R3 runs the full sequence in a single pass with no reset ; in our DL3DV run, TTT3R [ 10 ]uses a 100 -frame reset interval, which gives better results than no-reset inference. The reported numbers are consistent with the long-sequence pose curves in Sec. 4.3: the keyframe-bank front-end with confidence-weighted relative-pose aggregation remains stable at the horizons covered by DL3DV-Benchmark, where recurrent and KV-cache baselines accumulate visible drift. 
+
+## I Video Depth Estimation 
+
+We additionally evaluate video depth estimation against the DA3-Large backbone on Sintel [ 4], Bonn [ 44 ], and KITTI [ 21 ]. Following the standard protocol, we report Absolute Relative error (Abs Rel, lower is better) and δ < 1.25 accuracy (higher is better) under per-sequence median scale alignment. 22 Our model matches the DA3-Large teacher on Bonn, improves Abs Rel on Sintel, and trails slightly on KITTI, showing that joint relative-pose and depth training preserves the backbone’s depth quality despite the added pose objective. 
+
+## J Limitations and Future Work 
+
+R3 is a 372M-parameter model trained on six 48 GB GPUs, and we have not explored larger backbones or substantially more data. The keyframe bank still relies on a few hand-set thresholds ( τ ,
+
+∆max , Mmax , outlier-gate constants) that generalize across our benchmarks but may need re-tuning on very different domains. On very long streams R3-Stream can still drift without a periodic reset (Fig. 9), and because it cannot revisit past tokens, distant viewpoints, occlusions, or long sequences can leave residual inconsistencies in the geometry (Fig. 10).  
+
+> (a) Without reset. (b) With periodic reset.
+
+Figure 9: Bird’s-eye view of a long streaming sequence. Without reset, the trajectory eventually drifts and the camera is lost; a periodic reset restores a clean track. 
+
+Figure 10: Causal streaming reconstructions. Distant viewpoints, occlusions, and long sequences can leave residual inconsistencies in the recovered geometry. Natural next steps include scaling the backbone and training data, replacing the lightweight pose-only refinement with bundle adjustment or joint depth–pose optimization, learning the keyframe-bank thresholds and a reset policy in place of the current scalars, and a global refinement or limited bidirectional re-attention pass to address causal inconsistencies in the streaming setting. 23
