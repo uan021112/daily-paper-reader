@@ -6,70 +6,73 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-06-02
-- 运行时间：2026-06-02 23:13:13 UTC
+- 最新运行日期：2026-06-03
+- 运行时间：2026-06-03 22:33:28 UTC
 - 运行状态：成功
-- 本次总论文数：16
-- 精读区：8
-- 速读区：8
+- 本次总论文数：17
+- 精读区：5
+- 速读区：12
 
 ### 今日简报（AI）
-今日推荐16篇论文，重点精读2篇高分论文，聚焦3D生成与代码建模。  
-值得关注《GAP3D》和《3DCodeBench》，前者对齐VLM与3D生成，后者采用代码驱动的程序化3D建模。  
-建议优先阅读精读报告，尤其是对3D生成和程序化建模感兴趣的读者，可深入理解前沿方法。
-- 详情：[/202606/02/README](/202606/02/README)
+今日推荐17篇论文，精读聚焦于前馈式3D编辑与语义无关的形状感知分割模型。  
+最值得关注的是利用语义部分变换进行3D编辑的方法（8.0分），以及强调形状先验的视觉-语言分割模型（8.0分）。  
+建议普通读者优先阅读3D场景生成与稀疏深度补全方向，例如PhyScene3D的交互式场景生成和Large Depth Completion Model的实际部署潜力。
+- 详情：[/202606/03/README](/202606/03/README)
 
 ### 精读区论文标签
-1. [GAP3D: Generative Alignment of VLM Latents to Patch-Level Embeddings for 3D Generation](/202606/02/2605.28995v2-gap3d-generative-alignment-of-vlm-latents-to-patch-level-embeddings-for-3d-generation)  
-   标签：评分：9.0/10、query:dgen
-   evidence：基于扩散的模块化方法，从VLM潜空间生成3D
-2. [3DCodeBench: Benchmarking Agentic Procedural 3D Modeling Via Code](/202606/02/2606.01057v1-3dcodebench-benchmarking-agentic-procedural-3d-modeling-via-code)  
-   标签：评分：9.0/10、query:dgen
-   evidence：通过代码进行程序化3D建模的系统基准
-3. [Splatshot: 3D Face Avatar Generation from a Single Unconstrained Photo](/202606/02/2606.01493v1-splatshot-3d-face-avatar-generation-from-a-single-unconstrained-photo)  
-   标签：评分：9.0/10、query:dgen
-   evidence：利用扩散模型和3DGS从单张照片生成3D面部头像
-4. [SCAPO: Self-Supervised Category-Level Articulated Pose Estimation from a Single 3D Observation](/202606/02/2606.01940v1-scapo-self-supervised-category-level-articulated-pose-estimation-from-a-single-3d-observation)  
-   标签：评分：9.0/10、query:partseg
-   evidence：在铰接姿态估计中执行刚体部件分割
-5. [Thinking in Blender: Staged Executable Inverse Graphics with Vision-Language Models](/202606/02/2606.02580v1-thinking-in-blender-staged-executable-inverse-graphics-with-vision-language-models)  
-   标签：评分：9.0/10、query:dgen
-   evidence：单图像可执行Blender程序的三维场景重建
-6. [SuperVoxelGPT: Adaptive and Ordered 3D Tokenization for Autoregressive Shape Generation](/202606/02/2605.29655v2-supervoxelgpt-adaptive-and-ordered-3d-tokenization-for-autoregressive-shape-generation)  
+1. [Feedforward 3D Editing Learns from Semantic-Part Transformation](/202606/03/2605.27351v2-feedforward-3d-editing-learns-from-semantic-part-transformation)  
    标签：评分：8.0/10、query:dgen
-   evidence：基于超体素标记的自回归形状生成
-7. [Advances in Neural 3D Mesh Texturing: A Survey](/202606/02/2606.00137v1-advances-in-neural-3d-mesh-texturing-a-survey)  
+   evidence：利用语义部件变换的前馈3D编辑
+2. [Toward Semantic-Agnostic and Shape-Aware Vision-Language Segmentation Models](/202606/03/2605.28348v1-toward-semantic-agnostic-and-shape-aware-vision-language-segmentation-models)  
+   标签：评分：8.0/10、query:partseg
+   evidence：基于语言提示的语义无关形状感知分割
+3. [GeoSAM-3D: Geodesic Prompt Propagation for Open-Vocabulary 3D Scene Segmentation from Monocular Video](/202606/03/2606.00447v1-geosam-3d-geodesic-prompt-propagation-for-open-vocabulary-3d-scene-segmentation-from-monocular-video)  
+   标签：评分：8.0/10、query:partseg
+   evidence：基于测地传播的单目视频开放词汇3D实例分割
+4. [Fast and Lightweight Novel View Synthesis with Differentiable Multiplane Image](/202606/03/2606.02068v1-fast-and-lightweight-novel-view-synthesis-with-differentiable-multiplane-image)  
+   标签：评分：8.0/10、query:ffdr
+   evidence：前馈重建用于新视角合成
+5. [MLP Splatting: Object-Centric Neural Fields](/202606/03/2606.03877v1-mlp-splatting-object-centric-neural-fields)  
    标签：评分：8.0/10、query:dgen
-   evidence：神经3D网格纹理化综述，属于3D内容生成管线
-8. [Learning Neural Deformation Representation for 4D Dynamic Shape Generation](/202606/02/2606.01021v1-learning-neural-deformation-representation-for-4d-dynamic-shape-generation)  
-   标签：评分：8.0/10、query:dgen
-   evidence：使用神经变形表示生成4D动态形状
+   evidence：基于MLP的神经基元用于场景分解和新视图合成
 
 ### 速读区论文标签
-1. [MORPHOS: Autoregressive 4D Generation with Temporal Structured Latents](/202606/02/2606.02491v1-morphos-autoregressive-4d-generation-with-temporal-structured-latents)  
-   标签：评分：8.0/10、query:dgen
-   evidence：自回归4D视频生成
-2. [SOCO: Benchmarking Semantic Object Correspondence in Vision Foundation Models](/202606/02/2605.31597v2-soco-benchmarking-semantic-object-correspondence-in-vision-foundation-models)  
-   标签：评分：7.0/10、query:partseg
-   evidence：包含部件级关键点标注的语义对象对应基准，支持部件分割评估
-3. [Beyond Static Gaussians: An Empirical Investigation of Architectural Paradigms for Dynamic 3D Scene Reconstruction](/202606/02/2606.00452v1-beyond-static-gaussians-an-empirical-investigation-of-architectural-paradigms-for-dynamic-3d-scene-reconstruction)  
+1. [Large Depth Completion Model from Sparse Observations](/202606/03/2605.30115v1-large-depth-completion-model-from-sparse-observations)  
+   标签：评分：7.0/10、query:ffdr
+   evidence：基于前馈Transformer从稀疏观测估计度量深度
+2. [DeblurNVS: Geometric Latent Diffusion for Novel View Synthesis from Sparse Motion-Blurred Images](/202606/03/2606.01315v1-deblurnvs-geometric-latent-diffusion-for-novel-view-synthesis-from-sparse-motion-blurred-images)  
    标签：评分：7.0/10、query:dgen
-   evidence：动态3D高斯泼溅范式的实证分析
-4. [Towards 3D-Aware Video Diffusion Models: Render-Free Human Motion Control with Mesh Tokenization](/202606/02/2606.02000v1-towards-3d-aware-video-diffusion-models-render-free-human-motion-control-with-mesh-tokenization)  
+   evidence：基于几何潜在扩散的新颖视图合成用于3D内容创建
+3. [PhyScene3D: Physically Consistent Interactive 3D Tabletop Scene Generation](/202606/03/2606.01649v1-physcene3d-physically-consistent-interactive-3d-tabletop-scene-generation)  
    标签：评分：7.0/10、query:dgen
-   evidence：基于3D网格令牌的无渲染视频扩散，用于人体运动控制
-5. [Not All Points Are Equal: Uncertainty-Aware 4D LiDAR Scene Synthesis](/202606/02/2606.02510v1-not-all-points-are-equal-uncertainty-aware-4d-lidar-scene-synthesis)  
+   evidence：通过认知推理链生成物理一致的3D桌面场景
+4. [PatchScene: Patch-based Voxel Diffusion for Large-Scale Scene Completion](/202606/03/2606.03915v1-patchscene-patch-based-voxel-diffusion-for-large-scale-scene-completion)  
    标签：评分：7.0/10、query:dgen
-   evidence：基于不确定性的生成式4D LiDAR场景合成
-6. [ComPose: A Unified Completion-Pose Framework for Robust Category-Level Object Pose Estimation](/202606/02/2605.25553v1-compose-a-unified-completion-pose-framework-for-robust-category-level-object-pose-estimation)  
-   标签：评分：6.0/10、query:ffdr
-   evidence：用于鲁棒重建的统一形状补全与位姿估计框架
-7. [Geometry Matters: 3D Foundation Priors for Learning Semantic Correspondence](/202606/02/2605.30093v1-geometry-matters-3d-foundation-priors-for-learning-semantic-correspondence)  
-   标签：评分：6.0/10、query:partseg
-   evidence：利用3D部件感知描述符进行语义对应
-8. [Real2SAM2Real: Generative 3D Caches as Complementary Context for Video Diffusion](/202606/02/2606.00299v1-real2sam2real-generative-3d-caches-as-complementary-context-for-video-diffusion)  
+   evidence：基于块扩散的生成式3D场景完成
+5. [GARDEN: Gravity-Aligned Reconstruction of Disentangled ENvironments from RGB images](/202606/03/2606.03921v1-garden-gravity-aligned-reconstruction-of-disentangled-environments-from-rgb-images)  
+   标签：评分：7.0/10、query:dgen
+   evidence：从多视图RGB图像重建具有物理结构的3D环境，并分离前景和背景
+6. [SimuScene: Simulation-Ready Compositional 3D Scene Reconstruction from a Single Image](/202606/03/2606.03994v1-simuscene-simulation-ready-compositional-3d-scene-reconstruction-from-a-single-image)  
+   标签：评分：7.0/10、query:dgen
+   evidence：单图像组合三维场景重建，融入物理
+7. [S2MDF: A Plug-And-Play Layer for Intersection-Free Multi-Object Signed Distance Fields](/202606/03/2605.29761v1-s2mdf-a-plug-and-play-layer-for-intersection-free-multi-object-signed-distance-fields)  
    标签：评分：6.0/10、query:dgen
-   evidence：利用3D提升模型生成3D缓存以辅助视频扩散
+   evidence：用于组合式3D表示的即插即用无交插SDF模块
+8. [Triangle Splatting SLAM](/202606/03/2605.31419v1-triangle-splatting-slam)  
+   标签：评分：6.0/10、query:dgen
+   evidence：可微分三角形渲染用于SLAM，神经渲染应用
+9. [SOCO: Benchmarking Semantic Object Correspondence in Vision Foundation Models](/202606/03/2605.31597v2-soco-benchmarking-semantic-object-correspondence-in-vision-foundation-models)  
+   标签：评分：6.0/10、query:partseg
+   evidence：包含部件标注的语义对象对应基准
+10. [Towards 3D-Aware Video Diffusion Models: Render-Free Human Motion Control with Mesh Tokenization](/202606/03/2606.02000v1-towards-3d-aware-video-diffusion-models-render-free-human-motion-control-with-mesh-tokenization)  
+   标签：评分：6.0/10、query:dgen
+   evidence：基于网格令牌化的3D感知视频扩散生成建模
+11. [VEDAL: Variational Error-Driven Asynchronous Learning for 3D Gaussian Splatting Pruning](/202606/03/2606.02346v1-vedal-variational-error-driven-asynchronous-learning-for-3d-gaussian-splatting-pruning)  
+   标签：评分：6.0/10、query:ffdr
+   evidence：剪枝3D高斯泼溅以提升重建模型效率
+12. [Exploring Easy Boosts for Lidar Semantic Scene Completion](/202606/03/2606.03992v1-exploring-easy-boosts-for-lidar-semantic-scene-completion)  
+   标签：评分：6.0/10、query:partseg
+   evidence：点云语义分割与伪标签
 
 
 <div class="dpr-home-promo-card">
