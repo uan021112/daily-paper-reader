@@ -1,0 +1,1534 @@
+Title: RadiusFPS: Efficient Farthest Point Sampling on CPUs and GPUs via Spherical Voxel Pruning
+
+URL Source: https://arxiv.org/pdf/2606.06255v1
+
+Published Time: Fri, 05 Jun 2026 01:36:41 GMT
+
+Number of Pages: 28
+
+Markdown Content:
+# RADIUS FPS: E FFICIENT FARTHEST POINT SAMPLING ON CPU SAND GPU S VIA SPHERICAL VOXEL PRUNING 
+
+Ziyang Yu 
+
+School of Computing Institute of Science Tokyo Tokyo 
+
+yu.ziyang.2001@gmail.com 
+
+Xiang Li 
+
+School of Computing Institute of Science Tokyo Tokyo 
+
+652022230010@smail.nju.edu.cn 
+
+Qiong Chang 
+
+School of Computing Institute of Science Tokyo Tokyo 
+
+q.chang@c.titech.ac.jp 
+
+Jun Miyazaki 
+
+School of Computing Institute of Science Tokyo Tokyo 
+
+miyazaki@comp.isct.ac.jp 
+
+ABSTRACT 
+
+Point clouds are a primary sensory representation for robotic perception, underpinning LiDAR-based autonomous driving, simultaneous localization and mapping (SLAM), and navigation. Within these pipelines, Farthest Point Sampling (FPS) is the most well-known downsampling operator, as its uni-form coverage preserves the geometric structure on which downstream perception relies. However, the large time complexity of classical FPS scales poorly with the million-point-per-second rates of modern 3D sensors, making it a dominant latency bottleneck that conflicts with the real-time and limited onboard compute budgets of robotic systems. Therefore, we propose RadiusFPS, an FPS ac-celeration framework based on spherical voxel pruning that preserves the standard FPS update rule under the same initialization and tie-breaking policy. By indexing the point cloud with spherical voxels, RadiusFPS derives a conservative geometric bound that prunes redundant distance compu-tations in each iteration, complemented by a coordinate-wise point-skip test that removes residual updates. We further introduce RadiusFPS-G, a warp-level GPU implementation that fuses voxel selection, pruning, and distance update into memory-coalesced kernels, eliminating costly global-memory round-trips. On indoor (S3DIS, ScanNet) and outdoor LiDAR (SemanticKITTI) bench-marks, RadiusFPS-G attains up to 2.5× speedup over GPU-based FPS and matches or exceeds QuickFPS among the evaluated methods while using roughly half its GPU memory, with compara-ble segmentation accuracy. When coupled with the learning-based FastPoint sampler, the resulting pipeline achieves the fastest End-to-End inference among all evaluated configurations. These prop-erties make high-quality FPS-style sampling practical for latency- and memory-constrained robotic vision. 
+
+Keywords Point cloud processing, farthest point sampling, GPU acceleration, robotic perception 
+
+1 Introduction 
+
+Point clouds have become a fundamental sensory representation in robotic vision, where robots must perceive, in-terpret, and interact with complex three-dimensional environments. Modern 3D sensors, including LiDAR, RGB-D cameras, and depth cameras, provide dense geometric measurements together with attributes such as color, reflectance, and intensity, enabling robots to estimate scene structure, localize themselves, detect obstacles, and reason about ob-jects and free space. As a result, point cloud processing has become essential to a wide range of robotic applications, including autonomous driving, simultaneous localization and mapping (SLAM), navigation, inspection, and human-robot interaction. Driven by rapid advances in sensing hardware, the spatial resolution and acquisition rate of point 
+
+> arXiv:2606.06255v1 [cs.RO] 4 Jun 2026
+
+Arxiv preprint - June 5, 2026 <1k 1k-5k 5k-10k 10k-50k 50k-100k 100k-200k >200k  
+
+> Point Cloud Size Range
+> 0
+> 5
+> 10
+> 15
+> 20
+> 25
+> 30
+> 35
+> Proportion of Point Clouds (%)
+> S3DIS
+> ScanNet
+> 0
+> 500
+> 1000
+> 1500
+> 2000
+> 2500
+> 3000
+> Average Sampling Time (ms) S3DIS ScanNet
+> Dataset
+> 0
+> 200
+> 400
+> 600
+> 800
+> 1000
+> Average Time per Sampling (ms)
+> 464.9 ms
+> (77.6%)
+> 133.9 ms
+> (22.4%)
+> Total: 598.8 ms
+> 846.8 ms
+> (89.0%)
+> 104.6 ms
+> (11.0%)
+> Total: 951.5 ms
+> FPS
+> Other
+
+Figure 1: Efficiency analysis of FPS on the S3DIS and ScanNet datasets. Top: point cloud size distribution and sam-pling latency. The histograms show the proportion of point clouds in different size ranges for S3DIS and ScanNet, while the overlaid curves indicate the average sampling time for each range. The sampling latency increases sharply as the point cloud size grows, especially beyond 50k points. Bottom: average sampling latency breakdown of Point-MetaBase [2] on S3DIS [19] and ScanNet [20]. The stacked bars show the proportion of time spent on FPS and other operations, demonstrating that FPS accounts for the dominant part of the total sampling latency. cloud sensors have increased substantially in recent years. For example, contemporary mainstream LiDAR sensors, typically featuring 128 lines, can generate over 1,000,000 points per second, representing a five-fold increase compared with sensors from just five years ago [1]. While such dense measurements provide richer geometric details and im-prove the robustness of robotic perception, they also impose severe computational pressure on downstream algorithms, leading to excessive memory consumption and prohibitive latency. This challenge is particularly critical for robotic systems, where perception modules must operate under strict real-time constraints and limited onboard computational resources. Therefore, sampling a representative subset of points is a basic yet significant task in 3D robotic vision. Effective point cloud sampling can reduce computational overhead while preserving essential geometric structures, making it a key technique for efficient and reliable perception in large-scale robotic systems. Among point cloud sampling strategies, Farthest Point Sampling (FPS) has become a common sampling strategy for point cloud tasks. Unlike heuristic alternatives such as random or grid sampling, FPS produces a near-uniform spatial distribution that, for the same number of sampled points, retains finer geometric structure and broader scene coverage. This property has made FPS a core component of the perception backbones widely deployed on robotic platforms, spanning point cloud segmentation [2, 3, 4, 5, 6, 7, 8, 9], object detection [10, 11, 12, 13], classification [14, 15, 16, 17, 18], etc. However, despite its central role, FPS is inherently sequential and compute-intensive, and in practice becomes the dominant latency bottleneck—limiting its applicability precisely in the large-scale, real-time settings that robotic perception demands. The FPS algorithm operates with a time complexity of O(N · M ), where N stands for the number of points in the point cloud, and M stands for the number of target sampled points in the point cloud. Selecting each of the M
+
+samples requires a global distance comparison against all N points, so a large volume of computation is spent merely to add a single point. To quantify this impact, we profile FPS within PointMetaBase [2] on a randomly selected 25% subset of the validation samples from the indoor S3DIS [19] and ScanNet [20] benchmarks (Fig. 1). The top figure reports the point cloud size distribution together with the corresponding FPS sampling latency. Although most samples contain a moderate number of points, the FPS runtime increases sharply as the point cloud size grows. In particular, once the point cloud size exceeds 50k points, the sampling cost becomes substantially higher, reaching around 250 ms per sample and increasing to more than 1000 ms for samples with over 100k points. Therefore, the overall sampling cost is largely dominated by a small number of large-scale point clouds. The bottom figure further shows the latency breakdown between FPS and the remaining operations. FPS accounts for the majority of the total latency on both datasets: 77 .6% on S3DIS and 89 .0% on ScanNet. This indicates that FPS is not merely an auxiliary preprocessing step, but the dominant computational bottleneck in the sampling pipeline. Moreover, ScanNet contains a higher proportion of large point clouds, especially those exceeding 100k points, which explains its substantially higher average FPS latency and larger FPS ratio compared with S3DIS, even though the latency of the other operations is comparable. Since FPS is inherently sequential, it maps poorly onto data-parallel GPUs, and most prior accelerators therefore rely on specialized hardware. FPGA-based designs such as MARS[21] and PtrAcc[22] exploit custom on-chip memory and 2Arxiv preprint - June 5, 2026 
+
+Algorithm 1 Standard FPS Algorithm 
+
+Require: Input point cloud P = {p1, p 2, . . . , p N }; target sample size M
+
+Ensure: Sampled point set S 
+
+> 1:
+
+Initialize sampled set S ← ∅  
+
+> 2:
+
+Initialize distance array D of size N with +∞ 
+
+> 3:
+
+Randomly select a starting point pstart from P 
+
+> 4:
+
+S ← S ∪ { pstart } 
+
+> 5:
+
+D[start ] ← 0 
+
+> 6:
+
+while |S| < M do  
+
+> 7:
+
+Let slast be the point most recently added to S 
+
+> 8:
+
+for each point pi ∈ P do  
+
+> 9:
+
+d ← ∥ pi − slast ∥2 
+
+> 10:
+
+D[i] ← min( D[i], d ) 
+
+> 11:
+
+end for  
+
+> 12:
+
+pnext ← arg max i D[i] 
+
+> 13:
+
+S ← S ∪ { pnext } 
+
+> 14:
+
+end while  
+
+> 15:
+
+return S
+
+data pipelines to achieve large speedups, but their hardware-specific optimizations do not transfer to general-purpose platforms. The KD-Tree-based QuickFPS[23] is portable to commodity hardware and is one of the strongest exact accelerators evaluated in this work, yet its substantial memory footprint is ill-suited to onboard robotic deployment. To accelerate FPS on processors without these limitations, we propose RadiusFPS, a spherical voxel-based algo-rithm whose radius pruning removes the redundant distance computations and memory traffic identified above while preserving the standard FPS update rule under a fixed seed and deterministic tie-breaking policy. To exploit GPU parallelism, we further introduce RadiusFPS-G, a warp-level implementation that fuses the core sampling sub-tasks into memory-coalesced kernels. Across indoor (S3DIS, ScanNet) and outdoor LiDAR (SemanticKITTI) benchmarks, our method advances efficiency on both hardware classes while maintaining competitive sampling quality. On the CPU, RadiusFPS accelerates sampling by up to 186× over vanilla FPS on large-scale scenes—far beyond the 6× of the approximate FPS+NPDU baseline. On the GPU, RadiusFPS-G reduces sampling latency by up to 52× relative to GPU FPS and consistently matches or exceeds QuickFPS among the evaluated methods while using only about half of its GPU memory. These gains carry through to full perception pipelines: as a drop-in module, RadiusFPS-G cuts End-to-End segmentation latency by up to 2.5×, and when paired with the learning-based FastPoint [24] sampler, it raises the sampling speedup to 11.7× and the End-to-End speedup to 3.3× over the GPU-FPS baseline under the same backbone. Overall, RadiusFPS provides a strong exact-FPS-compatible accelerator among the evaluated CPU and GPU methods. Our main contributions are listed as follows: • We identify redundant distance computations and excessive memory I/O as the principal sources of FPS in-efficiency, and propose RadiusFPS, a spherical voxel-based sampling algorithm that addresses them through a dual-level pruning scheme: a radius-based voxel filter that discards entire irrelevant regions, followed by a coordinate-wise point-skip test that removes residual point updates. The spherical bound is provably con-servative, so RadiusFPS accelerates sampling while preserving the FPS distance-update rule under the same initialization and tie-breaking policy. • We further propose RadiusFPS-G, a GPU-accelerated variant that maps the inherently sequential sampling loop onto GPUs. Beyond conventional thread-level parallelism, it fuses voxel selection, radius pruning, and distance update into two warp-level fusion kernels with coalesced memory access, eliminating the global-memory round-trips that bottleneck existing GPU-based FPS implementations. • We establish a strong exact-FPS-compatible implementation across CPUs and GPUs among the evaluated methods: RadiusFPS reaches up to 186× over CPU FPS, while RadiusFPS-G matches or exceeds QuickFPS using only half of its GPU memory and comparable segmentation accuracy. Integrated into deep pipelines, both variants serve as drop-in modules and, combined with FastPoint, cut End-to-End latency by up to 3.3× over the GPU-FPS baseline, making FPS-style sampling practical for latency- and memory-constrained robotic perception. 3Arxiv preprint - June 5, 2026 Sampling Ratio = 0.1 Sampling Ratio = 0.2 Sampling Ratio = 0.4          
+
+> (a) Random Sampling Results in Different Sampling Ratios Sampling Ratio = 0.1 Sampling Ratio = 0.2 Sampling Ratio = 0.4
+> (b) FPS Sampling Results in Different Sampling Ratios 0.05 0.10 0.15 0.20 0.25 0.30 0.35 0.40
+> Sampling Ratio
+> 0.0000
+> 0.0025
+> 0.0050
+> 0.0075
+> 0.0100
+> 0.0125
+> 0.0150
+> 0.0175
+> Neighbor Distance  Random (Avg NN Dist)
+> FPS (Avg NN Dist)
+
+(c) Nearest Neighbour Distance Analysis of Random Sampling and FPS 
+
+Figure 2: Sampling uniformity of FPS versus random sampling on the Stanford dragon point cloud. (a)-(b) sampling results at different ratios; (c) average nearest neighbor distance (lines) with min-max range(shaded). 
+
+2 Background Knowledge 
+
+2.1 Farthest Point Sampling 
+
+Initially popularized by PointNet++ [4], Farthest Point Sampling (FPS) has become one of the most standard sampling algorithms for point cloud-based deep learning models [25, 26, 15, 16, 2, 3, 10, 5]. Beyond simply downsampling dense point clouds, FPS effectively preserves representative points that capture local structural information, thereby facilitating subsequent processing tasks. Numerous studies have since validated the efficacy of FPS in deep learning applications [12, 11, 27]. The detailed procedure of the standard FPS is formalized in Alg. 1. Given an input point cloud P = {p1, p 2, . . . , p N }
+
+and a target sample size M , the algorithm maintains a distance array D of size N to track the shortest distance from each point to the current sampled set S. Initially, all entries of the distance array are set to +∞, i.e., D[i] = + ∞ for all i = 1 , . . . , N , and the sampled set S is seeded with a randomly selected starting point pstart . In each iteration of sampling, rather than recomputing distances to the entire set S, we efficiently update D based on the most recently added point, denoted as slast . For every point pi ∈ P , we compute the Euclidean distance to slast and update the stored distance only if the new value is smaller (i.e., D[i] ← min( D[i], ∥pi − slast ∥2)). This ensures that D[i]
+
+always represents the minimum distance from pi to any point in S. Finally, the point with the maximum value in 
+
+D—representing the point most distant from the existing samples—is selected as pnext (pnext ← argmax (D)) and added to S for the next cycle. The algorithm then proceeds iteratively until the target size M is reached. A primary advantage of FPS is its inherent ability to regulate spatial distribution, ensuring that the sampled subset provides a comprehensive representation of the underlying geometry. Fig.2 shows the sampling results on the dragon point cloud from the Stanford 3D Scanning Dataset [28] and presents a quantitative analysis of neighbor distances. 4Arxiv preprint - June 5, 2026 0 100 200 300 400 500 600 
+
+Sample Step (First 600 Steps) 
+
+60 
+
+70 
+
+80 
+
+90 
+
+100 
+
+> Percentage (%)
+> ratio=0.1
+> ratio=0.2
+> ratio=0.3
+
+Figure 3: Percentage of ineffective distance updates at each sampling step of standard FPS on the Stanford dragon point cloud. Across different sampling ratios, ineffective updates rapidly dominate after the initial stage and remain above 90% in most later iterations, indicating that most distance computations and memory accesses do not change the stored nearest-sample distances. As shown in the visual comparison between Fig. 2(a) and Fig. 2(b), random sampling exhibits a highly unbalanced distribution characterized by dense clusters and significant voids. In contrast, FPS yields a much more homogeneous pattern, effectively preserving structural details—such as edges and surface contours—across all sampling ratios. Fig. 2(c) further quantifies this stability. The line chart tracks the average Nearest Neighbor (NN) distance, while the shaded regions (blue for Random, red for FPS) represent the range (spread between maximum and minimum) of these distances. Notably, the extensive blue region completely encompasses the narrower red region. This stark contrast indicates that while Random Sampling suffers from extreme irregulari-ties—points being either overly clustered or sparsely scattered—FPS maintains a consistent inter-point distance. This ”tight” distribution control ensures that local features are uniformly captured without redundancy or main information loss. 
+
+2.2 Challenges of FPS 
+
+Given the above introduction, we can conclude that the challenges in accelerating the FPS algorithm fall into three main aspects: • High computational overhead. FPS necessitates exhaustive Euclidean distance calculations and compar-isons for the entire point cloud in each round. As the number of input points ( N ) and target samples ( M )increases, the computational complexity grows significantly (typically O(N · M )), becoming a bottleneck for large-scale processing. • Lack of Filtering Mechanism. In each iteration, the standard FPS performs a global distance update over all points: 
+
+Dist p[i] ← min  Dist p[i], ∥pi − slast ∥2
+
+, i = 0 , . . . , N − 1, (1) where Dist p[i] is the current nearest sample distance of pi and slast is the most recently selected sample. However, only points satisfying ∥pi −slast ∥2 < Dist p[i] actually change; the rest remain unchanged. Standard FPS lacks any mechanism to identify and skip these unaffected points, causing significant computational redundancy. • Inherent Sequential Dependency. Since each new sample is selected based on the distances to the pre-viously sampled set, there exists a strict dependency between iterations. This iterative nature prevents the simultaneous acquisition of all points via simple parallelization techniques. The sampling process is sensitive to local deviations; an erroneous selection of a single point can propagate errors to subsequent iterations, potentially compromising the overall quality of the sampled set. Among the challenges above, the lack of a filtering mechanism is the most critical for practical acceleration. In each FPS iteration, the newly selected sample is compared with all (N) input points, although only a small subset may actually reduce their stored nearest sample distances. We define a distance update as effective if 
+
+∥pi − slast ∥2 < Dist p[i], (2) and ineffective otherwise. Ineffective updates leave Dist p[i] unchanged and therefore do not affect subsequent sample selection, while still incurring distance computation and memory-access costs. 5Arxiv preprint - June 5, 2026 
+
+To quantify this redundancy, we profile standard FPS on the Stanford dragon point cloud under three sampling ratios. As shown in Fig. 3, ineffective updates rapidly dominate after the initial sampling stage. The first several iterations still cover large unexplored regions, but later samples typically influence only a local neighborhood because most points already have nearby representatives. Consequently, more than 90% of distance computations become ineffective in later iterations. This observation motivates the coarse-to-fine pruning strategy of RadiusFPS, which first eliminates unaffected spatial regions and then skips unnecessary point-level updates. 
+
+2.3 Related Works 
+
+Existing efforts to accelerate FPS fall into two broad categories: algorithm structure optimization and sampling pattern optimization. The former preserves the exact FPS output and reduces its cost by redesigning the data structures, memory access, or underlying hardware on which sampling runs; the latter relaxes exactness, substituting parallel-friendly heuristics or learned predictors that sample faster but no longer reproduce the FPS result. We review each category below and position our method relative to both. 
+
+2.3.1 Algorithm Structure Optimization 
+
+A range of accelerators speed up FPS by redesigning its data structures or the hardware on which it runs, while keeping the sampled output exact [29, 22, 21, 30, 23, 31]. On general-purpose hardware, QuickFPS[23] is the strongest representative: Han et al. organize the point cloud with a KD-tree to prune distance computations and regularize memory access, making it the fastest existing exact accelerator. This speed, however, comes at the cost of a substantial memory footprint that is unsuited to memory-constrained onboard platforms. A second line of work turns to custom silicon: MARS[21] and PtrAcc[22] build FPGA-based pipelines that cut distance computation and streamline the sampling workflow, achieving large speedups without sacrificing accuracy. Their gains, however, hinge on FPGA-specific on-chip RAM and dataflow and do not transfer to general-purpose CPUs or GPUs. In short, structure-level methods preserve exact FPS results but remain either memory-heavy or hardware-bound. 
+
+2.3.2 Sampling Pattern Optimization 
+
+To bypass the sequential cost of FPS, a second line of work replaces it with parallel-friendly sampling patterns. Grid sampling[32] is the most common alternative: it partitions the bounding box of the point cloud into regular cells and keeps, in each cell, the point closest to the cell center. This gives better control over the average inter-point spacing and has been adopted by models such as Grid-GCN[33], KPConv[34], and PGFormer[35]. Other methods instead approximate the FPS pattern to reduce the number of sampling rounds. Targeting on-device perception, EdgePC[36] encodes the point cloud with Morton codes to enable a fully parallel sampling strategy for edge platforms, while NPDU[37] segments a LiDAR scan and selects multiple points per round via an efficient nearest neighbor search. By committing several points in a single iteration, these heuristics save substantial processing time but fall short of FPS in sampling quality, which in turn degrades downstream task performance. A more recent direction learns the sampling pattern from FPS itself. FastPoint[24] analyzes the sampling positions and distribution produced by the first few FPS iterations and predicts a sampling curve, thereby avoiding the full iterative FPS process with only minor quality degradation. However, because it still bootstraps from standard FPS to generate the initial trajectory and relies on a learned prediction module, FastPoint is regarded as an FPS-based acceleration component for learning-based pipelines rather than a standalone sampling strategy. 
+
+3 Method 
+
+In this section, we present RadiusFPS, a spherical-voxel-based acceleration framework for exact farthest point sam-pling. As illustrated in Fig. 4, RadiusFPS follows three main stages. First, the input point cloud is partitioned into active voxels, and two distance states are maintained: a point-level nearest sample distance array ( Dist p) and a voxel-level maximum-distance array ( Dist v ) (Fig.4a). Second, RadiusFPS selects an initial seed point ( p0) and performs a global distance initialization. Specifically, ( Dist p) is initialized by computing the distance from each point to ( p0), while ( Dist v ) is obtained by taking the maximum ( Dist p) value within each active voxel (Fig. 4b). Finally, the al-gorithm enters the iterative sampling stage. At each iteration, the next sampled point is first selected from the current distance states. RadiusFPS then applies conservative voxel-level radius pruning to discard voxels that cannot contain effective updates, followed by a coordinate-wise point-skip test to avoid unnecessary point-level distance computations inside the remaining voxels (Fig. 4c). This coarse-to-fine pruning strategy reduces redundant distance computations and memory accesses while preserving the update behavior of standard FPS. The following subsections describe each stage in detail. 6Arxiv preprint - June 5, 2026 0 ... ... 0   
+
+> MAX ... ... MAX
+
+Voxelization 
+
+Allocate Memory 
+
+> Point Distance Array Dist p
+> Voxel Distance Array Dist v
+> Active Voxel Inactive Voxel Point Cloud (3, N)
+
+(a) Point Cloud Preprocessing 0.3 0.2 ... ... 0.4      
+
+> 0.3 0.5 0.1 ... ... 0.4
+> Point Distance Array Dist p
+> Voxel Distance Array Dist v
+
+Randomly Select the Initial Point p 0
+
+Initial Point p 0
+
+> Sync Voxel State
+
+Distance Initialization 
+
+j = 0 (b) First Point Selection and Distance Initialization ... ...  
+
+> Voxel Distance Array Dist v
+> ... ...
+> Point Distance Array Dist p
+
+Find New Sampled Point s j
+
+Sync Dist p
+
+Point Distance Computation Update Voxel List  
+
+> Sj
+> Spherical Construction Radius Voxel Centre
+
+Radius Pruning 
+
+Point Skip 
+
+j = (1, ..., M - 1) 
+
+Sync Dist v
+
+> sj
+
+(c) Iterative Sampling with Voxel-Level Pruning and Point Skip 
+
+Figure 4: An Overview of the RadiusFPS Algorithm. The algorithm mainly consists of three stages: (a) Point Cloud Preprocessing: Voxelize the input point cloud and allocate memory for voxel and point distance array Dist p, Dist v .(b) Initial update: Randomly select the initial sampled point p0, update distance arrays with global Euclidean distance computation. (c) Iterative sampling with voxel-level pruning and point skip: The sampling process can be split into three steps: firstly, find the new sampled point, then utilize efficient radius pruning and point skip strategy to decide a subset of points for distance update. Eventually, only selected points are required to compute an accurate distance and perform memory access. 
+
+3.1 Notation 
+
+Given an input point cloud P = {p0, p 1, . . . , p N −1} with N points, where pi ∈ R3, the goal of FPS is to select a subset 
+
+S = {s0, s 1, . . . , s M −1} of M points that provides representative coverage of the original set. The sampling process is performed iteratively. Let Sj−1 = {s0, s 1, . . . , s j−1} denote the set of points selected before the j-th selection. The next point sj is chosen as the point in P whose nearest distance to the current sampled set is maximized: 
+
+sj = arg max 
+
+> p∈P
+
+
+
+min 
+
+> s∈Sj−1
+
+∥p − s∥2
+
+
+
+. (3) To avoid recomputing the distance from every point to all previously selected samples at each iteration, FPS maintains a point-level distance array Dist p. Each element Dist p[i] records the current nearest sample distance of point pi,7Arxiv preprint - June 5, 2026 
+
+namely 
+
+Dist p[i] = min  
+
+> s∈S
+
+∥pi − s∥2. (4) With this array, each iteration only needs to compute the distance from all points to the newly selected sample and update Dist p when a smaller distance is found. To make exactness well-defined, all FPS variants in our algorithmic discussion use the same initial seed, the same floating-point precision, and deterministic tie-breaking: when multiple candidates have the same distance, arg max returns the point with the smallest original input index. Different seeds or tie-breaking policies can yield different valid FPS sequences and slightly different downstream metrics. We further partition P into K active voxels V = {v0, v 1, . . . , v K−1}. For each active voxel vk, RadiusFPS maintains a voxel-level distance value 
+
+Dist v [k] = max 
+
+> pi∈vk
+
+Dist p[i], (5) which records the largest current nearest sample distance among points in vk. This value serves as the voxel-level threshold used by the pruning strategy introduced below. 
+
+3.2 Preprocessing 
+
+In the preprocessing stage, RadiusFPS voxelizes the input point cloud to establish a compact spatial index for sub-sequent voxel-level pruning. Let the axis-aligned bounding box of the input point cloud be defined by pmin =(xmin , y min , z min ), p max = ( xmax , y max , z max ) and let its side lengths be 
+
+E = ( Ex, E y , E z ) = ( xmax − xmin , y max − ymin , z max − zmin ) (6) To ensure all points p ∈ P are contained within the voxel grid, the bounding box is slightly scaled by an expansion factor α = 1 + ε (where ε ≪ 1). The side length of a single voxel L is then determined by a user-defined voxel resolution nvox , which denotes the number of voxel bins along each axis rather than a physical distance (reported as v
+
+in the parameter-sensitivity experiments): 
+
+L = α max {Ex, E y , E z }
+
+nvox 
+
+. (7) For every point pi = ( xi, y i, z i) ∈ P , its position is mapped to discrete integer coordinates (vx, v y , v z ) representing its home voxel. Boundary values are clamped to keep every coordinate in the valid range: 
+
+vi,a = min 
+
+
+
+nvox − 1, max 
+
+
+
+0,
+
+ pai − pamin 
+
+L
+
+ 
+
+, a ∈ { x, y, z }. (8) To handle the inherent sparsity of point clouds, RadiusFPS stores only active voxels, namely, voxels that contain at least one input point. Empty voxels are discarded and never visited during sampling. Let the set of active voxels be denoted by 
+
+V = v0, v 1, . . . , v K−1, (9) where K is the number of active voxels. For each active voxel vk, RadiusFPS records the indices of its contained points and maintains its voxel center ck. In addition, each voxel is associated with a bounding sphere radius 
+
+rk =
+
+√32 L, (10) which guarantees that all points inside vk are enclosed by the sphere centered at ck. This spherical representation is later used to derive a conservative lower bound for voxel-level pruning. After the active voxel index is constructed, RadiusFPS allocates two distance-tracking structures. The point-level distance array Dist p ∈ RN stores the current nearest sample distance of each point and is initialized to +∞. The voxel-level distance array Dist v ∈ RK stores the maximum current point-level distance within each active voxel: 
+
+Dist v [k] = max 
+
+> pi∈vk
+
+Dist p[i]. (11) Before the first sample is selected, Dist v is initialized to zero and is synchronized with Dist p after the initial global distance update. Therefore, this preprocessing stage only builds the sparse voxel index and prepares the distance states, while the actual distance values are established in the initialization stage described next. 8Arxiv preprint - June 5, 2026 
+
+3.3 Initial Update 
+
+The initial iteration ( j = 0 ) serves as the priming phase for the RadiusFPS algorithm. While subsequent iterations leverage hierarchical pruning to bypass redundant regions, this step is dedicated to establishing the global distance state required to initialize the two-level acceleration. 
+
+Seed Selection. The process begins by selecting the primary seed point s0 from the input point cloud P . To ensure an unbiased starting state, s0 is typically chosen via a uniform discrete distribution over the indices of the point set (as illustrated in Fig.4b): 
+
+s0 = pk, k ∼ Uniform (0 , N − 1) (12) 
+
+Distance Initialization Since no prior distance information exists to facilitate pruning at this stage, the algorithm performs an exhaustive global update. For every point pi ∈ P , the algorithm computes the exact Euclidean distance to the initial seed point s0 and initializes the point-level distance array as: 
+
+Dist p[i] = ∥pi − s0∥2, ∀i ∈ { 0, . . . , N − 1} (13) This step incurs a computational cost of O(N ), ensuring that the foundation for subsequent sampling is mathematically rigorous. After the point-level distances are initialized, RadiusFPS synchronizes the voxel-level distance array by taking the maximum point-level distance inside each active voxel: 
+
+Dist v [k] = max 
+
+> pi∈vk
+
+Dist p[i] (14) Consequently, Dist p records the nearest sample distance of each point to the current sampled set S = s0, while 
+
+Dist v [k] records the largest such distance among points in voxel vk. These two synchronized distance states form the basis for the hierarchical sample selection and pruning operations in the subsequent iterations. 
+
+3.4 Efficient Iterative Sampling 3.4.1 Find New Sample Point 
+
+Following the initial update, the algorithm proceeds to the main loop to iteratively select the remaining M − 1 sam-ples. Given that the initial point-level and voxel-level distance states have been established, each iteration begins by identifying the next farthest sample point. We reformulate the selection of the j-th sampled point sj as a two-level maximization problem. Instead of scanning all points in P directly, RadiusFPS first searches over the active voxels and then searches within the selected voxel. Specifically, the index of candidate voxel k∗ is determined by 
+
+k∗ = arg max  
+
+> 0≤k<K
+
+Dist v [k], (15) where Dist v [k] denotes the maximum current point-level distance among all points inside voxel vk. Then, the next sampled point is selected from this candidate voxel: 
+
+sj = arg max 
+
+> pi∈vk∗
+
+Dist p[i], j ∈ 1, . . . , M − 1. (16) Since ( Dist v [k]) is synchronized as 
+
+Dist v [k] = max 
+
+> pi∈vk
+
+Dist p[i], (17) the above two-level selection is equivalent to the global FPS selection rule when the same deterministic tie-breaking policy is used at both the voxel and point levels: 
+
+sj = arg max  
+
+> pi∈P
+
+Dist p[i]. (18) Therefore, the hierarchical search changes only how the farthest point is located, while preserving the sample-selection behavior of standard FPS under the fixed seed and tie-breaking policy stated above. After sj is selected, RadiusFPS up-dates the distance states using the voxel-level radius pruning and point-level skip strategies described in the following subsections. 9Arxiv preprint - June 5, 2026 p2
+
+p3
+
+ck
+
+p1
+
+sj
+
+p2
+
+p3
+
+ck
+
+p1
+
+sj
+
+Radius 
+
+Dist (s j,v k) = L2 (s j, c k) Dist (s j,v k) =  L2 (s j, c k) - Radius  
+
+> New Sampled Point Unsampled Point Voxel Centroid
+
+Sphere Voxel Standard Voxel 
+
+Figure 5: Standard Voxel Design (Left) and Spherical Voxel Design (Right). The main difference between the two voxels is the sphere construction covering all the points inside the voxel. In this figure, for the new sampled point sj ,the distance between sj and the edge of the spherical voxel provides a conservative lower bound on point distances to 
+
+sj . For the standard voxel, on the contrary, a similar centroid-only strategy may lead to incorrect sampling in the next iteration. 
+
+3.4.2 Radius Pruning Based on Spherical Voxels 
+
+In standard FPS, each iteration updates Dist p by comparing the newly selected sample sj with every point in P .Although this exhaustive update is exact, most comparisons do not reduce the stored nearest sample distance and therefore have no effect on subsequent sample selection. The resulting redundant distance computations and memory accesses constitute the main opportunity for acceleration. RadiusFPS addresses this redundancy by first deciding whether an entire voxel can be safely skipped before accessing its internal points. A straightforward approach is to represent each voxel vk by its centroid ck and use the center distance ∥sj − ck∥2 as an estimate of the distance from sj to all points in the voxel. However, such a centroid-based criterion is not safe for exact FPS. As illustrated in Fig. 5, the center distance is not necessarily a lower bound for all point-wise distances inside the voxel. In particular, there may exist a point pi ∈ vk, such as p2 in the figure, satisfying 
+
+∥sj − pi∥2 < ∥sj − ck∥2. (19) In this case, pruning the voxel according only to ∥sj −ck∥2 may incorrectly skip a point whose stored distance Dist p[i]
+
+should be updated. Since FPS selects each subsequent sample from the updated distance array, a single unsafe skip may change the following sampling sequence. Therefore, a safe voxel-level pruning rule must rely on a conservative lower bound rather than on a centroid-only distance estimate. Specifically, for each voxel vk, we require a quantity LB (vk, s j ) satisfying 
+
+LB (vk, s j ) ≤ ∥ sj − pi∥2, ∀pi ∈ vk. (20) If this lower bound is no smaller than the maximum current distance stored in the voxel, then no point in the voxel can be updated by sj .To obtain such a bound, RadiusFPS represents each active voxel vk by a bounding sphere centered at ck, as shown in Fig. 5. Since all points in vk are enclosed by this sphere, the sphere radius is determined by the voxel side length L:
+
+rk =
+
+√32 L. (21) For any point pi ∈ vk, we have ∥pi − ck∥2 ≤ rk. According to the triangle inequality, 
+
+∥sj − pi∥2 ≥ ∥ sj − ck∥2 − ∥ pi − ck∥2. (22) Combining Eq. (22) with ∥pi − ck∥2 ≤ rk, RadiusFPS defines the lower bound from sj to voxel vk as 
+
+LB (vk, s j ) = max (0 , ∥sj − ck∥2 − rk) . (23) By construction, this bound satisfies the requirement in Eq. (20): 
+
+LB (vk, s j ) ≤ ∥ sj − pi∥2, ∀pi ∈ vk. (24) 10 Arxiv preprint - June 5, 2026 p2     
+
+> p3
+> ck
+> p1
+> p2
+> ck
+> p1
+> p2
+> p3
+> ck
+> p1
+> p2
+> p3
+> ck
+> p1
+> p3
+> sj
+> sp
+> sp
+> sp
+> sp
+> sjsj
+> sj
+> p2
+> p3
+> ck
+> p1
+> p2
+> ck
+> p1
+> p2
+> p3
+> ck
+> p1
+> p2
+> p3
+> ck
+> p1
+> p3
+> sj
+> sp
+> sp
+> sp
+> sp
+> sjsj
+> sj
+> rk
+> rk
+> rkrk
+> Dist v[k] = L2 (s p,p 1); L2(s j, c k) > Dist v[k]; Pass; Dist v[k] = L2 (s p,p 1); ||L2(s j, c k) - r k|| 2< Dist v[k]; Update;
+> Dist v[k] = L2 (s p,p 2); L2(s j, c k) < Dist v[k]; Update; Dist v[k] = L2 (s p,p 2); ||L2(s j, c k) - r k|| 2>Dist v[k]; Pass;
+> Dist v[k] = L2 (s p,p 3); L2(s j, c k) < Dist v[k]; Update; Dist v[k] = L2 (s p,p 1); ||L2(s j, c k) - r k|| 2>Dist v[k]; Pass;
+> Dist v[k] = L2 (s p,p 1); L2(s j, c k) > Dist v[k]; Pass;
+> Dist v[k] = L2 (s p,p 1); ||L2(s j, c k) - r k|| 2< Dist v[k]; Update;
+> L2(s j, p 2) < L2 (s p, p 1), Update L2(s j, p 2) > L2 (s p, p 2), Pass L2(s j, p 2) > L2 (s p, p 3), Pass L2(s j, p 2) < L2 (s p, p 1), Update
+
+Ground Truth Standard Voxel Pruning Spherical Voxel Pruning      
+
+> New Sampled Point Previous Sampled Point Voxel Radius L2 Distance Voxel Centroid Sphere Voxel Standard Voxel Unsampled Point
+
+Figure 6: Illustration of the standard voxel pruning versus our proposed spherical voxel pruning. The top row defines the ground truth for updating or passing based on exact Euclidean distances. The standard voxel pruning (middle) fails in the illustrated cases (marked with red crosses) because relying solely on the distance to the voxel centroid 
+
+ck provides an unsafe geometric criterion. By incorporating a bounding sphere with radius rk, our spherical voxel pruning (bottom) uses the conservative lower bound max(0 , ∥sj − ck∥2 − rk) and avoids unsafe false pruning in these cases (green checkmarks). Based on this lower bound, RadiusFPS skips voxel vk when 
+
+LB (vk, s j ) ≥ Dist v [k], (25) where Dist v [k] = max pi∈vk Dist p[i] denotes the largest current nearest sample distance among points in vk. This condition is safe because, for any point pi ∈ vk, we have 
+
+∥sj − pi∥2 ≥ LB (vk, s j ) ≥ Dist v [k] ≥ Dist p[i]. (26) Therefore, no point inside vk can satisfy ∥sj − pi∥2 < Dist p[i], which means that all point-level distance records in this voxel remain unchanged. The equality case is also safe because the FPS distance update only changes Dist p[i]
+
+when a strictly smaller distance is found. Consequently, pruning vk does not alter the distance-update behavior or the subsequent sample selection of standard FPS. If the pruning condition is not satisfied, voxel vk may still contain points whose distance records can be reduced. RadiusFPS then visits the points inside vk and applies the coordinate-wise point-skip test introduced in the next subsection before performing exact Euclidean distance computation. Fig. 6 further illustrates why the spherical bound is necessary. In these representative cases, the current distance records in voxel vk are determined by a previously selected sample sp, and the algorithm must decide whether the newly selected sample sj can reduce any point-level distance in the voxel. The positions of sp and sj cover both inside-voxel and outside-voxel configurations. Centroid-based pruning can make incorrect decisions because the centroid does not constrain the minimum possible distance from sj to every point in vk. In contrast, the spherical representation explicitly encloses all points in the voxel and therefore provides a valid lower bound for every point-wise distance. As a result, spherical voxel pruning safely identifies voxels whose point distances cannot be updated; voxels that fail the pruning test are conservatively retained for the point-level skip and exact-distance update stages. 
+
+3.4.3 Point Skip Acceleration 
+
+Radius pruning removes entire voxels whose point-level distances are guaranteed to remain unchanged. However, a voxel that survives Eq. (25) does not imply that every point inside it must be updated. In many cases, only a small 11 Arxiv preprint - June 5, 2026 
+
+subset of points in the surviving voxel can potentially obtain a smaller nearest sample distance from the newly selected sample sj . Therefore, RadiusFPS further applies a point-level skip test before performing exact Euclidean distance computation. For each point pi in a visited voxel, an exact update is needed only when the new distance to sj is smaller than the current record Dist p[i]. RadiusFPS uses the relation between the Euclidean norm and the L∞ norm: 
+
+∥pi − sj ∥2 ≥ ∥ pi − sj ∥∞ = max  
+
+> a∈{ x,y,z }
+
+|pai − saj |. (27) Accordingly, if the coordinate difference along any axis is already no smaller than the current nearest sample distance, then the exact Euclidean distance cannot reduce Dist p[i]:skip pi if ∃a ∈ { x, y, z } : |pai − saj | ≥ Dist p[i]. (28) This condition is conservative. It may leave some non-updatable points for exact computation, but it never skips a point whose distance record should be decreased. Therefore, the point-skip test preserves the exact update behavior of FPS while avoiding a large number of unnecessary square, summation, and square-root operations. Only points that pass Eq. (28) are subjected to the exact distance update: 
+
+Dist p[i] ← min 
+
+Dist p[i],
+
+s X
+
+> a∈{ x,y,z }
+
+(pai − saj )2
+
+ . (29) From a geometric perspective, Eq. (28) characterizes a necessary condition for exact distance computation: pi must lie inside the axis-aligned cube centered at sj with half side length Dist p[i]. Points outside this cube are guaranteed to be farther than their current nearest sample distance and can be skipped safely. After all necessary point-level updates in a visited voxel are completed, RadiusFPS synchronizes the voxel state by recomputing the maximum residual distance within that voxel: 
+
+Dist v [k] ← max 
+
+> pi∈vk
+
+Dist p[i]. (30) For voxels pruned by Eq. (25), both Dist p and Dist v remain unchanged and no synchronization is required. Together, spherical radius pruning and point skip form a coarse-to-fine filtering strategy: the former avoids accessing irrelevant voxels, whereas the latter avoids exact distance computation for redundant points inside the remaining voxels. Voxel Filter Find Best Voxel  
+
+> Find Best Point Distance Update
+> New Sample
+> Point Cloud (3, N)
+> CPU
+> Voxelization
+> Initialization Iteration Sampling With Fusion Kernels
+
+GPU 
+
+> Data Transfer
+
+Figure 7: Architectural workflow of our proposed GPU-based RadiusFPS (RadiusFPS-G). Following data transfer to GPU global memory, the input point cloud is voxelized on-device into an optimized, sorted data layout organized by voxel indices. In the iterative sampling process, we strategically fuse four core operations (Find Best Voxel, Find Best Point, Voxel Filter, Distance Update) into two paired fusion kernels to minimize kernel launch overhead and maximize parallel efficiency. The only synchronization point between these kernels is the acquisition of the next sampled point in each iteration. 
+
+4 RadiusFPS-G: GPU-based RadiusFPS Design 
+
+To further improve RadiusFPS on GPUs, we design RadiusFPS-G, a GPU-resident implementation that exploits mas-sive thread-level parallelism and coalesced memory access. From the RadiusFPS introduction in Sec.3, we can observe that although sampled points in the sampling process show dependencies, each component of the algorithm is inde-pendent of the others, which results in frequent memory access. The architectural disparity between the CPU and GPU lies primarily in how they handle memory hierarchy. Unlike the CPU, which relies on large, multi-level caches to reduce latency, the GPU hides latency through hardware multi-threading. However, the performance of the GPU is strictly bound by its memory access patterns. In the context of 12 Arxiv preprint - June 5, 2026 
+
+RadiusFPS, frequent global memory transactions and high-frequency communication between independent modules lead to ’memory-wall’ issues, necessitating a specialized accelerator design to optimize data movement. To address these architectural bottlenecks, we propose the RadiusFPS-G. As illustrated in Fig.7, RadiusFPS-G offloads the entire sampling pipeline to the GPU to minimize host-device synchronization. Following initial voxelization and memory allocation, the core innovation of RadiusFPS-G is the deployment of Fusion Kernels during the iterative sampling phase. While RadiusFPS is inherently sequential due to its iterative nature, the internal sub-tasks—including Best Voxel Selection, Point Searching, Voxel Filtering, and Distance Updating—are traditionally executed as discrete operations. By fusing these into high-performance kernels, we maintain intermediate data within on-chip shared memory and registers. This strategy eliminates redundant round-trips to the high-latency global memory, transforming the algorithm from a memory-bound process into a compute-efficient pipeline. In this section, we will introduce the Voxelization and Initialization, Fusion Kernel 1: Voxel and Point Selection, Fusion Kernel 2: Voxel Filter and Distance Update. 
+
+4.1 Voxelization and Initialization 
+
+While previous studies on GPU-accelerated point cloud processing provide foundational references for voxel con-struction [38, 39], their reliance on variable locks to manage voxel states and prevent thread contention introduces significant synchronization overhead. This locking strategy cannot be directly applied to RadiusFPS-G. Instead, to maximize parallel efficiency, our architecture relies on the concept of active voxels. By explicitly pruning empty vox-els and contiguously packing the populated ones in memory, our structure avoids thread collisions while unlocking the massive bandwidth advantages of memory coalescing. As outlined in Algorithm 2, our voxelization strategy is divided into four primary stages: parallel voxel mapping, AoS-to-SoA transformation, sparse structure construction, and global initialization. 
+
+Parallel Voxel Mapping. To establish spatial locality without relying on thread locks, a parallel GPU kernel indepen-dently maps each 3D point to a discrete voxel. The coordinates (vx, v y , v z ) are clamped to the index range [0 , n vox −1] ,where nvox is the voxel-count resolution, flattened into a unique 1D voxel identifier Vid [i], and the original memory index Iorig [i] = i is recorded. 
+
+Vid [i] = vz × n2vox + vy × nvox + vx (31) However, since spatially adjacent points may still be scattered in global memory, we apply a parallel Radix Sort using 
+
+Vid as keys. With an O(N ) linear time complexity, Radix Sort efficiently reorders Iorig , packing points from the same physical voxel into contiguous memory addresses. This operation fundamentally transforms spatial proximity into physical memory locality, preparing the data for coalesced memory access. 
+
+Gather and AoS-to-SoA Transformation. While sorted indices establish logical locality, fetching data from the original Array of Structures (AoS, e.g., x1, y 1, z 1, x 2 . . . ) layout still causes uncoalesced memory access due to co-ordinate striding. To eliminate this hardware bottleneck, we utilize a dedicated gather kernel to transfer the point cloud into a Structure of Arrays (SoA, e.g., x1, x 2 . . . , y 1, y 2 . . . ) layout in parallel. This critical conversion guaran-tees strictly coalesced memory transactions for GPU thread warps, maximizing global memory bandwidth utilization during neighborhood queries. 
+
+Sparsity and Offset Calculation. To prevent wasting computational resources on empty volumetric space, RadiusFPS-G explicitly extracts an active voxel list. By calculating the boundary offsets—specifically the start in-dex and point count—for each populated voxel, we construct a compact, sparse representation of the voxel. This sparse structure ensures that the subsequent iterative sampling process exclusively evaluates populated regions, avoid-ing redundant distance calculations and maximizing overall execution throughput. 
+
+Global Distance Initialization. To bootstrap the iterative sampling loop, RadiusFPS-G must perform an initial global distance evaluation. Unlike the CPU implementation, which relies on a straightforward linear scan, the GPU must carefully avoid control-flow divergence to maintain high execution efficiency. After selecting the initial seed point, we launch a dedicated, branchless update kernel. Because the point cloud is now strictly formatted in the Structure of Arrays (SoA) layout, memory transactions for extracting the X, Y , and Z coordinates are coalesced. For every point 
+
+pi, the kernel computes the Euclidean distance to the seed point without utilizing divergent branch instructions, thus preventing warp divergence within the Streaming Multiprocessors (SMs). Concurrently, to initialize the voxel-level bounds required for our pruning strategy, RadiusFPS-G performs a parallel block reduction over each compact active-voxel segment. Utilizing fast on-chip shared memory, threads within the same CUDA block collaboratively determine the maximum distance within their assigned voxel segment, establishing the global distance state without mixing raw voxel IDs and compact active-voxel indices. 13 Arxiv preprint - June 5, 2026 
+
+Algorithm 2 Active Voxelization and Global Initialization on GPU 
+
+Require: Raw Point Cloud PAoS ∈ RN ×3, Voxel Resolution nvox (number of voxel bins per axis) 
+
+Ensure: Sorted Point Cloud PSoA , Active Voxel List Vactive , Compact Voxel Offsets O, Voxel Counts C, Point Distances Dp, Voxel Bounds Dv
+
+1: Compute bounding box [pmin , p max ] of PAoS 
+
+2: Calculate voxel size s ← α max( pmax −pmin ) 
+
+> nvox
+
+, where α = 1 + ε
+
+3: Initialize Voxel IDs array Vid and Original Indices array Iorig of size N
+
+4: 5: Phase 1: Parallel Voxel Mapping 
+
+6: for all point index i ∈ { 0, . . . , N − 1} in parallel do 
+
+7: Compute voxel coordinates (vx, v y , v z ) ← clip( ⌊ PAoS [i]−pmin  
+
+> s
+
+⌋, 0, n vox − 1) 
+
+8: Vid [i] ← vz n2vox + vy nvox + vx
+
+9: Iorig [i] ← i
+
+10: end for 
+
+11: (Vid , I orig ) ← ParallelRadixSortByKey (Vid , I orig )
+
+12: 13: Phase 2: Gather and AoS-to-SoA Transformation 
+
+14: for all point index i ∈ { 0, . . . , N − 1} in parallel do 
+
+15: idx ← Iorig [i] {Fetch original index }
+
+16: PSoA [i] ← P AoS [idx ].x 
+
+17: PSoA [i + N ] ← P AoS [idx ].y 
+
+18: PSoA [i + 2 N ] ← P AoS [idx ].z 
+
+19: end for 
+
+20: 21: Phase 3: Active Voxel Compaction and Offset Calculation 
+
+22: Vactive ← ParallelUnique (Vid )
+
+23: Initialize compact Offsets O and Counts C with size |V active |
+
+24: for all active-voxel index k ∈ { 0, . . . , |V active | − 1} in parallel do 
+
+25: vid ← V active [k]
+
+26: idx start ← LowerBound (Vid , vid )
+
+27: idx end ← UpperBound (Vid , vid )
+
+28: O[k] ← idx start 
+
+29: C[k] ← idx end − idx start 
+
+30: end for 
+
+31: 32: Phase 4: Global Distance Initialization 
+
+33: Randomly select initial seed point pseed ∈ P SoA 
+
+34: Initialize Point Distances Dp of size N with +∞
+
+35: Initialize Voxel Bounds Dv of size |V active | with 0
+
+36: for all point index i ∈ { 0, . . . , N − 1} in parallel do 
+
+37: Dp[i] ← ∥P SoA [i] − pseed ∥2
+
+38: end for 
+
+39: for all active-voxel index k ∈ { 0, . . . , |V active | − 1} in parallel do 
+
+40: idx start ← O [k]
+
+41: idx end ← O [k] + C[k] − 1
+
+42: Dv [k] ← BlockReduceMax (Dp[idx start . . . idx end ]) 
+
+43: end for 
+
+44: return PSoA , Vactive , O, C, Dp, Dv
+
+14 Arxiv preprint - June 5, 2026 Voxel Distance   
+
+> Block 0
+> Point Distance
+> i
+> Global Memory
+> Sample Result
+> Block 0
+> Sample Point
+> 0
+> ...
+> i-1
+> i
+> i+1
+> ...
+> M
+> Dist pBuffer Dist vBuffer
+> Best Voxel Index
+> Block Reduction Block Reduction
+> Voxel Level Selection Point Level Selection
+
+Fusion Kernel 1 
+
+> Write Read
+
+Figure 8: Overview of Fusion Kernel 1. The kernel fuses two sequential parallel reductions into a single operation. First, a block reduction on the Dist v Buffer determines the best voxel index i. This index is subsequently used to query the Dist p Buffer, where a second block reduction identifies the final Sample Point within that specific voxel. The result is then written directly to the Sample Result buffer in global memory, eliminating unnecessary kernel launch overhead. 
+
+4.2 Fusion Kernel 1: 2-Level Reduction With Efficient Memory Access 
+
+To mitigate the hardware bottlenecks caused by frequent large-scale reductions and excessive global memory accesses, we propose Fusion Kernel 1. As illustrated in the architectural overview (Fig.8), this kernel fundamentally optimizes the farthest point selection process by decomposing it into a hierarchical, two-stage pipeline: Voxel Level Selection and Point Level Selection. By fusing these operations, the kernel completes the farthest point selection with only a few instances of coalesced memory access. The workflow of the kernel operates as follows: 
+
+Voxel Level Selection : As shown in the upper section of Fig. 8, the kernel initiates the process by reading the voxel distance bounds from the Dist v Buffer stored in the Global Memory. Within the GPU streaming multiprocessors, a thread block (Block 0) executes a highly parallelized warp-level reduction across these voxel distances. Fig. 9 illustrates the detailed workflow of the warp-level reduction. After fetching the voxel distance bounds ( Dist v ) from the global memory, the data is distributed among the threads within individual warps. Following an initial intra-warp reduction via register shuffles, the local maximum distance identified by each warp is written into the on-chip shared memory. 
+
+Algorithm 3 Warp-Level Argmax Reduction 
+
+Require: Each thread holds a pair (d, −iorig ), where d is a distance value 
+
+Ensure: All threads in the warp obtain the maximum pair under deterministic tie-breaking 
+
+1: for k = log 2(W ) − 1 down to 0 do 
+
+2: of f set ← 2k
+
+3: (d′, −i′ 
+
+> orig
+
+) ← SHUFFLE DOWN (( d, −iorig ), of f set )
+
+4: (d, −iorig ) ← arg max {(d, −iorig ), (d′, −i′ 
+
+> orig
+
+)}
+
+5: end for 
+
+The specific operation of the warp reduction is introduced in Alg. 3. The operation is implemented using shuffle-down intrinsics. The warp reduction is implemented using a recursive halving approach. At each step, threads communicate 15 Arxiv preprint - June 5, 2026 Shared Memory     
+
+> Warp 0 Warp 1 Warp 2 Warp 31
+> Warp Reduction
+> Warp Reduction
+> Warp Reduction
+> Warp Reduction
+> Warp 0 Warp Reduction
+
+Block 0 
+
+Read 
+
+> Result: point / voxel index
+
+Write 
+
+GPU Global Memory 
+
+Distance Array 
+
+GPU Global Memory 
+
+new index Sample Result 
+
+Figure 9: Illustration of the two-stage warp-level reduction within a single CUDA block. To minimize synchronization overhead, each warp first performs an independent intra-warp reduction on data fetched from global memory, storing partial results in shared memory. Subsequently, a single active warp (Warp 0) performs a final reduction on these intermediate values to determine the optimal point or voxel index, writing the result back to global memory. with a partner at a distance that is halved successively, exploiting shuffle-down intrinsics to aggregate the maximum values. Subsequently, in the final stage, these intermediate maximums are fed exclusively into Warp 0. Warp 0 then performs a final pass of warp reduction to efficiently determine the absolute maximum for the entire block, thereby completing the reduction process. 
+
+Point Level Selection : Transitioning to the lower section of the pipeline, the kernel utilizes the newly identified Best Voxel Index k to precisely target the corresponding compact active-voxel segment. It fetches the exact point distances from the Dist p Buffer in the Global Memory. Block 0 then performs a secondary block reduction exclusively on the points residing within this optimal voxel, again using the original-index tie-breaking rule described in Sec. 3. 
+
+4.3 Fusion Kernel 2: Voxel Filter and Distance Update 
+
+As illustrated in Fig.10, Fusion Kernel 2 is responsible for the concurrent execution of voxel-level filtering, point-level distance updating, and voxel state synchronization. A fundamental architectural distinction between Fusion Kernel 1 and Fusion Kernel 2 lies in their workload distribution strategies. While Kernel 1 performs a global two-level reduction to pinpoint a single optimal voxel candidate, Kernel 2 is designed for massive parallel updating across the entire point cloud. Therefore, we adopt a ”One-Block-to-One-Voxel” mapping paradigm in the kernel design. The active voxel information is distributed across multiple CUDA blocks, allowing each block to independently process 16 Arxiv preprint - June 5, 2026 Yes Radius Pruning       
+
+> Shared Memory
+> Best Distance
+> Shared Memory
+> Warp Reduction
+> Warp Reduction
+> Warp Reduction
+> Warp Reduction
+> Warp 0 Warp Reduction
+> Points in V kDist pin V k
+> j
+> Sampled Points S
+> Global Memory
+> kVoxel Info V
+> Point Distance Update
+> Points PDist pDist vk
+> No
+> Updated Point Distance
+> Thread-Level L2 Distance Computation
+> Point Distance Update
+> Voxel Distance Update
+> Sj
+
+To the Next Block   
+
+> Fusion Kernel 2
+> Read Write
+> Filtering Computation
+> Vkinfo sj
+
+Figure 10: Execution pipeline of Fusion Kernel 2. This kernel efficiently integrates radius-based voxel pruning with hierarchical distance updates. By evaluating the filtering condition early, the kernel dynamically bypasses redundant point-level Euclidean distance computations for pruned voxels. For unpruned voxels, it performs parallel thread-level point distance updates, immediately followed by an optimized warp-level reduction to update the global voxel distance (Dist v ), effectively minimizing global memory bandwidth consumption. a specific spatial region without cross-block dependency. By consolidating these sequential operations into a single kernel execution, we effectively eliminate the overhead of intermediate global memory round-trips. Before execution, the block first loads the newly sampled point sj and the information of its assigned voxel vk (includ-ing its centroid and radius) into low-latency shared memory. Utilizing this shared data, the block collectively performs the filtering computation. Crucially, the GPU execution strictly implements the radius pruning strategy based on spherical voxels introduced in Sec. 3.4.2, and the block evaluates the same pruning condition defined in Eq. (25). If 
+
+LB (vk, s j ) is no smaller than the currently recorded maximum distance Dist v [k], the pruning condition is met. Con-sequently, the entire thread block executes an early exit, freeing up the Streaming Multiprocessor (SM) to schedule the next block immediately without fetching the underlying point data. 17 Arxiv preprint - June 5, 2026 
+
+Algorithm 4 Voxel Filter and Point Distance Update with Coalesced Access 
+
+Require: Active-voxel index k, newly sampled point sj , point cloud in SoA layout PSoA with size N , compact offsets 
+
+O, counts C, point distances Dp, voxel bounds Dv
+
+Ensure: Updated Dp and Dv [k] 
+
+> 1:
+
+idx start ← O [k], count ← C [k] 
+
+> 2:
+
+if LB (vk, s j ) ≥ D v [k] then  
+
+> 3:
+
+return Dv [k] {Safe voxel-level pruning } 
+
+> 4:
+
+end if  
+
+> 5:
+
+for each thread tid in the block in parallel do  
+
+> 6:
+
+dlocal max ← − 1.0 
+
+> 7:
+
+for q ← tid ; q < count ; q ← q + block size do  
+
+> 8:
+
+i ← idx start + q 
+
+> 9:
+
+pxi ← P SoA [i] 
+
+> 10:
+
+pyi ← P SoA [i + N ] 
+
+> 11:
+
+pzi ← P SoA [i + 2 N ] 
+
+> 12:
+
+dold ← D p[i] 
+
+> 13:
+
+if |pxi − sxj | ≥ dold or |pyi − syj | ≥ dold or |pzi − szj | ≥ dold then  
+
+> 14:
+
+df inal ← dold {Coordinate-wise point skip } 
+
+> 15:
+
+else  
+
+> 16:
+
+dnew ←
+
+q
+
+(pxi − sxj )2 + ( pyi − syj )2 + ( pzi − szj )2 
+
+> 17:
+
+df inal ← min( dold , d new ) 
+
+> 18:
+
+if df inal < d old then  
+
+> 19:
+
+Dp[i] ← df inal  
+
+> 20:
+
+end if  
+
+> 21:
+
+end if  
+
+> 22:
+
+dlocal max ← max( dlocal max , d f inal ) 
+
+> 23:
+
+end for  
+
+> 24:
+
+end for  
+
+> 25:
+
+Dv [k] ← BlockReduceMax (dlocal max ) 
+
+> 26:
+
+return Dv [k]
+
+If the voxel survives the pruning stage, the block proceeds to the Point Distance Update phase, whose detailed execu-tion flow is formalized in Alg. 4. Individual threads within the block fetch the coordinates of points in the compact segment [O[k], O[k]+ C[k]) . Because the point cloud data was reorganized into a Structure of Arrays (SoA) layout dur-ing initialization, the threads within a warp can access the X, Y, and Z coordinates with coalesced memory transactions, avoiding the severe performance penalties of strided memory access. Each thread first applies the coordinate-wise skip test from Eq. (28); only points that pass this test require an exact L2 distance computation against sj . The newly se-lected point itself is included in the same segment, so its distance is updated to zero when processed. The historical minimum distance Dp[i] is updated only if the newly computed distance provides a tighter geometric bound, which minimizes global memory writes. To maintain the exactness of the pruning framework for the next iteration, the maximum distance parameter of Vk
+
+must be synchronized. Fusion Kernel 2 employs a similar block reduction mechanism introduced in Fig.9 to identify the local maximums, and then performs a terminal reduction pass to determine the absolute maximum distance (Best Distance) for the entire voxel. The final value is written back to the Dist v [k] buffer, concluding the block execution. 
+
+5 Experiments 
+
+5.1 Experiment Setup 
+
+To rigorously evaluate the performance of RadiusFPS, we test the algorithm on standard point cloud segmentation tasks that typically rely on Farthest Point Sampling (FPS). Specifically, we apply our method to two indoor datasets, S3DIS[19] and ScanNet[20], as well as an outdoor dataset, SemanticKITTI[40]. Within these settings, we employ two PointNet++-based architectures—PointMetaBase[2] and PointVector[3]—to assess the End-to-End latency and sampling quality of RadiusFPS. Furthermore, we integrate RadiusFPS with a learning-based method, FastPoint[24], to explore the feasibility of coupling traditional acceleration algorithms with deep learning-based sampling strategies in practical applications. 18 Arxiv preprint - June 5, 2026 
+
+We measure the End-to-End latency of RadiusFPS on pretrained models by processing all the scenes from the val-idation set, and utilize Overall Accuracy (OA), mean Intersection Over Union (mIoU) to evaluate the accuracy and quality of sampled point clouds and sampling effect on the following models. For each model, RadiusFPS and other baseline models are applied to the first-layer FPS, which consumes most of the processing time. We implement CPU-based RadiusFPS and GPU-based RadiusFPS-G and import them into the OpenPoints[41] point cloud segmentation framework. We also import the GPU implementation of FastPoint[24] and QuickFPS[23] into OpenPoints as baseline methods. The experiment environment setting is summarized in Tab.1. The pretrained PointMetaBase[2] and PointVector[3] segmentation models are provided by the model zoo of FastPoint[24]. Table 1: Experimental Environment 
+
+Hardware Specification 
+
+CPU 12th Gen Intel(R) Core(TM) i7-12700KF GPU NVIDIA RTX 6000 Ada Generation RAM 32 GB Operating System Ubuntu 24.04 CUDA Version 11.6 
+
+5.2 End-to-End Overall Evaluation on FPS Optimized Strategies 
+
+To comprehensively evaluate the accuracy and efficiency of our proposed RadiusFPS and its GPU-accelerated variant, RadiusFPS-G, we conduct extensive experiments on point cloud segmentation tasks. By integrating these sampling algorithms into the PointMetaBase and PointVector models, we quantify their performance using Overall Accuracy (OA), mean Intersection over Union (mIoU), and total runtime to demonstrate latency reductions. As summarized in Tab. 2 and Tab. 3, we benchmark our methods against standard CPU baselines (FPS and FPS + NPDU) as well as state-of-the-art GPU implementations (GPU-based FPS and QuickFPS). Furthermore, we investigate the synergy between these heuristic methods and FastPoint, a deep learning-based sampling strategy. In these hybrid pipelines, our heuristic methods provide initial spatial priors, which FastPoint subsequently leverages to optimize the predictive sampling process. The most prominent advantage of our proposed methods lies in the substantial reduction of inference latency, which is essential for large-scale point cloud processing. As shown in Tab. 2 and Tab. 3, the traditional CPU-based FPS suffers from prohibitive computational costs, requiring tens of thousands of seconds on large-scale datasets like Se-manticKITTI. While the GPU-accelerated standard FPS (FPS (GPU)) drastically mitigates this issue, our proposed RadiusFPS-G further pushes the boundary of efficiency. For instance, under the PointMetaBase architecture on the SemanticKITTI dataset, RadiusFPS-G reduces the runtime from 1734.057s (standard GPU FPS) to 691.230s, achiev-ing a speedup of approximately 2.5 × over the GPU baseline. This acceleration trend is consistent across all datasets and both network architectures. Furthermore, when integrating our heuristic samplers with the learning-based Fast-Point strategy, the latency reaches its minimum in our experiments. The combination of FastPoint + RadiusFPS-G consistently yields the fastest inference speeds across all evaluated configurations. Notably, on the SemanticKITTI dataset using the PointMetaBase model, it reduces the full validation runtime to 531.202s, indicating substantially improved suitability for latency-sensitive point cloud processing. Crucially, the computational efficiency of RadiusFPS and its variants is achieved while maintaining competitive seg-mentation accuracy. As observed in Tab. 2, RadiusFPS-G not only accelerates the process but also achieves the highest Overall Accuracy (OA) and mean Intersection over Union (mIoU) among all standalone samplers on the S3DIS (89.75% OA, 68.28% mIoU) and ScanNet (89.75% OA, 71.21% mIoU) datasets, while other settings show small metric variations around the GPU-FPS baseline. While learning-based predictive sampling (FastPoint) trades some accuracy for speed, it remains highly competi-tive. The FastPoint + RadiusFPS-G pipeline maintains robust metrics (e.g., 88.75% OA and 47.55% mIoU on Se-manticKITTI in PointMetaBase), with an absolute mIoU drop of about 2.16 percentage points relative to the GPU FPS baseline while reducing runtime by more than two-thirds. In stark contrast, other efficiency-oriented combina-tions, such as FPS + NPDU, exhibit catastrophic performance degradation, particularly in the PointVector architecture (Tab. 3), where its mIoU plummets to 35.11% on ScanNet and 26.64% on SemanticKITTI. This sharp contrast under-scores the robustness of RadiusFPS-G in preserving critical geometric features during downsampling, ensuring that downstream networks receive high-quality representations even under aggressive acceleration. 19 Arxiv preprint - June 5, 2026 
+
+Table 2: End-to-End Latency Reduction Evaluation on PointMetaBase                                                                                                       
+
+> DataSets S3DIS ScanNet SemanticKITTI Methods OA (%) mIoU (%) Runtime (s) OA (%) mIoU (%) Runtime (s) OA (%) mIoU (%) Runtime (s)
+> FPS (CPU) 89.59 67.90 351.846 89.68 70.93 2861.794 89.53 49.72 14697.007 FPS + NPDU 86.15 61.43 89.125 82.98 55.72 719.155 80.67 33.97 3947.027 FPS (GPU) 89.60 67.90 40.176 89.63 70.80 296.860 89.59 49.71 1734.057 QuickFPS 89.60 67.90 18.363 89.60 70.96 106.466 89.54 49.54 859.166
+> RadiusFPS 89.60 67.90 15.948 89.63 70.80 86.307 89.59 49.71 1065.902
+> RadiusFPS-G 89.75 68.28 15.335 89.75 71.21 92.346 89.58 49.26 691.230 FastPoint + FPS 89.53 68.21 14.297 89.69 70.87 89.009 89.44 49.26 622.247 FastPoint + QuickFPS 89.60 68.28 13.083 89.67 70.96 69.475 89.44 49.26 572.870
+> FastPoint + RadiusFPS 89.56 68.19 12.308 89.11 69.38 69.947 88.75 47.48 563.614
+> FastPoint + RadiusFPS-G 89.25 67.58 11.248 89.08 69.43 68.860 88.75 47.55 531.202
+
+Table 3: End-to-End Latency Reduction Evaluation on PointVector                                                                                                       
+
+> DataSets S3DIS ScanNet SemanticKITTI Method OA (%) mIoU (%) Runtime (s) OA (%) mIoU (%) Runtime (s) OA (%) mIoU (%) Runtime (s)
+> FPS (CPU) 90.08 69.80 714.228 89.54 70.21 2780.102 89.08 48.38 17348.921 FPS + NPDU 72.23 36.32 191.907 73.98 35.11 739.691 74.18 26.64 4130.392 FPS (GPU) 89.96 70.03 41.792 89.54 70.11 319.552 89.08 48.38 1955.910 QuickFPS 89.89 69.55 22.465 89.41 69.92 139.196 89.07 48.25 1074.936
+> RadiusFPS 89.96 70.03 19.711 89.54 70.11 114.465 89.08 48.38 1528.442
+> RadiusFPS-G 89.77 69.22 19.243 89.52 69.92 123.651 89.11 48.28 901.779 FastPoint + FPS 89.82 69.54 19.207 89.54 70.04 121.400 88.63 47.78 791.042 FastPoint + QuickFPS 89.92 69.76 18.337 89.50 70.04 113.505 88.60 47.54 738.996
+> FastPoint + RadiusFPS 89.40 68.59 17.589 89.18 69.47 109.487 87.13 45.27 755.050
+> FastPoint + RadiusFPS-G 89.46 68.31 17.278 89.18 69.34 104.636 87.15 45.28 699.001
+
+5.3 FPS Efficiency on Different Datasets 
+
+To further dissect the computational efficiency, Fig. 11 visualizes the speedup ratios of our proposed acceleration strategies against the standard GPU-based FPS baseline. We evaluate the performance gain from two perspectives: the End-to-End latency reduction (Overall Time) and the sampling acceleration (FPS Sampling Time). As illustrated by the darker bars, our proposed sampling variants achieve large speedups over the GPU baseline. Notably, the integration of deep learning-based spatial priors with our heuristic samplers yields the highest efficiency. The FastPoint + RadiusFPS-G combination accelerates the sampling process by up to 11.72 × on the S3DIS dataset with PointMetaBase (Fig. 11a), demonstrating the potential of this hybrid approach in breaking the traditional FPS bottleneck. While the End-to-End pipeline speedup (lighter bars) is naturally bounded by the constant inference time of other network components (such as convolutions and MLPs), the overall latency reduction remains significant. Across different backbones and datasets, our fastest pipelines deliver a total runtime speedup ranging from approximately 2.4 × to 4.3 × relative to the GPU-FPS baseline. This confirms that the efficiency gains achieved in the sampling stage translate effectively into substantial acceleration for the entire point cloud segmentation task, making it suitable for latency-sensitive applications. 
+
+5.4 Ablation Studies 
+
+To validate the individual contributions of our proposed algorithmic designs, we first ablate the mechanisms within RadiusFPS. As shown in Tab.4, applying Radius Pruning alone achieves a significant speedup of 2.42 × without any loss in segmentation accuracy, maintaining the baseline mIoU of 67.90%. This supports the safety of the conservative voxel-level pruning rule. Conversely, the standalone Point Skip configuration yields an even higher speedup (3.68 ×), but results in a severe accuracy drop to 19.73%. This row should be interpreted as an unguided skip-only negative control rather than the full conservative RadiusFPS update: without voxel-level pruning and synchronization, local coordinate filtering can discard information needed by subsequent selections. When Point Skip is combined with Radius Pruning (the full Ra-diusFPS), the algorithm achieves a robust 2.58 × speedup while restoring the mIoU to 67.90%. This demonstrates that Point Skip is effective when it operates under the structural constraints and distance-state synchronization provided by Radius Pruning. The second half of Tab.4 ablates the hardware-level optimizations implemented in the GPU-accelerated version, RadiusFPS-G. Because these are pure computational optimizations, the segmentation accuracy remains completely unaffected, locked at a stable 68.28% across all configurations. The unoptimized GPU baseline (without any fusion kernels) provides a modest 1.87 × speedup over the GPU standard. By introducing Fusion Kernel 1 and Fusion Kernel 2 independently, the total speedup increases to 2.24 × and 2.11 ×, respectively. This indicates 20 Arxiv preprint - June 5, 2026 FPS (GPU)       
+
+> QuickFPS
+> RadiusFPS
+> RadiusFPS-G
+> FastPoint
+> FP+Quick
+> FP+Radius
+> FP+Radius-G
+> 0
+> 100
+> 200
+> 300
+> 400
+> 500
+> 600
+> Running Time (ms)
+> 604
+> 1.0x
+> 478
+> 1.0x
+> 270
+> 2.2x
+> 144
+> 3.3x
+> 234
+> 2.6x 108
+> 4.4x
+> 225
+> 2.7x 99
+> 4.8x
+> 210
+> 2.9x 80
+> 6.0x
+> 192
+> 3.1x 66
+> 7.2x
+> 181
+> 3.3x 55
+> 8.7x
+> 165
+> 3.7x 37
+> 12.9x
+
+S3DIS - PointMetaBase 
+
+Overall Time 
+
+FPS Sampling Time 
+
+(a) FPS (GPU)       
+
+> QuickFPS
+> RadiusFPS
+> RadiusFPS-G
+> FastPoint
+> FP+Quick
+> FP+Radius
+> FP+Radius-G
+> 0
+> 100
+> 200
+> 300
+> 400
+> 500
+> 600
+> 700
+> Running Time (ms)
+> 614
+> 1.0x
+> 458
+> 1.0x
+> 330
+> 1.9x
+> 174
+> 2.6x
+> 289
+> 2.1x 133
+> 3.4x
+> 283
+> 2.2x 127
+> 3.6x
+> 282
+> 2.2x 126
+> 3.6x
+> 269
+> 2.3x 113
+> 4.1x
+> 258
+> 2.4x 103
+> 4.4x
+> 254
+> 2.4x 98
+> 4.7x
+
+S3DIS - PointVector 
+
+Overall Time 
+
+FPS Sampling Time (b) FPS (GPU)      
+
+> QuickFPS
+> RadiusFPS
+> RadiusFPS-G
+> FastPoint
+> FP+Quick
+> FP+Radius
+> FP+Radius-G
+> 0
+> 200
+> 400
+> 600
+> 800
+> 1000
+> Running Time (ms)
+> 951
+> 1.0x
+> 823
+> 1.0x 341
+> 2.8x
+> 213
+> 3.9x
+> 276
+> 3.4x 148
+> 5.6x
+> 295
+> 3.2x
+> 167
+> 4.9x
+> 285
+> 3.3x
+> 157
+> 5.2x
+> 225
+> 4.2x 96
+> 8.6x
+> 222
+> 4.3x 94
+> 8.8x
+> 220
+> 4.3x 92
+> 8.9x
+
+ScanNet - PointMetaBase 
+
+Overall Time 
+
+FPS Sampling Time 
+
+(c) FPS (GPU)       
+
+> QuickFPS
+> RadiusFPS
+> RadiusFPS-G
+> FastPoint
+> FP+Quick
+> FP+Radius
+> FP+Radius-G
+> 0
+> 200
+> 400
+> 600
+> 800
+> 1000
+> Running Time (ms)
+> 1024
+> 1.0x
+> 828
+> 1.0x
+> 446
+> 2.3x
+> 250
+> 3.3x
+> 367
+> 2.8x 170
+> 4.9x
+> 396
+> 2.6x 200
+> 4.1x
+> 389
+> 2.6x 193
+> 4.3x
+> 363
+> 2.8x 167
+> 5.0x
+> 350
+> 2.9x 154
+> 5.4x
+> 335
+> 3.1x 139
+> 6.0x
+
+ScanNet - PointVector 
+
+Overall Time 
+
+FPS Sampling Time (d) FPS (GPU)    
+
+> QuickFPS
+> RadiusFPS
+> RadiusFPS-G
+> FastPoint
+> FP+Quick
+> FP+Radius
+> FP+Radius-G
+> 0
+> 100
+> 200
+> 300
+> 400
+> Running Time (ms)
+> 425
+> 1.0x
+> 358
+> 1.0x
+> 211
+> 2.0x
+> 144
+> 2.5x
+> 261
+> 1.6x
+> 194
+> 1.8x
+> 169
+> 2.5x
+> 102
+> 3.5x
+> 152
+> 2.8x
+> 85
+> 4.2x
+> 140
+> 3.0x 73
+> 4.9x
+> 138
+> 3.1x 71
+> 5.0x
+> 130
+> 3.3x 63
+> 5.7x
+
+SemanticKITTI - PointMetaBase 
+
+Overall Time 
+
+FPS Sampling Time 
+
+(e) FPS (GPU)      
+
+> QuickFPS
+> RadiusFPS
+> RadiusFPS-G
+> FastPoint
+> FP+Quick
+> FP+Radius
+> FP+Radius-G
+> 0
+> 100
+> 200
+> 300
+> 400
+> 500
+> Running Time (ms)
+> 480
+> 1.0x
+> 366
+> 1.0x
+> 264
+> 1.8x
+> 150
+> 2.4x
+> 375
+> 1.3x
+> 261
+> 1.4x
+> 221
+> 2.2x 107
+> 3.4x
+> 194
+> 2.5x 80
+> 4.6x
+> 181
+> 2.7x 67
+> 5.5x
+> 185
+> 2.6x 71
+> 5.2x
+> 171
+> 2.8x 57
+> 6.4x
+
+SemanticKITTI - PointVector 
+
+Overall Time 
+
+FPS Sampling Time (f) 
+
+Figure 11: Comprehensive runtime and speedup analysis across S3DIS, ScanNet, and SemanticKITTI datasets. The figures compare overall inference time (blue) and dedicated sampling time (red) for PointMetaBase (left column) and PointVector (right column) architectures. Annotated values denote the relative speedup compared to the baseline FPS (GPU). Results demonstrate that our proposed RadiusFPS-G significantly reduces latency, while the hybrid pipeline integrating FastPoint with our method (FP+Radius-G) consistently achieves the highest sampling speedup across all evaluated scenarios. that both kernel optimizations effectively reduce memory access overhead and kernel launch latency. Most impor-tantly, when both fusion strategies are activated simultaneously, the performance synergistically peaks at a 2.68 × total speedup. This confirms that our custom CUDA kernel fusions are orthogonal and complementary, maximizing GPU utilization to break the bottleneck of traditional parallel sampling. 
+
+5.5 Quality Evaluation 5.5.1 End-to-End Segmentation Quality 
+
+To isolate the impact of different sampling strategies on the final segmentation quality, we conduct a comprehensive quantitative evaluation, as summarized in Tab.5. The performance is consistently measured by the mean Intersection over Union (mIoU) across three benchmark datasets (S3DIS, ScanNet, SemanticKITTI) utilizing both PointMetaBase and PointVector architectures. 21 Arxiv preprint - June 5, 2026 
+
+Table 4: Ablation Study of RadiusFPS and RadiusFPS-G on the S3DIS Dataset                        
+
+> Method Configurations mIoU (%) Total SpeedUp
+> FPS (GPU) -67.90 1.00 ×
+> Radius Pruning Point Skip
+> RadiusFPS
+> ✓✓67.90 2.58 ×
+> ✓67.90 2.42 ×
+> ✓19.73 3.68 ×
+> Fusion Kernel 1 Fusion Kernel 2
+> RadiusFPS-G
+> ✓✓68.28 2.68 ×
+> ✓68.28 2.24 ×
+> ✓68.28 2.11 ×
+> 68.28 1.87 ×
+
+Table 5: Sampling Quality Evaluation of Segmentation Quality across Various Sampling Strategies Model Datasets FPS (GPU) Random Grid EdgePC FPS + NPDU FastPoint RadiusFPS RadiusFPS-G PointMetaBase S3DIS 67.90 65.28 66.81 67.16 61.43 68.21 67.90 68.28 ScanNet 70.80 64.45 69.95 70.31 50.22 70.87 70.80 71.21 SemanticKITTI 49.72 40.90 49.26 47.45 33.97 49.26 49.71 49.26 PointVector S3DIS 70.03 59.76 67.89 68.21 36.32 69.54 70.03 69.54 ScanNet 70.21 54.65 68.90 69.02 35.11 70.04 70.11 70.04 SemanticKITTI 48.38 33.35 47.30 45.42 26.64 47.78 48.38 48.28 As we can observe from the table, the results clearly demonstrate that basic heuristic downsampling methods, such as Random and Grid sampling, suffer from severe information loss. For instance, Random sampling on SemanticKITTI using PointMetaBase yields an mIoU of only 40.90%, a significant drop from the 49.72% achieved by the standard FPS (GPU) baseline. While EdgePC provides a more structured approach, it still falls short of the FPS standard across most setups. This highlights the inherent difficulty of accelerating point cloud sampling without compromising the spatial integrity required for dense prediction tasks. In stark contrast, our proposed RadiusFPS and RadiusFPS-G consistently maintain highly competitive segmenta-tion accuracy, improving the speed-quality trade-off. On the S3DIS and ScanNet datasets using the PointMetaBase architecture, RadiusFPS-G achieves mIoUs of 68.28% and 71.21%, respectively, slightly above the corresponding GPU-FPS baseline in these runs. On the large-scale SemanticKITTI dataset, the performance of RadiusFPS-G re-mains close to the GPU baseline (49.26% vs. 49.72% in PointMetaBase). Furthermore, when compared to alterna-tive efficiency-oriented combinations like FPS + NPDU—which exhibits catastrophic accuracy degradation down to 26.64% on SemanticKITTI with PointVector—our methods demonstrate strong robustness. This confirms that our op-timizations preserve most critical geometric and contextual features during the downsampling process, ensuring that the downstream network receives high-quality representations despite the aggressive acceleration. 
+
+Figure 12: Visualization display of point cloud downsampling using our proposed RadiusFPS and RadiusFPS-G. We visualize the sampling results at 12.5% and 25% ratios against the original dense point clouds (100%) across three diverse datasets. The visually consistent outputs demonstrate that our GPU-accelerated RadiusFPS-G preserves the spatial fidelity and structural integrity of the CPU-based RadiusFPS in these examples, even at highly sparse sampling rates. 22 Arxiv preprint - June 5, 2026 
+
+Figure 13: Close-up qualitative comparison of local geometric details. Zoomed-in views of the Stanford Dragon, SemanticKITTI Velodyne Scene, and S3DIS Conference Room datasets. The comparison illustrates that our proposed RadiusFPS and RadiusFPS-G (middle and right columns) effectively preserve fine-grained structures and maintain a highly uniform spatial distribution comparable to the FPS (left column). 
+
+5.5.2 Visualization Evaluation 
+
+To qualitatively evaluate the sampling quality of our proposed methods, we visualize the downsampled point clouds across different scales and densities. As illustrated in Fig.12, we select three point cloud samples: Stanford Dragon[28] (over 40 thousand points), a Velodyne LiDAR point cloud scene (over 120 thousand points) from SemanticKITTI[40], and a complete conference room scan (over 1 million points) from S3DIS[19]. Each of these point clouds is sam-pled at two ratios: 12.5% and 25%. In the figure, both RadiusFPS and its GPU-accelerated variant, RadiusFPS-G, preserve the global geometric contours of the original dense point clouds, even under the sparse sampling ratio of 12.5%. Notably, the visually consistent outputs between the two rows indicate that our GPU parallelization and fu-sion strategies preserve the spatial fidelity of the sampling algorithm in these examples. Furthermore, Fig.13 provides zoomed-in views to assess local structural details. When compared to the standard FPS baseline, both RadiusFPS and RadiusFPS-G demonstrate highly consistent spatial distributions. They retain fine-grained features—such as the intricate shapes of the dragon and the sharp edges of the indoor furniture—without introducing irregular clustering or empty holes. Together, these visualizations indicate that our approaches achieve significant computational speedups while closely preserving the high-quality, uniform coverage characteristic of standard farthest point sampling. 
+
+5.6 Scalability Studies 
+
+To further evaluate RadiusFPS and RadiusFPS-G on large-scale point cloud processing, we conduct further tests of these algorithms on the three workloads mentioned in Sec.5.5.2. 
+
+5.6.1 Computation Efficiency and Resource Consumption 
+
+We first evaluate the computation efficiency and resource consumption by comparing RadiusFPS-G with FPS (GPU) and QuickFPS across the three samples. As illustrated in Fig.14, the performance is assessed using three metrics: latency, memory footprint, and throughput. Regarding latency, FPS (GPU) exhibits a near-quadratic time complexity relative to the sample size, which becomes a severe bottleneck in dense or large-scale scenarios. For instance, on the SemanticKITTI dataset ( 100 , 000 points), the 23 Arxiv preprint - June 5, 2026 1000 2000 3000 4000 5000 6000                                                   
+
+> Sample Size (M)
+> 20
+> 40
+> Dragon
+> Latency (ms)
+> 4.5 8.8 13.5 17.7
+> 26.7
+> Latency (ms)
+> 1000 2000 3000 4000 5000 6000
+> Sample Size (M)
+> 0.5
+> 1.0
+> 1.5
+> Memory (MB)
+> 1000 2000 3000 4000 5000 6000
+> Sample Size (M)
+> 2.5
+> 5.0
+> 7.5
+> Throughput (Mpts)
+> 20000 40000 60000 80000 100000
+> Sample Size (M)
+> 0
+> 1000
+> 2000
+> Velodyne
+> Latency (ms)
+> 45.5 136.6 228.0 319.4 455.9
+> 20000 40000 60000 80000 100000
+> Sample Size (M)
+> 2
+> 4
+> 6
+> 8
+> 20000 40000 60000 80000 100000
+> Sample Size (M)
+> 0
+> 1
+> 2
+> 050000 100000 150000 200000 250000
+> Sample Size (M)
+> 0
+> 20000
+> 40000
+> Conference Room
+> Latency (ms)
+> 75.0 360.9 720.8 1072.3 1788.7
+> 050000 100000 150000 200000 250000
+> Sample Size (M)
+> 40
+> 60
+> 80
+> 050000 100000 150000 200000 250000
+> Sample Size (M)
+> 0
+> 5
+> 10
+> 15
+> FPS QuickFPS RadiusFPS-G
+
+Figure 14: Performance scalability analysis across varying sample sizes. The line charts compare the Latency (ms), Memory consumption (MB), and Throughput (Mpts) of standard FPS, QuickFPS, and our proposed RadiusFPS-G on three representative datasets. Results demonstrate that RadiusFPS-G consistently achieves the lowest latency (anno-tated in green) and the highest throughput. Furthermore, it maintains a highly competitive memory footprint, scaling significantly better than QuickFPS on large-scale scenes. latency of vanilla FPS exceeds 2000 ms, whereas RadiusFPS-G drastically reduces it to 455 .9 ms. This advantage is further magnified on the massive S3DIS Room dataset ( 250 , 000 points), where RadiusFPS-G maintains a remarkably stable execution time while vanilla FPS latency grows exponentially. Crucially, this low latency is achieved without sacrificing memory efficiency. While alternative acceleration methods like QuickFPS incur substantial memory overhead (peaking at nearly 80 MB for the Room dataset), RadiusFPS-G consumes approximately 40 MB, maintaining a memory profile strictly comparable to vanilla FPS. Furthermore, RadiusFPS-G consistently delivers the highest throughput (Mpts) across all tested sample sizes, demonstrating its capability to sustain high-speed processing without introducing memory bottlenecks. 
+
+5.6.2 Hardware Acceleration and Parameter Sensitivity 
+
+We further investigate the speedup ratios across different computing architectures (GPU and CPU) and the algorithm’s sensitivity to the voxel resolution parameter v. Fig. 15a and Fig. 15b detail the speedup comparisons against vanilla FPS and the CPU-optimized baseline, FPS+NPDU. On the GPU backend (Fig.15a), RadiusFPS-G demonstrates robust and consistent acceleration. The speedup scales effectively with scene complexity: while the Stanford Dragon yields a modest 1.5× to 1.6× improvement, the large-scale S3DIS Room dataset achieves an impressive 50 × (peaking at 52 .4×) speedup over vanilla FPS. Notably, this GPU performance is largely insensitive to variations in the voxel resolution parameter v, indicating the robustness of our highly parallel voxelization and traversal kernels. Conversely, the CPU implementation (Fig.15b) reveals both unprecedented acceleration and distinct parameter sensi-tivity. RadiusFPS reaches a peak speedup of 186 .56 × on the S3DIS conference room at v = 24 , orders of magnitude faster than the FPS+NPDU baseline (which achieves only a 5.8× speedup). This massive gain highlights the effec-tiveness of our search-space pruning strategy in resource-constrained CPU environments. However, the CPU speedup is highly sensitive to the chosen voxel resolution. For the Room dataset, the performance follows a non-monotonic trend, peaking at v = 24 before declining to 145 .83 × at v = 32 . This decline suggests that for certain spatial distributions, excessively fine voxels ( v = 32 ) introduce management overhead and cache misses from traversing numerous empty voxels, which eventually outweigh the benefits of pruning. In contrast, for the 24 Arxiv preprint - June 5, 2026 FPS   
+
+> QFPS
+> RFPS-G(v=4)
+> RFPS-G(v=8)
+> RFPS-G(v=16)
+> RFPS-G(v=24)
+> RFPS-G(v=32)
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> 1.2
+> 1.4
+> 1.6
+> Speedup (x)  1.0x
+> 1.4x
+> 1.5x 1.5x 1.5x
+> 1.6x
+> 1.5x
+
+Stanford Dragon Speedup     
+
+> FPS
+> QFPS
+> RFPS-G(v=4)
+> RFPS-G(v=8)
+> RFPS-G(v=16)
+> RFPS-G(v=24)
+> RFPS-G(v=32)
+> 0
+> 1
+> 2
+> 3
+> 4
+> Speedup (x)
+> 1.0x
+> 3.9x
+> 4.7x 4.7x 4.7x 4.7x 4.6x
+
+SemanticKITTI Velodyne Speedup     
+
+> FPS
+> QFPS
+> RFPS-G(v=4)
+> RFPS-G(v=8)
+> RFPS-G(v=16)
+> RFPS-G(v=24)
+> RFPS-G(v=32)
+> 0
+> 10
+> 20
+> 30
+> 40
+> 50
+> Speedup (x)
+> 1.0x
+> 15.7x
+> 51.3x 52.4x 51.7x 51.7x 50.7x
+
+S3DIS:Conference Room Speedup 
+
+(a) FPS     
+
+> FPS+NPDU
+> RFPS(v=4)
+> RFPS(v=8)
+> RFPS(v=16)
+> RFPS(v=24)
+> RFPS(v=32)
+> 0
+> 5
+> 10
+> 15
+> 20
+> 25
+> 30
+> 35
+> 40
+> Speedup Ratio (x)
+> 1.0x
+> 5.05x 4.88x
+> 14.91x
+> 38.82x 38.94x
+> 22.02x
+> FPS
+> FPS+NPDU
+> RFPS(v=4)
+> RFPS(v=8)
+> RFPS(v=16)
+> RFPS(v=24)
+> RFPS(v=32)
+> 0
+> 10
+> 20
+> 30
+> 40
+> Speedup Ratio (x)
+> 1.0x
+> 5.2x 3.56x
+> 7.68x
+> 19.02x
+> 33.88x
+> 46.57x
+> FPS
+> FPS+NPDU
+> RFPS(v=4)
+> RFPS(v=8)
+> RFPS(v=16)
+> RFPS(v=24)
+> RFPS(v=32)
+> 0
+> 25
+> 50
+> 75
+> 100
+> 125
+> 150
+> 175
+> Speedup Ratio (x)
+> 1.0x 5.8x
+> 20.0x
+> 68.98x
+> 179.42x
+> 186.56x
+> 145.83x
+
+(b) 
+
+Figure 15: Impact of varying voxel resolutions ( v) on sampling speedup. The figures evaluate the performance scaling of (a) our GPU-accelerated RFPS-G against standard FPS and QuickFPS (QFPS), and (b) our CPU-based RFPS against FPS and FPS+NPDU, across three datasets. The results demonstrate that appropriately tuning the voxel resolution v
+
+maximizes the performance gains, achieving peak speedups of up to 52.4 × on GPU and 186.5 × on CPU compared to the vanilla FPS baseline. SemanticKITTI dataset, the speedup continues to increase up to v = 32 (reaching 46 .57 ×), likely benefiting from its specific, localized point distribution. These results emphasize that the optimal voxel resolution v is a trade-off between indexing granularity and spatial distribution characteristics. Fig.12 provides a qualitative comparison of the downsampled point clouds generated by our proposed RadiusFPS and RadiusFPS-G across three representative scenarios: a single object (Stanford Dragon), a large-scale outdoor LiDAR scene (SemanticKITTI Velodyne Scene), and a detailed indoor environment (S3DIS Conference Room), at sampling rates of 12.5% and 25%. Visually, the results for RadiusFPS-G are consistent with those of vanilla RadiusFPS, indicating that our parallel GPU implementation preserves the spatial properties of the sampling algorithm in these examples. Furthermore, across all datasets, both methods maintain the overall structural integrity and key geometric features (e.g., the intricate curves of the dragon and the layout of the furniture) even at the sparse 12.5% sampling rate, demonstrating robust sampling capability across varying scales and environments. 
+
+6 Conclusion 
+
+In this paper, we introduce RadiusFPS, a farthest point sampling algorithm designed to improve computational effi-ciency while maintaining sampling quality. By employing a conservative radius pruning strategy, RadiusFPS pre-25 Arxiv preprint - June 5, 2026 
+
+serves the FPS distance-update behavior under the same initialization and tie-breaking policy. Furthermore, we present RadiusFPS-G, a GPU-accelerated variant that integrates active-voxel packing and two fusion kernels to im-prove hardware utilization and memory access efficiency. Comprehensive evaluations on point cloud segmentation tasks demonstrate that both RadiusFPS and RadiusFPS-G achieve competitive accuracy while substantially reducing latency. Finally, by combining our heuristic approach with deep learning-based sampling techniques, we further im-prove inference speed with manageable accuracy changes, demonstrating potential for latency-sensitive, large-scale point cloud processing. 
+
+References 
+
+[1] Rabia Rashdi, Iv´ an Garrido, Jes´ us Balado, Pablo Del R´ ıo-Barral, Juan Luis Rodr´ ıguez-Somoza, and Joaqu´ ın Mart´ ınez-S´ anchez. Comparative evaluation of lidar systems for transport infrastructure: case studies and perfor-mance analysis. European Journal of Remote Sensing , 57(1):2316304, 2024. [2] Haojia Lin, Xiawu Zheng, Lijiang Li, Fei Chao, Shanshan Wang, Yan Wang, Yonghong Tian, and Rongrong Ji. Meta architecture for point cloud analysis. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition , pages 17682–17691, 2023. [3] Xin Deng, WenYu Zhang, Qing Ding, and XinMing Zhang. Pointvector: A vector representation in point cloud analysis. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition , pages 9455– 9465, 2023. [4] Charles Ruizhongtai Qi, Li Yi, Hao Su, and Leonidas J Guibas. Pointnet++: Deep hierarchical feature learning on point sets in a metric space. Advances in neural information processing systems , 30, 2017. [5] Xiaoyang Wu, Li Jiang, Peng-Shuai Wang, Zhijian Liu, Xihui Liu, Yu Qiao, Wanli Ouyang, Tong He, and Hengshuang Zhao. Point transformer v3: Simpler, faster, stronger. In CVPR , 2024. [6] Xiaoyang Wu, Zhuotao Tian, Xin Wen, Bohao Peng, Xihui Liu, Kaicheng Yu, and Hengshuang Zhao. Towards large-scale 3d representation learning with multi-dataset point prompt training. In CVPR , 2024. [7] Xiaoyang Wu, Yixing Lao, Li Jiang, Xihui Liu, and Hengshuang Zhao. Point transformer v2: Grouped vector attention and partition-based pooling. In NeurIPS , 2022. [8] Pointcept Contributors. Pointcept: A codebase for point cloud perception research. https://github.com/ Pointcept/Pointcept , 2023. [9] Qingyong Hu, Bo Yang, Linhai Xie, Stefano Rosa, Yulan Guo, Zhihua Wang, Niki Trigoni, and Andrew Markham. Randla-net: Efficient semantic segmentation of large-scale point clouds. Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition , 2020. [10] Shaoshuai Shi, Xiaogang Wang, and Hongsheng Li. Pointrcnn: 3d object proposal generation and detection from point cloud. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition ,pages 770–779, 2019. [11] Yifan Zhang, Qingyong Hu, Guoquan Xu, Yanxin Ma, Jianwei Wan, and Yulan Guo. Not all points are equal: Learning highly efficient point-based detectors for 3d lidar point clouds. In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition , 2022. [12] Zetong Yang, Yanan Sun, Shu Liu, and Jiaya Jia. 3dssd: Point-based 3d single stage object detector. In Proceed-ings of the IEEE/CVF conference on computer vision and pattern recognition , pages 11040–11048, 2020. [13] Zetong Yang, Yanan Sun, Shu Liu, Xiaoyong Shen, and Jiaya Jia. STD: sparse-to-dense 3d object detector for point cloud. In 2019 IEEE/CVF International Conference on Computer Vision, ICCV 2019, Seoul, Korea (South), October 27 - November 2, 2019 , 2019. [14] Dingkang Liang, Xin Zhou, Wei Xu, Xingkui Zhu, Zhikang Zou, Xiaoqing Ye, Xiao Tan, and Xiang Bai. Point-mamba: A simple state space model for point cloud analysis. In Advances in Neural Information Processing Systems , 2024. [15] Xumin Yu, Lulu Tang, Yongming Rao, Tiejun Huang, Jie Zhou, and Jiwen Lu. Point-bert: Pre-training 3d point cloud transformers with masked point modeling. In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR) , 2022. [16] Yatian Pang, Wenxiao Wang, Francis EH Tay, Wei Liu, Yonghong Tian, and Li Yuan. Masked autoencoders for point cloud self-supervised learning. In Computer Vision–ECCV 2022: 17th European Conference, Tel Aviv, Israel, October 23–27, 2022, Proceedings, Part II , pages 604–621. Springer, 2022. 26 Arxiv preprint - June 5, 2026 
+
+[17] Dening Lu, Qian Xie, Kyle Gao, Linlin Xu, and Jonathan Li. 3dctn: 3d convolution-transformer network for point cloud classification. IEEE Transactions on Intelligent Transportation Systems , pages 1–12, 2022. [18] Marzieh Mohammadi and Amir Salarpour. Point-gn: A non-parametric network using gaussian positional en-coding for point cloud classification. In 2025 IEEE/CVF Winter Conference on Applications of Computer Vision (WACV) , pages 3487–3496, 2025. [19] Iro Armeni, Ozan Sener, Amir R Zamir, Helen Jiang, Ioannis Brilakis, Martin Fischer, and Silvio Savarese. 3d semantic parsing of large-scale indoor spaces. In Proceedings of the IEEE conference on computer vision and pattern recognition , pages 1534–1543, 2016. [20] Angela Dai, Angel X. Chang, Manolis Savva, Maciej Halber, Thomas Funkhouser, and Matthias Nießner. Scan-net: Richly-annotated 3d reconstructions of indoor scenes. In Proc. Computer Vision and Pattern Recognition (CVPR), IEEE , 2017. [21] Xinhao Yang, Tianyu Fu, Guohao Dai, Shulin Zeng, Kai Zhong, Ke Hong, and Yu Wang. An efficient accelerator for point-based and voxel-based point cloud neural networks. In 2023 60th ACM/IEEE Design Automation Conference (DAC) , pages 1–6. IEEE, 2023. [22] Yaoxiu Lian, Xinhao Yang, Ke Hong, Yu Wang, Guohao Dai, and Ningyi Xu. A point transformer accelerator with fine-grained pipelines and distribution-aware dynamic fps. In 2023 IEEE/ACM International Conference on Computer Aided Design (ICCAD) , pages 1–9. IEEE, 2023. [23] Meng Han, Liang Wang, Limin Xiao, Hao Zhang, Chenhao Zhang, Xiangrong Xu, and Jianfeng Zhu. Quickfps: Architecture and algorithm co-design for farthest point sampling in large-scale point clouds. IEEE Transactions on Computer-Aided Design of Integrated Circuits and Systems , 42(11):4011–4024, 2023. [24] Donghyun Lee, Dawoon Jeong, Jae W. Lee, and Hongil Yoon. Fastpoint: Accelerating 3d point cloud model inference via sample point distance prediction. In IEEE/CVF International Conference on Computer Vision (ICCV 25) , 2025. [25] Christopher Choy, JunYoung Gwak, and Silvio Savarese. 4d spatio-temporal convnets: Minkowski convolutional neural networks. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition , pages 3075–3084, 2019. [26] Charles R Qi, Wei Liu, Chenxia Wu, Hao Su, and Leonidas J Guibas. Frustum pointnets for 3d object detection from rgb-d data. In Proceedings of the IEEE conference on computer vision and pattern recognition , pages 918–927, 2018. [27] Shi Qiu, Saeed Anwar, and Nick Barnes. Semantic segmentation for real point cloud scenes via bilateral aug-mentation and adaptive fusion. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition , pages 1757–1767, 2021. [28] Brian Curless and Marc Levoy. A volumetric method for building complex models from range images. In 
+
+Proceedings of the 23rd annual conference on Computer graphics and interactive techniques , pages 303–312, 1996. [29] Yujun Lin, Zhekai Zhang, Haotian Tang, Hanrui Wang, and Song Han. Pointacc: Efficient point cloud accelerator. In MICRO-54: 54th Annual IEEE/ACM International Symposium on Microarchitecture , pages 449–461, 2021. [30] Yaoxiu Lian, Xinhao Yang, Ke Hong, Yu Wang, Ningyi Xu, and Guohao Dai. A point transformer acceler-ator with distribution-aware heuristic distance calculation. IEEE Transactions on Computer-Aided Design of Integrated Circuits and Systems , 2024. [31] Hengzhe Chi, Jihe Wang, Jinzhe Zhang, and Danghui Wang. Accelerating point cloud sampling by parallel structure deconstruction. IEEE Transactions on Parallel and Distributed Systems , 37(1):60–75, 2026. [32] Radu Bogdan Rusu and Steve Cousins. 3D is here: Point Cloud Library (PCL). In IEEE International Conference on Robotics and Automation (ICRA) , Shanghai, China, May 9-13 2011. [33] Qiangeng Xu, Xudong Sun, Cho-Ying Wu, Panqu Wang, and Ulrich Neumann. Grid-gcn for fast and scalable point cloud learning. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition ,pages 5661–5670, 2020. [34] Hugues Thomas, Charles R Qi, Jean-Emmanuel Deschaud, Beatriz Marcotegui, Franc ¸ois Goulette, and Leonidas J Guibas. Kpconv: Flexible and deformable convolution for point clouds. In Proceedings of the IEEE/CVF international conference on computer vision , pages 6411–6420, 2019. [35] Jiakang Xia, Yanming Chen, Guoli Li, Yueqian Shen, Xincan Zou, Dong Chen, and Yufu Zang. Pgformer: a point cloud segmentation network for urban scenes combining grouped transformer and kpconv. IEEE Transactions on Geoscience and Remote Sensing , 2025. 27 Arxiv preprint - June 5, 2026 
+
+[36] Ziyu Ying, Sandeepa Bhuyan, Yan Kang, Yingtian Zhang, Mahmut T Kandemir, and Chita R Das. Edgepc: Ef-ficient deep learning analytics for point clouds on edge devices. In Proceedings of the 50th Annual International Symposium on Computer Architecture , pages 1–14, 2023. [37] Jingtao Li, Jian Zhou, Yan Xiong, Xing Chen, and Chaitali Chakrabarti. An adjustable farthest point sampling method for approximately-sorted point cloud data. In 2022 IEEE workshop on signal processing systems (SiPS) ,pages 1–6. IEEE, 2022. [38] Weimin Wang and Qiong Chang. Van-icp: Gpu-accelerated approximate nearest neighbor search for icp regis-tration via voxel dilation. In ICASSP 2023-2023 IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP) , pages 1–5. IEEE, 2023. [39] Qiong Chang, Weimin Wang, and Jun Miyazaki. Accelerating nearest neighbor search in 3d point cloud regis-tration on gpus. ACM Transactions on Architecture and Code Optimization , 22(1):1–24, 2025. [40] J. Behley, M. Garbade, A. Milioto, J. Quenzel, S. Behnke, C. Stachniss, and J. Gall. SemanticKITTI: A Dataset for Semantic Scene Understanding of LiDAR Sequences. In Proc. of the IEEE/CVF International Conf. on Computer Vision (ICCV) , 2019. [41] Guocheng Qian, Yuchen Li, Houwen Peng, Jinjie Mai, Hasan Hammoud, Mohamed Elhoseiny, and Bernard Ghanem. Pointnext: Revisiting pointnet++ with improved training and scaling strategies. arXiv:2206.04670 ,2022. 28

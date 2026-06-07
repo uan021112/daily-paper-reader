@@ -6,64 +6,55 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-06-06
-- 运行时间：2026-06-06 20:24:10 UTC
+- 最新运行日期：2026-06-07
+- 运行时间：2026-06-07 20:08:52 UTC
 - 运行状态：成功
-- 本次总论文数：14
-- 精读区：7
-- 速读区：7
+- 本次总论文数：11
+- 精读区：6
+- 速读区：5
 
 ### 今日简报（AI）
-1) 今日聚焦三维视觉与生成，14篇论文中精读推荐《VG²GT》体素高斯几何变换器，速读覆盖CT生成、场景一致性与屋顶重建。  
-2) 最值得看《VG²GT》提出的几何引导三维表示方法，以及《PhyScene3D》物理一致性表观场景生成的新方向。  
-3) 下一步可深入《VG²GT》的体素-高斯融合机制，同时关注《Flexible Control of 3D CT Generation》的文本/分割提示控制潜力。
-- 详情：[/202606/06/README](/202606/06/README)
+今日3D视觉领域11篇新论文中，两篇高分工作分别聚焦VLM空间推理与CT生成控制。  
+最值得关注：将3D重建作为显式记忆提升大模型空间推理（Reasmory），以及通过文本和语义分割提示灵活控制3D CT生成。  
+建议普通读者先阅读《A Cookbook of 3D Vision》综述搭建知识框架，再深入研读这两篇精读论文。
+- 详情：[/202606/07/README](/202606/07/README)
 
 ### 精读区论文标签
-1. [$\text{VG}^2$GT: Voxel-Gaussian Splatting Visual Geometry Grounded Transformer](/202606/06/2606.01573v1-textvg2gt-voxel-gaussian-splatting-visual-geometry-grounded-transformer)  
+1. [Reasmory: 3D Reconstruction as Explicit Memory for VLMs Spatial Reasoning](/202606/07/2606.00963v1-reasmory-3d-reconstruction-as-explicit-memory-for-vlms-spatial-reasoning)  
+   标签：评分：9.0/10、query:dgen
+   evidence：从多视图图像进行三维重建作为空间记忆
+2. [Flexible Control of 3D CT Generation via Text and Semantically-Defined Segmentation Prompts](/202606/07/2606.00967v1-flexible-control-of-3d-ct-generation-via-text-and-semantically-defined-segmentation-prompts)  
+   标签：评分：9.0/10、query:dgen
+   evidence：通过文本和分割提示控制3D CT生成
+3. [$\text{VG}^2$GT: Voxel-Gaussian Splatting Visual Geometry Grounded Transformer](/202606/07/2606.01573v2-textvg2gt-voxel-gaussian-splatting-visual-geometry-grounded-transformer)  
    标签：评分：9.0/10、query:ffdr
-   evidence：用于三维重建的前馈体素-高斯泼溅方法
-2. [$\text{VG}^2$GT: Voxel-Gaussian Splatting Visual Geometry Grounded Transformer](/202606/06/2606.01573v2-textvg2gt-voxel-gaussian-splatting-visual-geometry-grounded-transformer)  
+   evidence：用于3D重建的前馈体素-高斯泼溅Transformer
+4. [FUSE-Flow: A Decoupled Framework for Calibration and Stateless Real-Time Multi-View Point Cloud Fusion](/202606/07/2606.04376v1-fuse-flow-a-decoupled-framework-for-calibration-and-stateless-real-time-multi-view-point-cloud-fusion)  
    标签：评分：9.0/10、query:ffdr
-   evidence：使用高斯泼溅的前馈式三维重建
-3. [Parameter-Efficient Fine-Tuning of Large Pretrained Models for Instance Segmentation Tasks](/202606/06/2606.01947v1-parameter-efficient-fine-tuning-of-large-pretrained-models-for-instance-segmentation-tasks)  
-   标签：评分：9.0/10、query:partseg
-   evidence：关注实例分割的参高效微调方法
-4. [PAR3D: A Unified 3D-MLLM with Part-Aware Representation for Scene Understanding](/202606/06/2606.06485v1-par3d-a-unified-3d-mllm-with-part-aware-representation-for-scene-understanding)  
-   标签：评分：9.0/10、query:partseg
-   evidence：面向场景理解的部件感知3D-MLLM及部件分割
-5. [SOCO: Benchmarking Semantic Object Correspondence in Vision Foundation Models](/202606/06/2605.31597v2-soco-benchmarking-semantic-object-correspondence-in-vision-foundation-models)  
-   标签：评分：8.0/10、query:partseg
-   evidence：用于语义部件对应的基准，含关键点标注
-6. [ForestMamba: Sparse Mamba with Geometry-guided Queries for 3D Forest Point Cloud Segmentation](/202606/06/2606.01549v1-forestmamba-sparse-mamba-with-geometry-guided-queries-for-3d-forest-point-cloud-segmentation)  
-   标签：评分：8.0/10、query:partseg
-   evidence：点云部件级分割方法
-7. [Global-Local Monte Carlo Tree Search in Vision-Language Models for Text-to-3D Indoor Scene Generation](/202606/06/2606.06002v1-global-local-monte-carlo-tree-search-in-vision-language-models-for-text-to-3d-indoor-scene-generation)  
+   evidence：实时多视角点云融合实现可扩展三维重建
+5. [Recent Advances and Trends in Learning-based 3D Representations](/202606/07/2606.04871v1-recent-advances-and-trends-in-learning-based-3d-representations)  
+   标签：评分：9.0/10、query:dgen
+   evidence：关于重建与生成的3D表征综述
+6. [KC-3DGS: Kurtosis-Constrained Gaussian Splatting for High-Fidelity View Synthesis](/202606/07/2606.03120v1-kc-3dgs-kurtosis-constrained-gaussian-splatting-for-high-fidelity-view-synthesis)  
    标签：评分：8.0/10、query:dgen
-   evidence：结合视觉语言模型的全局-局部蒙特卡洛树搜索用于文本到三维室内场景生成
+   evidence：通过小波域监督的3D高斯溅射实现神经渲染
 
 ### 速读区论文标签
-1. [Flexible Control of 3D CT Generation via Text and Semantically-Defined Segmentation Prompts](/202606/06/2606.00967v1-flexible-control-of-3d-ct-generation-via-text-and-semantically-defined-segmentation-prompts)  
-   标签：评分：7.0/10、query:dgen
-   evidence：使用文本和分割提示的可控3D CT生成
-2. [PhyScene3D: Physically Consistent Interactive 3D Tabletop Scene Generation](/202606/06/2606.01649v2-physcene3d-physically-consistent-interactive-3d-tabletop-scene-generation)  
-   标签：评分：7.0/10、query:dgen
-   evidence：从零生成物理一致的3D桌面场景
-3. [Edge Prediction for Roof Wireframe Reconstruction with Transformers](/202606/06/2606.02406v1-edge-prediction-for-roof-wireframe-reconstruction-with-transformers)  
+1. [SAVMap: Structure-Aided Visual Mapping of Large-Scale 2.5D Manhattan Wireframes from Panoramic Video](/202606/07/2606.01939v1-savmap-structure-aided-visual-mapping-of-large-scale-25d-manhattan-wireframes-from-panoramic-video)  
    标签：评分：7.0/10、query:ffdr
-   evidence：使用端到端Transformer从稀疏点云进行3D屋顶线框重建
-4. [Geometry Gaussians: Decoupling Appearance and Geometry in Gaussian Splatting](/202606/06/2606.05124v1-geometry-gaussians-decoupling-appearance-and-geometry-in-gaussian-splatting)  
-   标签：评分：7.0/10、query:dgen
-   evidence：在3D高斯泼溅中解耦外观与几何以用于3D内容创建
-5. [DSD-GS: Dynamic-Static Decomposition of Gaussian Splatting for Efficient and High-Fidelity Dynamic Scene Reconstruction](/202606/06/2605.30863v1-dsd-gs-dynamic-static-decomposition-of-gaussian-splatting-for-efficient-and-high-fidelity-dynamic-scene-reconstruction)  
+   evidence：从全景视频直接映射到3D线框地图
+2. [A Cookbook of 3D Vision: Data, Learning Paradigms, and Application](/202606/07/2606.04291v1-a-cookbook-of-3d-vision-data-learning-paradigms-and-application)  
+   标签：评分：7.0/10、query:ffdr
+   evidence：前馈3D重建方法的表示与学习范式分类
+3. [LiAuto-GeoX: Efficient Grounded Driving Transformer](/202606/07/2606.05774v1-liauto-geox-efficient-grounded-driving-transformer)  
+   标签：评分：7.0/10、query:ffdr
+   evidence：用于驾驶场景的前馈3D重建
+4. [MedSyn2: Flexible Control of 3D CT Generation via Text and Semantically-Defined Segmentation Prompts](/202606/07/2606.00967v2-medsyn2-flexible-control-of-3d-ct-generation-via-text-and-semantically-defined-segmentation-prompts)  
    标签：评分：6.0/10、query:dgen
-   evidence：基于高斯泼溅的动态场景图像重建
-6. [Benchmarking Single-Step Inpainting Methods for Multi-Object 3D Gaussian Splatting Scenes](/202606/06/2605.30987v1-benchmarking-single-step-inpainting-methods-for-multi-object-3d-gaussian-splatting-scenes)  
-   标签：评分：6.0/10、query:dgen
-   evidence：三维高斯泼溅场景的修复方法基准测试
-7. [WebSpline: Structure-Informed Splines for Real-Time 3D Gaussians from Monocular Videos](/202606/06/2606.02096v1-webspline-structure-informed-splines-for-real-time-3d-gaussians-from-monocular-videos)  
-   标签：评分：6.0/10、query:dgen
-   evidence：基于样条的动态3D高斯场景重建
+   evidence：使用文本和分割提示生成3D CT图像
+5. [RadiusFPS: Efficient Farthest Point Sampling on CPUs and GPUs via Spherical Voxel Pruning](/202606/07/2606.06255v1-radiusfps-efficient-farthest-point-sampling-on-cpus-and-gpus-via-spherical-voxel-pruning)  
+   标签：评分：6.0/10、query:partseg
+   evidence：高效的最远点采样用于点云处理
 
 
 <div class="dpr-home-promo-card">
