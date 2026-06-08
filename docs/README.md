@@ -6,55 +6,56 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-06-07
-- 运行时间：2026-06-07 20:08:52 UTC
+- 最新运行日期：2026-06-08
+- 运行时间：2026-06-08 22:11:59 UTC
 - 运行状态：成功
-- 本次总论文数：11
-- 精读区：6
-- 速读区：5
+- 本次总论文数：12
+- 精读区：8
+- 速读区：4
 
 ### 今日简报（AI）
-今日3D视觉领域11篇新论文中，两篇高分工作分别聚焦VLM空间推理与CT生成控制。  
-最值得关注：将3D重建作为显式记忆提升大模型空间推理（Reasmory），以及通过文本和语义分割提示灵活控制3D CT生成。  
-建议普通读者先阅读《A Cookbook of 3D Vision》综述搭建知识框架，再深入研读这两篇精读论文。
-- 详情：[/202606/07/README](/202606/07/README)
+今日12篇论文聚焦3D表示与场景理解，2篇精读均获8分。推荐精读的基于学习的3D表示综述和无监督视频全景分割，代表了当前最前沿方向。普通读者可优先关注这两篇精读论文，建立对3D深度学习与视觉分割的技术认知。
+- 详情：[/202606/08/README](/202606/08/README)
 
 ### 精读区论文标签
-1. [Reasmory: 3D Reconstruction as Explicit Memory for VLMs Spatial Reasoning](/202606/07/2606.00963v1-reasmory-3d-reconstruction-as-explicit-memory-for-vlms-spatial-reasoning)  
-   标签：评分：9.0/10、query:dgen
-   evidence：从多视图图像进行三维重建作为空间记忆
-2. [Flexible Control of 3D CT Generation via Text and Semantically-Defined Segmentation Prompts](/202606/07/2606.00967v1-flexible-control-of-3d-ct-generation-via-text-and-semantically-defined-segmentation-prompts)  
-   标签：评分：9.0/10、query:dgen
-   evidence：通过文本和分割提示控制3D CT生成
-3. [$\text{VG}^2$GT: Voxel-Gaussian Splatting Visual Geometry Grounded Transformer](/202606/07/2606.01573v2-textvg2gt-voxel-gaussian-splatting-visual-geometry-grounded-transformer)  
-   标签：评分：9.0/10、query:ffdr
-   evidence：用于3D重建的前馈体素-高斯泼溅Transformer
-4. [FUSE-Flow: A Decoupled Framework for Calibration and Stateless Real-Time Multi-View Point Cloud Fusion](/202606/07/2606.04376v1-fuse-flow-a-decoupled-framework-for-calibration-and-stateless-real-time-multi-view-point-cloud-fusion)  
-   标签：评分：9.0/10、query:ffdr
-   evidence：实时多视角点云融合实现可扩展三维重建
-5. [Recent Advances and Trends in Learning-based 3D Representations](/202606/07/2606.04871v1-recent-advances-and-trends-in-learning-based-3d-representations)  
-   标签：评分：9.0/10、query:dgen
-   evidence：关于重建与生成的3D表征综述
-6. [KC-3DGS: Kurtosis-Constrained Gaussian Splatting for High-Fidelity View Synthesis](/202606/07/2606.03120v1-kc-3dgs-kurtosis-constrained-gaussian-splatting-for-high-fidelity-view-synthesis)  
+1. [Recent Advances and Trends in Learning-based 3D Representations](/202606/08/2606.04871v1-recent-advances-and-trends-in-learning-based-3d-representations)  
    标签：评分：8.0/10、query:dgen
-   evidence：通过小波域监督的3D高斯溅射实现神经渲染
+   evidence：综述了基于学习的3D表示，涵盖重建和生成
+2. [Scene-Centric Unsupervised Video Panoptic Segmentation](/202606/08/2606.04925v1-scene-centric-unsupervised-video-panoptic-segmentation)  
+   标签：评分：8.0/10、query:partseg
+   evidence：无监督视频全景分割，涵盖实例级分割
+3. [Global-Local Monte Carlo Tree Search in Vision-Language Models for Text-to-3D Indoor Scene Generation](/202606/08/2606.06002v2-global-local-monte-carlo-tree-search-in-vision-language-models-for-text-to-3d-indoor-scene-generation)  
+   标签：评分：8.0/10、query:dgen
+   evidence：使用蒙特卡洛树搜索和大视觉语言模型进行文本到3D室内场景生成
+4. [S23DR 2026 Winning Solution](/202606/08/2606.06695v1-s23dr-2026-winning-solution)  
+   标签：评分：8.0/10、query:dgen
+   evidence：基于流匹配DiT和条件集合去噪的结构化3D线框重建
+5. [GuideCAD: A Lightweight Multimodal Framework for 3D CAD Model Generation via Prefix Embedding](/202606/08/2606.07024v1-guidecad-a-lightweight-multimodal-framework-for-3d-cad-model-generation-via-prefix-embedding)  
+   标签：评分：8.0/10、query:dgen
+   evidence：通过前缀嵌入从文本和图像生成3D CAD模型
+6. [Native3D: End-to-End 3D Scene Generation via Unified Mesh-Texture Modeling and Semantic Alignment](/202606/08/2606.07117v1-native3d-end-to-end-3d-scene-generation-via-unified-mesh-texture-modeling-and-semantic-alignment)  
+   标签：评分：8.0/10、query:dgen
+   evidence：无需2D中间表示的端到端3D场景生成
+7. [Geometric-Aware Hypergraph Reasoning for Novel Class Discovery in Point Cloud Segmentation](/202606/08/2606.07280v1-geometric-aware-hypergraph-reasoning-for-novel-class-discovery-in-point-cloud-segmentation)  
+   标签：评分：8.0/10、query:partseg
+   evidence：使用超图推理的点云分割新类别发现
+8. [Mind the Gap: Disentangling Performance Bottlenecks in Video Instance Segmentation](/202606/08/2606.07394v1-mind-the-gap-disentangling-performance-bottlenecks-in-video-instance-segmentation)  
+   标签：评分：8.0/10、query:partseg
+   evidence：视频实例分割的诊断框架
 
 ### 速读区论文标签
-1. [SAVMap: Structure-Aided Visual Mapping of Large-Scale 2.5D Manhattan Wireframes from Panoramic Video](/202606/07/2606.01939v1-savmap-structure-aided-visual-mapping-of-large-scale-25d-manhattan-wireframes-from-panoramic-video)  
-   标签：评分：7.0/10、query:ffdr
-   evidence：从全景视频直接映射到3D线框地图
-2. [A Cookbook of 3D Vision: Data, Learning Paradigms, and Application](/202606/07/2606.04291v1-a-cookbook-of-3d-vision-data-learning-paradigms-and-application)  
-   标签：评分：7.0/10、query:ffdr
-   evidence：前馈3D重建方法的表示与学习范式分类
-3. [LiAuto-GeoX: Efficient Grounded Driving Transformer](/202606/07/2606.05774v1-liauto-geox-efficient-grounded-driving-transformer)  
-   标签：评分：7.0/10、query:ffdr
-   evidence：用于驾驶场景的前馈3D重建
-4. [MedSyn2: Flexible Control of 3D CT Generation via Text and Semantically-Defined Segmentation Prompts](/202606/07/2606.00967v2-medsyn2-flexible-control-of-3d-ct-generation-via-text-and-semantically-defined-segmentation-prompts)  
+1. [ARAPDiffusion: ARAP Regularization for Diffusion-Based Deformable Shape Space Learning](/202606/08/2606.06887v1-arapdiffusion-arap-regularization-for-diffusion-based-deformable-shape-space-learning)  
+   标签：评分：7.0/10、query:dgen
+   evidence：基于潜扩散的可变形形状空间学习生成模型
+2. [Edge Prediction for Roof Wireframe Reconstruction with Transformers](/202606/08/2606.02406v1-edge-prediction-for-roof-wireframe-reconstruction-with-transformers)  
+   标签：评分：6.0/10、query:ffdr
+   evidence：端到端Transformer用于从稀疏点云进行3D屋顶线框重建
+3. [Direct 3D-Aware Object Insertion via Decomposed Visual Proxies](/202606/08/2606.06601v1-direct-3d-aware-object-insertion-via-decomposed-visual-proxies)  
    标签：评分：6.0/10、query:dgen
-   evidence：使用文本和分割提示生成3D CT图像
-5. [RadiusFPS: Efficient Farthest Point Sampling on CPUs and GPUs via Spherical Voxel Pruning](/202606/07/2606.06255v1-radiusfps-efficient-farthest-point-sampling-on-cpus-and-gpus-via-spherical-voxel-pruning)  
-   标签：评分：6.0/10、query:partseg
-   evidence：高效的最远点采样用于点云处理
+   evidence：从单张图像重建3D对象用于插入
+4. [ExMesh: EXplicit Mesh Reconstruction with Topology Adaptation](/202606/08/2606.07288v1-exmesh-explicit-mesh-reconstruction-with-topology-adaptation)  
+   标签：评分：6.0/10、query:ffdr
+   evidence：显式网格优化与前馈方法的对比
 
 
 <div class="dpr-home-promo-card">
