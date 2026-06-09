@@ -6,56 +6,67 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-06-08
-- 运行时间：2026-06-08 22:11:59 UTC
+- 最新运行日期：2026-06-09
+- 运行时间：2026-06-09 22:20:01 UTC
 - 运行状态：成功
-- 本次总论文数：12
+- 本次总论文数：15
 - 精读区：8
-- 速读区：4
+- 速读区：7
 
 ### 今日简报（AI）
-今日12篇论文聚焦3D表示与场景理解，2篇精读均获8分。推荐精读的基于学习的3D表示综述和无监督视频全景分割，代表了当前最前沿方向。普通读者可优先关注这两篇精读论文，建立对3D深度学习与视觉分割的技术认知。
-- 详情：[/202606/08/README](/202606/08/README)
+今日共处理15篇论文，精读8篇，重点聚焦卫星图像度量重建与无训练三维实例分割。
+最值得关注的两项成果：精读最高分《卫星图像赋能前馈重建模型获取度量尺度》与《基于几何视觉对应的无训练3D实例分割》。
+建议普通读者优先尝试训练-free的几何对应分割方法，无需额外训练即可快速验证效果。
+- 详情：[/202606/09/README](/202606/09/README)
 
 ### 精读区论文标签
-1. [Recent Advances and Trends in Learning-based 3D Representations](/202606/08/2606.04871v1-recent-advances-and-trends-in-learning-based-3d-representations)  
+1. [Empowering Feed-Forward Reconstruction Models with Metric Scale via Satellite Images](/202606/09/2606.08205v1-empowering-feed-forward-reconstruction-models-with-metric-scale-via-satellite-images)  
+   标签：评分：10.0/10、query:ffdr
+   evidence：直接解决前馈3D重建模型的尺度模糊，利用卫星图像提供度量参考
+2. [GVC-Seg: Training-Free 3D Instance Segmentation via Geometric Visual Correspondence](/202606/09/2606.08014v1-gvc-seg-training-free-3d-instance-segmentation-via-geometric-visual-correspondence)  
+   标签：评分：9.0/10、query:partseg
+   evidence：基于几何视觉对应的免训练3D实例分割
+3. [Rethinking 3D Shape Generation: Diffusion over Superquadrics](/202606/09/2606.08957v1-rethinking-3d-shape-generation-diffusion-over-superquadrics)  
+   标签：评分：9.0/10、query:dgen
+   evidence：基于超二次曲面参数的扩散模型实现高效3D生成
+4. [EPS3D: End-to-End Feed-Forward 3D Panoptic Segmentation](/202606/09/2606.08980v1-eps3d-end-to-end-feed-forward-3d-panoptic-segmentation)  
+   标签：评分：9.0/10、query:partseg
+   evidence：端到端前馈3D全景分割
+5. [3DMorph: Single-Image-Guided Local 3D Shape Editing and Morphing](/202606/09/2606.07115v1-3dmorph-single-image-guided-local-3d-shape-editing-and-morphing)  
    标签：评分：8.0/10、query:dgen
-   evidence：综述了基于学习的3D表示，涵盖重建和生成
-2. [Scene-Centric Unsupervised Video Panoptic Segmentation](/202606/08/2606.04925v1-scene-centric-unsupervised-video-panoptic-segmentation)  
+   evidence：基于单图像引导的局部三维形状编辑与变形，无需训练的框架
+6. [SegmentAnyTreeV2: Scaling Transformer-Based Tree Instance Segmentation Across Sensors, Platforms, and Forests](/202606/09/2606.08206v1-segmentanytreev2-scaling-transformer-based-tree-instance-segmentation-across-sensors-platforms-and-forests)  
    标签：评分：8.0/10、query:partseg
-   evidence：无监督视频全景分割，涵盖实例级分割
-3. [Global-Local Monte Carlo Tree Search in Vision-Language Models for Text-to-3D Indoor Scene Generation](/202606/08/2606.06002v2-global-local-monte-carlo-tree-search-in-vision-language-models-for-text-to-3d-indoor-scene-generation)  
+   evidence：点云树木实例分割
+7. [SceneConductor: 3D Scene Generation from Single Image with Multi-Agent Orchestration](/202606/09/2606.08402v1-sceneconductor-3d-scene-generation-from-single-image-with-multi-agent-orchestration)  
    标签：评分：8.0/10、query:dgen
-   evidence：使用蒙特卡洛树搜索和大视觉语言模型进行文本到3D室内场景生成
-4. [S23DR 2026 Winning Solution](/202606/08/2606.06695v1-s23dr-2026-winning-solution)  
+   evidence：使用多智能体编排从单张图像生成3D场景
+8. [MaterialClusterGS: Palette-Based Material Decomposition and Physically-Based Relighting with 2D Gaussian Splatting](/202606/09/2606.09018v1-materialclustergs-palette-based-material-decomposition-and-physically-based-relighting-with-2d-gaussian-splatting)  
    标签：评分：8.0/10、query:dgen
-   evidence：基于流匹配DiT和条件集合去噪的结构化3D线框重建
-5. [GuideCAD: A Lightweight Multimodal Framework for 3D CAD Model Generation via Prefix Embedding](/202606/08/2606.07024v1-guidecad-a-lightweight-multimodal-framework-for-3d-cad-model-generation-via-prefix-embedding)  
-   标签：评分：8.0/10、query:dgen
-   evidence：通过前缀嵌入从文本和图像生成3D CAD模型
-6. [Native3D: End-to-End 3D Scene Generation via Unified Mesh-Texture Modeling and Semantic Alignment](/202606/08/2606.07117v1-native3d-end-to-end-3d-scene-generation-via-unified-mesh-texture-modeling-and-semantic-alignment)  
-   标签：评分：8.0/10、query:dgen
-   evidence：无需2D中间表示的端到端3D场景生成
-7. [Geometric-Aware Hypergraph Reasoning for Novel Class Discovery in Point Cloud Segmentation](/202606/08/2606.07280v1-geometric-aware-hypergraph-reasoning-for-novel-class-discovery-in-point-cloud-segmentation)  
-   标签：评分：8.0/10、query:partseg
-   evidence：使用超图推理的点云分割新类别发现
-8. [Mind the Gap: Disentangling Performance Bottlenecks in Video Instance Segmentation](/202606/08/2606.07394v1-mind-the-gap-disentangling-performance-bottlenecks-in-video-instance-segmentation)  
-   标签：评分：8.0/10、query:partseg
-   evidence：视频实例分割的诊断框架
+   evidence：基于调色板的2D高斯泼溅材质分解与重光照
 
 ### 速读区论文标签
-1. [ARAPDiffusion: ARAP Regularization for Diffusion-Based Deformable Shape Space Learning](/202606/08/2606.06887v1-arapdiffusion-arap-regularization-for-diffusion-based-deformable-shape-space-learning)  
+1. [EditSSC: Toward Editable Semantic Occupancy Scenes with Unconditional Diffusion Models](/202606/09/2606.09273v1-editssc-toward-editable-semantic-occupancy-scenes-with-unconditional-diffusion-models)  
+   标签：评分：8.0/10、query:dgen
+   evidence：基于扩散模型的生成式3D场景生成
+2. [Aqua Boundary-Saliency Attention Module for Lightweight Underwater Salient Instance Segmentation Detection Transformer](/202606/09/2606.08002v1-aqua-boundary-saliency-attention-module-for-lightweight-underwater-salient-instance-segmentation-detection-transformer)  
+   标签：评分：7.0/10、query:partseg
+   evidence：水下显著实例分割框架
+3. [Neural Field Tokenizations with Hierarchy and Spatial Locality Priors](/202606/09/2606.08204v1-neural-field-tokenizations-with-hierarchy-and-spatial-locality-priors)  
+   标签：评分：7.0/10、query:ffdr
+   evidence：用于神经场表示学习的前馈编码
+4. [REFINE: Super-efficient 3D Gaussian Splatting Pruning via Rendering-Free Primitive Importance](/202606/09/2606.09074v1-refine-super-efficient-3d-gaussian-splatting-pruning-via-rendering-free-primitive-importance)  
    标签：评分：7.0/10、query:dgen
-   evidence：基于潜扩散的可变形形状空间学习生成模型
-2. [Edge Prediction for Roof Wireframe Reconstruction with Transformers](/202606/08/2606.02406v1-edge-prediction-for-roof-wireframe-reconstruction-with-transformers)  
-   标签：评分：6.0/10、query:ffdr
-   evidence：端到端Transformer用于从稀疏点云进行3D屋顶线框重建
-3. [Direct 3D-Aware Object Insertion via Decomposed Visual Proxies](/202606/08/2606.06601v1-direct-3d-aware-object-insertion-via-decomposed-visual-proxies)  
+   evidence：针对3D高斯溅射的无渲染剪枝，加速神经渲染
+5. [HDSL: A Hierarchical Domain-Specific Language for Structured 3D Indoor Scene Generation and Localized Editing with LLM Agents](/202606/09/2606.09738v1-hdsl-a-hierarchical-domain-specific-language-for-structured-3d-indoor-scene-generation-and-localized-editing-with-llm-agents)  
+   标签：评分：7.0/10、query:dgen
+   evidence：基于分层领域特定语言的LLM驱动室内场景生成
+6. [Hierarchical Space Partition for Surface Reconstruction](/202606/09/2606.04891v1-hierarchical-space-partition-for-surface-reconstruction)  
    标签：评分：6.0/10、query:dgen
-   evidence：从单张图像重建3D对象用于插入
-4. [ExMesh: EXplicit Mesh Reconstruction with Topology Adaptation](/202606/08/2606.07288v1-exmesh-explicit-mesh-reconstruction-with-topology-adaptation)  
-   标签：评分：6.0/10、query:ffdr
-   evidence：显式网格优化与前馈方法的对比
+   evidence：分层空间划分用于点云表面重建
+7. [Skeletal-Anchored Dual Harmonics for Structured 3D Modeling](/202606/09/2606.07337v1-skeletal-anchored-dual-harmonics-for-structured-3d-modeling)  
+   标签：评分：6.0/10、query:dgen
+   evidence：带内部骨骼锚点的3D形状表示，用于结构化建模
 
 
 <div class="dpr-home-promo-card">
