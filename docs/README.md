@@ -6,67 +6,62 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-06-09
-- 运行时间：2026-06-09 22:20:01 UTC
+- 最新运行日期：2026-06-10
+- 运行时间：2026-06-10 22:51:20 UTC
 - 运行状态：成功
-- 本次总论文数：15
-- 精读区：8
+- 本次总论文数：14
+- 精读区：7
 - 速读区：7
 
 ### 今日简报（AI）
-今日共处理15篇论文，精读8篇，重点聚焦卫星图像度量重建与无训练三维实例分割。
-最值得关注的两项成果：精读最高分《卫星图像赋能前馈重建模型获取度量尺度》与《基于几何视觉对应的无训练3D实例分割》。
-建议普通读者优先尝试训练-free的几何对应分割方法，无需额外训练即可快速验证效果。
-- 详情：[/202606/09/README](/202606/09/README)
+今日14篇论文聚焦三维视觉，精读《学习型3D表征综述》与《单图生成3D场景的多智能体方法》评分最高。建议优先关注基于学习的3D表示与场景生成前沿方向，后续可跟进点云表示学习及3D基准测试。
+- 详情：[/202606/10/README](/202606/10/README)
 
 ### 精读区论文标签
-1. [Empowering Feed-Forward Reconstruction Models with Metric Scale via Satellite Images](/202606/09/2606.08205v1-empowering-feed-forward-reconstruction-models-with-metric-scale-via-satellite-images)  
-   标签：评分：10.0/10、query:ffdr
-   evidence：直接解决前馈3D重建模型的尺度模糊，利用卫星图像提供度量参考
-2. [GVC-Seg: Training-Free 3D Instance Segmentation via Geometric Visual Correspondence](/202606/09/2606.08014v1-gvc-seg-training-free-3d-instance-segmentation-via-geometric-visual-correspondence)  
-   标签：评分：9.0/10、query:partseg
-   evidence：基于几何视觉对应的免训练3D实例分割
-3. [Rethinking 3D Shape Generation: Diffusion over Superquadrics](/202606/09/2606.08957v1-rethinking-3d-shape-generation-diffusion-over-superquadrics)  
+1. [Recent Advances and Trends in Learning-based 3D Representations](/202606/10/2606.04871v1-recent-advances-and-trends-in-learning-based-3d-representations)  
+   标签：评分：9.0/10、query:ffdr
+   evidence：综述基于学习的3D表示，涵盖前馈重建和生成方法
+2. [SceneConductor: 3D Scene Generation from Single Image with Multi-Agent Orchestration](/202606/10/2606.08402v1-sceneconductor-3d-scene-generation-from-single-image-with-multi-agent-orchestration)  
    标签：评分：9.0/10、query:dgen
-   evidence：基于超二次曲面参数的扩散模型实现高效3D生成
-4. [EPS3D: End-to-End Feed-Forward 3D Panoptic Segmentation](/202606/09/2606.08980v1-eps3d-end-to-end-feed-forward-3d-panoptic-segmentation)  
+   evidence：单图像3D场景生成，多智能体编排
+3. [EPS3D: End-to-End Feed-Forward 3D Panoptic Segmentation](/202606/10/2606.08980v1-eps3d-end-to-end-feed-forward-3d-panoptic-segmentation)  
    标签：评分：9.0/10、query:partseg
-   evidence：端到端前馈3D全景分割
-5. [3DMorph: Single-Image-Guided Local 3D Shape Editing and Morphing](/202606/09/2606.07115v1-3dmorph-single-image-guided-local-3d-shape-editing-and-morphing)  
-   标签：评分：8.0/10、query:dgen
-   evidence：基于单图像引导的局部三维形状编辑与变形，无需训练的框架
-6. [SegmentAnyTreeV2: Scaling Transformer-Based Tree Instance Segmentation Across Sensors, Platforms, and Forests](/202606/09/2606.08206v1-segmentanytreev2-scaling-transformer-based-tree-instance-segmentation-across-sensors-platforms-and-forests)  
+   evidence：端到端前馈式3D全景分割
+4. [SegmentAnyTreeV2: Scaling Transformer-Based Tree Instance Segmentation Across Sensors, Platforms, and Forests](/202606/10/2606.08206v1-segmentanytreev2-scaling-transformer-based-tree-instance-segmentation-across-sensors-platforms-and-forests)  
    标签：评分：8.0/10、query:partseg
-   evidence：点云树木实例分割
-7. [SceneConductor: 3D Scene Generation from Single Image with Multi-Agent Orchestration](/202606/09/2606.08402v1-sceneconductor-3d-scene-generation-from-single-image-with-multi-agent-orchestration)  
+   evidence：传感器无关的树木点云实例分割
+5. [CP4D: Compositional Physics-aware 4D Scene Generation](/202606/10/2606.09187v1-cp4d-compositional-physics-aware-4d-scene-generation)  
    标签：评分：8.0/10、query:dgen
-   evidence：使用多智能体编排从单张图像生成3D场景
-8. [MaterialClusterGS: Palette-Based Material Decomposition and Physically-Based Relighting with 2D Gaussian Splatting](/202606/09/2606.09018v1-materialclustergs-palette-based-material-decomposition-and-physically-based-relighting-with-2d-gaussian-splatting)  
+   evidence：组合式物理感知4D场景生成
+6. [Maximum Matching Accuracy: An Instance Segmentation Evaluation Metric Utilizing Globally Optimal Matching](/202606/10/2606.10107v1-maximum-matching-accuracy-an-instance-segmentation-evaluation-metric-utilizing-globally-optimal-matching)  
+   标签：评分：8.0/10、query:partseg
+   evidence：提出新的实例分割评估指标
+7. [3D-CoS: A New 3D Reconstruction Paradigm Based on VLM Code Synthesis](/202606/10/2606.10478v1-3d-cos-a-new-3d-reconstruction-paradigm-based-on-vlm-code-synthesis)  
    标签：评分：8.0/10、query:dgen
-   evidence：基于调色板的2D高斯泼溅材质分解与重光照
+   evidence：通过VLM代码合成重建3D物体
 
 ### 速读区论文标签
-1. [EditSSC: Toward Editable Semantic Occupancy Scenes with Unconditional Diffusion Models](/202606/09/2606.09273v1-editssc-toward-editable-semantic-occupancy-scenes-with-unconditional-diffusion-models)  
-   标签：评分：8.0/10、query:dgen
-   evidence：基于扩散模型的生成式3D场景生成
-2. [Aqua Boundary-Saliency Attention Module for Lightweight Underwater Salient Instance Segmentation Detection Transformer](/202606/09/2606.08002v1-aqua-boundary-saliency-attention-module-for-lightweight-underwater-salient-instance-segmentation-detection-transformer)  
+1. [Efficient RWKV-based Representation Learning for 3D Point Clouds](/202606/10/2606.10395v1-efficient-rwkv-based-representation-learning-for-3d-point-clouds)  
    标签：评分：7.0/10、query:partseg
-   evidence：水下显著实例分割框架
-3. [Neural Field Tokenizations with Hierarchy and Spatial Locality Priors](/202606/09/2606.08204v1-neural-field-tokenizations-with-hierarchy-and-spatial-locality-priors)  
-   标签：评分：7.0/10、query:ffdr
-   evidence：用于神经场表示学习的前馈编码
-4. [REFINE: Super-efficient 3D Gaussian Splatting Pruning via Rendering-Free Primitive Importance](/202606/09/2606.09074v1-refine-super-efficient-3d-gaussian-splatting-pruning-via-rendering-free-primitive-importance)  
+   evidence：基于RWKV的高效点云表示学习，用于改进分割
+2. [Segment and Select: Vision-Language Segmentation in 3D Scenarios](/202606/10/2606.10594v1-segment-and-select-vision-language-segmentation-in-3d-scenarios)  
+   标签：评分：7.0/10、query:partseg
+   evidence：结合大语言模型的视觉语言3D分割
+3. [P3D-Bench: Benchmarking MLLMs for Parametric 3D Generation and Structural Reasoning](/202606/10/2606.11152v1-p3d-bench-benchmarking-mllms-for-parametric-3d-generation-and-structural-reasoning)  
    标签：评分：7.0/10、query:dgen
-   evidence：针对3D高斯溅射的无渲染剪枝，加速神经渲染
-5. [HDSL: A Hierarchical Domain-Specific Language for Structured 3D Indoor Scene Generation and Localized Editing with LLM Agents](/202606/09/2606.09738v1-hdsl-a-hierarchical-domain-specific-language-for-structured-3d-indoor-scene-generation-and-localized-editing-with-llm-agents)  
-   标签：评分：7.0/10、query:dgen
-   evidence：基于分层领域特定语言的LLM驱动室内场景生成
-6. [Hierarchical Space Partition for Surface Reconstruction](/202606/09/2606.04891v1-hierarchical-space-partition-for-surface-reconstruction)  
+   evidence：参数化3D生成基准，与文本或图像生成3D内容相关
+4. [TASE: Truncation-Aware Semantic Embeddings for 3D Scene Understanding and Editing](/202606/10/2606.03314v1-tase-truncation-aware-semantic-embeddings-for-3d-scene-understanding-and-editing)  
    标签：评分：6.0/10、query:dgen
-   evidence：分层空间划分用于点云表面重建
-7. [Skeletal-Anchored Dual Harmonics for Structured 3D Modeling](/202606/09/2606.07337v1-skeletal-anchored-dual-harmonics-for-structured-3d-modeling)  
+   evidence：用于可控3D场景编辑的截断感知语义嵌入
+5. [Scene-Centric Unsupervised Video Panoptic Segmentation](/202606/10/2606.04925v1-scene-centric-unsupervised-video-panoptic-segmentation)  
+   标签：评分：6.0/10、query:partseg
+   evidence：无监督视频全景分割方法
+6. [Latent Spatial Memory for Video World Models](/202606/10/2606.09828v1-latent-spatial-memory-for-video-world-models)  
    标签：评分：6.0/10、query:dgen
-   evidence：带内部骨骼锚点的3D形状表示，用于结构化建模
+   evidence：用于视频生成中保持3D一致性的潜在空间记忆
+7. [DB-3DME: From Dataset to Benchmark for Human-aligned Automatic 3D Mesh Evaluation](/202606/10/2606.10142v1-db-3dme-from-dataset-to-benchmark-for-human-aligned-automatic-3d-mesh-evaluation)  
+   标签：评分：6.0/10、query:dgen
+   evidence：符合人类偏好的3D网格评估数据集与基准
 
 
 <div class="dpr-home-promo-card">
