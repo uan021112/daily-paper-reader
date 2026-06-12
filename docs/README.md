@@ -6,76 +6,59 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-06-03 ~ 2026-06-12
-- 运行时间：2026-06-12 01:22:11 UTC
+- 最新运行日期：2026-06-12
+- 运行时间：2026-06-12 22:12:54 UTC
 - 运行状态：成功
-- 本次总论文数：18
-- 精读区：8
-- 速读区：10
+- 本次总论文数：13
+- 精读区：7
+- 速读区：6
 
 ### 今日简报（AI）
-1) 今日日报精选18篇论文，精读8篇，重点关注3D生成与自动驾驶前沿进展。
-2) 最值得看《Wild3R》实现无约束稀疏照片的前馈式3D高斯泼溅（10.0分），以及《LiAuto-GeoX》的高效接地驾驶Transformer（9.0分）。
-3) 建议优先精读这两篇，并速读《ABot-Earth 0.5》的生成式3D地球模型与《P3D-Bench》的3D生成基准测试，把握3D建模与多模态推理趋势。
-- 详情：[/20260603-20260612/README](/20260603-20260612/README)
+今日3D生成与评估领域聚焦：精读两篇9分论文，分别聚焦生成式3D地球模型与参数化3D生成基准测试；速读涉及NeRF渲染增强、几何学习及全景图生成。最值得关注的方向是“生成式3D地球建模”和“参数化3D生成的结构推理评估”，前者是3D场景生成前沿，后者提供ML模型评测标准。建议优先精读这两篇9分论文，把握生成式3D与结构推理的结合趋势。
+- 详情：[/202606/12/README](/202606/12/README)
 
 ### 精读区论文标签
-1. [Wild3R: Feed-Forward 3D Gaussian Splatting from Unconstrained Sparse Photo Collection](/20260603-20260612/2606.11894v1-wild3r-feed-forward-3d-gaussian-splatting-from-unconstrained-sparse-photo-collection)  
-   标签：评分：10.0/10、query:ffdr
-   evidence：从无约束照片集的前馈3D高斯泼溅
-2. [LiAuto-GeoX: Efficient Grounded Driving Transformer](/20260603-20260612/2606.05774v1-liauto-geox-efficient-grounded-driving-transformer)  
-   标签：评分：9.0/10、query:ffdr
-   evidence：高效的接地驾驶Transformer用于密集3D重建
-3. [SceneConductor: 3D Scene Generation from Single Image with Multi-Agent Orchestration](/20260603-20260612/2606.08402v1-sceneconductor-3d-scene-generation-from-single-image-with-multi-agent-orchestration)  
+1. [ABot-Earth 0.5: Generative 3D Earth Model](/202606/12/2606.09967v1-abot-earth-05-generative-3d-earth-model)  
    标签：评分：9.0/10、query:dgen
-   evidence：从单张图像生成3D场景
-4. [P3D-Bench: Benchmarking MLLMs for Parametric 3D Generation and Structural Reasoning](/20260603-20260612/2606.11152v1-p3d-bench-benchmarking-mllms-for-parametric-3d-generation-and-structural-reasoning)  
+   evidence：从卫星图像生成3D地球模型
+2. [P3D-Bench: Benchmarking MLLMs for Parametric 3D Generation and Structural Reasoning](/202606/12/2606.11152v2-p3d-bench-benchmarking-mllms-for-parametric-3d-generation-and-structural-reasoning)  
    标签：评分：9.0/10、query:dgen
-   evidence：从文本生成参数化三维的基准
-5. [DarkVGGT: Seeing Through Darkness Using Thermal Geometry without Daylight Tax](/20260603-20260612/2606.11326v1-darkvggt-seeing-through-darkness-using-thermal-geometry-without-daylight-tax)  
-   标签：评分：9.0/10、query:ffdr
-   evidence：使用RGB-T热成像模态的前馈3D重建用于低光环境
-6. [PT-WNO: Point Transformer with Wavelet Neural Operator for 3D Point Cloud Semantic Segmentation](/20260603-20260612/2606.11466v1-pt-wno-point-transformer-with-wavelet-neural-operator-for-3d-point-cloud-semantic-segmentation)  
+   evidence：用于从文本/视觉规范生成参数化3D的基准测试
+3. [TextHOI-3D: Text-to-3D Hand-Object Interaction via Discrete Multi-View Generation and Joint Mesh Optimization](/202606/12/2606.11805v1-texthoi-3d-text-to-3d-hand-object-interaction-via-discrete-multi-view-generation-and-joint-mesh-optimization)  
+   标签：评分：9.0/10、query:dgen
+   evidence：文本到3D手-物体交互生成
+4. [Point Cloud Segmentation for Autonomous Clip Positioning in Laparoscopic Cholecystectomy on a Phantom](/202606/12/2606.12048v1-point-cloud-segmentation-for-autonomous-clip-positioning-in-laparoscopic-cholecystectomy-on-a-phantom)  
    标签：评分：9.0/10、query:partseg
-   evidence：结合全局上下文的点云语义分割
-7. [TextHOI-3D: Text-to-3D Hand-Object Interaction via Discrete Multi-View Generation and Joint Mesh Optimization](/20260603-20260612/2606.11805v1-texthoi-3d-text-to-3d-hand-object-interaction-via-discrete-multi-view-generation-and-joint-mesh-optimization)  
-   标签：评分：9.0/10、query:dgen
-   evidence：文本到3D手物交互生成，利用多视图生成和网格优化
-8. [AnimaSpark: A Feed-Forward Method for Animating Arbitrary 3D Objects](/20260603-20260612/2606.10988v1-animaspark-a-feed-forward-method-for-animating-arbitrary-3d-objects)  
+   evidence：用于外科手术夹定位的点云部件级分割
+5. [3D Oral Modelling with Improved Vertex Distribution Using Matching-Based Learning](/202606/12/2606.07907v1-3d-oral-modelling-with-improved-vertex-distribution-using-matching-based-learning)  
+   标签：评分：8.0/10、query:ffdr
+   evidence：从图像前馈3D重建
+6. [Latent Spatial Memory for Video World Models](/202606/12/2606.09828v1-latent-spatial-memory-for-video-world-models)  
    标签：评分：8.0/10、query:dgen
-   evidence：前馈方法用于类别无关3D动画生成
+   evidence：用于视频生成中3D一致性的潜在空间记忆，支持3D场景生成
+7. [DynaTok: Token-Based 4D Reconstruction from Partial Point Clouds](/202606/12/2606.12189v1-dynatok-token-based-4d-reconstruction-from-partial-point-clouds)  
+   标签：评分：8.0/10、query:ffdr
+   evidence：基于Transformer的Token化局部点云4D重建
 
 ### 速读区论文标签
-1. [ABot-Earth 0.5: Generative 3D Earth Model](/20260603-20260612/2606.09967v1-abot-earth-05-generative-3d-earth-model)  
-   标签：评分：8.0/10、query:dgen
-   evidence：基于卫星图像的生成式3D地球模型，使用3D高斯泼溅
-2. [P3D-Bench: Benchmarking MLLMs for Parametric 3D Generation and Structural Reasoning](/20260603-20260612/2606.11152v2-p3d-bench-benchmarking-mllms-for-parametric-3d-generation-and-structural-reasoning)  
-   标签：评分：8.0/10、query:dgen
-   evidence：针对多模态大模型从文本/图像生成参数化3D程序的基准
-3. [3D-CBM: A Framework for Concept-Based Interpretability in Generative 3D Modeling](/20260603-20260612/2606.11446v1-3d-cbm-a-framework-for-concept-based-interpretability-in-generative-3d-modeling)  
-   标签：评分：8.0/10、query:dgen
-   evidence：将概念瓶颈模型引入可解释的生成式3D建模
-4. [A Turbo-Inference Strategy for Object Detection and Instance Segmentation](/20260603-20260612/2606.12371v1-a-turbo-inference-strategy-for-object-detection-and-instance-segmentation)  
-   标签：评分：8.0/10、query:partseg
-   evidence：目标检测与实例分割的涡轮推理策略
-5. [OctaOctree Neural Radiosity for Real-time Glossy Material Rendering](/20260603-20260612/2606.08469v1-octaoctree-neural-radiosity-for-real-time-glossy-material-rendering)  
+1. [Leveraging NeRF-Rendered Images for 3D Gaussian Splatting](/202606/12/2606.09034v1-leveraging-nerf-rendered-images-for-3d-gaussian-splatting)  
    标签：评分：7.0/10、query:dgen
-   evidence：OctaOctree神经辐射度用于实时光泽渲染
-6. [TRON: Tracing Rays to Orchestrate a Neural Renderer for 3D Gaussian Reconstructions](/20260603-20260612/2606.11314v1-tron-tracing-rays-to-orchestrate-a-neural-renderer-for-3d-gaussian-reconstructions)  
+   evidence：神经渲染用于3D内容创作
+2. [Internalizing Geometric Law: Learning from Solver Residuals for Precision-Critical Generation](/202606/12/2606.09278v1-internalizing-geometric-law-learning-from-solver-residuals-for-precision-critical-generation)  
    标签：评分：7.0/10、query:dgen
-   evidence：光线追踪与神经渲染结合用于3D高斯重建
-7. [ISAP-3D: Identity-Slot Aligned Part-Aware 3D Generation](/20260603-20260612/2606.12099v1-isap-3d-identity-slot-aligned-part-aware-3d-generation)  
+   evidence：从自然语言生成精确几何构造
+3. [SHERPA: Seam-aware Harmonized ERP Adaptation for Open-Domain 360$^\circ$ Panorama Generation](/202606/12/2606.12213v1-sherpa-seam-aware-harmonized-erp-adaptation-for-open-domain-360circ-panorama-generation)  
    标签：评分：7.0/10、query:dgen
-   evidence：具有身份槽对齐的部件感知3D生成
-8. [Learning Geometric Representations from Videos for Spatial Intelligent Multimodal Large Language Models](/20260603-20260612/2606.05833v1-learning-geometric-representations-from-videos-for-spatial-intelligent-multimodal-large-language-models)  
+   evidence：文本到360度全景生成
+4. [HRsR: Hierarchical Rotation System Reconstruction](/202606/12/2606.07078v1-hrsr-hierarchical-rotation-system-reconstruction)  
    标签：评分：6.0/10、query:ffdr
-   evidence：从视频中学习几何表示以增强多模态大语言模型的3D空间智能
-9. [DisPOSE: Projected Polystochastic Diffusion for Self-Supervised Multi-View 3D Human Pose Estimation](/20260603-20260612/2606.07419v1-dispose-projected-polystochastic-diffusion-for-self-supervised-multi-view-3d-human-pose-estimation)  
-   标签：评分：6.0/10、query:dgen
-   evidence：从多视图图像中自监督扩散方法估计3D人体姿态
-10. [Seeing What Matters: Perceptual Wrapper with Common Randomness for 3D Gaussian Splatting](/20260603-20260612/2606.11782v1-seeing-what-matters-perceptual-wrapper-with-common-randomness-for-3d-gaussian-splatting)  
-   标签：评分：6.0/10、query:dgen
-   evidence：用于3DGS渲染增强的感知包装器
+   evidence：层次化点云表面重建，用于高效的3D重建
+5. [Multi-planar 2D-U-Net Segmentation of 3D-CT Abdominal Organs augmented by Spatial Occurrence Maps](/202606/12/2606.07717v1-multi-planar-2d-u-net-segmentation-of-3d-ct-abdominal-organs-augmented-by-spatial-occurrence-maps)  
+   标签：评分：6.0/10、query:partseg
+   evidence：多平面2D U-Net用于3D腹部器官分割
+6. [Anatomically Conditioned Recurrent Refinement for Topology-Aware Circle of Willis Segmentation](/202606/12/2606.12319v1-anatomically-conditioned-recurrent-refinement-for-topology-aware-circle-of-willis-segmentation)  
+   标签：评分：6.0/10、query:partseg
+   evidence：血管结构的拓扑感知分割，作为3D部件分割
 
 
 <div class="dpr-home-promo-card">
