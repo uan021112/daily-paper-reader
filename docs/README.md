@@ -6,47 +6,53 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-06-13
-- 运行时间：2026-06-13 20:52:08 UTC
+- 最新运行日期：2026-06-14
+- 运行时间：2026-06-14 21:25:57 UTC
 - 运行状态：成功
-- 本次总论文数：9
-- 精读区：2
-- 速读区：7
+- 本次总论文数：11
+- 精读区：8
+- 速读区：3
 
 ### 今日简报（AI）
-今天精读了3D口腔建模和单目深度估计两篇高分论文，速读7篇涵盖3D建模、物理场景图与全局光照渲染。最值得关注的是口腔建模的顶点分布优化技术和深度估计的统一透视全景方法。建议后续探索3D建模与深度估计的交叉应用，提升场景理解精度。
-- 详情：[/202606/13/README](/202606/13/README)
+今日聚焦3D视觉与生成，精读无约束稀疏照片的3D高斯泼溅及一致表面流模型。最值得关注的是《Wild3R》和《Surflo》，分别在前馈3D重建与全局状态表面流领域取得突破。建议普通读者优先关注这两个方向的开源代码与预训练模型，体验稀疏输入下的高质量3D生成。
+- 详情：[/202606/14/README](/202606/14/README)
 
 ### 精读区论文标签
-1. [3D Oral Modelling with Improved Vertex Distribution Using Matching-Based Learning](/202606/13/2606.07907v1-3d-oral-modelling-with-improved-vertex-distribution-using-matching-based-learning)  
+1. [Wild3R: Feed-Forward 3D Gaussian Splatting from Unconstrained Sparse Photo Collection](/202606/14/2606.11894v2-wild3r-feed-forward-3d-gaussian-splatting-from-unconstrained-sparse-photo-collection)  
+   标签：评分：9.0/10、query:ffdr
+   evidence：针对无约束稀疏照片的前馈三维高斯泼溅重建
+2. [Surflo: Consistent 3D Surface Flow Model with Global State](/202606/14/2606.13644v1-surflo-consistent-3d-surface-flow-model-with-global-state)  
+   标签：评分：9.0/10、query:ffdr
+   evidence：前馈模型将多视图压缩为潜在表示，通过流匹配解码3D表面点
+3. [World Tracing: Generative Pixel-Aligned Geometry Beyond the Visible](/202606/14/2606.13652v1-world-tracing-generative-pixel-aligned-geometry-beyond-the-visible)  
+   标签：评分：9.0/10、query:ffdr
+   evidence：从图像到像素对齐3D几何的生成
+4. [Envision4D: Envisioning Visual Futures via Feed-forward 4D Gaussian Splatting for Autonomous Driving](/202606/14/2606.10656v1-envision4d-envisioning-visual-futures-via-feed-forward-4d-gaussian-splatting-for-autonomous-driving)  
    标签：评分：8.0/10、query:ffdr
-   evidence：从多视角图像前馈预测3D点云
-2. [DepthMaster: Unified Monocular Depth Estimation for Perspective and Panoramic Images](/202606/13/2606.12368v1-depthmaster-unified-monocular-depth-estimation-for-perspective-and-panoramic-images)  
+   evidence：前馈4D高斯泼溅用于未来外推
+5. [DynaTok: Token-Based 4D Reconstruction from Partial Point Clouds](/202606/14/2606.12189v1-dynatok-token-based-4d-reconstruction-from-partial-point-clouds)  
    标签：评分：8.0/10、query:ffdr
-   evidence：统一前馈网络实现像素到深度的直接映射
+   evidence：基于前馈令牌的部分点云4D重建
+6. [JointEdit3D: Feed-Forward 3D Scene Editing in a Unified Latent Space](/202606/14/2606.13345v1-jointedit3d-feed-forward-3d-scene-editing-in-a-unified-latent-space)  
+   标签：评分：8.0/10、query:ffdr
+   evidence：前馈3D场景编辑与统一潜在空间
+7. [MoVerse: Real-Time Video World Modeling with Panoramic Gaussian Scaffold](/202606/14/2606.13376v1-moverse-real-time-video-world-modeling-with-panoramic-gaussian-scaffold)  
+   标签：评分：8.0/10、query:dgen
+   evidence：从单张图像重建可交互3D场景
+8. [Flex4DHuman: Flexible Multi-view Video Diffusion for 4D Human Reconstruction](/202606/14/2606.13655v1-flex4dhuman-flexible-multi-view-video-diffusion-for-4d-human-reconstruction)  
+   标签：评分：8.0/10、query:dgen
+   evidence：基于扩散的4D人体视频重建
 
 ### 速读区论文标签
-1. [Skeletal-Anchored Dual Harmonics for Structured 3D Modeling](/202606/13/2606.07337v1-skeletal-anchored-dual-harmonics-for-structured-3d-modeling)  
+1. [ManiSplat: Manipulation Trajectory Synthesis from Monocular Video via Decoupled 3D Gaussian Splatting](/202606/14/2606.10645v1-manisplat-manipulation-trajectory-synthesis-from-monocular-video-via-decoupled-3d-gaussian-splatting)  
    标签：评分：7.0/10、query:dgen
-   evidence：一种将表面几何与内部骨架组织耦合的新型3D形状表示方法
-2. [PhysGraph: A Physics-aware 3D Scene Graph for Perception and Reasoning](/202606/13/2606.08655v1-physgraph-a-physics-aware-3d-scene-graph-for-perception-and-reasoning)  
+   evidence：从单目视频重建动态3D场景，使用解耦3D高斯
+2. [DIMOS: Disentangling Instance-level Moving Object Segmentation](/202606/14/2606.12826v1-dimos-disentangling-instance-level-moving-object-segmentation)  
    标签：评分：7.0/10、query:partseg
-   evidence：具有物体级部件语义的3D场景图
-3. [Path-Traced Inverse Rendering with Global Illumination in 3D Gaussian Fields](/202606/13/2606.09606v1-path-traced-inverse-rendering-with-global-illumination-in-3d-gaussian-fields)  
+   evidence：移动实例分割方法
+3. [From Tokens to Faces: Investigating Discrete Speech Representations for 3D Facial Animation](/202606/14/2606.13630v1-from-tokens-to-faces-investigating-discrete-speech-representations-for-3d-facial-animation)  
    标签：评分：7.0/10、query:dgen
-   evidence：基于3D高斯场的路径追踪逆渲染
-4. [Beyond Spherical Harmonics: Rethinking Appearance Models for Radiance Reconstruction](/202606/13/2606.09794v1-beyond-spherical-harmonics-rethinking-appearance-models-for-radiance-reconstruction)  
-   标签：评分：7.0/10、query:dgen
-   evidence：用于新视角合成的辐射度重建
-5. [DynaTok: Token-Based 4D Reconstruction from Partial Point Clouds](/202606/13/2606.12189v1-dynatok-token-based-4d-reconstruction-from-partial-point-clouds)  
-   标签：评分：7.0/10、query:ffdr
-   evidence：基于前馈token的部分点云4D重建
-6. [Leveraging NeRF-Rendered Images for 3D Gaussian Splatting](/202606/13/2606.09034v1-leveraging-nerf-rendered-images-for-3d-gaussian-splatting)  
-   标签：评分：6.0/10、query:dgen
-   evidence：利用NeRF渲染图像改进3D高斯溅射，用于新视角合成
-7. [Envision4D: Envisioning Visual Futures via Feed-forward 4D Gaussian Splatting for Autonomous Driving](/202606/13/2606.10656v1-envision4d-envisioning-visual-futures-via-feed-forward-4d-gaussian-splatting-for-autonomous-driving)  
-   标签：评分：6.0/10、query:ffdr
-   evidence：用于自动驾驶的前馈4D场景预测
+   evidence：利用离散语音表示驱动3D面部动画生成
 
 
 <div class="dpr-home-promo-card">
