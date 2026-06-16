@@ -6,50 +6,67 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-06-15
-- 运行时间：2026-06-15 23:04:37 UTC
+- 最新运行日期：2026-06-16
+- 运行时间：2026-06-16 23:05:00 UTC
 - 运行状态：成功
-- 本次总论文数：10
+- 本次总论文数：15
 - 精读区：5
-- 速读区：5
+- 速读区：10
 
 ### 今日简报（AI）
-今日推荐10篇论文，重点聚焦3D场景编辑与重建；最值得关注《JointEdit3D》与《Pano3D》双9.0高分，分别在前馈统一潜空间编辑和联合全景分割重建上取得突破；建议从这两篇入手，再结合《VideoMDM》和《MUSE》了解2D监督生成与增量式场景创作。
-- 详情：[/202606/15/README](/202606/15/README)
+1) 今日推荐15篇论文，精读聚焦3D重建与全景分割、智能场景创作两大突破。
+2) 最值得关注：满分论文《Pano3D》统一重建与分割框架，以及《MUSE》用记忆驱动实现增量需求满足的3D场景编辑。
+3) 建议深入阅读这两篇，理解其如何将多任务融合与交互式创作结合，推动3D视觉实用化。
+- 详情：[/202606/16/README](/202606/16/README)
 
 ### 精读区论文标签
-1. [JointEdit3D: Feed-Forward 3D Scene Editing in a Unified Latent Space](/202606/15/2606.13345v1-jointedit3d-feed-forward-3d-scene-editing-in-a-unified-latent-space)  
-   标签：评分：9.0/10、query:ffdr
-   evidence：利用统一潜在空间进行前馈3D场景编辑，直接从编辑后的RGB映射到3D几何
-2. [Pano3D: Unified 3D Reconstruction and Panoptic Segmentation](/202606/15/2606.14307v1-pano3d-unified-3d-reconstruction-and-panoptic-segmentation)  
-   标签：评分：9.0/10、query:ffdr
-   evidence：前馈3D重建与全景分割统一框架
-3. [MooMIns -- Monocular 3D Reconstruction and Object Pose Estimation from Multiple Instances](/202606/15/2606.14389v1-moomins----monocular-3d-reconstruction-and-object-pose-estimation-from-multiple-instances)  
+1. [Pano3D: Unified 3D Reconstruction and Panoptic Segmentation](/202606/16/2606.14307v1-pano3d-unified-3d-reconstruction-and-panoptic-segmentation)  
+   标签：评分：10.0/10、query:ffdr
+   evidence：3D前馈重建和全景分割
+2. [MUSE: Agentic 3D Scene Authoring via Memory-Grounded Incremental Requirement Satisfaction](/202606/16/2606.14168v1-muse-agentic-3d-scene-authoring-via-memory-grounded-incremental-requirement-satisfaction)  
    标签：评分：9.0/10、query:dgen
-   evidence：单目多实例3D重建
-4. [Instruct-Particulate: Scaling Feed-Forward 3D Object Articulation with Kinematic Control](/202606/15/2606.14699v1-instruct-particulate-scaling-feed-forward-3d-object-articulation-with-kinematic-control)  
-   标签：评分：9.0/10、query:partseg
-   evidence：前馈3D物体关节重建与运动学部件分割
-5. [DepthMaster: Unified Monocular Depth Estimation for Perspective and Panoramic Images](/202606/15/2606.12368v2-depthmaster-unified-monocular-depth-estimation-for-perspective-and-panoramic-images)  
-   标签：评分：8.0/10、query:ffdr
-   evidence：前馈式单目深度估计，实现像素到3D几何的直接映射
+   evidence：文本驱动的3D场景创作与增量需求满足
+3. [SpatialAvatar-0: High-Quality 4D Head Avatar with Multi-Stage Reconstruction](/202606/16/2606.15659v1-spatialavatar-0-high-quality-4d-head-avatar-with-multi-stage-reconstruction)  
+   标签：评分：9.0/10、query:ffdr
+   evidence：用于3D头部虚拟形象重建的前馈预测器
+4. [Flex4DHuman: Flexible Multi-view Video Diffusion for 4D Human Reconstruction](/202606/16/2606.13655v2-flex4dhuman-flexible-multi-view-video-diffusion-for-4d-human-reconstruction)  
+   标签：评分：8.0/10、query:dgen
+   evidence：多视角视频扩散模型用于4D人体重建
+5. [PointDiffusion: Diffusion-Based Scene Completion in the Point Cloud Domain](/202606/16/2606.16048v1-pointdiffusion-diffusion-based-scene-completion-in-the-point-cloud-domain)  
+   标签：评分：8.0/10、query:dgen
+   evidence：使用扩散模型生成式补全3D场景
 
 ### 速读区论文标签
-1. [VideoMDM: Towards 3D Human Motion Generation From 2D Supervision](/202606/15/2606.13364v1-videomdm-towards-3d-human-motion-generation-from-2d-supervision)  
+1. [Pose-ICL: 3D-Aware In-Context Learning for Pose-Controllable Subject Customization](/202606/16/2606.10902v1-pose-icl-3d-aware-in-context-learning-for-pose-controllable-subject-customization)  
    标签：评分：7.0/10、query:dgen
-   evidence：从二维监督生成三维人体运动
-2. [MUSE: Agentic 3D Scene Authoring via Memory-Grounded Incremental Requirement Satisfaction](/202606/15/2606.14168v1-muse-agentic-3d-scene-authoring-via-memory-grounded-incremental-requirement-satisfaction)  
+   evidence：3D感知的上下文学习用于图像生成中的主体定制
+2. [ViT-Up: Faithful Feature Upsampling for Vision Transformers](/202606/16/2606.14024v1-vit-up-faithful-feature-upsampling-for-vision-transformers)  
+   标签：评分：7.0/10、query:partseg
+   evidence：用于语义分割等密集预测的忠实特征上采样
+3. [S23DR 2026: End-to-End 3D Wireframe Prediction via DETR-Style Set Prediction with Contrastive Denoising](/202606/16/2606.14811v1-s23dr-2026-end-to-end-3d-wireframe-prediction-via-detr-style-set-prediction-with-contrastive-denoising)  
+   标签：评分：7.0/10、query:ffdr
+   evidence：使用DETR风格前馈网络进行端到端3D线框预测
+4. [SGFormer++: Semantic Graph Transformer for Incremental 3D Scene Graph Generation](/202606/16/2606.15328v1-sgformer-semantic-graph-transformer-for-incremental-3d-scene-graph-generation)  
+   标签：评分：7.0/10、query:partseg
+   evidence：3D场景图生成涉及实例分割
+5. [VEPHand: View-Efficient Photometric Hand Performance Capture at Scale](/202606/16/2606.15966v1-vephand-view-efficient-photometric-hand-performance-capture-at-scale)  
    标签：评分：7.0/10、query:dgen
-   evidence：文本驱动的3D场景生成与创作
-3. [WaveDiT: Distribution-Aware Wavelet Flow Matching for Efficient 3D Brain MRI Synthesis](/202606/15/2606.08670v1-wavedit-distribution-aware-wavelet-flow-matching-for-efficient-3d-brain-mri-synthesis)  
+   evidence：从多视图图像重建3D手部
+6. [MVM-IOD: An Industrial Object-Centric Benchmark Dataset for the Evaluation of 3D Reconstruction Methods](/202606/16/2606.16638v1-mvm-iod-an-industrial-object-centric-benchmark-dataset-for-the-evaluation-of-3d-reconstruction-methods)  
+   标签：评分：7.0/10、query:ffdr
+   evidence：用于评估3D重建方法的基准数据集
+7. [MeshLoom: Feed-Forward Non-Rigid Registration of Mesh Sequences](/202606/16/2606.17027v1-meshloom-feed-forward-non-rigid-registration-of-mesh-sequences)  
+   标签：评分：7.0/10、query:ffdr
+   evidence：前馈网格序列配准网络
+8. [Toward Richer Material Generation via Procedural Data Enhancement](/202606/16/2606.14988v1-toward-richer-material-generation-via-procedural-data-enhancement)  
    标签：评分：6.0/10、query:dgen
-   evidence：利用流匹配进行3D脑MRI合成
-4. [Modality Forcing for Scalable Spatial Generation](/202606/15/2606.13676v1-modality-forcing-for-scalable-spatial-generation)  
+   evidence：通过程序数据增强实现更丰富的材质生成
+9. [GeoStream: Toward Precise Camera Controlled Streaming Video Generation](/202606/16/2606.15162v1-geostream-toward-precise-camera-controlled-streaming-video-generation)  
    标签：评分：6.0/10、query:dgen
-   evidence：使用扩散变压器联合生成图像与深度，实现可扩展的深度预测
-5. [NEST3D: A High-Resolution Multimodal Dataset of Sociable Weaver Tree Nests](/202606/15/2606.14562v1-nest3d-a-high-resolution-multimodal-dataset-of-sociable-weaver-tree-nests)  
-   标签：评分：6.0/10、query:partseg
-   evidence：提供带有专家语义分割标签的3D点云数据集，针对不规则结构
+   evidence：利用自刷新3D缓存实现精确相机控制的流式视频生成
+10. [TurboGS: Accelerating 3D Gaussian Splatting via Error-Guided Sparse Pixel Sampling and Optimization](/202606/16/2606.15924v1-turbogs-accelerating-3d-gaussian-splatting-via-error-guided-sparse-pixel-sampling-and-optimization)  
+   标签：评分：6.0/10、query:ffdr
+   evidence：加速3DGS优化以实现高效场景重建
 
 
 <div class="dpr-home-promo-card">
