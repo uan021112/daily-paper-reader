@@ -6,67 +6,52 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-06-16
-- 运行时间：2026-06-16 23:05:00 UTC
+- 最新运行日期：2026-06-17
+- 运行时间：2026-06-17 22:26:40 UTC
 - 运行状态：成功
-- 本次总论文数：15
-- 精读区：5
-- 速读区：10
+- 本次总论文数：10
+- 精读区：2
+- 速读区：8
 
 ### 今日简报（AI）
-1) 今日推荐15篇论文，精读聚焦3D重建与全景分割、智能场景创作两大突破。
-2) 最值得关注：满分论文《Pano3D》统一重建与分割框架，以及《MUSE》用记忆驱动实现增量需求满足的3D场景编辑。
-3) 建议深入阅读这两篇，理解其如何将多任务融合与交互式创作结合，推动3D视觉实用化。
-- 详情：[/202606/16/README](/202606/16/README)
+今天重点关注3D资产的人机协同分割与单目实时高斯泼溅重建两大技术突破。  
+最推荐的两篇精读论文：交互式3D资产分割提升内容创作效率，以及MoonSplat的全局优化单目重建方案。  
+建议尝试将这两项技术结合到交互式3D编辑与动态场景重建的实际项目中。
+- 详情：[/202606/17/README](/202606/17/README)
 
 ### 精读区论文标签
-1. [Pano3D: Unified 3D Reconstruction and Panoptic Segmentation](/202606/16/2606.14307v1-pano3d-unified-3d-reconstruction-and-panoptic-segmentation)  
-   标签：评分：10.0/10、query:ffdr
-   evidence：3D前馈重建和全景分割
-2. [MUSE: Agentic 3D Scene Authoring via Memory-Grounded Incremental Requirement Satisfaction](/202606/16/2606.14168v1-muse-agentic-3d-scene-authoring-via-memory-grounded-incremental-requirement-satisfaction)  
-   标签：评分：9.0/10、query:dgen
-   evidence：文本驱动的3D场景创作与增量需求满足
-3. [SpatialAvatar-0: High-Quality 4D Head Avatar with Multi-Stage Reconstruction](/202606/16/2606.15659v1-spatialavatar-0-high-quality-4d-head-avatar-with-multi-stage-reconstruction)  
-   标签：评分：9.0/10、query:ffdr
-   evidence：用于3D头部虚拟形象重建的前馈预测器
-4. [Flex4DHuman: Flexible Multi-view Video Diffusion for 4D Human Reconstruction](/202606/16/2606.13655v2-flex4dhuman-flexible-multi-view-video-diffusion-for-4d-human-reconstruction)  
-   标签：评分：8.0/10、query:dgen
-   evidence：多视角视频扩散模型用于4D人体重建
-5. [PointDiffusion: Diffusion-Based Scene Completion in the Point Cloud Domain](/202606/16/2606.16048v1-pointdiffusion-diffusion-based-scene-completion-in-the-point-cloud-domain)  
-   标签：评分：8.0/10、query:dgen
-   evidence：使用扩散模型生成式补全3D场景
+1. [Human-in-the-Loop Atlas-Based 3D Asset Segmentation for Interactive Content Workflows](/202606/17/2606.17824v1-human-in-the-loop-atlas-based-3d-asset-segmentation-for-interactive-content-workflows)  
+   标签：评分：8.0/10、query:partseg
+   evidence：使用SAM2进行3D资产交互分割的人机协同管道
+2. [MoonSplat: Monocular Online Gaussian Splatting with Sim(3) Global Optimization](/202606/17/2606.17935v1-moonsplat-monocular-online-gaussian-splatting-with-sim3-global-optimization)  
+   标签：评分：8.0/10、query:ffdr
+   evidence：使用高斯溅射与全局优化的单目在线三维重建
 
 ### 速读区论文标签
-1. [Pose-ICL: 3D-Aware In-Context Learning for Pose-Controllable Subject Customization](/202606/16/2606.10902v1-pose-icl-3d-aware-in-context-learning-for-pose-controllable-subject-customization)  
+1. [Atomic Design Transformer: xTB-Validated 3D Molecule Generation from Scaffolds](/202606/17/2606.15220v1-atomic-design-transformer-xtb-validated-3d-molecule-generation-from-scaffolds)  
    标签：评分：7.0/10、query:dgen
-   evidence：3D感知的上下文学习用于图像生成中的主体定制
-2. [ViT-Up: Faithful Feature Upsampling for Vision Transformers](/202606/16/2606.14024v1-vit-up-faithful-feature-upsampling-for-vision-transformers)  
-   标签：评分：7.0/10、query:partseg
-   evidence：用于语义分割等密集预测的忠实特征上采样
-3. [S23DR 2026: End-to-End 3D Wireframe Prediction via DETR-Style Set Prediction with Contrastive Denoising](/202606/16/2606.14811v1-s23dr-2026-end-to-end-3d-wireframe-prediction-via-detr-style-set-prediction-with-contrastive-denoising)  
+   evidence：用于从骨架生成3D分子的SE(3)不变变压器
+2. [MVM-IOD: An Industrial Object-Centric Benchmark Dataset for the Evaluation of 3D Reconstruction Methods](/202606/17/2606.16638v1-mvm-iod-an-industrial-object-centric-benchmark-dataset-for-the-evaluation-of-3d-reconstruction-methods)  
    标签：评分：7.0/10、query:ffdr
-   evidence：使用DETR风格前馈网络进行端到端3D线框预测
-4. [SGFormer++: Semantic Graph Transformer for Incremental 3D Scene Graph Generation](/202606/16/2606.15328v1-sgformer-semantic-graph-transformer-for-incremental-3d-scene-graph-generation)  
-   标签：评分：7.0/10、query:partseg
-   evidence：3D场景图生成涉及实例分割
-5. [VEPHand: View-Efficient Photometric Hand Performance Capture at Scale](/202606/16/2606.15966v1-vephand-view-efficient-photometric-hand-performance-capture-at-scale)  
+   evidence：用于评估三维重建方法的数据集
+3. [MeshLoom: Feed-Forward Non-Rigid Registration of Mesh Sequences](/202606/17/2606.17027v1-meshloom-feed-forward-non-rigid-registration-of-mesh-sequences)  
+   标签：评分：7.0/10、query:ffdr
+   evidence：用于3D网格的前馈配准网络
+4. [Edit3DGS: Unified Framework for Dynamic Head Editing via 2D Instruction-Guided Diffusion and 3D Gaussian Splatting](/202606/17/2606.17432v1-edit3dgs-unified-framework-for-dynamic-head-editing-via-2d-instruction-guided-diffusion-and-3d-gaussian-splatting)  
    标签：评分：7.0/10、query:dgen
-   evidence：从多视图图像重建3D手部
-6. [MVM-IOD: An Industrial Object-Centric Benchmark Dataset for the Evaluation of 3D Reconstruction Methods](/202606/16/2606.16638v1-mvm-iod-an-industrial-object-centric-benchmark-dataset-for-the-evaluation-of-3d-reconstruction-methods)  
-   标签：评分：7.0/10、query:ffdr
-   evidence：用于评估3D重建方法的基准数据集
-7. [MeshLoom: Feed-Forward Non-Rigid Registration of Mesh Sequences](/202606/16/2606.17027v1-meshloom-feed-forward-non-rigid-registration-of-mesh-sequences)  
-   标签：评分：7.0/10、query:ffdr
-   evidence：前馈网格序列配准网络
-8. [Toward Richer Material Generation via Procedural Data Enhancement](/202606/16/2606.14988v1-toward-richer-material-generation-via-procedural-data-enhancement)  
+   evidence：使用扩散模型和高斯泼溅进行3D头部编辑，与生成式3D建模相关
+5. [Future Dynamic 3D Reconstruction: A 3D World Model with Disentangled Ego-Motion](/202606/17/2606.18250v1-future-dynamic-3d-reconstruction-a-3d-world-model-with-disentangled-ego-motion)  
+   标签：评分：7.0/10、query:dgen
+   evidence：从图像进行未来动态3D重建
+6. [A Robust Point Cloud Analysis Framework Inspired By Primary Visual Cortex](/202606/17/2606.14292v1-a-robust-point-cloud-analysis-framework-inspired-by-primary-visual-cortex)  
+   标签：评分：6.0/10、query:partseg
+   evidence：点云分析框架，适用于部件级分割
+7. [High-Fidelity 4D Hand-Object Capture via Multi-View Spatiotemporal Tracking and Physics-Aware Gaussians](/202606/17/2606.15908v1-high-fidelity-4d-hand-object-capture-via-multi-view-spatiotemporal-tracking-and-physics-aware-gaussians)  
    标签：评分：6.0/10、query:dgen
-   evidence：通过程序数据增强实现更丰富的材质生成
-9. [GeoStream: Toward Precise Camera Controlled Streaming Video Generation](/202606/16/2606.15162v1-geostream-toward-precise-camera-controlled-streaming-video-generation)  
+   evidence：从多视角视频中重建手和物体，无需模板
+8. [ReAge3D: Re-Aging 3D Faces with View Consistency](/202606/17/2606.18156v1-reage3d-re-aging-3d-faces-with-view-consistency)  
    标签：评分：6.0/10、query:dgen
-   evidence：利用自刷新3D缓存实现精确相机控制的流式视频生成
-10. [TurboGS: Accelerating 3D Gaussian Splatting via Error-Guided Sparse Pixel Sampling and Optimization](/202606/16/2606.15924v1-turbogs-accelerating-3d-gaussian-splatting-via-error-guided-sparse-pixel-sampling-and-optimization)  
-   标签：评分：6.0/10、query:ffdr
-   evidence：加速3DGS优化以实现高效场景重建
+   evidence：使用扩散模型和视角一致性进行三维人脸年龄重演，属于生成式三维建模
 
 
 <div class="dpr-home-promo-card">
