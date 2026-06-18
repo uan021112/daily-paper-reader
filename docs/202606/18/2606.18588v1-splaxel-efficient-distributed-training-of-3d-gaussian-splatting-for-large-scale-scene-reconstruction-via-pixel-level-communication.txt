@@ -1,0 +1,1569 @@
+Title: Splaxel: Efficient Distributed Training of 3D Gaussian Splatting for Large-scale Scene Reconstruction via Pixel-level Communication
+
+URL Source: https://arxiv.org/pdf/2606.18588v1
+
+Published Time: Thu, 18 Jun 2026 00:23:28 GMT
+
+Number of Pages: 17
+
+Markdown Content:
+# Splaxel : Efficient Distributed Training of 3D Gaussian Splatting for Large-scale Scene Reconstruction via Pixel-level Communication 
+
+Wenqi Jia* 
+
+UT Arlington 
+
+wenqi.jia@uta.edu 
+
+Zhewen Hu* 
+
+Texas A&M University 
+
+zhewen@tamu.edu 
+
+Ying Huang* 
+
+UT Arlington 
+
+ying.huang@uta.edu 
+
+Yu Gong 
+
+Independent Researcher 
+
+yu3.gong@gmail.com 
+
+Stavros Kalafatis 
+
+Texas A&M University 
+
+skalafatis-tamu@tamu.edu 
+
+Yuke Wang 
+
+Rice University 
+
+yuke.wang@rice.edu 
+
+Wei Niu 
+
+University of Georgia 
+
+wniu@uga.edu 
+
+Chengming Zhang 
+
+University of Houston 
+
+czhang59@central.uh.edu 
+
+Ang Li 
+
+University of Washington 
+
+uuudown@gmail.com 
+
+Sheng Di 
+
+Argonne National Labs 
+
+sdi1@anl.gov 
+
+Yuede Ji 
+
+UT Arlington 
+
+yuede.ji@uta.edu 
+
+Bo Fang 
+
+UT Arlington 
+
+bo.fang@uta.edu 
+
+Miao Yin †
+
+UT Arlington 
+
+miao.yin@uta.edu 
+
+Abstract 
+
+3D Gaussian Splatting (3DGS) enables high-fidelity and real-time 3D scene reconstruction, but scaling training to large-scale scenes requires optimizing hundreds of millions of Gaussians across multiple GPUs. Existing distributed ap-proaches either partition scenes into isolated regions, caus-ing global inconsistency, or rely on global Gaussian-level exchanges, which lead to substantial growth in inter-GPU communication and quickly dominate iteration time. We propose Splaxel , a communication-efficient distributed 3DGS training framework based on pixel-level local render-ing and global composition. Instead of synchronizing Gaus-sians, each GPU renders its local subset and exchanges only partial pixel values, maintaining mathematical consistency while keeping communication cost stable as the scene size increases. Splaxel further reduces pixel-level redundancy through geometric and transmittance visibility prediction and improves GPU utilization via conflict-free camera-view consolidation. Evaluated on large-scale datasets with up to 120M Gaussians, Splaxel achieves up to 7.6 × speedup over the state-of-the-art distributed 3DGS framework while pre-serving high reconstruction quality. 
+
+1 Introduction 
+
+3D scene reconstruction supports a wide range of applica-tions, including autonomous driving [ 38 , 51 , 78 , 80 ], digital twins [ 9 ], and augmented reality [ 16 , 26 ], where modeling 
+
+* Equal contribution.  
+
+> †
+
+Corresponding author. Local  
+
+> Projection
+> Gaussian
+> Communication
+> Global Blending
+> & Rendering
+> GPU 0
+> Local
+> Projection
+> Gaussian
+> Communication
+> Global Blending
+> & Rendering
+> GPU 1
+> (b) Existing distributed training with Gaussian -level communication
+> Local
+> Projection
+> Local Blending
+> & Rendering
+> Pixel
+> Communication
+> GPU 0
+> Local
+> Projection
+> Local Blending
+> & Rendering
+> Pixel
+> Communication
+> GPU 1
+> (c) Proposed distributed training with pixel -level communication
+> GPU 0 GPU 1
+> (a) Gaussians partition
+> Global
+> Composition
+> Global
+> Composition
+
+Figure 1. Conceptual comparison between pixel-level com-munication and Gaussian-level communication schemes. fine geometric and appearance detail is critical [ 30 ]. To facili-tate such a process, 3D Gaussian Splatting (3DGS) [ 27 , 46 , 54 ]has emerged as the dominant solution for high-fidelity, real-time scene rendering. 3DGS trains by projecting each 3D Gaussian, defined by its position, covariance, color, and opac-ity, onto the target camera plane, where they are depth-sorted and splat-rendered with alpha blending to form the image. The rendering loss is then backpropagated through the splat-ting pipeline to update all Gaussian parameters [ 27 , 36 ]. By optimizing millions of those explicit 3D Gaussians, 3DGS captures rich spatial details and achieves significantly higher rendering efficiency compared to conventional neural im-plicit representations [32, 35, 48, 55]. Despite its rendering efficiency, scaling 3DGS to large scenes is fundamentally challenging due to its dynamic, view-dependent access patterns and the resulting inefficiencies in distributed training [ 62 , 71 , 73 , 77 ]. To scale up 3DGS for large-scale 3D scene reconstruction [ 5 , 25 , 29 ], the primary 
+
+1                      
+
+> arXiv:2606.18588v1 [cs.DC] 17 Jun 2026 Jia and Yin, et al. Ground
+> truth
+> 𝐿 (𝛩 )=𝐿 !"# +𝜆 𝐿 $%&&'(
+> 3D Gaussians
+> Update parameters
+> {𝝁 ,𝜮 ,𝒄 ,𝑜 }
+> Pixel 1
+> Pixel 2
+> {𝛼 ,
+> c,
+> T}Color of pixel
+> Ray 1
+> Ray 2
+> Ray 3Pixel 3
+> Projection
+> 1
+> Sorting
+> 2
+> Blending
+> 3Parameter
+> Optimization
+> 4
+> 2D Gaussians
+> {𝝁 )$ ,𝜮 )$ ,𝑑 ,
+> c,
+> o}G1depth 1
+> G2depth 2
+> G5depth 5
+> G3depth 3
+> G4depth 4
+> Sorted by depth 𝑑
+> Rendered
+> image
+
+Figure 2. The standard training pipeline of 3D Gaussian Splatting. solution is to leverage distributed training to break the mem-ory barrier of optimizing massive numbers of Gaussians. However, 3DGS exhibits a dynamic and imbalanced access pattern that depends on the current random camera view, where it activates distinct subsets of Gaussians in different views [ 52 , 74 ]. Moreover, the increased number of Gaussians in large-scale scenes significantly intensifies this pattern. Consequently, existing distributed training frameworks for deep neural networks (DNNs), e.g., DeepSpeed [ 53 ], PyTorch DDP [ 37 ], Alpha [ 76 ], which assume static and balanced tensor computations, are incompatible with 3DGS. To tackle these challenges, existing efforts can be broadly categorized into two main directions. i) Algorithm optimiza-tion. Existing works [ 7 , 28 , 41 , 43 ] in this category lever-age divide-and-conquer strategies, partitioning the scene into independent regions, fully optimizing each region sepa-rately across GPUs, and finally merging them for complete reconstruction. While these works can optimize Gaussian parameters locally with the dynamic camera views, they sacrifice global consistency. Consequently, it leads to visi-ble discontinuities across the reconstructed scene as each partition optimizes its Gaussians in isolation without con-sidering neighboring regions. ii) System optimization. In this direction, Grendel [ 75 ] is the only work that globally pre-serves the 3DGS pipeline and consistency. Grendel randomly distributes Gaussians across devices, where each device de-termines the required Gaussians based on the current camera view and requests the missing Gaussians from other devices through all-to-all communication. While this design main-tains global consistency, it faces significant scalability chal-lenges in large-scale scenes. As the number of Gaussians grows, such a global Gaussian-level exchange becomes in-creasingly expensive, leading to a substantial increase in the communication ratio for inter-GPU data transfer. Conse-quently, communication dominates training iteration time and severely limits 3DGS’s scalability and throughput. To address the above issues, we consider the opportunity of a pixel-level communication scheme, where each GPU renders locally based on its local Gaussian partition and ex-changes only the rendered partial pixels for global blending, as shown in Fig. 1. Pixel-level communication enables con-stant data transmission volume across GPUs, regardless of the number of Gaussians involved. Such property alleviates the burden of substantial Gaussians in large-scale scenes. Despite the potential to mitigate communication bottleneck, three main challenges exist. i) Global inconsistency. At the pixel level, local rendering lacks the global Gaussian informa-tion, which may lead to a Gaussian disorder in the blending phase. ii) Pixel-level redundancy. A naive pixel-level commu-nication scheme leads to spatial redundancy and saturation redundancy due to geometric invisibility and transmittance saturation, respectively, resulting in a majority of transmis-sions being zeros, which implies significant bandwidth waste on data that never affects the rendering result. iii) Insufficient GPU utilization. Most camera views only cross a subset of the Gaussian partitions, but all GPUs must participate in the computation for a single view under the naive scheduling strategy. This leads to a high GPU idle rate. In this paper, we propose Splaxel , enabling efficient dis-tributed 3DGS training for large-scale scene reconstruction via pixel-level communication. Splaxel leverages convex-based partition to ensure the global consistency. It reduces spatial redundancy by projecting the vertices of overlapping 3D space between the view frustum and the convex Gaussian partition onto the rendering plane without extra communi-cation. Moreover, Splaxel enhances GPU utilization through an efficient conflict-free camera view and GPU scheduling mechanism. Our contributions are summarized as follows: 
+
+• We analyze the bottleneck ( §3.1) in the existing dis-tributed 3DGS training framework with Gaussian-level communication, identifying the opportunities and challenges of a pixel-level communication scheme. 
+
+• We propose a principled 3DGS distributed training framework based on pixel-level communication ( §4.2), with a reformulation of the Gaussian rendering and parameters update paradigm to maintain mathemati-cal consistency. 
+
+• We present two novel techniques ( §4.3, §4.4) that re-duce pixel-level redundancy by predicting geometric and transmittance invisibility, and improve GPU uti-lization with conflict-free camera view consolidation. 
+
+• We conduct extensive evaluations ( §5) on multiple large-scale datasets, including the largest publicly avail-able ones, Big City Street and Aerial, with 120M Gaus-sians, on which Splaxel outperforms the existing SOTA by 7.6 × and 2.9 × speedups with 8 GPUs, respectively.        
+
+> 2Splaxel: Efficient Distributed Training of 3D Gaussian Splatting for Large-scale Scene Reconstruction via Pixel-level Communication 73.0%
+> 27.0%
+> 74.3%
+> 25.7%
+> 75.8%
+> 24.2%
+> 78.1%
+> 21.9%
+> 80.4%
+> 19.6%
+> 10M 20M 30M 40M 50M
+> # Gaussians
+> 500
+> 1000
+> Comm. Size (MB)  Comm. Size PSNR Communication Time Compute Time
+> 26.0
+> 26.5
+> 27.0
+> 27.5
+> 28.0
+> PSNR (dB)
+
+Figure 3. Communication cost and time breakdown per iter-ation with 8 GPUs and PSNR w.r.t. the number of Gaussians. The red shaded region denotes the transmitted mean ± 1𝜎 .2 4 6 8             
+
+> # GPUs
+> 0
+> 25
+> 50
+> 75
+> 100
+> 125
+> 150
+> Latency (ms)
+> 15.2% 49.2% 61.3% 73.0%
+> 84.8%
+> 50.8% 38.7% 27.0%
+> 10M Gaussians
+> 2468
+> # GPUs
+> 16.7% 49.6% 65.5% 74.3%
+> 83.3%
+> 50.4%
+> 34.5% 25.7%
+> 20M Gaussians
+> Communication Time Compute Time
+
+Figure 4. Communication bottleneck. Communication rises from 15% to over 70% per iteration as scene and GPU scale. 
+
+2 Background 
+
+3D Gaussian Splatting (3DGS) [ 4 , 27 , 65 ] encodes the target scene with a collection of 3D Gaussians. Each Gaussian is represented by its position 𝝁 ∈ R3 for 3D position, covari-ance matrix 𝚺 ∈ R3×3, as well as the opacity value 𝑜 and the color 𝒄 . The covariance matrix 𝚺 is generally composed of 
+
+𝚺 = 𝑹𝑺𝑺 ⊤𝑹 ⊤ with a rotation matrix 𝑹 ∈ R3×3 and a scaling factor 𝑺 ∈ R3×3, In summary, each Gaussian is parametrized by 𝚯 𝑖 = {𝝁 𝑖 , 𝑹 𝑖 , 𝑺 𝑖 , 𝑜 𝑖 , 𝒄 𝑖 }.Fig. 2 illustrates the training process to optimize each Gaussian’s parameters through the following four main steps: 
+
+1 Projection. 3D Gaussians outside the camera’s field of view are first discarded through frustum culling according to its mean position 𝝁 . Each visible 3D Gaussian is then projected into an elliptical 2D Gaussian on the view plane, resulting in 2D attributes, such as depth 𝑑 , 2D position 𝝁 2D 
+
+and 2D covariance 𝚺 2D . The projected 2D covariance matrix is computed as 𝚺 2D = 𝑱 𝑾 𝚺 𝑾 ⊤ 𝑱 ⊤, where 𝑾 represents the view transformation matrix, and 𝑱 is the Jacobian of the affine approximation of the projective transformation. Typically, a pixel will be covered by multiple Gaussians, forming a one-to-many relationship between the pixel and the Gaussians. 
+
+2 Sorting. To produce physically correct rendering results that follow light propagation mechanism, 3D Gaussians are sorted based on their distance from the camera, i.e., depth 𝑑 .
+
+3 Blending & Rendering. 3DGS leverage 𝛼 -blending to compute the pixel color of the rendered image. For the 𝑖 -th Gaussian, the rendering opacity 𝛼 𝑖 is calculated by 
+
+𝛼 𝑖 = 𝑜 𝑖 exp (− 12 (𝒙 − 𝝁 2D  
+
+> 𝑖
+
+)T (𝚺 2D  
+
+> 𝑖
+
+)−1 (𝒙 − 𝝁 2D  
+
+> 𝑖
+
+)) . (1) (b) (c) (a) 
+
+Figure 5. Rendering error maps at two example locations of the Small City Street dataset. (a) Ground truth images. (b) Training with opacity-based Gaussian filtering. (c) Regular training with unbounded Gaussians. Then, the pixel color is rendered by accumulating the Gaus-sians’ color as 
+
+𝐶 𝑝 =∑︁ 
+
+> 𝑖
+
+𝒄 𝑖 𝛼 𝑖 𝑇 𝑖 , (2) and 𝑇 𝑖 = Î𝑖 −1 
+
+> 𝑗 =1
+
+(1 − 𝛼 𝑗 ) is the transmittance of 𝑖 -th Gaussian. 
+
+4 Parameter Optimization. After rendering the image, the loss between the input image and the rendered image in the pixel space is calculated by 𝐿 = 𝐿 RGB + 𝜆𝐿 D-SSIM , where 𝐿 RGB 
+
+denotes the RGB rendering error, and 𝐿 D-SSIM denotes the structural dissimilarity derived from the Structural Similarity Index Measure (SSIM). 
+
+3 Motivation 
+
+In this section, we introduce the fundamental bottleneck that needs to be addressed for large-scale 3D reconstruction and explain our hypothesis for mitigating this bottleneck. 
+
+3.1 Observation: Communication Bottleneck in Large-scale Scene Reconstruction 
+
+Our observation reveals a communication bottleneck inher-ent in current distributed 3DGS training frameworks. Both scene scaling (increasing the number of Gaussians) and sys-tem scaling (increasing the number of GPUs) lead to unex-pected, substantial growth in communication during inter-GPU data transfer. As a result, communication dominates iteration time and severely limits scalability and throughput. Achieving high-quality reconstruction for large-scale scenes requires optimizing tens to hundreds of millions of Gaus-sians, posing significant challenges for distributed 3DGS training [ 6 , 12 , 66 ]. To understand the bottleneck in the state-of-the-art framework, Grendel [ 75 ], we conduct a breakdown analysis on an 8-GPU platform with NVIDIA RTX 6000 Ada GPUs using the large-scale MatrixCity dataset [ 39 ]. Fig. 3 shows that as the number of Gaussians increases from 10M to 50M, per-iteration communication grows from 200 MB to 800 MB and dominates runtime, accounting for 73.0%-80.4%. This trend indicates that larger scenes significantly increase the number of visible Gaussians exchanged across GPUs. Fig. 4 further shows that communication overhead wors-ens with more GPUs. Although local computation decreases   
+
+> 3Jia and Yin, et al. GPU 0
+> Local
+> Pixel
+> Camera
+> Ray
+> Local
+> Rendering
+> Local
+> Rendering
+> GPU 1
+> Local
+> Pixel
+> Global Composition:
+
++ = Global 
+
+> Pixel
+
+Figure 6. Each GPU accumulates the color and transmittance from its local Gaussians into per-pixel aggregates during lo-cal rendering. The local rendered pixel encapsulates all nec-essary information for cross-GPU composition, eliminating the need to transmit individual Gaussians and maintaining a constant communication cost regardless of scene complexity. with parallelism, cross-GPU synchronization grows much faster and quickly dominates iteration time. For example, with 20M Gaussians, increasing GPUs from 2 to 8 raises per-GPU communication time from 24 ms to 68 ms, while the communication ratio increases from 16.7% to 74.3%. These results reveal a fundamental communication bottle-neck in existing distributed 3DGS frameworks: both scene scaling and system scaling lead to substantial increases in inter-GPU data transfer, causing communication to dominate runtime and limiting scalability. 
+
+3.2 Root Cause of Communication Bottleneck: View-dependent Gaussian Access GPU 1 GPU 0 
+
+> GPU 2 GPU 3
+> View 1
+> View 2
+
+Figure 7. The re-quested Gaussians are dynamically dependent on the current views. In the existing distributed training paradigm, for each target view in the dataset, each GPU must request the required projected Gaussians that are not on itself to render the whole image to calculate the gra-dient and update the Gaussian pa-rameters. In large scenes contain-ing tens of millions of Gaussians, a single target view may involve mil-lions of cross-GPU requests. Conse-quently, such a Gaussian-level com-munication scheme causes significantly increased commu-nication overhead. Additionally, the number of cross-view GPUs increases in proportion to the number of GPUs. When more GPUs participate in training, the Gaussians required for a given view are scattered across a larger set of devices. Each GPU must therefore retrieve remote Gaussians from more peers, multiplying the total amount of data exchanged. This effect creates a nonlinear growth in communication cost with respect to both the number of Gaussians and the num-ber of GPUs. Due to the nature that per-iteration Gaussians are dependent on the dynamic views, which are randomly distributed from all angles in the large-scale datasets, it is unable to reduce the amount of Gaussian communication for Partition 0 Partition 1           
+
+> (b) Convex Partitions
+> (a) Non -Convex Partitions
+> Convex
+> Ray re -enters Partition 1
+> Iter -GPU order breaks
+> Ray leaves Partition 1
+> Convex
+> Convex
+> Non -convex
+> Partition 0 Partition 1
+> GPU 0 / Partition 0
+> GPU 1 / Partition 1
+> GPU 1 / Partition 1
+> GPU 0 / Partition 0
+
+Figure 8. (a) Local rendering in non-convex partitions can-not guarantee the global blending order. (b) Convex parti-tions ensure consistent global inter-GPU depth ordering. all views via an optimized partition as demonstrated in Fig. 7. Furthermore, the communication is tightly synchronized with the rendering and backpropagation pipeline. Each GPU must wait for the arrival of remote Gaussian data before pro-ceeding with global pixel composition, creating serialization points that further amplify iteration delay. The overall sys-tem throughput, therefore, becomes bounded by inter-GPU communication. 
+
+3.3 Can Reducing Gaussians Mitigate Bottleneck? 
+
+A natural approach to alleviate the communication bottle-neck is to reduce the number of transmitted Gaussians, but this introduces a fundamental trade-off between efficiency and rendering correctness. Specifically, each GPU transmits only the Gaussians whose opacity exceeds a predefined threshold, while skipping those with low transparency values that contribute less to the rendered image. This simple rule ef-fectively discards Gaussians from inter-GPU communication, significantly reducing both the data volume and transmis-sion time per iteration. However, this approach compromises global rendering consistency. The opacity of a Gaussian is highly view-dependent and context-sensitive: Gaussians that appear nearly transparent in one view may still play a critical role in another. By discarding low-opacity Gaussians globally, the framework introduces inconsistencies across views, as different GPUs may operate with incomplete or mismatched Gaussian sets, leading to incorrect pixel composition and visible rendering artifacts. As shown in Fig. 5, on the Small City Street dataset, when transmitting only Gaussians whose opacity exceeds a certain threshold, the rendering error is significantly amplified compared to regular distributed train-ing. This trade-off between communication efficiency and reconstruction fidelity highlights the fundamental limitation of Grendel [ 75 ], motivating a more principled distributed training framework for large-scale reconstruction.                                 
+
+> 4Splaxel: Efficient Distributed Training of 3D Gaussian Splatting for Large-scale Scene Reconstruction via Pixel-level Communication Ray 0
+> Local
+> Rendering
+> Ray 0
+> Local
+> Rendering
+> Comm.
+> Ordered
+> by Depth
+> Ordered
+> by Depth
+> Global
+> Compositing
+> =
+> +x
+> x=
+> Final
+> Color
+> Ground
+> Truth
+> || -||
+> Final
+> Color
+> Ground
+> Truth
+> || -|| Global
+> Compositing
+> GPU 0/Partition 0
+> GPU 1/Partition 1
+> Ray 0
+> GPU 0/Partition 0GPU1 /Partition 1Final
+> Color
+> Near Far
+> Camera
+> Forward
+> Backward
+> Color
+> Transmittance
+> Depth
+> Local Variable
+> Local Variable
+> Local Variable
+> +
+
+Figure 9. Distributed rendering with pixel-level communica-tion. Each GPU exchanges per-pixel color, transmittance, and depth; The received pixels are composited in global depth order for consistent rendering, and gradients propagate lo-cally without further communication. 
+
+3.4 Opportunity: Pixel-level Communication 
+
+To fundamentally mitigate the bottleneck, we consider the opportunity, can we transmit local rendering intermediates instead of the Gaussians? Specifically, each GPU indepen-dently accumulates the contributions of its local Gaussians and performs rendering to obtain an intermediate image. Then, all the corresponding pixels from intermediate images are aggregated along the same camera ray to render the final image. As illustrated in Fig. 6, GPU 0 and GPU 1 compute their local rendering results independently, and GPU 1 only needs the “local pixel" (red) from GPU 0 to render the pixel at the same “local pixel" (blue) on the camera ray. In this way, the communication is no longer relevant to the num-ber of Gaussians. Instead, the communication cost of such a pixel-level communication scheme is approximately con-stant with respect to the resolution, thereby eliminating the tremendous Gaussian transmission in large-scale scenes. 
+
+4 Pixel-level Communication for Efficient Distributed 3DGS Training 
+
+4.1 Overview 
+
+Based on the analysis and opportunity presented in Section 3, we propose Splaxel , an efficient distributed 3DGS training framework for high-quality large-scale scene reconstruction via pixel-level communication. The key innovation in the proposed design is reformulating the distributed 3DGS train-ing to expose pixel-level communication, which inherently targets large-scale scene reconstruction tasks. This reformu-lation, discussed in Section 4.2, provides a principled foun-dation for pixel-level distributed 3DGS training that differs fundamentally from the prior Gaussian-level approach. Adopting a pixel-level communication scheme introduces challenges of redundant inter-GPU pixel transmission and in-sufficient GPU utilization. We develop two novel techniques to address those challenges and fully unlock the potential of the proposed pixel-level communication scheme. Section 4.3 presents a communication-free approach that predicts the invisible pixels before and during training, respectively, thereby offering a significant reduction in spatial and satu-ration redundancy. Section 4.4 presents an efficient schedul-ing mechanism with conflict-free view consolidation, which leverages the disjoint nature of workload distribution to en-able concurrent execution of multiple views. This mechanism removes GPU bubbles and improves overall throughput by reducing synchronization across different camera views. 
+
+4.2 Pixel-Level Communication Scheme Challenge: How to Maintain Inter-GPU Blending Or-der? To employ pixel-level communication for 3DGS dis-tributed training, the key challenge is to maintain the global blending order of Gaussians. Recalling the blending step in Section 2, the color of each rendered pixel is computed through the sequential accumulation of colors from depth-ordered Gaussians along the camera ray, where the transmit-tance at each step depends on all previously accumulated opacity. For pixel-level communication, each GPU has no access to the Gaussians residing on other GPUs. The local pixels (partial to the final pixels) generated by a GPU need to be consistent with the global blending order for the training algorithm to yield the correct rendering results. As illustrated in Fig. 8a, the red camera ray enters Partition 1 twice, and the inter-GPU depth order is broken when aggregating local pixels from GPU 0 and GPU 1. To maintain the global order, GPU 1 must render two local images based on the Gaus-sians on the left and right sides of Partition 0, respectively, resulting in the doubled communication cost for Partition 1. 
+
+Opportunity: Convex Partitioning Enables Globally Ordered Local Rendering. To overcome the challenge, we identify an opportunity to preserve global blending order by exploiting geometric properties. We find that if all the par-titions are convex, the global blending order is guaranteed. Aconvex partition is defined as a region in which any line seg-ment connecting two points within it remains entirely inside. When the scene is divided into convex regions, each pixel’s ray intersects with any GPU’s region at most once, resulting in a globally ordered accumulation of Gaussian contributions. As shown in Fig. 8b, all the camera rays enter and exit both Partition 0 and 1 only once. Therefore, GPU 0 and 1 can per-form local blending based on local Gaussians by depth only once, and the global aggregation of per-GPU pixels along the ray preserves the global blending ordering without extra communication. Splaxel employs the axis-aligned bounding box (AABB) method to obtain convex partitions. 
+
+Design of Distributed Training with Pixel-level Com-munication. We design the pixel-level communication-based distributed training framework as shown in Fig. 9. The frame-work consists of three steps: local rendering , global composi-tion , and backward propagation . Among them, local rendering follows the standard 3DGS rendering procedure within each GPU’s local partition, while our key contribution is to enable                      
+
+> 5Jia and Yin, et al. GPU 3
+> GPU 0
+> GPU 2
+> GPU 1
+> (a) Top View of Scene -space Partitions
+> High -opacity
+> Gaussians
+> Spatial
+> Redundancy
+> (b) Front View :Spatial Redundancy
+> Invisible Pixels
+> outside
+> Frustum
+> (c) Front View :Saturation Redundancy
+> Saturation
+> Redundancy,
+> No Contribution
+> for Global
+> Composition
+> All Pixels
+> Get Saturated
+> after GPU 3
+> Projected
+> Intersection
+> Vertices
+> Before
+> Training
+> During
+> Training
+> Visible Region
+> inside Frustum
+> Invisible Region Occluded Region
+> Saturated Pixels
+> Non -occluded
+> Region
+> AB
+> C
+> DEF
+> GH
+> AB
+> CH
+> HC
+> DE
+> G
+> EF
+> A
+> B
+> CH
+> CH
+> DEEF
+> GH
+> H
+
+Figure 10. Spatial and saturation redundancy. (a) Each GPU covers only a portion of the scene geometry, leaving invisible regions outside its frustum that cause spatial redundancy . (b) These invisible regions lead to redundant local pixel rendering and communication, as shown in the front view. (c) During training, some Gaussians become highly opaque, producing saturation redundancy where later GPUs no longer contribute to the global composition. mathematically consistent cross-GPU training through pixel-level communication, including the global composition of partial pixels and the corresponding backward propagation. 
+
+1 Local Rendering. This step is mainly to compute each GPU’s partial pixel contributions by blending its locally stored Gaussians along each camera ray in depth order. We define Q𝑚 as the set of Gaussians on the 𝑚 -th GPU, on which the local rendering process is performed within the corre-sponding convex partition. To render the partial pixel color 
+
+𝐶 𝑚 𝑝 for pixel 𝑝 on GPU 𝑚 , the Gaussians associated with the camera ray of that pixel are first sorted locally by depth. Then, the color is rendered by the local blending as: 
+
+𝐶 𝑚 𝑝 =∑︁  
+
+> 𝑖 ∈ Q 𝑚
+
+𝒄 𝑖 𝛼 𝑖 𝑖 −1Ö
+
+> 𝑗 =1
+
+(1 − 𝛼 𝑗 ). (3) To aggregate all partial pixels from associated GPUs for the final rendering image, we also need to calculate the pixel-wise partial transmittance 𝑇 𝑚 𝑝 and the partial depth 𝐷 𝑚 𝑝 by 
+
+𝑇 𝑚 𝑝 =
+
+Ö 
+
+> 𝑖 ∈ Q 𝑚
+
+(1 − 𝛼 𝑖 ), 𝐷 𝑚 𝑝 =∑︁  
+
+> 𝑖 ∈ Q 𝑚
+
+𝑑 𝑖 𝑖 −1Ö
+
+> 𝑗 =1
+
+(1 − 𝛼 𝑗 ). (4) Such information is transmitted to the GPUs that the camera ray crosses, along with the partial pixels for maintaining the global order. 
+
+2 Global Composition. This step composes partial pixels from multiple GPUs into the final image while preserving the global rendering order. For the pixel 𝑝 , we first sort the colors according to their partial depth 𝐷 𝑚 𝑝 , and then traverse the GPUs from front to back along with the camera ray to ac-cumulate the local rendering color with partial transmittance 
+
+𝑇 𝑚 𝑝 . This will lead to a global rendering color 𝐶 𝑝 :
+
+𝐶 𝑝 =
+
+> 𝑀
+
+∑︁ 
+
+> 𝑚
+
+𝐶 𝑚 𝑝 
+
+Ö
+
+> 𝑘 <𝑚
+
+𝑇 𝑘 𝑝 . (5) Eq. 5 holds equivalently to Eq.2 for all 𝑝 . Fig. 9 shows only the local rendering color, partial depth, and partial transmittance need to be transmitted in the proposed training framework. Once the rendering resolution is set, the communication size is also fixed and independent to the number of Gaussians. 
+
+3 Backward Propagation. This step backpropagates gradi-ents through the globally composed pixels to update each GPU’s local Gaussians. After global rendering, we can cal-culate the loss 𝐿 between the globally rendered image and the ground truth, and compute the gradients to update the Gaussian parameters. In the pixel-level communication, since the color is obtained by combining partial pixels from mul-tiple GPUs, we reformulate the gradient backpropagation accordingly. Similar to the forward pass, the per-Gaussian gradient backpropagates through the intermediate partial pixel on each GPU. Specifically, for all Gaussians on GPU 
+
+𝑚 , i.e., 𝑖 ∈ Q 𝑚 , the gradient to 𝛼 𝑖 and 𝒄 𝑖 , 𝜕𝐿 𝜕𝛼 𝑖 = 𝜕𝐿 𝜕𝐶 𝑝  
+
+> 𝜕𝐶 𝑝
+> 𝜕𝛼 𝑖
+
+and  
+
+> 𝜕𝐿 𝜕 𝒄 𝒊
+
+= 𝜕𝐿 𝜕𝐶 𝑝  
+
+> 𝜕𝐶 𝑝
+> 𝜕 𝒄 𝒊
+
+, can be calculated by 
+
+𝜕𝐶 𝑝 
+
+𝜕𝛼 𝑖 
+
+= 𝜕𝐶 𝑚 𝑝 
+
+𝜕𝛼 𝑖 
+
+Ö
+
+> 𝑘 <𝑚
+
+𝑇 𝑘 𝑝 + 𝜕𝑇 𝑚 
+
+𝜕𝛼 𝑖 ∑︁ 𝑘 >𝑚 
+
+𝐶 𝑘 𝑝 
+
+Ö
+
+> 𝑠 <𝑘,𝑠 ≠𝑚
+
+𝑇 𝑠 𝑝 , (6) 
+
+𝜕𝐶 𝑝 
+
+𝜕 𝒄 𝒊 
+
+= 𝜕𝐶 𝑚 𝑝 
+
+𝜕 𝒄 𝑖 
+
+Ö
+
+> 𝑘 <𝑚
+
+𝑇 𝑘 𝑝 . (7) As each GPU retains the local rendering color and partial transmittance of other GPUs, the parameters can be opti-mized without any additional cross-GPU communication. 
+
+4.3 Pixel-level Redundancy Reduction Challenge: Pixel-level Redundancy from Geometric Invisibility and Transmittance Saturation. Under the pixel-level communication scheme, we observe that a sub-stantial portion of transmitted pixels never influence the final image, indicating significant bandwidth waste (Fig. 11). These redundancies arise from two aspects. 
+
+i) Spatial redundancy from geometric invisibility. As illus-trated in Fig. 10a, each GPU covers only a portion of the scene 3D space, leaving large parts of the camera frustum outside its spatial geometry. These invisible regions lead to 
+
+> 6
+
+Splaxel: Efficient Distributed Training of 3D Gaussian Splatting for Large-scale Scene Reconstruction via Pixel-level Communication 0 50 100               
+
+> Zero-pixel Ratio (%)
+> 0.01
+> 0.02
+> 0.03
+> 0.04
+> Density
+> Mean = 45%
+> GPU 0
+> Small Street
+> 050 100
+> Zero-pixel Ratio (%)
+> 0.01
+> 0.02
+> 0.03
+> 0.04
+> Mean = 45%
+> GPU 1
+> 050 100
+> Zero-pixel Ratio (%)
+> 0.01
+> 0.02
+> 0.03
+> 0.04
+> Mean = 48%
+> GPU 2
+> 050 100
+> Zero-pixel Ratio (%)
+> 0.01
+> 0.02
+> 0.03
+> 0.04
+> Mean = 53%
+> GPU 3
+> 050 100
+> Zero-pixel Ratio (%)
+> 0.01
+> 0.02
+> 0.03
+> 0.04
+> 0.05
+> 0.06
+> Density
+> Mean = 63%
+> GPU 0
+> Small Aerial
+> 050 100
+> Zero-pixel Ratio (%)
+> 0.01
+> 0.02
+> 0.03
+> 0.04
+> 0.05
+> 0.06
+> Mean = 59%
+> GPU 1
+> 050 100
+> Zero-pixel Ratio (%)
+> 0.01
+> 0.02
+> 0.03
+> 0.04
+> 0.05
+> 0.06
+> Mean = 64%
+> GPU 2
+> 050 100
+> Zero-pixel Ratio (%)
+> 0.01
+> 0.02
+> 0.03
+> 0.04
+> 0.05
+> 0.06
+> Mean = 62%
+> GPU 3
+
+(a) Zero-pixel ratio in naive all-gather communication. 0 50 100                
+
+> Saturated-pixel Ratio (%)
+> 0.01
+> 0.02
+> 0.03
+> 0.04
+> Density  Mean = 52%
+> GPU 0
+> Small Street
+> 050 100
+> Saturated-pixel Ratio (%)
+> 0.01
+> 0.02
+> 0.03
+> 0.04
+> Mean = 52%
+> GPU 1
+> 050 100
+> Saturated-pixel Ratio (%)
+> 0.01
+> 0.02
+> 0.03
+> 0.04
+> Mean = 53%
+> GPU 2
+> 050 100
+> Saturated-pixel Ratio (%)
+> 0.01
+> 0.02
+> 0.03
+> 0.04
+> Mean = 52%
+> GPU 3
+> 050 100
+> Saturated-pixel Ratio (%)
+> 0.01
+> 0.02
+> 0.03
+> 0.04
+> 0.05
+> 0.06
+> Density
+> Mean = 47%
+> GPU 0
+> Small Aerial
+> 050 100
+> Saturated-pixel Ratio (%)
+> 0.01
+> 0.02
+> 0.03
+> 0.04
+> 0.05
+> 0.06
+> Mean = 48%
+> GPU 1
+> 050 100
+> Saturated-pixel Ratio (%)
+> 0.01
+> 0.02
+> 0.03
+> 0.04
+> 0.05
+> 0.06
+> Mean = 44%
+> GPU 2
+> 050 100
+> Saturated-pixel Ratio (%)
+> 0.01
+> 0.02
+> 0.03
+> 0.04
+> 0.05
+> 0.06
+> Mean = 46%
+> GPU 3
+
+(b) Saturated-pixel ratio with spatial redundancy removed. 
+
+Figure 11. Redundancy analysis of pixel communication. (a) Over half of the transmitted pixels are zeros in the naive all-gather, showing dominant spatial redundancy. (b) With spatial redundancy removed, still many pixels remain saturated (transmittance 
+
+≈ 0) with no contribution to final blending, indicating saturation redundancy. Redundant Invisible Region                                    
+
+> (No Contribution)
+> Active Region
+> (Visible Pixels)
+> GPU 0: 50% Redundant GPU 1: 50% Redundant
+> GPU 2: 60% Redundant
+> GPU 1: 15% Redundant
+> GPU 2: 20% Redundant GPU 3: 0% Redundant
+> No Communication
+> Needed
+> GPU 3: 100% Redundant
+> Fully Redundant
+> (No Visible Pixels)
+> (a) Original (Spatial Redundancy) (b) With Redundancy Reduction
+> GPU 0: 15% Redundant
+> Visible Region
+> Removed Invisible Region
+
+Figure 12. Spatial redundancy reduction. (a) The original communication exhibits redundancy from invisible pixels. (b) It eliminates invisible regions with redundant pixels. substantial spatial redundancy (as demonstrated in Fig. 10b and Fig. 12a) during communication, where partial pixels from those unseen regions have no contributions to the fi-nal image rendering. Consistently, Fig. 11a shows that up to 64% of transmitted pixels are zeros, further confirming the severity of this spatial redundancy. This spatial redundancy arises from the geometric mismatch between the camera frustum and GPU partitions: if a region lies outside the frus-tum, it remains invisible and thus redundant to the training. That said, pixel-level communication needs to consider view-dependent visibility for partial pixel transmission. 
+
+ii) Saturation redundancy from transmittance invisibility. 
+
+Another form of redundancy emerges dynamically during training, as certain Gaussians become opaque and begin to behave like solid surfaces, such as walls and buildings. As illustrated in Fig. 10c, once earlier Gaussians along a camera ray have already reduced a pixel’s transmittance to nearly zero, subsequent Gaussians in the corresponding partitions on other GPUs no longer contribute to blending, yet still transmit their partial pixels that have already been saturated. Fig. 11b shows that even with spatial redundancy removed, up to 53% of transmitted pixels exhibit transmittance close to zero. This observation highlights a significant challenge of re-dundant communication cost due to dynamic transmittance invisibility during the runtime training process. 
+
+Opportunity: Predictable and Detectable Invisibility for Redundancy Reduction. Since spatial and saturation redundancy arise from geometric and transmittance invis-ibility , we identify the opportunity that invisibility can be 
+
+predicted or detected to determine redundant pixel-level com-munication. i) A convex region can be identified through its boundary. As illustrated in Fig. 10a, the camera frustum is a convex polyhedron defined by its eight corner vertices, and each GPU partition is also convex, designed explicitly as an axis-aligned bounding box. Since the intersection of two convex sets remains convex [ 2, 3, 23 ], the overlapping volume be-tween a frustum and partition, e.g., ABCH in Fig. 10a, is also a convex polyhedron representing part of the scene i.e., geometrically visible . Projecting this convex 3D space onto the image plane yields a convex visible region, e.g., ABCH in Fig. 10b. This convex region can be efficiently determined by projecting only the intersection vertices, as shown by ABCH, HCDE, GHEF in Fig. 10b, without rendering. ii) As the opacity of each Gaussian is dynamically updated during training, transmittance invisibility can be detected at runtime. For a given camera view, the participating GPUs exchange partial pixel transmittance and depth information in a predefined order for global compositing, as described in Section 4.2. During compositing, each GPU can locally evalu-ate the accumulated transmittance along each ray. From the first GPU to the current GPU 𝑚 , once the cumulative trans-mittance Î𝑘 ≤𝑚 𝑇 𝑘 is less than a threshold 𝜀 , all subsequent partitions behind GPU 𝑚 have no meaningful contribution and thus become invisible on the camera ray. 
+
+Design of Pixel-level Redundancy Reduction. To system-atically remove the pixel-level communication redundancy, we propose a reduction algorithm that identifies the required GPUs and invisible pixels for a given camera view. 
+
+1 Spatial Redundancy Reduction. Splaxel leverages static geometric correlations between the camera frustum and GPU partition at initialization stage to identify pixel-level visibil-ity. Each GPU is tied to a partition that consists of Gaussians 
+
+7Jia and Yin, et al. Step 2: Selective All -to -All Pixel Exchange Step 3: Reconstruct 2D Globally Visible Regions                                                                                                                   
+
+> GPU 0
+> Camera
+> Ray
+> Local
+> Rendering
+> GPU 1
+> Local
+> Rendering
+> Step 1:Local Rendering within Partition Step 4:Perform Consistent Global Composition
+> GPU 0 GPU 1
+> GPU 0 GPU 1 1D Flat Streams
+> (Overlap Only )
+> Locally Determined
+> Overlap Visibility Map
+> Locally Reconstruct by
+> Overlap Visibility Map
+> Locally Determined
+> Overlap Visibility Map
+> Selective
+> All -to -All
+> GPU 0 GPU 1
+> Final Image Final Image
+> Step 1:Locally Evaluate Transmittance Saturation
+> GPU 0
+> First Time for View N
+> Near
+> Far
+> Near
+> Far
+> GPU 1
+> Detected occlusion .
+> Skip future comm .with
+> GPU 0for this view.
+> Update Required
+> GPU Peers
+> Detected occlusion .
+> Skip future comm .with
+> GPU 1for this view.
+> View N: {GPU 0, GPU 1}View N: {GPU 0,GPU 1}
+> Step 2:Update Local Visible Pixels and GPU Peers for this View
+> Locally Derived Global Consensus
+> (No Sync Needed) GPU 0
+> Camera
+> Ray
+> GPU 1
+> Step 3:Local Rendering within Partition
+> Update Required
+> GPU Peers
+> GPU 0 GPU 1
+> Occluded
+> Second Time for View N
+> No Comm. for View N
+> between GPU 0and 1
+> (a) Spatial Redundancy Reduction (b) Saturation Redundancy Reduction
+> Locally Derived Global Consensus (No Sync Needed)
+> Update Local
+> Visible Pixels
+> No Update
+> for Local
+> Visible Pixels
+> Locally Reconstruct by
+> Overlap Visibility Map
+> Local
+> Visible
+> Region
+> Local
+> Visible
+> Region
+
+Figure 13. Distributed rendering with pixel-level redundancy reduction. (a) After local rendering, Splaxel identifies overlap visible pixel regions between GPUs based on geometric visibility, transmitting those pixels with all-to-all communication. (b) During training, Splaxel dynamically detects transmittance saturation, and each GPU then renders only the remaining visible pixels according to its updated pixel set, effectively removing saturation redundancy caused by transmittance invisibility. Small City Street Small City Aerial Big City Street Big City Aerial             
+
+> 0.15
+> 0.30
+> 0.45
+> 0.60
+> 0.75
+> Ratio
+> 468468468468
+> Zero-intersection Ratio GPU Utilization
+
+Figure 14. GPU utilization and zero-intersection ratio under the one-view-per-iteration strategy. As the number of GPUs increases, zero-intersection ratios of views rise while GPU utilization consistently drops, creating opportunities for effi-cient scheduling with conflict-free view consolidation. belonging to the overlapping 3D geometric space within the frustum. The vertices of the 3D space are then projected onto the 2D image plane to obtain the visible pixel region for a given camera view, as shown in Fig. 12b. Then, this visible region map can be shared across all GPUs to identify valid pixels without extra communication. Thus, pixel trans-mission is restricted to the overlapping regions. The pixels are transmitted as compact streams via selective all-to-all 
+
+communication among GPUs that share visible regions. Fig. 13a illustrates the workflow of spatial redundancy re-duction. At step 1, each GPU performs local rendering within its partition (convex partition according to the number of Gaussians). At step 2, the local visible regions are identified, i.e., Ω𝑚 𝑣 on GPU 𝑚 for the camera view 𝑣 , which is used to determine the overlap visibility map between two GPUs. The local rendered pixels, whose corresponding locations on this map are valid, are then transmitted (selective all-to-all) by a flat 1D stream. At step 3, each GPU reconstructs the received 1D streams into its local 2D overlapping region map using identified pixel regions, ensuring spatial alignment. Finally, the global composition is performed to render the image, and the loss of visible regions is backpropagated to the corresponding GPUs to update the Gaussians. 
+
+2 Saturation Redundancy Reduction. Splaxel leverages in-formation from global composition to detect transmittance saturation during runtime training at no additional cost. Each GPU, while compositing colors from preceding partitions, de-termines which pixels are saturated by evaluating whether the cumulative transmittance is less than the threshold 𝜀 .Once such saturation is detected, the affected pixels are re-moved from the local visible region Ω𝑚 𝑣 , and GPUs partic-ipating in the reconstruction skip further communication for these pixels in subsequent iterations of the same view. As shown in Fig. 13b, GPU 1, after compositing with GPU 0, observes that three overlapping pixels have already satu-rated in pixels of GPU 0. GPU 1 locally identifies that GPU 0 is no longer a required peer for this view. In the following iteration, each GPU renders only the remaining visible pixels according to its updated pixel set, while saturated regions are completely excluded from both rendering and supervision. Over time, Splaxel adaptively removes redundant commu-nication and computation, effectively removing saturation redundancy by identifying transmittance invisibility. 
+
+4.4 Conflict-free View Consolidation for Efficient Scheduling Challenge: Insufficient GPU Resource Utilization. The existing scheduling strategy takes one view for training each time on all GPUs due to the lack of view-GPUs mapping, as illustrated in Fig. 15a. With our proposed redundancy reduction (Section 4.3), even though redundant pixel-level communication can be removed, those GPUs may still remain idle and wait for active GPUs to complete the current view. To analyze the GPU utilization [ 8, 64 ], we define utilization ratio 𝑈 by measuring the average ratio of active GPUs for a training epoch, i.e., 𝑈 = |A|/ 𝑀 , where A and 𝑀 denote the set of active GPUs and the total number of GPUs, respectively. Fig. 14 shows that 𝑈 is near 50% in the Big City Street and Aerial datasets under the original one-view-per-iteration execution strategy, indicating significant insufficient GPU 
+
+8Splaxel: Efficient Distributed Training of 3D Gaussian Splatting for Large-scale Scene Reconstruction via Pixel-level Communication V7 V6 V5 V4 V3 V2 V1 V0      
+
+> V7 V6 V5 V4 V3 V2 V1 V0
+> V7 V6 V5 V4 V3 V2 V1 V0
+> V7 V6 V5 V4 V3 V2 V1 V0
+> V6 V4 V0
+> V7 V3 V2
+> V6 V1 V0
+> V5 V3 V2
+> (a) Original (b) Redundancy Reduced (c) View Consolidation
+> Idle Active
+> 0
+> 1
+> 2
+> 3
+> GPU
+> Time
+> V6 V4 V0
+> V7 V3 V2
+> V6 V1 V0
+> V5 V3 V2
+> 7654321076543210210
+> Time Time
+
+Figure 15. Illustration of view and GPU scheduling. GPU 1      
+
+> GPU 2
+> GPU 0
+> Bucket B0
+> GPU 3
+> GPU 1
+> GPU 2
+> GPU 0
+> GPU 3
+> GPU 1
+> GPU 2
+> GPU 0
+> GPU 3
+> GPU 1
+> GPU 2
+> GPU 0
+> GPU 3
+> GPU 1
+> GPU 2
+> GPU 0
+> GPU 3
+> Bucket B1
+> Conflict w/ B0; new B1 Compatible w/ B0
+> Bucket B0 Bucket B1
+> Compatible w/ B1 Compatible w/ B1
+> Bucket B1
+
+Figure 16. Demonstration of conflict-free view consolida-tion. Non-conflicting views are grouped to utilize GPUs fully, while a conflicting one will be assigned a new bucket. resource utilization. Moreover, the GPU utilization problem becomes more severe as the number of GPUs increases or the scene grows larger. This pervasive underutilization poses a key efficiency challenge as training scales. 
+
+Opportunity: High Zero-intersection Ratio of Views as Scale Up. To reduce the idle bubble, we can merge two views into a single time slot if the GPUs they cross have no depen-dence. For example, in Fig. 15, view V0 needs GPU 0 and 2 while view V2 needs GPU 1 and 3, which have no dependence. To quantitatively analyze the potential of removing the idle GPU bubble, we define the zero-intersection ratio of views as the proportion of views that have no intersection with other views among the entire dataset. As demonstrated in Fig. 14, the zero-intersection ratio is higher than 50% when using 8 GPUs, indicating that a high proportion of camera views can be scheduled simultaneously. This observation presents a significant opportunity for conflict-free view consolidation, enabling efficient view and GPU scheduling. 
+
+Design of Efficient Scheduling with Conflict-free View Consolidation. The key design of the scheduler is to it-erate over all camera views to greedily and incrementally bucket more views that have no overlap with the GPUs in the existing buckets. For the camera view 𝑣 , the scheduler determines (using GetParticipants(v) by our redundancy reduction approach) the set of GPUs P𝑣 required to process that view. Then, it searches the existing buckets to find one whose current GPU assignment has no conflict with P𝑣 . If a satisfied bucket exists, the view is inserted into it, and the bucket’s GPU assignment is updated to include P𝑣 . If no compatible bucket is found, a new bucket is created con-taining only view 𝑣 . Finally, it returns the list of buckets that define the conflict-free execution scheduling for the current epoch. Fig. 16 demonstrates our conflict-free view bucketing, with which the views can be efficiently scheduled by being processed concurrently within a bucket. We also employ an asynchronous execution pipeline that overlaps communication and computation for view rendering and backpropagation, using a FIFO queue of in-flight views. Small City 
+
+> Street
+> Small City
+> Aerial
+> Big City
+> Street
+> Big City
+> Aerial
+> 0
+> 50
+> 100
+> 150
+> 200
+> Iteration Time (ms)
+
+5.9× 
+
+3.2× 
+
+7.6× 
+
+2.9× 
+
+Grendel 
+
+Splaxel 
+
+Figure 17. Per-iteration training (one view processed per iteration) time with 8 GPUs. Splaxel (Ours)            
+
+> #Gaussian: 120M
+> #GPU: 8
+> Per iteration: 19 ms
+> PSNR: 26.6
+> Grendel
+> #Gaussian: 120M
+> #GPU: 8
+> Per iteration: 146 ms
+> PSNR: 25.8
+> Grendel
+> #Gaussian: 120M
+> #GPU: 8
+> Per iteration: 43 ms
+> PSNR: 30.3
+> Splaxel (Ours)
+> #Gaussian: 120M
+> #GPU: 8
+> Per iteration: 15 ms
+> PSNR: 31.5
+
+Figure 18. Example rendered images for visual reconstruc-tion quality comparison. (Left) Big City Aerial; (Right) Big City Street. With the same 120M Gaussians, Splaxel achieves higher rendering quality with much less training time. 
+
+5 Performance and Scalability Evaluation 
+
+Platform. We conduct evaluations on two platforms, each equipped with dual AMD EPYC 9254 24-core processors. Platform 1 is equipped with eight NVIDIA RTX 6000 Ada Generation GPUs (48 GB GDDR6), and Platform 2 has eight NVIDIA RTX PRO 6000 Blackwell GPUs (96 GB GDDR7). 
+
+Datasets. We evaluate Splaxel with four datasets from the 
+
+MatrixCity [39 ] benchmark: Small City Street , Small City Aerial , Big City Street , and Big City Aerial , at 1080p resolution. The basic information of those datasets is summarized in Table 2. Each dataset represents a distinct large-scale urban reconstruction scenario captured from either ground-level or aerial perspectives. Together, they cover a total area of ap-proximately 28km 2, containing about 60K aerial images and 350K street-view images. We run the Small City experiments on Platform 1 and the Big City experiments on Platform 2. To the best of our knowledge, MatrixCity remains the only publicly available benchmark of sufficient scale to support large-scale 3D scene reconstruction. 
+
+Baseline & Other Settings. We choose Grendel [ 75 ] as our baseline. For a fair comparison, we follow Grendel to set the batch size equal to the number of GPUs. We use the standard rendering quality metric, Peak Signal-to-Noise Ratio (PSNR), to evaluate the reconstruction quality. We use CUDA 12.8 on NVIDIA GPUs and PyTorch v2.9.0 for model training. 
+
+5.1 Training Performance and Quality 
+
+Table 1 summarizes the overall training performance and reconstruction quality on the four datasets. Compared to Grendel, Splaxel achieves significantly faster training with even better rendering quality. Fig. 17 shows the per-iteration time with 8 GPUs for each dataset and the corresponding speedups over Grendel. Splaxel consistently reduces training 
+
+9Jia and Yin, et al. 
+
+Table 1. Overall training performance and quantitative quality with 8 GPUs on the large-scale datasets, in comparison with Grendel. Small City Street, Small City Aerial, Big City Street, and Big City Aerial are trained for 150k, 30k, 1.2M, and 300k iterations, respectively, for both methods. 
+
+Method Small City Street Small City Aerial Big City Street Big City Aerial # Gaussian PSNR ↑ Time ↓ # Gaussian PSNR ↑ Time ↓ # Gaussian PSNR ↑ Time ↓ # Gaussian PSNR ↑ Time ↓
+
+Grendel 55M 21.4 7.5h 37M 26.6 25.5m 120M 23.2 48.8h 120M 30.4 3.6h 
+
+Splaxel 55M 21.7 1.3h 37M 27.3 8.0m 120M 23.2 6.4h 120M 31.2 1.2h 120 
+
+Small City Street Small City Aerial Big City Street Big City Aerial     
+
+> 12468
+
+# GPUs     
+
+> 0
+> 20
+> 40
+> 60
+> 80
+> Images/sec
+> 12468
+
+# GPUs 1 2 4 6 8
+
+# GPUs 1 2 4 6 8
+
+# GPUs 
+
+Grendel Splaxel 
+
+Figure 19. The training throughput of Splaxel compared to the baseline, Grendel. As the number of GPUs increases from 1 to 8, the throughput of Splaxel improves significantly, while Grendel scales with a marginal speedup. 
+
+Table 2. Summary of the large-scale datasets. 
+
+Dataset # Train # Test Area 
+
+Small City Aerial 5,621 741 2.7 km 2
+
+Small City Street 27,505 3,256 2.7 km 2
+
+Big City Aerial 51,632 9,066 25.3 km 2
+
+Big City Street 206,412 22,744 25.3 km 22 4 6 8                                                       
+
+> # GPU
+> 0
+> 20
+> 40
+> 60
+> 80
+> 100
+> Ratio (%)
+> 6% 9% 17% 20%
+> 18% 17%
+> 14% 14%
+> 40% 48% 46% 49%
+> 36%
+> 26% 23% 18%
+> Small City Street
+> 2468
+> # GPU
+> 9% 13% 17% 20%
+> 21% 20% 20% 18%
+> 39% 39% 42% 45%
+> 31% 28%
+> 21% 17%
+> Small City Aerial
+> 2468
+> # GPU
+> 7% 9% 12% 14%
+> 24% 25% 24% 21%
+> 35% 39% 40% 43%
+> 34%
+> 27% 25% 22%
+> Big City Street
+> 2468
+> # GPU
+> 8% 14% 17% 20%
+> 21% 14% 11% 14%
+> 44% 48% 52%
+> 46%
+> 27% 25% 20% 19%
+> Big City Aerial
+> Communication Local Rendering Backpropagation Others
+
+Figure 20. Per-iteration runtime breakdown over multiple GPUs. Communication is no longer a bottleneck. time between 2.9 × and 7.6 × across all datasets. The most significant improvements occur on the street datasets, where iteration time decreases from 181.84ms to 30.82ms on Small City Street and from 146.77ms to 19.32ms on Big City Street. This is because street scenes feature dense building facades, narrow corridors, and strong depth discontinuities. These structural characteristics introduce substantial redundancy, and many pixels have no geometric contribution for most partitions. Splaxel can quickly identify these spatial and sat-uration redundancies. Fig. 18 shows representative scenes reconstructed from the Big City Aerial and Big City Street datasets trained on 8 GPUs, showing that Splaxel achieves higher-quality reconstructions with significantly less train-ing time, compared to Grendel [75]. 
+
+5.2 Scalability and Training Throughput 
+
+Next, we evaluate the throughput of Splaxel with differ-ent numbers of GPUs. To ensure a consistent problem set-ting across different GPU counts, we choose 15M Gaussians for the Small City Street and Aerial scenes and 48M Gaus-sians for the Big City Street and Aerial scenes, which fit within single-GPU memory. Results with 120M Gaussians on 8 GPUs are provided in Table 1. Fig. 19 reports the train-ing throughput (views processed per second) across all four datasets. Splaxel consistently achieves significantly higher throughput as the number of GPUs increases, reaching up to 90 images/s on Big City Street and 142 images/s on Big City Aerial with eight GPUs, compared to only 14 and 52 images/s for Grendel, respectively. In contrast, Grendel shows only modest gains beyond four GPUs on the Street datasets due to its communication-bound scaling. These results confirm that Splaxel fully leverages multi-GPU parallelism, achieving consistent throughput gains as the GPU count scales. Our results show that Splaxel benefits more from larger scenes. As scene size increases, each GPU covers a larger region, while each camera view still only observes a sub-set of the scene. This reduces active GPUs per view and increases spatial redundancy, enabling Splaxel to eliminate more invisible pixels and avoid redundant computation. 
+
+5.3 Per-iteration Runtime Breakdown 
+
+We provide breakdown results of the latency of communi-cation, backpropagation, local rendering, and other com-ponents on the four large-scale datasets as the GPU count scales from 2 to 8, to systematically analyze the training time with Splaxel . From Fig. 20, across all four scenes, the break-down shows that communication remains a small and stable fraction of the iteration time (roughly 10–20%) even as the number of GPUs increases, confirming that communication 
+
+10 Splaxel: Efficient Distributed Training of 3D Gaussian Splatting for Large-scale Scene Reconstruction via Pixel-level Communication 0 50 100               
+
+> Zero-pixel Ratio (%)
+> 0.02
+> 0.04
+> 0.06
+> 0.08
+> 0.10
+> Density
+> Before: 45%
+> After: 6%
+> 39%
+> GPU 0
+> Small Street
+> 050 100
+> Zero-pixel Ratio (%)
+> 0.02
+> 0.04
+> 0.06
+> 0.08
+> 0.10
+> Before: 45%
+> After: 9%
+> 36%
+> GPU 1
+> 050 100
+> Zero-pixel Ratio (%)
+> 0.02
+> 0.04
+> 0.06
+> 0.08
+> 0.10
+> Before: 48%
+> After: 9%
+> 39%
+> GPU 2
+> 050 100
+> Zero-pixel Ratio (%)
+> 0.02
+> 0.04
+> 0.06
+> 0.08
+> 0.10
+> Before: 53%
+> After: 13%
+> 40%
+> GPU 3
+> 050 100
+> Zero-pixel Ratio (%)
+> 0.02
+> 0.04
+> 0.06
+> 0.08
+> 0.10
+> Density
+> Before: 63%
+> After: 5%
+> 58%
+> GPU 0
+> Small Aerial
+> 050 100
+> Zero-pixel Ratio (%)
+> 0.02
+> 0.04
+> 0.06
+> 0.08
+> 0.10
+> Before: 59%
+> After: 2%
+> 57%
+> GPU 1
+> 050 100
+> Zero-pixel Ratio (%)
+> 0.02
+> 0.04
+> 0.06
+> 0.08
+> 0.10
+> Before: 64%
+> After: 9%
+> 55%
+> GPU 2
+> 050 100
+> Zero-pixel Ratio (%)
+> 0.02
+> 0.04
+> 0.06
+> 0.08
+> 0.10
+> Before: 62%
+> After: 12%
+> 50%
+> GPU 3
+
+(a) Zero-pixel ratio after removing spatial redundancy. 0 50 100                
+
+> Saturated-pixel Ratio (%)
+> 0.02
+> 0.04
+> 0.06
+> 0.08
+> 0.10
+> Density
+> Before: 52%
+> After: 10%
+> 42%
+> GPU 0
+> Small Street
+> 050 100
+> Saturated-pixel Ratio (%)
+> 0.02
+> 0.04
+> 0.06
+> 0.08
+> 0.10
+> Before: 52%
+> After: 13%
+> 39%
+> GPU 1
+> 050 100
+> Saturated-pixel Ratio (%)
+> 0.02
+> 0.04
+> 0.06
+> 0.08
+> 0.10
+> Before: 53%
+> After: 14%
+> 39%
+> GPU 2
+> 050 100
+> Saturated-pixel Ratio (%)
+> 0.02
+> 0.04
+> 0.06
+> 0.08
+> 0.10
+> Before: 52%
+> After: 13%
+> 39%
+> GPU 3
+> 050 100
+> Saturated-pixel Ratio (%)
+> 0.02
+> 0.04
+> 0.06
+> 0.08
+> 0.10
+> Density
+> Before: 47%
+> After: 8%
+> 39%
+> GPU 0
+> Small Aerial
+> 050 100
+> Saturated-pixel Ratio (%)
+> 0.02
+> 0.04
+> 0.06
+> 0.08
+> 0.10
+> Before: 48%
+> After: 11%
+> 37%
+> GPU 1
+> 050 100
+> Saturated-pixel Ratio (%)
+> 0.02
+> 0.04
+> 0.06
+> 0.08
+> 0.10
+> Before: 44%
+> After: 12%
+> 32%
+> GPU 2
+> 050 100
+> Saturated-pixel Ratio (%)
+> 0.02
+> 0.04
+> 0.06
+> 0.08
+> 0.10
+> Before: 46%
+> After: 18%
+> 28%
+> GPU 3
+
+(b) Saturated-pixel ratio after removing saturation redundancy. 
+
+Figure 21. Quantitative illustration of reduced redundancy. Grendel C C+R C+R+S 
+
+0
+
+25 
+
+50 
+
+75 
+
+100 
+
+125 
+
+150 
+
+175 
+
+> Iteration Time (ms)
+
+1.8x 
+
+2.2x 3.3x 
+
+Small City Street 
+
+Grendel C C+R C+R+S 
+
+1.8x 
+
+3.1x 4.3x 
+
+Big City Street 
+
+Grendel Compute Time Communication Time 
+
+Figure 22. Impact analysis of Splaxel key design compo-nents. C: pixel-level communication; R: redundancy reduc-tion; S: view consolidation. is no longer the bottleneck under our pixel-level commu-nication scheme. Local rendering consistently stays below 20% and generally decreases with more GPUs, indicating that our method effectively eliminates redundant rendering work. As expected, backpropagation dominates the runtime across all configurations, reflecting its inherently heavy com-putation and demonstrating that Splaxel successfully shifts the critical path back to the core learning step rather than communication or rendering overhead. Overall, the results validate the efficiency and scalability. 
+
+5.4 Impact of Key Design Components 
+
+To understand the contribution of each proposed component in Splaxel to the final training acceleration, we evaluate three configurations: i) pixel-level communication, where all GPUs participate in every view; ii) pixel-level communication with redundancy reduction; iii) pixel-level communication, redun-dancy reduction, and view consolidation. As shown in Fig. 22, on Small City Street, pixel-level communication takes about 100ms per iteration. With the redundancy reduction, it yields a 2.2 × speedup. Both communication and computation time decrease because far fewer GPUs participate in each view. With the view consolidation, the speedup reaches 3.3 times over i). Compared to ii), computation time remains the same, while communication time drops significantly. On Big City Street, pixel-level communication takes about 80ms per it-eration. With further redundancy reduction, it achieves a 3.1 × speedup over i). With view consolidation, the speedup Small City Street Small City Aerial Big City Street Big City Aerial             
+
+> 468468468468
+> 0.15
+> 0.30
+> 0.45
+> 0.60
+> 0.75
+> 0.90
+> Ratio
+> GPU Utilization (Original) GPU Utilization (Splaxel)
+
+Figure 23. GPU utilization improvement. increases to 4.3 × over i). This ablation study demonstrates that each proposed component is efficient in improving the distributed training efficiency for large scenes. 
+
+5.5 Technical Effectiveness and Analysis Redundancy Reduction. Fig. 21 quantifies the reduced pixel-level redundancy across four distributed GPUs. Fig. 21a shows that by predicting geometric invisibility, frustum-invisible pixels are eliminated, decreasing the zero-pixel ra-tio by approximately 39% on Small Street and 55% on Small Aerial. Fig. 21b shows that during training, transmittance-invisible pixels are detected and then removed, lowering the saturated-pixel ratio by 40% and 34%, respectively. 
+
+GPU Utilization Improvement. Fig. 23 reports the GPU utilization across all four scenes as the number of GPUs in-creases. Our scheduler improves the GPU utilization by 20%– 35% depending on the scene. Although utilization declines with increasing GPU count, our method yields significantly higher ratios of throughput. 
+
+Real-scene Illustration. Fig. 24 shows a real 3DGS ren-dering from Splaxel during distributed training. Splaxel pre-dicts per-GPU visible regions: GPU 0 covers most of the view, GPU 1 about half, while GPU 2 and GPU 3 nominally cover the full frame. At runtime, however, the Splaxel de-tects that all pixels become saturated after blending GPU 0 and GPU 1, so the contributions from GPU 2 and GPU 3 are skipped (grey panels). Because each GPU locally derives its partition-to-pixel map, GPU 0 and GPU 1 precisely identify their overlap regions. Only these overlap pixels (green) are exchanged via selective all-to-all, and artifacts appearing in the local overlap regions disappear after global composition, 
+
+11 Jia and Yin, et al. Local Rendering Results           
+
+> Global Composition Result for GPU 0
+> Global Composition Result for GPU 1
+
+Figure 24. Real 3DGS rendering produced by Splaxel . GPU 2 and GPU 3 are fully occluded and skipped, while GPU 0 and GPU 1 exchange overlap pixels (green). Artifacts appearing in the local overlap regions vanish after global composition. 
+
+Table 3. Analysis of batch size. Larger batch sizes improve throughput for both methods by reducing per-iteration over-head. The speedup of Splaxel over Grendel remains consis-tent across batch sizes.                      
+
+> Batch Size Grendel Splaxel Speedup PSNR ↑Time ↓PSNR ↑Time ↓
+> 421.45 8.2h 21.74 1.41h 5.8 ×
+> 821.40 7.5h 21.72 1.27h 5.9 ×
+> 16 21.16 7.0h 21.19 1.18h 5.9 ×
+
+showing how Splaxel restricts communication to pixels that truly matter. 
+
+Batch Size. We evaluate different batch sizes for both Splaxel 
+
+and Grendel in Table 3. Larger batch sizes improve through-put for both due to reduced per-iteration overhead and im-proved GPU utilization. The speedup of Splaxel over Grendel is up to 5.8–5.9× and remains consistent across all settings. 
+
+Sensitivity of Transmittance Threshold. Our distributed rendering pipeline skips subsequent partitions once a pixel is considered saturated. Here, transmittance ranges from 1 for complete transparency to 0 for full saturation. The threshold therefore governs the trade-off between rendering efficiency and reconstruction quality. To study its effect, we evaluate different threshold values in Table 4. Since PSNR is largely insensitive to the threshold, we use a fixed threshold of 1 × 10 −4 across all datasets without per-scene tuning. 
+
+6 Related Works 
+
+Acceleration on 3DGS Rendering. Recent efforts focus on improving 3DGS rendering efficiency [ 17 , 18 , 20 , 24 , 34 , 42 ,58 , 68 ]. LightGaussian [ 13 ] reduces redundancy via pruning and feature compression, improving throughput with mini-mal quality loss. Compression-based methods [ 14 , 45 , 49 , 61 ,63 ] further optimize storage and computation. On the system side, FlashGS [ 15 ] improves software rasterization through efficient workload partitioning and pipelined tile-based ren-dering. Hardware accelerator designs [ 21 , 50 , 67 , 70 ] further 
+
+Table 4. Sensitivity to transmittance threshold. A fixed threshold of 1×10 −4 is used across all datasets. PSNR remains stable for thresholds ≤ 1 × 10 −2, confirming low sensitivity and no need for dataset-specific tuning.                                  
+
+> Threshold Small City Street Small City Aerial Big City Street Big City Aerial PSNR ↑PSNR ↑PSNR ↑PSNR ↑
+> 1×10 −121.48 27.05 22.94 30.91
+> 1×10 −221.65 27.22 23.14 31.16
+> 1×10 −321.71 27.29 23.19 31.19
+> 1×10 −421.72 27.30 23.20 31.23
+> 1×10 −521.71 27.28 23.22 31.23
+
+boost on-device rendering by exploiting data reuse, memory-centric streaming, and inter-frame redundancy. Nebula [ 79 ]scales rendering to large scenes via collaborative cloud-client processing with accelerated stereo rasterization. 
+
+Acceleration on 3DGS Training. 3DGS training suffers from a large volume of atomic operations during gradient ac-cumulation, and several works [ 11 , 22 , 40 , 47 , 57 ] have been proposed to alleviate this bottleneck. ARC [ 10 ] accelerates atomic-intensive workloads by exploiting intra-warp locality for register-level reductions and by balancing atomic exe-cution across hardware units, reducing global atomic traffic and improving throughput. GSArch [ 22 ] introduces a cus-tomized hardware that speeds up 3DGS training by pruning gradients and reorganizing memory requests into disjoint patterns to mitigate contention. 
+
+Large-scale 3DGS Training. Scaling 3DGS training has been explored through both algorithm- and system-level approaches [ 19 , 33 , 59 , 60 , 69 , 72 ]. Algorithm-level meth-ods [ 44 , 56 ] typically adopt a divide-and-conquer strategy, partitioning scenes into smaller chunks for independent training and later merging. While effective for avoiding mem-ory limits, these methods deviate from the original 3DGS pipeline and may degrade reconstruction quality. On the sys-tem side, GS-Scale [ 31 ] and CLM [ 74 ] overcome single-GPU memory limitations by offloading Gaussian data to host mem-ory, enabling training of large-scale scenes on consumer-grade GPUs. However, these approaches scale memory capac-ity only and remain confined to a single GPU. Grendel [ 75 ]is the only distributed multi-GPU framework that preserves global consistency by enabling training of tens of millions of Gaussians. However, its reliance on Gaussian-level com-munication leads to rapidly increasing data transmission overhead as scene size and GPU count grow, significantly limiting scalability. 
+
+7 Conclusion 
+
+In this paper, we present Splaxel , an efficient and principled distributed 3DGS training framework for large-scale scene reconstruction via pixel-level communication, achieving up to 7.6 × speedup over the baseline. 
+
+> 12
+
+Splaxel: Efficient Distributed Training of 3D Gaussian Splatting for Large-scale Scene Reconstruction via Pixel-level Communication 
+
+References 
+
+[1] Jon Louis Bentley. 1975. Multidimensional binary search trees used for associative searching. Commun. ACM 18 (1975), 509–517. https: //api.semanticscholar.org/CorpusID:13091446 
+
+[2] Dimitri Bertsekas, Angelia Nedic, and Asuman Ozdaglar. 2003. Convex analysis and optimization . Vol. 1. Athena Scientific. [3] Stephen Boyd and Lieven Vandenberghe. 2004. Convex optimization .Cambridge university press. [4] David Charatan, Sizhe Lester Li, Andrea Tagliasacchi, and Vincent Sitzmann. 2024. pixelsplat: 3d gaussian splats from image pairs for scalable generalizable 3d reconstruction. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition . 19457–19467. [5] Junyi Chen, Weicai Ye, Yifan Wang, Danpeng Chen, Di Huang, Wanli Ouyang, Guofeng Zhang, Yu Qiao, and Tong He. 2024. Gigags: Scaling up planar-based 3d gaussians for large scene surface reconstruction. 
+
+arXiv preprint arXiv:2409.06685 (2024). [6] Youyu Chen, Junjun Jiang, Kui Jiang, Xiao Tang, Zhihao Li, Xianming Liu, and Yinyu Nie. 2025. DashGaussian: Optimizing 3D Gaussian Splatting in 200 Seconds. In Proceedings of the Computer Vision and Pattern Recognition Conference . 11146–11155. [7] Yu Chen and Gim Hee Lee. 2024. Dogs: Distributed-oriented gaussian splatting for large-scale 3d reconstruction via gaussian consensus. 
+
+Advances in Neural Information Processing Systems 37 (2024), 34487– 34512. [8] Sina Darabi, Mohammad Sadrosadati, Negar Akbarzadeh, Joël Lin-degger, Mohammad Hosseini, Jisung Park, Juan Gómez-Luna, Onur Mutlu, and Hamid Sarbazi-Azad. 2022. Morpheus: Extending the last level cache capacity in GPU systems using idle GPU core resources. In 2022 55th IEEE/ACM International Symposium on Microarchitecture (MICRO) . IEEE, 228–244. [9] Tianhu Deng, Keren Zhang, and Zuo-Jun Max Shen. 2021. A systematic review of a digital twin city: A new pattern of urban governance toward smart cities. Journal of management science and engineering 6, 2 (2021), 125–134. [10] Sankeerth Durvasula, Adrian Zhao, Fan Chen, Ruofan Liang, Pawan Kumar Sanjaya, Yushi Guan, Christina Giannoula, and Nandita Vijaykumar. 2025. ARC: Warp-level Adaptive Atomic Reduction in GPUs to Accelerate Differentiable Rendering. In Proceedings of the 30th ACM International Conference on Architectural Support for Pro-gramming Languages and Operating Systems, Volume 1 . 64–83. [11] Sankeerth Durvasula, Adrian Zhao, Fan Chen, Ruofan Liang, Pawan Kumar Sanjaya, and Nandita Vijaykumar. 2023. Distwar: Fast differentiable rendering on raster-based rendering pipelines. arXiv preprint arXiv:2401.05345 (2023). [12] Jixuan Fan, Wanhua Li, Yifei Han, Tianru Dai, and Yansong Tang. 2025. Momentum-gs: Momentum gaussian self-distillation for high-quality large scene reconstruction. In Proceedings of the IEEE/CVF International Conference on Computer Vision . 25250–25260. [13] Zhiwen Fan, Kevin Wang, Kairun Wen, Zehao Zhu, Dejia Xu, Zhangyang Wang, et al . 2024. Lightgaussian: Unbounded 3d gaussian compression with 15x reduction and 200+ fps. Advances in neural information processing systems 37 (2024), 140138–140158. [14] Guangchi Fang and Bing Wang. 2024. Mini-splatting: Representing scenes with a constrained number of gaussians. In European Conference on Computer Vision . Springer, 165–181. [15] Guofeng Feng, Siyan Chen, Rong Fu, Zimu Liao, Yi Wang, Tao Liu, Boni Hu, Linning Xu, Zhilin Pei, Hengjie Li, et al . 2025. Flashgs: Efficient 3d gaussian splatting for large-scale and high-resolution rendering. In 
+
+Proceedings of the Computer Vision and Pattern Recognition Conference .26652–26662. [16] Linus Franke, Laura Fink, and Marc Stamminger. 2025. Vr-splatting: Foveated radiance field rendering via 3d gaussian splatting and neural points. Proceedings of the ACM on Computer Graphics and Interactive Techniques 8, 1 (2025), 1–21. [17] Sharath Girish, Kamal Gupta, and Abhinav Shrivastava. 2024. Ea-gles: Efficient accelerated 3d gaussians with lightweight encodings. In 
+
+European Conference on Computer Vision . Springer, 54–71. [18] Antoine Guédon and Vincent Lepetit. 2024. Sugar: Surface-aligned gaussian splatting for efficient 3d mesh reconstruction and high-quality mesh rendering. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition . 5354–5363. [19] Alex Hanson, Allen Tu, Geng Lin, Vasu Singla, Matthias Zwicker, and Tom Goldstein. 2025. Speedy-splat: Fast 3d gaussian splatting with sparse pixels and sparse primitives. In Proceedings of the Computer Vision and Pattern Recognition Conference . 21537–21546. [20] Alex Hanson, Allen Tu, Vasu Singla, Mayuka Jayawardhana, Matthias Zwicker, and Tom Goldstein. 2025. Pup 3d-gs: Principled uncertainty pruning for 3d gaussian splatting. In Proceedings of the Computer Vision and Pattern Recognition Conference . 5949–5958. [21] Houshu He, Naifeng Jing, Li Jiang, Xiaoyao Liang, and Zhuoran Song. 2025. AGS: Accelerating 3D Gaussian Splatting SLAM via CODEC-Assisted Frame Covisibility Detection. In Proceedings of the 31st ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 1 (USA) (ASPLOS ’26) . As-sociation for Computing Machinery, New York, NY, USA, 20–34. doi: 10.1145/3760250.3762229 
+
+[22] Houshu He, Gang Li, Fangxin Liu, Li Jiang, Xiaoyao Liang, and Zhuo-ran Song. 2025. GSArch: Breaking Memory Barriers in 3D Gaussian Splatting Training via Architectural Support. In 2025 IEEE Interna-tional Symposium on High Performance Computer Architecture (HPCA) .IEEE, 366–379. [23] Jean-Baptiste Hiriart-Urruty and Claude Lemaréchal. 2013. Con-vex analysis and minimization algorithms I: Fundamentals . Vol. 305. Springer science & business media. [24] Qiqi Hou, Randall Rauwendaal, Zifeng Li, Hoang Le, Farzad Farhadzadeh, Fatih Porikli, Alexei Bourd, and Amir Said. 2024. Sort-free gaussian splatting via weighted sum rendering. arXiv preprint arXiv:2410.18931 (2024). [25] Lihan Jiang, Kerui Ren, Mulin Yu, Linning Xu, Junting Dong, Tao Lu, Feng Zhao, Dahua Lin, and Bo Dai. 2025. Horizon-GS: Unified 3D Gaussian Splatting for Large-Scale Aerial-to-Ground Scenes. In 
+
+Proceedings of the Computer Vision and Pattern Recognition Conference .26789–26799. [26] Ying Jiang, Chang Yu, Tianyi Xie, Xuan Li, Yutao Feng, Huamin Wang, Minchen Li, Henry Lau, Feng Gao, Yin Yang, et al . 2024. Vr-gs: A physical dynamics-aware interactive gaussian splatting system in virtual reality. In ACM SIGGRAPH 2024 Conference Papers . 1–1. [27] Bernhard Kerbl, Georgios Kopanas, Thomas Leimkühler, and George Drettakis. 2023. 3D Gaussian splatting for real-time radiance field rendering. ACM Trans. Graph. 42, 4 (2023), 139–1. [28] Bernhard Kerbl, Andreas Meuleman, Georgios Kopanas, Michael Wim-mer, Alexandre Lanvin, and George Drettakis. 2024. A hierarchical 3d gaussian representation for real-time rendering of very large datasets. 
+
+ACM Transactions on Graphics (TOG) 43, 4 (2024), 1–15. [29] Arno Knapitsch, Jaesik Park, Qian-Yi Zhou, and Vladlen Koltun. 2017. Tanks and temples: Benchmarking large-scale scene reconstruction. 
+
+ACM Transactions on Graphics (ToG) 36, 4 (2017), 1–13. [30] Jonas Kulhanek, Songyou Peng, Zuzana Kukelova, Marc Pollefeys, and Torsten Sattler. 2024. Wildgaussians: 3d gaussian splatting in the wild. arXiv preprint arXiv:2407.08447 (2024). [31] Donghyun Lee, Dawoon Jeong, Jae W. Lee, and Hongil Yoon. 2026. GS-Scale: Unlocking Large-Scale 3D Gaussian Splatting Training via Host Offloading. In Proceedings of the 31st ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 2 (USA) (ASPLOS ’26) . Association for Computing Ma-chinery, New York, NY, USA, 860–875. doi: 10.1145/3779212.3790167 
+
+13 Jia and Yin, et al. 
+
+[32] Junseo Lee, Kwanseok Choi, Jungi Lee, Seokwon Lee, Joonho Whangbo, and Jaewoong Sim. 2023. Neurex: A case for neural ren-dering acceleration. In Proceedings of the 50th Annual International Symposium on Computer Architecture . 1–13. [33] Junseo Lee, Seokwon Lee, Jungi Lee, Junyong Park, and Jaewoong Sim. 2024. Gscore: Efficient radiance field rendering via architectural support for 3d gaussian splatting. In Proceedings of the 29th ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 3 . 497–511. [34] Chaojian Li, Sixu Li, Linrui Jiang, Jingqun Zhang, and Yingyan Celine Lin. 2025. Uni-Render: A Unified Accelerator for Real-Time Ren-dering Across Diverse Neural Renderers. In 2025 IEEE International Symposium on High Performance Computer Architecture (HPCA) . IEEE, 246–260. [35] Chaojian Li, Sixu Li, Yang Zhao, Wenbo Zhu, and Yingyan Lin. 2022. Rt-nerf: Real-time on-device neural radiance fields towards immersive ar/vr rendering. In Proceedings of the 41st IEEE/ACM International Conference on Computer-Aided Design . 1–9. [36] Haolin Li, Jinyang Liu, Mario Sznaier, and Octavia Camps. 2025. 3D-HGS: 3D Half-Gaussian Splatting. In Proceedings of the Computer Vision and Pattern Recognition Conference . 10996–11005. [37] Shen Li, Yanli Zhao, Rohan Varma, Omkar Salpekar, Pieter Noordhuis, Teng Li, Adam Paszke, Jeff Smith, Brian Vaughan, Pritam Damania, et al . 2020. Pytorch distributed: Experiences on accelerating data parallel training. arXiv preprint arXiv:2006.15704 (2020). [38] Wei Li, CW Pan, Rong Zhang, JP Ren, YX Ma, Jin Fang, FL Yan, QC Geng, XY Huang, HJ Gong, et al . 2019. AADS: Augmented autonomous driving simulation using data-driven algorithms. Science robotics 4, 28 (2019), eaaw0863. [39] Yixuan Li, Lihan Jiang, Linning Xu, Yuanbo Xiangli, Zhenzhi Wang, Dahua Lin, and Bo Dai. 2023. Matrixcity: A large-scale city dataset for city-scale neural rendering and beyond. In Proceedings of the IEEE/CVF International Conference on Computer Vision . 3205–3215. [40] Kaimin Liao, Hua Wang, Zhi Chen, Luchao Wang, and Yaohua Tang. 2025. LiteGS: A High-performance Framework to Train 3DGS in Sub-minutes via System and Algorithm Codesign. arXiv:2503.01199 [cs.CV] 
+
+https://arxiv.org/abs/2503.01199 
+
+[41] Jiaqi Lin, Zhihao Li, Xiao Tang, Jianzhuang Liu, Shiyong Liu, Jiayue Liu, Yangdi Lu, Xiaofei Wu, Songcen Xu, Youliang Yan, et al . 2024. Vastgaussian: Vast 3d gaussians for large scene reconstruction. In 
+
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition . 5166–5175. [42] Weikai Lin, Yu Feng, and Yuhao Zhu. 2025. Metasapiens: Real-time neu-ral rendering with efficiency-aware pruning and accelerated foveated rendering. In Proceedings of the 30th ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 1 . 669–682. [43] Yang Liu, Chuanchen Luo, Lue Fan, Naiyan Wang, Junran Peng, and Zhaoxiang Zhang. 2024. Citygaussian: Real-time high-quality large-scale scene rendering with gaussians. In European Conference on Com-puter Vision . Springer, 265–282. [44] Yang Liu, Chuanchen Luo, Zhongkai Mao, Junran Peng, and Zhaoxiang Zhang. 2024. Citygaussianv2: Efficient and geometrically accurate reconstruction for large-scale scenes. arXiv preprint arXiv:2411.00771 
+
+(2024). [45] Yifei Liu, Zhihang Zhong, Yifan Zhan, Sheng Xu, and Xiao Sun. 2025. Maskgaussian: Adaptive 3d gaussian representation from probabilistic masks. In Proceedings of the Computer Vision and Pattern Recognition Conference . 681–690. [46] Tao Lu, Mulin Yu, Linning Xu, Yuanbo Xiangli, Limin Wang, Dahua Lin, and Bo Dai. 2024. Scaffold-gs: Structured 3d gaussians for view-adaptive rendering. In Proceedings of the IEEE/CVF Conference on Com-puter Vision and Pattern Recognition . 20654–20664. [47] Saswat Subhajyoti Mallick, Rahul Goel, Bernhard Kerbl, Markus Stein-berger, Francisco Vicente Carrasco, and Fernando De La Torre. 2024. Taming 3dgs: High-quality radiance fields with limited resources. In 
+
+SIGGRAPH Asia 2024 Conference Papers . 1–11. [48] Ben Mildenhall, Pratul P Srinivasan, Matthew Tancik, Jonathan T Barron, Ravi Ramamoorthi, and Ren Ng. 2021. Nerf: Representing scenes as neural radiance fields for view synthesis. Commun. ACM 
+
+65, 1 (2021), 99–106. [49] Simon Niedermayr, Josef Stumpfegger, and Rüdiger Westermann. 2024. Compressed 3d gaussian splatting for accelerated novel view synthesis. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition . 10349–10358. [50] Changhun Oh, Seongryong Oh, Jinwoo Hwang, Yoonsung Kim, Hardik Sharma, and Jongse Park. 2026. Neo: Real-Time On-Device 3D Gauss-ian Splatting with Reuse-and-Update Sorting Acceleration. In Proceed-ings of the 31st ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 2 (USA) 
+
+(ASPLOS ’26) . Association for Computing Machinery, New York, NY, USA, 1268–1284. doi: 10.1145/3779212.3790192 
+
+[51] Julian Ost, Fahim Mannan, Nils Thuerey, Julian Knodt, and Felix Heide. 2021. Neural scene graphs for dynamic scenes. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition . 2856– 2865. [52] Panagiotis Papantonakis, Georgios Kopanas, Bernhard Kerbl, Alexan-dre Lanvin, and George Drettakis. 2024. Reducing the memory foot-print of 3d gaussian splatting. Proceedings of the ACM on Computer Graphics and Interactive Techniques 7, 1 (2024), 1–17. [53] Jeff Rasley, Samyam Rajbhandari, Olatunji Ruwase, and Yuxiong He. 2020. Deepspeed: System optimizations enable training deep learning models with over 100 billion parameters. In Proceedings of the 26th ACM SIGKDD international conference on knowledge discovery & data mining . 3505–3506. [54] Kerui Ren, Lihan Jiang, Tao Lu, Mulin Yu, Linning Xu, Zhangkai Ni, and Bo Dai. 2024. Octree-gs: Towards consistent real-time rendering with lod-structured 3d gaussians. arXiv preprint arXiv:2403.17898 
+
+(2024). [55] Xinkai Song, Yuanbo Wen, Xing Hu, Tianbo Liu, Haoxuan Zhou, Husheng Han, Tian Zhi, Zidong Du, Wei Li, Rui Zhang, et al . 2023. Cambricon-r: A fully fused accelerator for real-time learning of neural scene representation. In Proceedings of the 56th Annual IEEE/ACM International Symposium on Microarchitecture . 1305–1318. [56] Mai Su, Zhongtao Wang, Huishan Au, Yilong Li, Xizhe Cao, Chengwei Pan, Yisong Chen, and Guoping Wang. 2025. HUG: Hierarchical Urban Gaussian Splatting with Block-Based Reconstruction for Large-Scale Aerial Scenes. In Proceedings of the IEEE/CVF International Conference on Computer Vision . 28839–28848. [57] Jiakai Sun, Han Jiao, Guangyuan Li, Zhanjie Zhang, Lei Zhao, and Wei Xing. 2024. 3dgstream: On-the-fly training of 3d gaussians for efficient streaming of photo-realistic free-viewpoint videos. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition .20675–20685. [58] Linye Wei, Jiajun Tang, Fan Fei, Boxin Shi, Runsheng Wang, and Meng Li. 2025. No Redundancy, No Stall: Lightweight Streaming 3D Gaussian Splatting for Real-time Rendering. arXiv preprint arXiv:2507.21572 
+
+(2025). [59] Lizhou Wu, Haozhe Zhu, Siqi He, Jiapei Zheng, Chixiao Chen, and Xiaoyang Zeng. 2024. GauSPU: 3D Gaussian Splatting Processor for Real-Time SLAM Systems. In 2024 57th IEEE/ACM International Symposium on Microarchitecture (MICRO) . IEEE, 1562–1573. [60] Haozhe Xie, Zhaoxi Chen, Fangzhou Hong, and Ziwei Liu. 2025. Gen-erative Gaussian splatting for unbounded 3D city generation. In Pro-ceedings of the Computer Vision and Pattern Recognition Conference .6111–6120. 14 Splaxel: Efficient Distributed Training of 3D Gaussian Splatting for Large-scale Scene Reconstruction via Pixel-level Communication 
+
+[61] Shuzhao Xie, Jiahang Liu, Weixiang Zhang, Shijia Ge, Sicheng Pan, Chen Tang, Yunpeng Bai, and Zhi Wang. 2024. SizeGS: Size-aware Compression of 3D Gaussians with Hierarchical Mixed Precision Quantization. arXiv preprint arXiv:2412.05808 (2024). [62] Chi Yan, Delin Qu, Dan Xu, Bin Zhao, Zhigang Wang, Dong Wang, and Xuelong Li. 2024. Gs-slam: Dense visual slam with 3d gaussian splatting. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition . 19595–19604. [63] Runyi Yang, Zhenxin Zhu, Zhou Jiang, Baijun Ye, Xiaoxue Chen, Yifei Zhang, Yuantao Chen, Jian Zhao, and Hao Zhao. 2024. Spectrally pruned gaussian fields with neural compensation. arXiv preprint arXiv:2405.00676 (2024). [64] Shuangyan Yang, Minjia Zhang, Wenqian Dong, and Dong Li. 2023. Betty: Enabling large-scale gnn training with batch-level graph par-titioning. In Proceedings of the 28th ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 2 . 103–117. [65] Ziyi Yang, Xinyu Gao, Wen Zhou, Shaohui Jiao, Yuqing Zhang, and Xiaogang Jin. 2024. Deformable 3d gaussians for high-fidelity monoc-ular dynamic scene reconstruction. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition . 20331–20341. [66] Baijun Ye, Minghui Qin, Saining Zhang, Moonjun Gong, Shaoting Zhu, Hao Zhao, and Hang Zhao. 2025. GS-Occ3D: Scaling Vision-only Occupancy Reconstruction with Gaussian Splatting. In Proceedings of the IEEE/CVF International Conference on Computer Vision . 25925– 25937. [67] Zhifan Ye, Yonggan Fu, Jingqun Zhang, Leshu Li, Yongan Zhang, Sixu Li, Cheng Wan, Chenxi Wan, Chaojian Li, Sreemanth Prathipati, et al . 2025. Gaussian Blending Unit: An Edge GPU Plug-in for Real-Time Gaussian-Based Rendering in AR/VR. In 2025 IEEE International Symposium on High Performance Computer Architecture (HPCA) . IEEE, 353–365. [68] Zehao Yu, Anpei Chen, Binbin Huang, Torsten Sattler, and Andreas Geiger. 2024. Mip-splatting: Alias-free 3d gaussian splatting. In Pro-ceedings of the IEEE/CVF conference on computer vision and pattern recognition . 19447–19456. [69] Zehao Yu, Torsten Sattler, and Andreas Geiger. 2024. Gaussian opacity fields: Efficient adaptive surface reconstruction in unbounded scenes. 
+
+ACM Transactions on Graphics (ToG) 43, 6 (2024), 1–13. [70] Chenqi Zhang, Yu Feng, Jieru Zhao, Guangda Liu, Wenchao Ding, Chentao Wu, and Minyi Guo. 2025. StreamingGS: Voxel-Based Stream-ing 3D Gaussian Splatting with Memory Optimization and Archi-tectural Support. In Proceedings of the 62nd Annual ACM/IEEE De-sign Automation Conference (San Francisco, California, United States) 
+
+(DAC ’25) . IEEE Press, Article 42, 7 pages. doi: 10.1109/DAC63849.2025. 11132470 
+
+[71] Yangming Zhang, Wenqi Jia, Wei Niu, and Miao Yin. 2025. Gaus-sianSpa: An" Optimizing-Sparsifying" Simplification Framework for Compact and High-Quality 3D Gaussian Splatting. In Proceedings of the Computer Vision and Pattern Recognition Conference . 26673–26682. [72] Ziyu Zhang, Binbin Huang, Hanqing Jiang, Liyang Zhou, Xiaojun Xi-ang, and Shuhan Shen. 2025. Quadratic Gaussian Splatting: High Qual-ity Surface Reconstruction with Second-order Geometric Primitives. In Proceedings of the IEEE/CVF International Conference on Computer Vision . 28260–28270. [73] Zhaoliang Zhang, Tianchen Song, Yongjae Lee, Li Yang, Cheng Peng, Rama Chellappa, and Deliang Fan. 2024. Lp-3dgs: Learning to prune 3d gaussian splatting. Advances in Neural Information Processing Systems 
+
+37 (2024), 122434–122457. [74] Hexu Zhao, Xiwen Min, Xiaoteng Liu, Moonjun Gong, Yiming Li, Ang Li, Saining Xie, Jinyang Li, and Aurojit Panda. 2026. CLM: Removing the GPU Memory Barrier for 3D Gaussian Splatting. In Proceedings of the 31st ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 2 (USA) (ASP-LOS ’26) . Association for Computing Machinery, New York, NY, USA, 377–393. doi: 10.1145/3779212.3790140 
+
+[75] Hexu Zhao, Haoyang Weng, Daohan Lu, Ang Li, Jinyang Li, Aurojit Panda, and Saining Xie. 2025. On Scaling Up 3D Gaussian Splat-ting Training. In The Thirteenth International Conference on Learning Representations . https://openreview.net/forum?id=pQqeQpMkE7 
+
+[76] Lianmin Zheng, Zhuohan Li, Hao Zhang, Yonghao Zhuang, Zhifeng Chen, Yanping Huang, Yida Wang, Yuanzhong Xu, Danyang Zhuo, Eric P Xing, et al . 2022. Alpa: Automating inter-and {Intra-Operator }
+
+parallelism for distributed deep learning. In 16th USENIX Symposium on Operating Systems Design and Implementation (OSDI 22) . 559–578. [77] Shijie Zhou, Haoran Chang, Sicheng Jiang, Zhiwen Fan, Zehao Zhu, Dejia Xu, Pradyumna Chari, Suya You, Zhangyang Wang, and Achuta Kadambi. 2024. Feature 3dgs: Supercharging 3d gaussian splatting to enable distilled feature fields. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition . 21676–21685. [78] Xiaoyu Zhou, Zhiwei Lin, Xiaojun Shan, Yongtao Wang, Deqing Sun, and Ming-Hsuan Yang. 2024. Drivinggaussian: Composite gaussian splatting for surrounding dynamic autonomous driving scenes. In 
+
+Proceedings of the IEEE/CVF conference on computer vision and pattern recognition . 21634–21643. [79] He Zhu, Zheng Liu, Xingyang Li, Anbang Wu, Jieru Zhao, Fangxin Liu, Yiming Gan, Jingwen Leng, and Yu Feng. 2026. Nebula: Infinite-Scale 3D Gaussian Splatting in VR via Collaborative Rendering and Accelerated Stereo Rasterization. In Proceedings of the 31st ACM In-ternational Conference on Architectural Support for Programming Lan-guages and Operating Systems, Volume 2 (USA) (ASPLOS ’26) . Asso-ciation for Computing Machinery, New York, NY, USA, 1235–1250. doi: 10.1145/3779212.3790190 
+
+[80] Wojciech Zielonka, Timur Bagautdinov, Shunsuke Saito, Michael Zoll-höfer, Justus Thies, and Javier Romero. 2025. Drivable 3d gaussian avatars. In 2025 International Conference on 3D Vision (3DV) . IEEE, 979–990. 15 Jia and Yin, et al. 
+
+8 Appendix 
+
+8.1 Implementation Details Cross-boundary Gaussians Handling. During training, Gaussian scales may expand across partition boundaries, which can break the global visibility order in distributed rendering and therefore require special handling to avoid in-correct alpha-composition and resulting PSNR degradation. Since Gaussians are assigned to partitions by their mean positions, a Gaussian such as 𝐺 3 in Fig. 25 is assigned to par-tition 0 although its spatial support extends into partition 1. During rendering, each partition independently composites its local Gaussians along each ray and communicates the resulting partial pixels for global composition. This can in-troduce interleaving in the global alpha-composition when multiple partitions contribute: for ray 𝑟 2, partition 0 compos-ites 𝐺 1 −𝐺 3 while partition 1 composites 𝐺 2 −𝐺 4, yielding an interleaved global sequence 𝐺 1 −𝐺 3 −𝐺 2 −𝐺 4 that breaks cor-rect occlusion and degrades PSNR, since alpha-composition is visibility-order dependent. To avoid such interleaving, we apply per-ray filtering to cross-boundary Gaussians. For two adjacent partitions 𝑘 and 
+
+𝑠 , let Qcross denote the set of Gaussians whose spatial support spans both partitions. We remove a Gaussian 𝐺 𝑖 ∈ Q cross 
+
+from the ray 𝑟 of pixel 𝑝 if and only if its depth 𝑑 𝑖 falls within the overlapped depth interval Doverlap and 𝑝 lies in the overlapped pixel region Ω𝑘 𝑣 ∩ Ω𝑠 𝑣 between the visibility maps of partitions 𝑘 and 𝑠 . In Fig. 25, 𝐺 3 ∈ Q cross with 𝑑 3 ∈ D overlap 
+
+is therefore removed for ray 𝑟 2 (since 𝑝 2 ∈ Ω0 
+
+> 𝑣
+
+∩ Ω1 
+
+> 𝑣
+
+) but retained for ray 𝑟 1 (since 𝑝 1 ∉ Ω0 
+
+> 𝑣
+
+∩Ω1 
+
+> 𝑣
+
+), preserving consistent depth ordering. The loss at 𝑝 2 is then minimized by the remaining Gaussians 𝐺 1 −𝐺 2 −𝐺 4: partition 0 composites 𝐺 1
+
+and partition 1 composites 𝐺 2 −𝐺 4, yielding the consistent global ordering 𝐺 1 − 𝐺 2 − 𝐺 4 without interleaving, which provides geometry-aware regularization. As shown in Table 6, per-ray filtering strategy improves PSNR by 0.2–0.4 dB across all scenes by avoiding inconsistent depth ordering from cross-boundary Gaussians. Moreover, the introduced training time overhead is negligible. 
+
+Partition Strategy. Gaussians are assigned to partitions based on their mean positions, where the partition bound-aries are determined via recursive binary splitting akin to a KD-tree [ 1 ], selecting the axis with the largest extent and splitting at the median Gaussian position at each level so that the Gaussian counts across partitions remain balanced. The resulting axis-aligned boxes serve as convex partitions assigned to GPUs. To evaluate sensitivity to partition imbal-ance, we deliberately create different levels of load imbal-ance, quantified by the imbalance ratio defined as 𝑁 max / ¯𝑁 −1
+
+where 𝑁 max is the Gaussian count of the most loaded parti-tion and ¯𝑁 is the average across all partitions. We disable densification and report average per-iteration time over sam-pled iterations. As shown in Table 5, even at 20% imbalance, 
+
+Splaxel ’s per-iteration time increases by only 15–19%, while Ray -aligned Depth                       
+
+> Projection
+> Ray 𝑟 !
+> 𝑟 !→Pixel 𝑝 !,𝑝 !∈Ω"
+> #∩Ω"
+> $𝑟 $→Pixel 𝑝 $,𝑝 $∉Ω"
+> #∩Ω"
+> $
+> Partition 0 Partition 1
+> Far
+> Ray 𝑟 "
+> Non -overlapped
+> Depth for
+> Partition 0
+> Non -overlapped
+> Depth for
+> Partition 1
+> Overlapped
+> Depth
+> 𝒟 %&'()*+
+> Perpendicular
+> Projection
+
+✓
+
+✓
+
+✓
+
+✓
+
+×                     
+
+> 𝑝 !𝑝 "
+> 𝑝 "
+> 𝐺 !
+> 𝐺 #
+> 𝐺 $
+> 𝐺 "
+> 𝐺 ,∈𝒬 -(%..
+> 𝑑 ,∈𝒟 %&'()*+
+> 𝑝 ∈Ω"
+> /∩Ω"
+> 0
+> 1
+> 2
+> 3
+> Remove Gaussian 𝐺 ,
+> for ray -pixel pair (𝑟 ,𝑝 )iff:
+> 𝑟 $,𝑝 $,𝐺 1:
+> Filtering Rule
+> 1
+> T
+> T
+> 2
+> T
+> T
+> 3
+> F
+> T
+> Per -ray Decision for
+> Final
+
+✓
+
+×𝑟 !, 𝑝 ! , 𝐺 1:   
+
+> T: True F: False
+
+✓: Retained : Removed ×
+
+> 𝑮 𝟑
+> Near
+> Partition 0
+> Depth
+> Partition 1
+> Depth
+
+Figure 25. Demonstration of cross-boundary Gaussians han-dling in Splaxel .
+
+Table 5. Partition sensitivity analysis. Per-iteration time under varying initial partition imbalance levels. Dataset Initial Avg. Iter. Time Speedup Time Incr. Imbalance Grendel Splaxel vs. 0% Small City Street 0% 181.7ms 30.1ms 6.0 × —10% 188.6ms 32.3ms 5.8 × 7.3% 20% 199.3ms 35.3ms 5.6 × 17.3% Small City Aerial 0% 54.0ms 15.7ms 3.4 × —10% 55.3ms 17.2ms 3.2 × 9.6% 20% 56.8ms 18.6ms 3.1 × 18.5% Big City Street 0% 150.1ms 19.0ms 7.9 × —10% 155.5ms 20.1ms 7.7 × 5.8% 20% 158.4ms 21.9ms 7.2 × 15.3% Big City Aerial 0% 46.8ms 15.4ms 3.0 × —10% 48.7ms 16.3ms 3.0 × 5.8% 20% 51.3ms 18.4ms 2.8 × 19.5% still maintaining a 2.8–5.6× speedup over Grendel, demon-strating that our KD-tree partitioning is robust to moderate load imbalance. We monitor load balance during training and trigger repar-titioning only when the imbalance becomes significant. Load balance is checked every few thousand iterations via a light-weight all-gather of per-GPU Gaussian counts ( <100 ms), and repartitioning is triggered only when the imbalance ratio exceeds 20% (Table 5). New boundaries are computed using lightweight local spatial histograms, followed by all-to-all redistribution. As shown in Table 7, the total repartition-ing overhead accounts for less than 0.7% of training time across all scenes, confirming that dynamic repartitioning is effectively free. 
+
+8.2 Experimental Analysis Saturation Stability during Training. Since opacity evolves during training, pixels marked as saturated may later become informative again, raising the question of whether satura-tion decisions remain valid over time. We show that frequent re-evaluation is unnecessary in practice: the first two analy-ses demonstrate that such flip cases are rare and yield only marginal quality gains, while the third provides a low-cost fallback when strict correctness is desired. 
+
+16 Splaxel: Efficient Distributed Training of 3D Gaussian Splatting for Large-scale Scene Reconstruction via Pixel-level Communication 
+
+Table 6. Ablation on cross-boundary filtering. Enabling per-ray filtering improves PSNR by 0.2–0.4 dB across all scenes at negligible training time overhead.                             
+
+> Method Small City Street Small City Aerial Big City Street Big City Aerial PSNR ↑Time ↓PSNR ↑Time ↓PSNR ↑Time ↓PSNR ↑Time ↓
+> Splaxel w/o Handling 21.4 1.3h 26.9 7.9m 23.0 6.4h 30.8 1.2h
+> Splaxel 21.7 1.3h 27.3 8.0m 23.2 6.4h 31.2 1.2h
+
+Table 7. Repartitioning overhead across scenes. Small City Street Small City Aerial Big City Street Big City Aerial Total Training Time 1.3h 8.0m 6.4h 1.2h # Repartitions 7 2 43 11 Avg. Repart. Time 1.5s 1.1s 3.5s 2.1s Total Repart. Overhead 10.5s 2.2s 150.5s 23.1s Overhead Ratio 0.22% 0.46% 0.65% 0.53% 
+
+Table 8. Flip rate across all scenes.      
+
+> Scene Small City Street Small City Aerial Big City Street Big City Aerial Flip Rate 0.42% 0.21% 0.36% 0.18%
+
+i) Low flip rate. When a GPU is pruned for a given pixel, active GPUs could retain its per-partition transmittance con-sumption budget (stale values from the last visit before prun-ing) through the normal composition process ( §4.2). In sub-sequent iterations, when the view is rendered again, each active GPU obtains a fresh residual transmittance from its routine global composition and checks whether the residual 
+
+budget exceeds the transmittance threshold 𝜀 . If so, we per-form a speculative evaluation to determine how many pruned GPUs the residual can sustain by sequentially subtracting each pruned GPU’s stale consumption budget in depth order until the residual budget falls below 𝜀 . Only those pruned GPUs whose budgets are fully covered are counted as flips. We define the flip rate as the ratio of flipped pixel-GPU pairs to the total number of pruned pairs, which is low across all scenes as summarized in Table 8. 
+
+ii) Marginal performance effects. To quantify the practical impact of these flip pairs, we run an upper-bound ablation that disables saturation pruning , i.e., always keeps all poten-tially flipped pairs active. PSNR improves only marginally with less than 0.05dB. The results in i) and ii) indicate that ignoring flips has a negligible effect in practice and frequent re-evaluation is unnecessary. 
+
+iii) Re-evaluation at a low cost. For strict correctness, sat-uration can also be re-evaluated every iteration: the fresh residual transmittance is already produced by routine com-position during rendering, and the speculative evaluation is a lightweight local scan on active GPUs. The only addi-tional step is notifying previously pruned GPUs to re-activate when the same view is rendered again, which can be im-plemented as an asynchronous and non-blocking control message, avoiding any additional synchronization on the critical path. 17
