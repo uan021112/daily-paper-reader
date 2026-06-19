@@ -6,58 +6,67 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-06-18
-- 运行时间：2026-06-18 21:05:35 UTC
+- 最新运行日期：2026-06-19
+- 运行时间：2026-06-19 22:01:22 UTC
 - 运行状态：成功
-- 本次总论文数：12
-- 精读区：7
-- 速读区：5
+- 本次总论文数：15
+- 精读区：8
+- 速读区：7
 
 ### 今日简报（AI）
-今日日报共盘点12篇论文，精读7篇，重点聚焦MeshLoom与RegimeVGGT两篇高分成果。  
-最值得关注MeshLoom在网格序列前馈非刚性配准上的突破，以及RegimeVGGT在视觉几何变换器中的层间冗余去除方法。  
-建议优先精读这两篇9分论文，速读可留意Edit3DGS的动态头部编辑框架与FlowObject的生成先验融合策略。
-- 详情：[/202606/18/README](/202606/18/README)
+今天精读两篇高分解码3D场景的论文：自监督学习与多模态语言模型。  
+重点推荐《3D-DLP》和《3D-PLOT-LLM》，均获9.0分，分别突破物体级场景表示与部件级语言理解。  
+建议深入阅读这两篇，掌握3D视觉与LLM融合的前沿方法。
+- 详情：[/202606/19/README](/202606/19/README)
 
 ### 精读区论文标签
-1. [MeshLoom: Feed-Forward Non-Rigid Registration of Mesh Sequences](/202606/18/2606.17027v1-meshloom-feed-forward-non-rigid-registration-of-mesh-sequences)  
-   标签：评分：9.0/10、query:ffdr
-   evidence：前馈式非刚性配准与基于优化的方法对比，效率高且直接
-2. [RegimeVGGT: Layer-Wise Spatially Preserving Redundancy Removal for Visual Geometry Grounded Transformer](/202606/18/2606.18439v1-regimevggt-layer-wise-spatially-preserving-redundancy-removal-for-visual-geometry-grounded-transformer)  
-   标签：评分：9.0/10、query:ffdr
-   evidence：VGGT前馈3D场景重建加速
-3. [Hand-4DGS: Feed-Forward 3D Gaussian Splatting for 4D Hand Reconstruction from Egocentric Videos](/202606/18/2606.19156v1-hand-4dgs-feed-forward-3d-gaussian-splatting-for-4d-hand-reconstruction-from-egocentric-videos)  
-   标签：评分：9.0/10、query:ffdr
-   evidence：用于第一人称视频中动态3D手部重建的前馈框架
-4. [MoVerse: Real-Time Video World Modeling with Panoramic Gaussian Scaffold](/202606/18/2606.13376v2-moverse-real-time-video-world-modeling-with-panoramic-gaussian-scaffold)  
+1. [3D-DLP: Self-Supervised 3D Object-Centric Scene Representation Learning](/202606/19/2606.19451v1-3d-dlp-self-supervised-3d-object-centric-scene-representation-learning)  
+   标签：评分：9.0/10、query:partseg
+   evidence：自监督3D物体中心表示，学习粒子级分割
+2. [3D-PLOT-LLM: Part-Level Object Tokens for 3D Large Language Models](/202606/19/2606.19828v1-3d-plot-llm-part-level-object-tokens-for-3d-large-language-models)  
+   标签：评分：9.0/10、query:partseg
+   evidence：通过LLM令牌重组实现3D物体部件级分割
+3. [Judging to Improve: A De-biased VLM-as-3D-Judge Protocol for Single-Image 3D Generation](/202606/19/2606.20364v1-judging-to-improve-a-de-biased-vlm-as-3d-judge-protocol-for-single-image-3d-generation)  
+   标签：评分：9.0/10、query:dgen
+   evidence：用于单图像3D生成质量改进的无偏VLM评判协议
+4. [JanusMesh: Fast and Zero-Shot 3D Visual Illusion Generation via Cross-Space Denoising](/202606/19/2606.20563v1-janusmesh-fast-and-zero-shot-3d-visual-illusion-generation-via-cross-space-denoising)  
+   标签：评分：9.0/10、query:dgen
+   evidence：文本驱动的3D视觉错觉生成
+5. [Edit3DGS: Unified Framework for Dynamic Head Editing via 2D Instruction-Guided Diffusion and 3D Gaussian Splatting](/202606/19/2606.17432v1-edit3dgs-unified-framework-for-dynamic-head-editing-via-2d-instruction-guided-diffusion-and-3d-gaussian-splatting)  
    标签：评分：8.0/10、query:dgen
-   evidence：单张图像生成可导航3D场景
-5. [VideoWeave: Unlocking Geometric Consistency in Video Generation via Joint Geometry-Video Modeling](/202606/18/2606.14162v1-videoweave-unlocking-geometric-consistency-in-video-generation-via-joint-geometry-video-modeling)  
+   evidence：使用2D扩散和3D高斯溅射的动态3D头部编辑
+6. [Learned Radius Estimation for UDF-Based Point Cloud Reconstruction](/202606/19/2606.18787v1-learned-radius-estimation-for-udf-based-point-cloud-reconstruction)  
+   标签：评分：8.0/10、query:ffdr
+   evidence：为UDF重建学习前馈半径选择器
+7. [One-Shot Novel View and Pose Human Image Synthesis via 3D Prior Guided Diffusion Model](/202606/19/2606.19718v1-one-shot-novel-view-and-pose-human-image-synthesis-via-3d-prior-guided-diffusion-model)  
    标签：评分：8.0/10、query:dgen
-   evidence：利用隐式几何特征实现视频生成的几何一致性
-6. [A Cross-Model VLM-Judge Protocol for Single-Image 3D Mesh Quality (and Why Cheap Proxies Fall Short)](/202606/18/2606.18451v1-a-cross-model-vlm-judge-protocol-for-single-image-3d-mesh-quality-and-why-cheap-proxies-fall-short)  
+   evidence：单张图像新视角合成，利用3D先验扩散模型
+8. [VisDom: Sparse Novel View Synthesis with Visible Domain Constraint](/202606/19/2606.20531v1-visdom-sparse-novel-view-synthesis-with-visible-domain-constraint)  
    标签：评分：8.0/10、query:dgen
-   evidence：评估单图像到3D网格的质量
-7. [Intrinsic 4D Gaussian Segmentation from Scene Cues](/202606/18/2606.18623v1-intrinsic-4d-gaussian-segmentation-from-scene-cues)  
-   标签：评分：8.0/10、query:partseg
-   evidence：无需外部掩码即可分割4D动态场景中的高斯基元
+   evidence：稀疏新视图合成恢复3D几何
 
 ### 速读区论文标签
-1. [Edit3DGS: Unified Framework for Dynamic Head Editing via 2D Instruction-Guided Diffusion and 3D Gaussian Splatting](/202606/18/2606.17432v1-edit3dgs-unified-framework-for-dynamic-head-editing-via-2d-instruction-guided-diffusion-and-3d-gaussian-splatting)  
+1. [Intrinsic 4D Gaussian Segmentation from Scene Cues](/202606/19/2606.18623v1-intrinsic-4d-gaussian-segmentation-from-scene-cues)  
+   标签：评分：8.0/10、query:partseg
+   evidence：从4D高斯原语进行对象实例分割
+2. [Local-GS: Accelerating 3D Gaussian Splatting via Tile-Local Warp Coherence](/202606/19/2606.16566v1-local-gs-accelerating-3d-gaussian-splatting-via-tile-local-warp-coherence)  
    标签：评分：7.0/10、query:dgen
-   evidence：文本条件扩散用于动态3D头部编辑结合3D高斯泼溅
-2. [CAOA -- Completion-Assisted Object-CAD Alignment](/202606/18/2606.18429v1-caoa----completion-assisted-object-cad-alignment)  
-   标签：评分：7.0/10、query:ffdr
-   evidence：点云补全用于3D重建中的CAD对齐
-3. [FlowObject: Flow Steering for Bridging Generative Priors and Reconstruction Fidelity](/202606/18/2606.19019v1-flowobject-flow-steering-for-bridging-generative-priors-and-reconstruction-fidelity)  
-   标签：评分：7.0/10、query:ffdr
-   evidence：比较了生成先验（前馈流匹配）和基于优化的3DGS在稀疏视图重建中的表现，契合前馈与优化对比需求
-4. [Splaxel: Efficient Distributed Training of 3D Gaussian Splatting for Large-scale Scene Reconstruction via Pixel-level Communication](/202606/18/2606.18588v1-splaxel-efficient-distributed-training-of-3d-gaussian-splatting-for-large-scale-scene-reconstruction-via-pixel-level-communication)  
+   evidence：加速3D高斯溅射实现实时神经渲染
+3. [NeuMesh++: Towards Versatile and Efficient Volumetric Editing with Disentangled Neural Mesh-based Implicit Field](/202606/19/2606.19316v1-neumesh-towards-versatile-and-efficient-volumetric-editing-with-disentangled-neural-mesh-based-implicit-field)  
+   标签：评分：7.0/10、query:dgen
+   evidence：基于解耦神经网格隐式场的体积编辑，支持几何和纹理编辑
+4. [TriFlow: Generating Artist-Like 3D Mesh Topology via Nearest-Vertex Vector Fields](/202606/19/2606.20131v1-triflow-generating-artist-like-3d-mesh-topology-via-nearest-vertex-vector-fields)  
+   标签：评分：7.0/10、query:dgen
+   evidence：从几何条件生成3D网格拓扑
+5. [3D Consistency Optimization for Self-Supervised Monocular Video Depth Estimation](/202606/19/2606.15681v1-3d-consistency-optimization-for-self-supervised-monocular-video-depth-estimation)  
    标签：评分：6.0/10、query:ffdr
-   evidence：提出高效分布式训练方法用于大规模3DGS场景重建，解决3D重建模型的可扩展性问题
-5. [NeuMesh++: Towards Versatile and Efficient Volumetric Editing with Disentangled Neural Mesh-based Implicit Field](/202606/18/2606.19316v1-neumesh-towards-versatile-and-efficient-volumetric-editing-with-disentangled-neural-mesh-based-implicit-field)  
+   evidence：基于优化的3D重建方法用于深度估计
+6. [High-Fidelity 4D Hand-Object Capture via Multi-View Spatiotemporal Tracking and Physics-Aware Gaussians](/202606/19/2606.15908v2-high-fidelity-4d-hand-object-capture-via-multi-view-spatiotemporal-tracking-and-physics-aware-gaussians)  
    标签：评分：6.0/10、query:dgen
-   evidence：基于神经网格隐式场的体编辑
+   evidence：从多视角视频重建4D手物交互
+7. [Pixel-Level Residual Diffusion Transformer: Scalable 3D CT Volume Generation](/202606/19/2606.20112v1-pixel-level-residual-diffusion-transformer-scalable-3d-ct-volume-generation)  
+   标签：评分：6.0/10、query:dgen
+   evidence：使用扩散变压器进行医疗体积的生成式三维建模
 
 
 <div class="dpr-home-promo-card">
