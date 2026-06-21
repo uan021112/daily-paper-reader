@@ -6,46 +6,52 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-06-20
-- 运行时间：2026-06-20 21:45:34 UTC
+- 最新运行日期：2026-06-21
+- 运行时间：2026-06-21 21:03:33 UTC
 - 运行状态：成功
-- 本次总论文数：8
+- 本次总论文数：10
 - 精读区：4
-- 速读区：4
+- 速读区：6
 
 ### 今日简报（AI）
-今日共推荐8篇论文，精读4篇、速读4篇，聚焦3D高斯泼溅加速、动态头部编辑及网格生成等前沿方向。  
-最值得关注的是精读列表中的《TurboGS: 通过误差引导稀疏像素采样加速3D高斯泼溅》和《Edit3DGS: 基于2D指令引导扩散与3D高斯泼溅的动态头部编辑统一框架》，均获8.0高分。  
-建议普通读者优先阅读这两篇顶会水平论文，并关注其开源实现与应用潜力。
-- 详情：[/202606/20/README](/202606/20/README)
+今日精选10篇论文，重点突破自动驾驶空间几何一致性及视频实例分割的稀疏标注难题。  
+最值得关注的方向：SurroundNEXO（自主驾驶空间几何桥接）与SA-VIS（稀疏帧训练视频实例分割），二者均获9.0高分。  
+建议读者优先精读这两篇，尤其关注稀疏标注降低人工成本、提升模型效率的实际潜力。
+- 详情：[/202606/21/README](/202606/21/README)
 
 ### 精读区论文标签
-1. [TurboGS: Accelerating 3D Gaussian Splatting via Error-Guided Sparse Pixel Sampling and Optimization](/202606/20/2606.15924v1-turbogs-accelerating-3d-gaussian-splatting-via-error-guided-sparse-pixel-sampling-and-optimization)  
+1. [SurroundNEXO: Ego-Centric Metric Bridging for Spatially Consistent Geometry in Autonomous Driving](/202606/21/2606.16960v1-surroundnexo-ego-centric-metric-bridging-for-spatially-consistent-geometry-in-autonomous-driving)  
+   标签：评分：9.0/10、query:ffdr
+   evidence：多相机深度预测用于3D重建
+2. [SA-VIS: Sparse frame Annotations for training Video Instance Segmentation](/202606/21/2606.20140v1-sa-vis-sparse-frame-annotations-for-training-video-instance-segmentation)  
+   标签：评分：9.0/10、query:partseg
+   evidence：基于稀疏标注的视频实例分割
+3. [Track2View: 4D-Consistent Camera-Controlled Video Generation via Paired 3D Point Tracks](/202606/21/2606.15534v1-track2view-4d-consistent-camera-controlled-video-generation-via-paired-3d-point-tracks)  
    标签：评分：8.0/10、query:dgen
-   evidence：加速3D高斯泼溅在3D内容创作中的神经渲染应用
-2. [Edit3DGS: Unified Framework for Dynamic Head Editing via 2D Instruction-Guided Diffusion and 3D Gaussian Splatting](/202606/20/2606.17432v1-edit3dgs-unified-framework-for-dynamic-head-editing-via-2d-instruction-guided-diffusion-and-3d-gaussian-splatting)  
-   标签：评分：8.0/10、query:dgen
-   evidence：基于文本驱动的3D头部编辑使用扩散模型和3DGS
-3. [3D-DLP: Self-Supervised 3D Object-Centric Scene Representation Learning](/202606/20/2606.19451v1-3d-dlp-self-supervised-3d-object-centric-scene-representation-learning)  
-   标签：评分：8.0/10、query:partseg
-   evidence：通过潜变量粒子实现自监督3D部件级分割
-4. [CSWinUNETR: Segmentation of Thin Anatomical Structures in Medical Images](/202606/20/2606.19824v1-cswinunetr-segmentation-of-thin-anatomical-structures-in-medical-images)  
-   标签：评分：8.0/10、query:partseg
-   evidence：医学图像中薄结构的分割，属于3D部件分割技术
+   evidence：使用3D点轨迹和扩散变换器从新视角生成视频
+4. [GeneralVLA-2: Geometry-Aware Reconstruction and Governed Memory for Robot Planning](/202606/21/2606.17480v1-generalvla-2-geometry-aware-reconstruction-and-governed-memory-for-robot-planning)  
+   标签：评分：8.0/10、query:ffdr
+   evidence：针对单目SAM3D风格物体重建，提出几何感知重建用于机器人规划
 
 ### 速读区论文标签
-1. [TriFlow: Generating Artist-Like 3D Mesh Topology via Nearest-Vertex Vector Fields](/202606/20/2606.20131v1-triflow-generating-artist-like-3d-mesh-topology-via-nearest-vertex-vector-fields)  
+1. [Open-World Video Segmentation](/202606/21/2606.15632v1-open-world-video-segmentation)  
+   标签：评分：7.0/10、query:partseg
+   evidence：开放世界视频实例分割系统
+2. [CPS4: Class Prompt driven Semi-Supervised Spine Segmentation with Class-specific Consistency Constraint](/202606/21/2606.15802v1-cps4-class-prompt-driven-semi-supervised-spine-segmentation-with-class-specific-consistency-constraint)  
+   标签：评分：7.0/10、query:partseg
+   evidence：基于类提示的半监督脊柱分割，与部件分割相关
+3. [VEPHand: View-Efficient Photometric Hand Performance Capture at Scale](/202606/21/2606.15966v2-vephand-view-efficient-photometric-hand-performance-capture-at-scale)  
+   标签：评分：7.0/10、query:ffdr
+   evidence：端到端神经网络进行3D手部重建
+4. [NeuMesh++: Towards Versatile and Efficient Volumetric Editing with Disentangled Neural Mesh-based Implicit Field](/202606/21/2606.19316v1-neumesh-towards-versatile-and-efficient-volumetric-editing-with-disentangled-neural-mesh-based-implicit-field)  
    标签：评分：7.0/10、query:dgen
-   evidence：通过潜在流匹配生成3D网格拓扑
-2. [Bayesian 3D Steerable CNNs: Enabling Equivariance and Uncertainty Quantification Simultaneously](/202606/20/2606.15479v1-bayesian-3d-steerable-cnns-enabling-equivariance-and-uncertainty-quantification-simultaneously)  
-   标签：评分：6.0/10、query:ffdr
-   evidence：贝叶斯3D CNN用于等变学习
-3. [ActiveSAM: Image-Conditional Class Pruning for Fast and Accurate Open-Vocabulary Segmentation](/202606/20/2606.16996v1-activesam-image-conditional-class-pruning-for-fast-and-accurate-open-vocabulary-segmentation)  
+   evidence：用于3D编辑的神经渲染
+5. [Post-Launch Capability Expansion of Vision-Language Models via Prompting for On-Orbit Spacecraft Inspection](/202606/21/2606.15427v1-post-launch-capability-expansion-of-vision-language-models-via-prompting-for-on-orbit-spacecraft-inspection)  
    标签：评分：6.0/10、query:partseg
-   evidence：通过类别剪枝加速开放词汇分割
-4. [CAOA -- Completion-Assisted Object-CAD Alignment](/202606/20/2606.18429v1-caoa----completion-assisted-object-cad-alignment)  
+   evidence：通过视觉语言模型对航天器部件进行零样本实例分割
+6. [Thinking in Boxes: 3D Editing in Real Images Made Easy](/202606/21/2606.20556v1-thinking-in-boxes-3d-editing-in-real-images-made-easy)  
    标签：评分：6.0/10、query:dgen
-   evidence：通过点云补全和姿态估计将CAD模型与RGB-D扫描对齐
+   evidence：使用盒子的真实图像3D编辑
 
 
 <div class="dpr-home-promo-card">
