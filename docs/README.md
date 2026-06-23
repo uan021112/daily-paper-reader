@@ -6,45 +6,79 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-06-22
-- 运行时间：2026-06-22 22:47:54 UTC
+- 最新运行日期：2026-06-23
+- 运行时间：2026-06-23 22:08:42 UTC
 - 运行状态：成功
-- 本次总论文数：7
-- 精读区：3
-- 速读区：4
+- 本次总论文数：19
+- 精读区：8
+- 速读区：11
 
 ### 今日简报（AI）
-今日论文涵盖驾驶场景生成、手部捕捉、3D检索及视频生成，共7篇，3篇精读。
-
-最值得关注的是9分精读《FrozenDrive》的零样本文本引导驾驶场景生成与数据增强，以及8分《VEPHand》的高效视角光度手部性能捕捉。
-
-建议优先研读这两篇精读论文，零样本生成方法可大幅降低自动驾驶数据采集成本，手部捕捉技术则对VR/AR交互有直接应用价值。
-- 详情：[/202606/22/README](/202606/22/README)
+今日19篇论文中，精读聚焦两项9分工作：端到端铰接物体重建与野外无干扰3D重建。  
+最值得关注的方向是隐式几何学习实现关节物体高精度重建，以及鲁棒性视觉变换器在复杂场景下的三维重建。  
+建议读者优先精读这两篇，并尝试将它们的思路结合到实际物体建模或AR/VR应用中。
+- 详情：[/202606/23/README](/202606/23/README)
 
 ### 精读区论文标签
-1. [FrozenDrive: Zero-Shot Text-Guided Driving Scene Generation and Data Augmentation with Parameter-Free Frozen Diffusion Model](/202606/22/2606.20110v1-frozendrive-zero-shot-text-guided-driving-scene-generation-and-data-augmentation-with-parameter-free-frozen-diffusion-model)  
+1. [Artic-O: End-to-End Articulated Object Reconstruction via Latent Geometry Learning](/202606/23/2606.21938v1-artic-o-end-to-end-articulated-object-reconstruction-via-latent-geometry-learning)  
+   标签：评分：9.0/10、query:ffdr
+   evidence：可动关节物体的端到端前馈重建框架
+2. [Visual Geometry Transformer in the Wild: Distractor-Free 3D Reconstruction](/202606/23/2606.22787v1-visual-geometry-transformer-in-the-wild-distractor-free-3d-reconstruction)  
+   标签：评分：9.0/10、query:ffdr
+   evidence：端到端前馈多视图3D重建，使用Transformer
+3. [Learning Stable Canonical Worlds for Novel View Synthesis and Beyond](/202606/23/2606.23027v1-learning-stable-canonical-worlds-for-novel-view-synthesis-and-beyond)  
+   标签：评分：9.0/10、query:ffdr
+   evidence：前馈高斯溅射用于新视角合成
+4. [Arbor: Explicit Geometric Conditioning for Controllable 3D Asset Generation](/202606/23/2606.23514v1-arbor-explicit-geometric-conditioning-for-controllable-3d-asset-generation)  
    标签：评分：9.0/10、query:dgen
-   evidence：使用冻结扩散模型进行零样本文本引导驾驶场景生成，保持预训练知识同时实现多视角和时间一致性
-2. [VEPHand: View-Efficient Photometric Hand Performance Capture at Scale](/202606/22/2606.15966v2-vephand-view-efficient-photometric-hand-performance-capture-at-scale)  
+   evidence：基于约束网格的可控3D资产生成
+5. [Lightweight Neural Framework for Robust 3D Volume and Surface Estimation from Multi-View Images](/202606/23/2606.23653v1-lightweight-neural-framework-for-robust-3d-volume-and-surface-estimation-from-multi-view-images)  
+   标签：评分：9.0/10、query:ffdr
+   evidence：全前馈框架用于多视图图像的3D体积和表面估计
+6. [TriFlow: Generating Artist-Like 3D Mesh Topology via Nearest-Vertex Vector Fields](/202606/23/2606.20131v2-triflow-generating-artist-like-3d-mesh-topology-via-nearest-vertex-vector-fields)  
    标签：评分：8.0/10、query:dgen
-   evidence：基于多视图的端到端三维手部重建
-3. [SpatialSV: Internalizing Interpretable 3D Spatial Awareness in MLLMs via Task-Oriented Visual Supervision](/202606/22/2606.19915v1-spatialsv-internalizing-interpretable-3d-spatial-awareness-in-mllms-via-task-oriented-visual-supervision)  
-   标签：评分：8.0/10、query:ffdr
-   evidence：通过前馈方式将二维视觉特征提升为显式三维表示，在MLLMs中内化3D空间感知
+   evidence：通过流匹配生成3D网格拓扑
+7. [Stochastic Signed Distance Processes](/202606/23/2606.20856v1-stochastic-signed-distance-processes)  
+   标签：评分：8.0/10、query:dgen
+   evidence：使用随机符号距离过程的多视图表面重建
+8. [Boundary-by-Mask: Few-Shot Instance Segmentation with Mask-Conditioned Boundary Learning for Texture-Poor Industrial Parts](/202606/23/2606.21594v1-boundary-by-mask-few-shot-instance-segmentation-with-mask-conditioned-boundary-learning-for-texture-poor-industrial-parts)  
+   标签：评分：8.0/10、query:partseg
+   evidence：基于边界学习的少样本实例分割
 
 ### 速读区论文标签
-1. [QueryGaussian: Scalable and Training-Free Open-Vocabulary 3D Instance Retrieval](/202606/22/2606.19733v1-querygaussian-scalable-and-training-free-open-vocabulary-3d-instance-retrieval)  
-   标签：评分：7.0/10、query:partseg
-   evidence：基于自然语言的无需训练的3D实例检索
-2. [Track2View: 4D-Consistent Camera-Controlled Video Generation via Paired 3D Point Tracks](/202606/22/2606.15534v1-track2view-4d-consistent-camera-controlled-video-generation-via-paired-3d-point-tracks)  
-   标签：评分：6.0/10、query:dgen
-   evidence：利用3D点轨迹的4D一致视频生成，与神经渲染相关
-3. [Renderable Partial Representations for Dynamic Gaussian Splatting under Incomplete Delivery](/202606/22/2606.17212v1-renderable-partial-representations-for-dynamic-gaussian-splatting-under-incomplete-delivery)  
+1. [Enhancing Creativity in 3D Generative Design via a TRIZ-Inspired Text-to-CAD Framework](/202606/23/2606.21378v1-enhancing-creativity-in-3d-generative-design-via-a-triz-inspired-text-to-cad-framework)  
+   标签：评分：8.0/10、query:dgen
+   evidence：使用LLM和TRIZ进行文本到CAD生成
+2. [$φ$-Scene: Physically Grounded Image-to-3D Scene Reconstruction](/202606/23/2606.21596v1--scene-physically-grounded-image-to-3d-scene-reconstruction)  
+   标签：评分：8.0/10、query:dgen
+   evidence：从单张图像到3D场景的物理性重建
+3. [Lighting-Consistent Object Transfer Across Radiance Fields](/202606/23/2606.22481v1-lighting-consistent-object-transfer-across-radiance-fields)  
+   标签：评分：8.0/10、query:dgen
+   evidence：使用扩散模型和3D高斯溅射进行光照一致的物体迁移，实现3D内容编辑
+4. [MeshFlow: Mesh Generation with Equivariant Flow Matching](/202606/23/2606.23489v1-meshflow-mesh-generation-with-equivariant-flow-matching)  
+   标签：评分：8.0/10、query:dgen
+   evidence：通过等变流匹配直接生成三角形网格
+5. [ACEsplat: Accelerated 3D Gaussian Scene Regression via RGB and Poses Only](/202606/23/2606.22091v1-acesplat-accelerated-3d-gaussian-scene-regression-via-rgb-and-poses-only)  
+   标签：评分：7.0/10、query:dgen
+   evidence：仅通过RGB图像和相机位姿重建3D高斯场景，无需外部先验
+6. [DreamUV: Unwrap Artist-like UV by End-to-End Flow Matching](/202606/23/2606.22445v1-dreamuv-unwrap-artist-like-uv-by-end-to-end-flow-matching)  
+   标签：评分：7.0/10、query:dgen
+   evidence：生成式流匹配用于3D内容创建中的UV展开
+7. [Generative Relightable Avatars](/202606/23/2606.22718v1-generative-relightable-avatars)  
+   标签：评分：7.0/10、query:dgen
+   evidence：具有前馈细化的生成式可重光照虚拟人
+8. [SCOPE: Scale-Consistent One-Pass Estimation of 3D Geometry](/202606/23/2606.21300v1-scope-scale-consistent-one-pass-estimation-of-3d-geometry)  
    标签：评分：6.0/10、query:ffdr
-   evidence：动态高斯泼溅的可渲染部分表示
-4. [Occ-VLM: Occupancy Grounded Vision Language Model for Indoor Scene Understanding](/202606/22/2606.19776v1-occ-vlm-occupancy-grounded-vision-language-model-for-indoor-scene-understanding)  
+   evidence：从视频一次性估计3D几何，高效大规模
+9. [Mesh2GS: White-Box 3DGS Construction via Plenoptic Sampling](/202606/23/2606.21898v1-mesh2gs-white-box-3dgs-construction-via-plenoptic-sampling)  
    标签：评分：6.0/10、query:dgen
-   evidence：从有位姿RGB图像预测占用进行3D场景理解
+   evidence：基于3DGS的神经渲染构建
+10. [Can Single-View Mesh Reconstruction Generalize to Robot Camera Rotation?](/202606/23/2606.22987v1-can-single-view-mesh-reconstruction-generalize-to-robot-camera-rotation)  
+   标签：评分：6.0/10、query:dgen
+   evidence：评估单视图网格重建在相机旋转下的性能
+11. [DrivingVoxels: Compositional Sparse Voxel Rasterization for Dynamic Driving Scene Reconstruction](/202606/23/2606.23031v1-drivingvoxels-compositional-sparse-voxel-rasterization-for-dynamic-driving-scene-reconstruction)  
+   标签：评分：6.0/10、query:ffdr
+   evidence：基于稀疏体素的动态城市场景重建
 
 
 <div class="dpr-home-promo-card">
