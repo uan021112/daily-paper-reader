@@ -293,6 +293,23 @@ def resolve_conference_pdf_url(paper: Dict[str, Any]) -> str:
     match = re.search(r"[?&]id=([^&#]+)", link)
     if "openreview.net/forum" in link and match:
         return f"https://openreview.net/pdf?id={match.group(1)}"
+    # CVF (CVPR/WACV): .../html/XXX_paper.html → .../papers/XXX_paper.pdf
+    if "openaccess.thecvf.com" in link and "/html/" in link:
+        return link.replace("/html/", "/papers/").replace("_paper.html", "_paper.pdf")
+    # ECVA (ECCV): .../html/3012_ECCV_2024_paper.php → .../papers/03012.pdf (zero-padded to 5 digits)
+    if "ecva.net" in link and "/html/" in link:
+        m = re.search(r"/html/(\d+)_", link)
+        if m:
+            base = link[:link.index("/html/")]
+            padded = m.group(1).zfill(5)
+            return f"{base}/papers/{padded}.pdf"
+        return link.replace("/html/", "/pdf/").replace("_paper.php", "_paper.pdf")
+    # ACL Anthology: https://aclanthology.org/2025.findings-emnlp.1018/ → .../2025.findings-emnlp.1018.pdf
+    if "aclanthology.org" in link:
+        clean = link.rstrip("/")
+        if not clean.endswith(".pdf"):
+            return clean + ".pdf"
+        return clean
     return link
 
 

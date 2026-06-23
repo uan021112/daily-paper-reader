@@ -1319,7 +1319,7 @@ def build_markdown_content(
     published = str(paper.get("published") or "").strip()
     if published:
         published = published[:10]
-    pdf_url = str(paper.get("link") or paper.get("pdf_url") or "").strip()
+    pdf_url = str(paper.get("pdf_url") or paper.get("link") or "").strip()
     score = paper.get("llm_score")
     evidence = str(paper.get("canonical_evidence") or "").strip()
     tldr = (
@@ -1450,7 +1450,7 @@ def process_paper(
     arxiv_id = str(paper.get("id") or paper.get("paper_id") or "").strip()
     md_path, txt_path, paper_id = prepare_paper_paths(docs_dir, date_str, title, arxiv_id)
     abstract_en = (paper.get("abstract") or "").strip()
-    pdf_url = str(paper.get("link") or paper.get("pdf_url") or "").strip()
+    pdf_url = str(paper.get("pdf_url") or paper.get("link") or "").strip()
     paper_llm_client = create_llm_client()
 
     glance = ""
@@ -1626,7 +1626,7 @@ def process_paper(
                 return paper_id, title
 
             # 生成详细总结
-            pdf_url = str(paper.get("link") or paper.get("pdf_url") or "").strip()
+            pdf_url = str(paper.get("pdf_url") or paper.get("link") or "").strip()
             ensure_text_content(pdf_url, txt_path)
             summary = generate_deep_summary(md_path, txt_path, client=paper_llm_client)
             if summary:
@@ -1665,7 +1665,7 @@ def process_paper(
         return paper_id, title
 
     # 新文件：生成完整内容
-    pdf_url = str(paper.get("link") or paper.get("pdf_url") or "").strip()
+    pdf_url = str(paper.get("pdf_url") or paper.get("link") or "").strip()
     ensure_text_content(pdf_url, txt_path)
     figures, tables = maybe_generate_paper_media(
         paper,
