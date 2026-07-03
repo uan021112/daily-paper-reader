@@ -314,6 +314,7 @@
       centerActive: false,
       autoMark: false,
       preserveScroll: true,
+      dispatchUpdated: false,
     };
   }
   function rerenderOptionsForStatusClick() {

@@ -625,6 +625,7 @@ function testSidebarUtilityHelpers() {
     centerActive: false,
     autoMark: false,
     preserveScroll: true,
+    dispatchUpdated: false,
   });
 
   assert.equal(typeof tools.updatePaperTitleOverflowMarks, 'function');
