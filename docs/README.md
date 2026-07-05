@@ -6,89 +6,82 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-07-03
-- 运行时间：2026-07-03 20:28:09 UTC
+- 最新运行日期：2026-07-05
+- 运行时间：2026-07-05 21:41:00 UTC
 - 运行状态：成功
-- 本次总论文数：23
-- 精读区：10
-- 速读区：13
+- 本次总论文数：20
+- 精读区：8
+- 速读区：12
 
 ### 今日简报（AI）
-今天综述23篇论文，精读10篇，重点关注全景3D重建与开放词汇视频实例分割。最值得看的是高分论文《Argus: Metric Panoramic 3D Reconstruction for Indoor Scenes》和《Segmenting, Fast and Slow: Real-Time Open-Vocabulary Video Instance Segmentation》。建议优先精读这两篇，掌握室内3D重建与实时视频分割前沿。
-- 详情：[/202607/03/README](/202607/03/README)
+今日导读聚焦动态场景重建与语义理解，精读两篇9分工作《HiReFF》和《L2D2-GS》，分别解决非标定稀疏视频的高分辨率人体重建和前馈动态高斯场景的密度化问题。  
+最值得关注的方向是前馈式动态3D高斯重建（含人体）以及利用语义锚定提升开放词汇场景理解的《SAD-GS》《Bridging 3D Gaussians》。  
+建议普通读者优先精读《HiReFF》和《L2D2-GS》把握动态重建新范式，再通过速读中的三篇8分工作巩固开放词汇与隐私保护的应用思路。
+- 详情：[/202607/05/README](/202607/05/README)
 
 ### 精读区论文标签
-1. [Argus: Metric Panoramic 3D Reconstruction for Indoor Scenes](/202607/03/2606.30047v2-argus-metric-panoramic-3d-reconstruction-for-indoor-scenes)  
-   标签：评分：10.0/10、query:ffdr
-   evidence：面向全景数据的度量前馈3D重建
-2. [Segmenting, Fast and Slow: Real-Time Open-Vocabulary Video Instance Segmentation with Dual-Path Processing](/202607/03/2607.00124v1-segmenting-fast-and-slow-real-time-open-vocabulary-video-instance-segmentation-with-dual-path-processing)  
-   标签：评分：9.0/10、query:partseg
-   evidence：实时开放词汇视频实例分割
-3. [Pano2World: End-to-End 3D Generation via Unified Multi-View Sequences](/202607/03/2607.00832v1-pano2world-end-to-end-3d-generation-via-unified-multi-view-sequences)  
-   标签：评分：9.0/10、query:dgen
-   evidence：从单张全景图生成3D场景
-4. [SuperFlex: Deformable Superquadrics for Point Cloud Decomposition](/202607/03/2607.01015v1-superflex-deformable-superquadrics-for-point-cloud-decomposition)  
-   标签：评分：9.0/10、query:partseg
-   evidence：可变形超二次曲面用于点云分解
-5. [Bridging 3D Gaussians and Semantic Occupancy for Comprehensive Open-Vocabulary Scene Understanding from Unposed Images](/202607/03/2607.01633v1-bridging-3d-gaussians-and-semantic-occupancy-for-comprehensive-open-vocabulary-scene-understanding-from-unposed-images)  
+1. [HiReFF: High-Resolution Feedforward Human Reconstruction from Uncalibrated Sparse-View Video](/202607/05/2606.29333v1-hireff-high-resolution-feedforward-human-reconstruction-from-uncalibrated-sparse-view-video)  
    标签：评分：9.0/10、query:ffdr
-   evidence：前馈高斯方法用于无位姿3D重建和语义占用
-6. [SimWorlds: A Multi-Agent System for Dynamic 3D Scene Creation](/202607/03/2607.01766v1-simworlds-a-multi-agent-system-for-dynamic-3d-scene-creation)  
-   标签：评分：9.0/10、query:dgen
-   evidence：多智能体系统从文本创建动态3D场景
-7. [UnderOneFacade: Worldwide Facade Semantic Segmentation Benchmark Dataset](/202607/03/2607.02018v1-underonefacade-worldwide-facade-semantic-segmentation-benchmark-dataset)  
-   标签：评分：9.0/10、query:partseg
-   evidence：最大的3D外立面分割基准数据集，包含点云
-8. [PWM-ArtGen: Part World Model for Articulated Object Generation](/202607/03/2607.02045v1-pwm-artgen-part-world-model-for-articulated-object-generation)  
-   标签：评分：9.0/10、query:dgen
-   evidence：从单张图像生成铰接3D物体，使用部分世界模型
-9. [InvSplat: Inverse Feed-Forward Scene Splatting](/202607/03/2607.02301v1-invsplat-inverse-feed-forward-scene-splatting)  
+   evidence：无标定稀疏视图视频的高分辨率前馈人体重建方法
+2. [L2D2-GS: Learning to Densify for Feedforward Dynamic Gaussian Scene Reconstruction](/202607/05/2606.29374v1-l2d2-gs-learning-to-densify-for-feedforward-dynamic-gaussian-scene-reconstruction)  
    标签：评分：9.0/10、query:ffdr
-   evidence：前馈多视图重建，预测带有材质属性的3D高斯体
-10. [Text-Driven 3D Indoor Scene Synthesis in Non-Manhattan Environments](/202607/03/2607.02407v1-text-driven-3d-indoor-scene-synthesis-in-non-manhattan-environments)  
+   evidence：前馈神经网络用于动态3D场景重建
+3. [NaLA: A 3D Native LLM Layout Agent for High-quality 3D Scene Generation](/202607/05/2606.29395v1-nala-a-3d-native-llm-layout-agent-for-high-quality-3d-scene-generation)  
    标签：评分：9.0/10、query:dgen
-   evidence：文本驱动的非曼哈顿室内3D场景合成
+   evidence：基于LLM的布局智能体用于3D场景生成
+4. [World from Motion: Generative Dynamic Gaussian Reconstruction from Monocular Video](/202607/05/2607.01202v1-world-from-motion-generative-dynamic-gaussian-reconstruction-from-monocular-video)  
+   标签：评分：9.0/10、query:dgen
+   evidence：从单目视频生成动态3D高斯表示的重建方法
+5. [PixGS: Pixel-Space Diffusion for Direct 3D Gaussian Splat Generation](/202607/05/2607.01803v1-pixgs-pixel-space-diffusion-for-direct-3d-gaussian-splat-generation)  
+   标签：评分：9.0/10、query:dgen
+   evidence：通过单阶段扩散从文本或图像生成3D模型
+6. [Diversity-aware View Partitioning for Scalable VGGT](/202607/05/2607.01885v1-diversity-aware-view-partitioning-for-scalable-vggt)  
+   标签：评分：9.0/10、query:ffdr
+   evidence：基于多样性感知视图划分的可扩展前馈3D重建方法
+7. [Vitality-Aware Compression for Efficient Image-to-Shape Diffusion Transformers](/202607/05/2607.00382v1-vitality-aware-compression-for-efficient-image-to-shape-diffusion-transformers)  
+   标签：评分：8.0/10、query:dgen
+   evidence：图像到形状扩散变换器压缩，用于3D生成
+8. [PointDiT: Pixel-Space Diffusion for Monocular Geometry Estimation](/202607/05/2607.02515v1-pointdit-pixel-space-diffusion-for-monocular-geometry-estimation)  
+   标签：评分：8.0/10、query:dgen
+   evidence：基于像素空间扩散的单目几何估计
 
 ### 速读区论文标签
-1. [Enhancing Part-Level Point Grounding for Any Open-Source MLLMs](/202607/03/2606.29267v1-enhancing-part-level-point-grounding-for-any-open-source-mllms)  
+1. [SAD-GS: Learning Reliable 3D Semantic Gaussian Fields via Dynamic Geo-Semantic Anchoring](/202607/05/2606.29376v1-sad-gs-learning-reliable-3d-semantic-gaussian-fields-via-dynamic-geo-semantic-anchoring)  
    标签：评分：8.0/10、query:partseg
-   evidence：部件级点定位，用于物体组件的语义标注
-2. [Walking in the Implicit: Interactive World Exploration via Neural Scene Representation](/202607/03/2606.30045v1-walking-in-the-implicit-interactive-world-exploration-via-neural-scene-representation)  
-   标签：评分：8.0/10、query:dgen
-   evidence：生成式神经场景表示
-3. [UnfoldArt: Zero-Shot Recovery of Full Articulated 3D Objects from Text or Image](/202607/03/2606.30608v2-unfoldart-zero-shot-recovery-of-full-articulated-3d-objects-from-text-or-image)  
-   标签：评分：8.0/10、query:dgen
-   evidence：从文本或图像零样本恢复铰接3D物体
-4. [Open-Vocabulary and Referring Segmentation for 3D Gaussians Using 2D Detectors](/202607/03/2606.30638v1-open-vocabulary-and-referring-segmentation-for-3d-gaussians-using-2d-detectors)  
+   evidence：开放词汇的三维语义高斯场学习
+2. [Privacy-Preserving Depth-Only Open-Vocabulary 3D Semantic Segmentation Via Uncertainty-Guided Test-Time Optimization](/202607/05/2607.00978v1-privacy-preserving-depth-only-open-vocabulary-3d-semantic-segmentation-via-uncertainty-guided-test-time-optimization)  
    标签：评分：8.0/10、query:partseg
-   evidence：利用二维检测器对三维高斯进行开放词汇和指向性分割
-5. [LIST3R: Long-sequence Instance-aware 3D Reconstruction](/202607/03/2607.00375v1-list3r-long-sequence-instance-aware-3d-reconstruction)  
+   evidence：使用仅深度几何进行开放词汇3D语义分割，保护隐私
+3. [Bridging 3D Gaussians and Semantic Occupancy for Comprehensive Open-Vocabulary Scene Understanding from Unposed Images](/202607/05/2607.01633v1-bridging-3d-gaussians-and-semantic-occupancy-for-comprehensive-open-vocabulary-scene-understanding-from-unposed-images)  
    标签：评分：8.0/10、query:ffdr
-   evidence：长序列实例感知3D重建
-6. [CubifyGS: Object-Centric 3D Gaussian Splatting for Lifelong Dynamic Scene Maintenance](/202607/03/2606.28720v1-cubifygs-object-centric-3d-gaussian-splatting-for-lifelong-dynamic-scene-maintenance)  
-   标签：评分：7.0/10、query:ffdr
-   evidence：在场景维护中对比前馈与优化方法；使用资产检索而非逐场景优化
-7. [Occlusion-Robust Multi-Object Decoupling for Physics-Based Robotic Interaction](/202607/03/2606.29303v2-occlusion-robust-multi-object-decoupling-for-physics-based-robotic-interaction)  
+   evidence：基于前馈高斯方法的无位姿重建
+4. [Alignment Is All You Need For X-to-4D Generation](/202607/05/2607.02516v1-alignment-is-all-you-need-for-x-to-4d-generation)  
+   标签：评分：8.0/10、query:dgen
+   evidence：任意模态到4D生成的对齐技术
+5. [RefGlass-GS: A UAV-Enabled Fusion Framework for Photorealistic, Semantic and Interactive Digitization of Reflective Glass Facades via Gaussian Splatting](/202607/05/2606.28826v1-refglass-gs-a-uav-enabled-fusion-framework-for-photorealistic-semantic-and-interactive-digitization-of-reflective-glass-facades-via-gaussian-splatting)  
    标签：评分：7.0/10、query:partseg
-   evidence：使用SAM2进行多物体3D重建中的实例分割
-8. [NaLA: A 3D Native LLM Layout Agent for High-quality 3D Scene Generation](/202607/03/2606.29395v1-nala-a-3d-native-llm-layout-agent-for-high-quality-3d-scene-generation)  
+   evidence：针对反射立面玻璃面板的分割方法
+6. [MyGO-Splat: Multi-Objective Closed-Loop Geometric Feedback for RGB-Only Gaussian SLAM](/202607/05/2606.29738v1-mygo-splat-multi-objective-closed-loop-geometric-feedback-for-rgb-only-gaussian-slam)  
    标签：评分：7.0/10、query:dgen
-   evidence：使用原生3D编码的LLM进行3D场景生成
-9. [HomeDiffusion: Zero-Shot Object Customization with Multi-View Representation Learning for Indoor Scenes](/202607/03/2606.29828v1-homediffusion-zero-shot-object-customization-with-multi-view-representation-learning-for-indoor-scenes)  
+   evidence：纯RGB单目高斯SLAM实现3D重建
+7. [Restore3D: Breathing Life into Broken Objects with Shape and Texture Restoration](/202607/05/2607.00522v1-restore3d-breathing-life-into-broken-objects-with-shape-and-texture-restoration)  
    标签：评分：7.0/10、query:dgen
-   evidence：使用多视图表示学习实现室内场景零样本物体定制生成
-10. [CoIn: Comprehensive 2D-3D Inpainting with Gaussian Splatting Guidance](/202607/03/2606.27584v1-coin-comprehensive-2d-3d-inpainting-with-gaussian-splatting-guidance)  
+   evidence：利用多视图图像恢复破损3D物体的形状和纹理
+8. [Online Segment 3D Gaussians via Launching Virtual Drones](/202607/05/2607.01628v1-online-segment-3d-gaussians-via-launching-virtual-drones)  
+   标签：评分：7.0/10、query:partseg
+   evidence：在线交互式分割3D高斯实现物体实例分割
+9. [Consistent Scene Understanding in 3D Gaussian Splatting via Multi-Cue Mask Refinement](/202607/05/2607.01708v1-consistent-scene-understanding-in-3d-gaussian-splatting-via-multi-cue-mask-refinement)  
+   标签：评分：7.0/10、query:partseg
+   evidence：3D场景实例级分割
+10. [Learning Spectral and Polarimetric Clues for One-to-Multimodal Novel View Synthesis](/202607/05/2607.02372v1-learning-spectral-and-polarimetric-clues-for-one-to-multimodal-novel-view-synthesis)  
+   标签：评分：7.0/10、query:dgen
+   evidence：神经渲染用于多模态（光谱、偏振）数据的新颖视图合成
+11. [Knowledge-Driven Dimension Estimation from a Single Image -3D Asset Generation Technology for Digital Twin Construction](/202607/05/2606.30896v1-knowledge-driven-dimension-estimation-from-a-single-image--3d-asset-generation-technology-for-digital-twin-construction)  
    标签：评分：6.0/10、query:dgen
-   evidence：利用高斯泼溅进行3D场景修复，连接2D和3D
-11. [DPPE: Rethinking Camera-Based Positional Encoding for Scaling Multi-View Transformers](/202607/03/2606.31585v1-dppe-rethinking-camera-based-positional-encoding-for-scaling-multi-view-transformers)  
-   标签：评分：6.0/10、query:dgen
-   evidence：基于相机的位置编码用于神经渲染
-12. [Stitched Embeddings: A Unified Latent Space for 3D Garments and 2D Patterns](/202607/03/2607.00829v1-stitched-embeddings-a-unified-latent-space-for-3d-garments-and-2d-patterns)  
-   标签：评分：6.0/10、query:dgen
-   evidence：从2D图案统一潜在空间进行3D服装重建
-13. [DeWorldSG: Depth-Aware 3D Semantic Scene Graph Generation via World-Model Priors](/202607/03/2607.00889v1-deworldsg-depth-aware-3d-semantic-scene-graph-generation-via-world-model-priors)  
+   evidence：单图像尺寸估计支持3D资产生成
+12. [MV-GEL: Language-Driven Multi-View Geometric Entity Localization on Meshes](/202607/05/2606.31533v1-mv-gel-language-driven-multi-view-geometric-entity-localization-on-meshes)  
    标签：评分：6.0/10、query:partseg
-   evidence：生成带有实例级语义标签的三维场景图
+   evidence：基于语言驱动的三维网格几何实体定位
 
 
 <div class="dpr-home-promo-card">
