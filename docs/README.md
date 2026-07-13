@@ -6,67 +6,67 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-07-12
-- 运行时间：2026-07-12 21:23:15 UTC
+- 最新运行日期：2026-07-13
+- 运行时间：2026-07-13 21:49:23 UTC
 - 运行状态：成功
 - 本次总论文数：15
-- 精读区：5
-- 速读区：10
+- 精读区：8
+- 速读区：7
 
 ### 今日简报（AI）
-今日精选两篇高分论文，分别聚焦心脏体积网格重建与3D场景像素级统一生成。
-最值得关注的是利用协方差引导变形的高精度心脏重建，以及像素空间中统一3D生成与重建的创新方法。
-建议关注几何变形与生成模型的结合，以提升医疗和虚拟现实领域的3D重建效率。
-- 详情：[/202607/12/README](/202607/12/README)
+今日聚焦15篇3D场景生成与重建论文，8篇精读中两篇获9.0高分。  
+最值得关注PixWorld统一3D场景生成与重建，以及StereoSplat+通过扩散辅助实现渐进式立体高斯泼溅推断。  
+建议普通读者重点跟进联合框架与扩散模型在3D推理中的应用。
+- 详情：[/202607/13/README](/202607/13/README)
 
 ### 精读区论文标签
-1. [HeartVolMesh: Cardiac Volumetric Mesh Reconstruction via Covariance-Guided Graph Deformation](/202607/12/2607.04243v1-heartvolmesh-cardiac-volumetric-mesh-reconstruction-via-covariance-guided-graph-deformation)  
+1. [PixWorld: Unifying 3D Scene Generation and Reconstruction in Pixel Space](/202607/13/2607.05373v1-pixworld-unifying-3d-scene-generation-and-reconstruction-in-pixel-space)  
+   标签：评分：9.0/10、query:dgen
+   evidence：在像素空间统一3D重建与生成
+2. [StereoSplat+: Feed-Forward Stereo Gaussian Splatting with Diffusion-Assisted Progressive Inference](/202607/13/2607.08808v1-stereosplat-feed-forward-stereo-gaussian-splatting-with-diffusion-assisted-progressive-inference)  
    标签：评分：9.0/10、query:ffdr
-   evidence：三维CNN-GNN用于体素网格重建
-2. [PixWorld: Unifying 3D Scene Generation and Reconstruction in Pixel Space](/202607/12/2607.05373v1-pixworld-unifying-3d-scene-generation-and-reconstruction-in-pixel-space)  
-   标签：评分：9.0/10、query:dgen
-   evidence：在像素空间统一3D场景生成与重建
-3. [ELSA3D: Elastic Semantic Anchoring for Unified 3D Understanding and Generation](/202607/12/2607.06565v1-elsa3d-elastic-semantic-anchoring-for-unified-3d-understanding-and-generation)  
-   标签：评分：9.0/10、query:dgen
-   evidence：统一的3D基础模型支持生成与理解
-4. [From RGB Generation to Dense Field Readout: Pixel-Space Dense Prediction with Text-to-Image Models](/202607/12/2607.06553v2-from-rgb-generation-to-dense-field-readout-pixel-space-dense-prediction-with-text-to-image-models)  
-   标签：评分：8.0/10、query:ffdr
-   evidence：利用DiT实现像素到3D几何的直接前馈映射
-5. [TMI: Text-to-Image Meets Image-to-Image for Complementary Data Synthesis to Boost Long-Tailed Instance Segmentation](/202607/12/2607.08201v1-tmi-text-to-image-meets-image-to-image-for-complementary-data-synthesis-to-boost-long-tailed-instance-segmentation)  
+   evidence：前馈立体高斯泼溅用于3D重建
+3. [Glob3R: Global Structure-from-Motion with 3D Foundation Models](/202607/13/2607.09225v1-glob3r-global-structure-from-motion-with-3d-foundation-models)  
+   标签：评分：9.0/10、query:ffdr
+   evidence：基于3D基础模型的前馈3D重建
+4. [EditVerse3D: High-Quality 3D Object Editing with Region-Aware Learning](/202607/13/2607.07187v1-editverse3d-high-quality-3d-object-editing-with-region-aware-learning)  
+   标签：评分：8.0/10、query:dgen
+   evidence：高质量3D物体编辑框架
+5. [HSA: Hierarchical Slot Attention for Multi-granularity Scene-Decomposition](/202607/13/2607.08249v1-hsa-hierarchical-slot-attention-for-multi-granularity-scene-decomposition)  
    标签：评分：8.0/10、query:partseg
-   evidence：结合文本到图像和图像到图像的数据合成方法，用于长尾实例分割
+   evidence：层次化槽注意力用于语义场景分解
+6. [Ortho2CAD: 3D CAD generation from orthographic drawings using vision language models](/202607/13/2607.08891v1-ortho2cad-3d-cad-generation-from-orthographic-drawings-using-vision-language-models)  
+   标签：评分：8.0/10、query:dgen
+   evidence：使用视觉语言模型从二维正射图生成3D CAD模型，属于生成式3D建模
+7. [CtrlVTON: Controllable Virtual Try-On via Visual-Instance-Prompt Segmentation](/202607/13/2607.09362v1-ctrlvton-controllable-virtual-try-on-via-visual-instance-prompt-segmentation)  
+   标签：评分：8.0/10、query:partseg
+   evidence：用于虚拟试穿的实例分割
+8. [Promptable Concept Segmentation from Above: Evaluating SAM 3's Zero-Shot and One-Shot Capabilities in Remote Sensing](/202607/13/2607.09583v1-promptable-concept-segmentation-from-above-evaluating-sam-3s-zero-shot-and-one-shot-capabilities-in-remote-sensing)  
+   标签：评分：8.0/10、query:partseg
+   evidence：在遥感图像上评估SAM 3的零样本和单样本实例分割能力
 
 ### 速读区论文标签
-1. [Sparse-View Surface Reconstruction using Gaussian Splatting through High-Confidence Depth Propagation with Normal Priors](/202607/12/2607.03765v1-sparse-view-surface-reconstruction-using-gaussian-splatting-through-high-confidence-depth-propagation-with-normal-priors)  
+1. [Geometric Reciprocity: Unlocking Self-Supervision for Stereoscopic Video Generation](/202607/13/2607.05354v1-geometric-reciprocity-unlocking-self-supervision-for-stereoscopic-video-generation)  
    标签：评分：7.0/10、query:dgen
-   evidence：基于高斯泼溅的稀疏视角表面重建，利用法线引导的深度传播
-2. [DeGenseGS: Geometrically and Semantically Decoupled Surgical Scene Understanding in 4D Gaussian Splatting](/202607/12/2607.04761v1-degensegs-geometrically-and-semantically-decoupled-surgical-scene-understanding-in-4d-gaussian-splatting)  
+   evidence：基于深度和几何的自督立体视频生成
+2. [GaussFusion: Towards Multimodal 3D Gaussian Pretraining](/202607/13/2607.05906v1-gaussfusion-towards-multimodal-3d-gaussian-pretraining)  
    标签：评分：7.0/10、query:dgen
-   evidence：文本提示的4D重建，语义与几何解耦
-3. [MV-Forcing: Long Multi-View Video Generation via 4D-Grounded Spatio-Temporal Self-Forcing](/202607/12/2607.05376v1-mv-forcing-long-multi-view-video-generation-via-4d-grounded-spatio-temporal-self-forcing)  
+   evidence：面向几何和外观的多模态3D高斯预训练
+3. [Decoupled Illumination Priors for Spatially Controllable Multi-View Indoor Scene Relighting](/202607/13/2607.08879v1-decoupled-illumination-priors-for-spatially-controllable-multi-view-indoor-scene-relighting)  
    标签：评分：7.0/10、query:dgen
-   evidence：利用自回归3D重建实现多视图一致视频生成
-4. [TRACE-Seg3D: Counterfactual Context Auditing For Robust 3D Glioma Segmentation Under Institutional Shift](/202607/12/2607.07038v1-trace-seg3d-counterfactual-context-auditing-for-robust-3d-glioma-segmentation-under-institutional-shift)  
-   标签：评分：7.0/10、query:partseg
-   evidence：三维医学图像分割及鲁棒性审计
-5. [LTM: Large-scale Terrain Model for Wildfire-prone Landscapes](/202607/12/2607.08711v1-ltm-large-scale-terrain-model-for-wildfire-prone-landscapes)  
+   evidence：利用生成先验实现空间可控的多视角室内重光照，属于神经渲染应用
+4. [4D Human-Scene Reconstruction from Low-Overlap Captures](/202607/13/2607.09125v1-4d-human-scene-reconstruction-from-low-overlap-captures)  
+   标签：评分：7.0/10、query:dgen
+   evidence：使用视频扩散模型从稀疏低重叠图像重建4D人类场景
+5. [Autoregressive latent diffusion for 3D molecule generation](/202607/13/2607.09277v1-autoregressive-latent-diffusion-for-3d-molecule-generation)  
+   标签：评分：7.0/10、query:dgen
+   evidence：用于3D分子生成的自回归潜在扩散
+6. [What VGGT Knows About Overlap: Probing Geometric Foundation Models for Co-Visibility](/202607/13/2607.09503v1-what-vggt-knows-about-overlap-probing-geometric-foundation-models-for-co-visibility)  
    标签：评分：7.0/10、query:ffdr
-   evidence：利用多模态先验的大规模地形重建
-6. [Geometry and Gradient-based Partitioning for Panoramic Outdoor Reconstruction](/202607/12/2607.08769v1-geometry-and-gradient-based-partitioning-for-panoramic-outdoor-reconstruction)  
-   标签：评分：7.0/10、query:ffdr
-   evidence：基于优化的3D重建，可与前馈方法对比
-7. [Semantic-Guided Progressive Object Removal with Gaussian Splatting](/202607/12/2607.04144v1-semantic-guided-progressive-object-removal-with-gaussian-splatting)  
-   标签：评分：6.0/10、query:dgen
-   evidence：利用高斯溅射的神经渲染进行3D物体移除
-8. [Video Generation Models Are Inherent Lighting Estimators](/202607/12/2607.04674v1-video-generation-models-are-inherent-lighting-estimators)  
-   标签：评分：6.0/10、query:dgen
-   evidence：视频生成模型用于渲染中的光照估计
-9. [Rendering-Aware Bayesian 3D Gaussian Splatting with Native Uncertainty and Adaptive Complexity Control](/202607/12/2607.05522v1-rendering-aware-bayesian-3d-gaussian-splatting-with-native-uncertainty-and-adaptive-complexity-control)  
-   标签：评分：6.0/10、query:dgen
-   evidence：贝叶斯3D高斯溅射用于新视角合成并带有不确定性
-10. [EditVerse3D: High-Quality 3D Object Editing with Region-Aware Learning](/202607/12/2607.07187v1-editverse3d-high-quality-3d-object-editing-with-region-aware-learning)  
-   标签：评分：6.0/10、query:dgen
-   evidence：高质量3D物体编辑框架，用于内容创作
+   evidence：探测前馈VGGT在三维重建中的作用
+7. [AnythingReality: Robust Online Gaussian Splatting SLAM for Open-Vocabulary VR Scene Exploration](/202607/13/2607.09260v1-anythingreality-robust-online-gaussian-splatting-slam-for-open-vocabulary-vr-scene-exploration)  
+   标签：评分：6.0/10、query:ffdr
+   evidence：在线高斯泼溅3D重建
 
 
 <div class="dpr-home-promo-card">
