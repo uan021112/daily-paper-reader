@@ -6,83 +6,71 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-07-18
-- 运行时间：2026-07-18 21:13:57 UTC
+- 最新运行日期：2026-07-19
+- 运行时间：2026-07-19 21:34:17 UTC
 - 运行状态：成功
-- 本次总论文数：21
-- 精读区：8
-- 速读区：13
+- 本次总论文数：17
+- 精读区：7
+- 速读区：10
 
 ### 今日简报（AI）
-今日精选21篇论文，精读8篇，重点关注稀疏视图重建与单目度量几何两大方向。最值得看的是《MAC-Splat》和《FoundationGeo》，均获10分满分，分别解决了高保真稀疏视图重建和单目像素级度量几何的问题。建议普通读者优先阅读这两篇，把握3D高斯表示与空间场学习的前沿方法。
-- 详情：[/202607/18/README](/202607/18/README)
+今天精选17篇论文，精读X-Lens实时深度估计与HierCAD文本生成CAD设计两篇高分力作。最值得关注X-Lens跨相机实时深度估计（10分）和HierCAD结构对齐文本转CAD（9分）。建议优先精读这两篇，速读可关注TCAM-Diff医学扩散模型与ACZ-GSeg LiDAR地面分割。
+- 详情：[/202607/19/README](/202607/19/README)
 
 ### 精读区论文标签
-1. [MAC-Splat: Multi-Attribute Consistency for High-Fidelity Sparse-View Reconstruction](/202607/18/2607.10792v1-mac-splat-multi-attribute-consistency-for-high-fidelity-sparse-view-reconstruction)  
+1. [X-Lens: Real-Time Metric Depth Estimation with Heterogeneous Cameras](/202607/19/2607.12993v2-x-lens-real-time-metric-depth-estimation-with-heterogeneous-cameras)  
    标签：评分：10.0/10、query:ffdr
-   evidence：前馈神经网络用于稀疏视图三维重建
-2. [FoundationGeo: Learning Spatial Pixel-Wise Fields for Monocular Metric Geometry](/202607/18/2607.11588v3-foundationgeo-learning-spatial-pixel-wise-fields-for-monocular-metric-geometry)  
-   标签：评分：10.0/10、query:ffdr
-   evidence：使用像素场的前馈单目度量几何估计
-3. [See like a Robot: Robot-Centric Pointmaps for Vision-Language-Action Models](/202607/18/2607.11498v1-see-like-a-robot-robot-centric-pointmaps-for-vision-language-action-models)  
-   标签：评分：9.0/10、query:ffdr
-   evidence：通过机器人中心点图实现像素到3D坐标的直接映射
-4. [ABot-3DWorld 0: A Universal World Model to Explore Any 3D Space](/202607/18/2607.11673v2-abot-3dworld-0-a-universal-world-model-to-explore-any-3d-space)  
+   evidence：紧凑前馈模型实现多视图度量深度估计
+2. [HierCAD: Hierarchical Text-to-CAD Design via Structure Alignment and Parameter Grounding](/202607/19/2607.11339v1-hiercad-hierarchical-text-to-cad-design-via-structure-alignment-and-parameter-grounding)  
    标签：评分：9.0/10、query:dgen
-   evidence：从多模态输入生成高保真可探索3D世界
-5. [ThinkBLOX: 3D Indoor Scene Generation with Progressive Reasoning](/202607/18/2607.13539v1-thinkblox-3d-indoor-scene-generation-with-progressive-reasoning)  
-   标签：评分：9.0/10、query:dgen
-   evidence：使用渐进VLM推理进行室内场景生成式3D建模与合成
-6. [Nexus: Native Mesh Generation with Diffusion](/202607/18/2607.13563v1-nexus-native-mesh-generation-with-diffusion)  
-   标签：评分：9.0/10、query:dgen
-   evidence：使用扩散模型解耦顶点和拓扑生成，输出高质量三角网格
-7. [MetaView: Monocular Novel View Synthesis with Scale-Aware Implicit Geometry Priors](/202607/18/2607.12000v1-metaview-monocular-novel-view-synthesis-with-scale-aware-implicit-geometry-priors)  
+   evidence：文本到CAD的层次化结构与参数接地
+3. [Hallo4D: Multi-Modal Hallucination Mitigation for Consistent Spatio-Temporal Generation](/202607/19/2607.12752v1-hallo4d-multi-modal-hallucination-mitigation-for-consistent-spatio-temporal-generation)  
    标签：评分：8.0/10、query:dgen
-   evidence：基于扩散和隐式几何先验的单目新视图合成
-8. [Compos3D: Interactive Part-Based Composition for Creative Control in Generative 3D Models](/202607/18/2607.12193v1-compos3d-interactive-part-based-composition-for-creative-control-in-generative-3d-models)  
+   evidence：缓解3D和4D内容生成中的时空幻觉
+4. [Hallo4D: Multi-Modal Hallucination Mitigation for Consistent Spatio-Temporal Generation](/202607/19/2607.12752v2-hallo4d-multi-modal-hallucination-mitigation-for-consistent-spatio-temporal-generation)  
    标签：评分：8.0/10、query:dgen
-   evidence：基于部件组合的交互式生成3D模型，支持文本/图像提示
+   evidence：缓解3D/4D生成中的空间幻觉
+5. [T3HG-Editor: Text-driven 3D Human Garment Editing with Body Priors Embedded in SMPL-X](/202607/19/2607.13654v1-t3hg-editor-text-driven-3d-human-garment-editing-with-body-priors-embedded-in-smpl-x)  
+   标签：评分：8.0/10、query:dgen
+   evidence：文本驱动的3D人体服装编辑
+6. [G$^2$SR: Geometric Methods for Fast and Memory-Efficient Gaussian-based Surface Reconstruction](/202607/19/2607.14470v1-g2sr-geometric-methods-for-fast-and-memory-efficient-gaussian-based-surface-reconstruction)  
+   标签：评分：8.0/10、query:ffdr
+   evidence：几何表面重建与前馈网络的对比
+7. [Still image and spatial-temporal tomato data enabling detection, segmentation, tracking, and video-instance segmentation using strong and weak labels](/202607/19/2607.14934v1-still-image-and-spatial-temporal-tomato-data-enabling-detection-segmentation-tracking-and-video-instance-segmentation-using-strong-and-weak-labels)  
+   标签：评分：8.0/10、query:partseg
+   evidence：提供番茄果实成熟度像素级标注和检测分割
 
 ### 速读区论文标签
-1. [DETRAM: End-to-end DEtection, Tracking and Recovery of HumAn Meshes](/202607/18/2607.09089v1-detram-end-to-end-detection-tracking-and-recovery-of-human-meshes)  
-   标签：评分：8.0/10、query:ffdr
-   evidence：使用单个Transformer解码器从视频端到端恢复人体网格
-2. [Incremental Online Scene Reconstruction by 3D Gaussian Triangulation](/202607/18/2607.10690v1-incremental-online-scene-reconstruction-by-3d-gaussian-triangulation)  
-   标签：评分：8.0/10、query:ffdr
-   evidence：使用3D高斯三角化进行增量在线场景重建
-3. [Revisiting Matching Response and Swept Feature Volumes for Wide-baseline Omnidirectional Stereo](/202607/18/2607.11097v1-revisiting-matching-response-and-swept-feature-volumes-for-wide-baseline-omnidirectional-stereo)  
-   标签：评分：8.0/10、query:ffdr
-   evidence：前馈3D CNN用于立体匹配和深度估计
-4. [FoundationGeo: Learning Spatial Pixel-Wise Fields for Monocular Metric Geometry](/202607/18/2607.11588v1-foundationgeo-learning-spatial-pixel-wise-fields-for-monocular-metric-geometry)  
-   标签：评分：8.0/10、query:ffdr
-   evidence：前馈框架的单目度量几何像素级场
-5. [ARDepth: Auto-regressive Monocular Depth Estimation with Progressive Visual Conditioning](/202607/18/2607.12433v1-ardepth-auto-regressive-monocular-depth-estimation-with-progressive-visual-conditioning)  
-   标签：评分：8.0/10、query:ffdr
-   evidence：自回归深度估计实现从像素到几何的直接映射
-6. [Rethinking Monocular Depth Embedding for Generalized Stereo Matching](/202607/18/2607.09284v1-rethinking-monocular-depth-embedding-for-generalized-stereo-matching)  
-   标签：评分：7.0/10、query:ffdr
-   evidence：单目深度嵌入作为像素到深度的映射
-7. [Dynamic Inverse Rendering for Enhanced Material-Lighting Decomposition](/202607/18/2607.09329v1-dynamic-inverse-rendering-for-enhanced-material-lighting-decomposition)  
-   标签：评分：7.0/10、query:dgen
-   evidence：通过逆渲染从图像重建三维对象
-8. [SalientGS: Unified SfM-to-3DGS with Importance-Guided MCMC Gaussian Allocation](/202607/18/2607.11285v2-salientgs-unified-sfm-to-3dgs-with-importance-guided-mcmc-gaussian-allocation)  
-   标签：评分：7.0/10、query:ffdr
-   evidence：统一的SfM到3DGS管线用于高效端到端3D场景重建
-9. [UniMedSeg: Unified In-Context Learning for Multi-Paradigm 2D/3D Medical Image Segmentation](/202607/18/2607.12896v1-unimedseg-unified-in-context-learning-for-multi-paradigm-2d3d-medical-image-segmentation)  
+1. [ACZ-GSeg: Adaptive Concentric Zone-based Two-stage Ground Segmentation for LiDAR Point Clouds](/202607/19/2607.12110v1-acz-gseg-adaptive-concentric-zone-based-two-stage-ground-segmentation-for-lidar-point-clouds)  
    标签：评分：7.0/10、query:partseg
-   evidence：统一的2D/3D医学图像分割框架
-10. [DGSfM: Depth-Guided Scale-Aware Global Structure-from-Motion](/202607/18/2607.09507v1-dgsfm-depth-guided-scale-aware-global-structure-from-motion)  
-   标签：评分：6.0/10、query:ffdr
-   evidence：深度引导的SfM用于高效大规模重建
-11. [3D Scene Graph Prediction: Generating Hierarchical Models from Partially Observed Environments](/202607/18/2607.10879v1-3d-scene-graph-prediction-generating-hierarchical-models-from-partially-observed-environments)  
+   evidence：基于自适应同心圆环模型的地面分割方法
+2. [TCAM-Diff: Triplane-Aware Cross-Attention Medical Diffusion Model](/202607/19/2607.13812v1-tcam-diff-triplane-aware-cross-attention-medical-diffusion-model)  
+   标签：评分：7.0/10、query:dgen
+   evidence：3D医学图像生成的扩散模型
+3. [Emergent Region-Level Facial Correspondence in Frozen Vision Foundation Models](/202607/19/2607.14423v1-emergent-region-level-facial-correspondence-in-frozen-vision-foundation-models)  
+   标签：评分：7.0/10、query:partseg
+   evidence：使用冻结的DINOv3特征进行面部部件的区域级语义标注
+4. [Annotation-Free Furniture Codes: What They Encode, and How Far They Transfer](/202607/19/2607.10461v1-annotation-free-furniture-codes-what-they-encode-and-how-far-they-transfer)  
    标签：评分：6.0/10、query:dgen
-   evidence：从部分观测生成层次化3D场景图，属于生成式3D建模
-12. [CASA-SDF: Curriculum-Aware Spatial Adaptation with Curvature-Guided Density for Neural Implicit Surface Reconstruction](/202607/18/2607.13492v1-casa-sdf-curriculum-aware-spatial-adaptation-with-curvature-guided-density-for-neural-implicit-surface-reconstruction)  
-   标签：评分：6.0/10、query:ffdr
-   evidence：基于优化的3D重建方法，可用于与反馈前向方法对比
-13. [Bake It Till You Make It: Ultrafast Spatial Texture-Atlas Splatting](/202607/18/2607.13808v1-bake-it-till-you-make-it-ultrafast-spatial-texture-atlas-splatting)  
+   evidence：自监督点云编码用于3D家具，可实现类别和姿态恢复
+5. [SeamGen: Artist-Aligned UV Seam Generation via Graph Flow Matching](/202607/19/2607.12379v1-seamgen-artist-aligned-uv-seam-generation-via-graph-flow-matching)  
    标签：评分：6.0/10、query:dgen
-   evidence：使用纹理图谱的3D高斯泼溅用于渲染
+   evidence：3D内容创建中UV接缝生成的生成模型
+6. [Topology-Agnostic Mesh Reconstruction of Deformable Objects from Sparse Touch](/202607/19/2607.13479v1-topology-agnostic-mesh-reconstruction-of-deformable-objects-from-sparse-touch)  
+   标签：评分：6.0/10、query:dgen
+   evidence：从稀疏触觉进行3D网格重建
+7. [Volumetric Inverse Rendering via Neural Radiative Transfer](/202607/19/2607.13695v1-volumetric-inverse-rendering-via-neural-radiative-transfer)  
+   标签：评分：6.0/10、query:dgen
+   evidence：神经辐射传输用于体素逆渲染
+8. [XCT-SAM: Sequential Parameter-Efficient Domain Adaptation of SAM for Industrial XCT Defect Segmentation](/202607/19/2607.14287v1-xct-sam-sequential-parameter-efficient-domain-adaptation-of-sam-for-industrial-xct-defect-segmentation)  
+   标签：评分：6.0/10、query:partseg
+   evidence：使用SAM进行工业XCT缺陷分割的域自适应
+9. [TanGO: Training-Free 3D Editing via Tangent-Space Guidance and Optimization](/202607/19/2607.14927v1-tango-training-free-3d-editing-via-tangent-space-guidance-and-optimization)  
+   标签：评分：6.0/10、query:dgen
+   evidence：生成模型的免训练3D编辑
+10. [JADE-GS: Joint Alternating Deblurring Guided by Events in 3D Gaussian Splatting](/202607/19/2607.14990v1-jade-gs-joint-alternating-deblurring-guided-by-events-in-3d-gaussian-splatting)  
+   标签：评分：6.0/10、query:dgen
+   evidence：事件引导的去模糊用于3D高斯泼溅重建
 
 
 <div class="dpr-home-promo-card">
