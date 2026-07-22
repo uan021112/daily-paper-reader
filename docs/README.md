@@ -18,73 +18,59 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-07-21
-- 运行时间：2026-07-21 21:57:47 UTC
+- 最新运行日期：2026-07-22
+- 运行时间：2026-07-22 21:48:07 UTC
 - 运行状态：成功
-- 本次总论文数：17
-- 精读区：8
-- 速读区：9
+- 本次总论文数：13
+- 精读区：6
+- 速读区：7
 
 ### 今日简报（AI）
-今日聚焦3D场景理解与生成，精读9分论文：点云快速符号距离场（Points as Tori）与物理感知室内场景分层生成（Text2Villa）。
-最值得关注的是“用环面表示点”实现极高效的点云SDF计算，以及“从文本到别墅”的层次化、可交互3D环境构建。
-建议优先精读这两篇，掌握几何深度学习的最新实用技巧；若对运动合成感兴趣，可联读HarmoHOI的多人手-物交互。
-- 详情：[/202607/21/README](/202607/21/README)
+今日13篇论文中，满分10分《IGGT4D》领衔4D流式实例几何变换，9分《UVFaceFusion》实现野外快速人脸拓扑一致重建。推荐优先精读这两篇，速读中《Fluid-SDF》的可编辑隐式形状与《ReViV》的单目4D重建也值得关注。
+- 详情：[/202607/22/README](/202607/22/README)
 
 ### 精读区论文标签
-1. [Points as Tori: Fast Pointwise Signed Distance for Point Clouds](/202607/21/2607.16946v1-points-as-tori-fast-pointwise-signed-distance-for-point-clouds)  
+1. [IGGT4D: Streaming 4D Instance-Grounded Geometry Transformer](/202607/22/2607.19228v1-iggt4d-streaming-4d-instance-grounded-geometry-transformer)  
+   标签：评分：10.0/10、query:ffdr
+   evidence：流式前馈3D重建结合实例基础
+2. [UVFaceFusion: Fast Multi-view Topologically Consistent Face Reconstruction in the Wild via UV-space Neural Fusion](/202607/22/2607.18798v1-uvfacefusion-fast-multi-view-topologically-consistent-face-reconstruction-in-the-wild-via-uv-space-neural-fusion)  
    标签：评分：9.0/10、query:ffdr
-   evidence：用于点云逐点有符号距离计算的前馈网络
-2. [Text2Villa: Hierarchical Generation of 3D Indoor Environments with Physics-Aware Analysis-by-Synthesis](/202607/21/2607.17145v1-text2villa-hierarchical-generation-of-3d-indoor-environments-with-physics-aware-analysis-by-synthesis)  
-   标签：评分：9.0/10、query:dgen
-   evidence：从文本提示生成3D室内场景
-3. [DA-Fusion: Deformable Attention-Based RGB-D Fusion Transformer for Unseen Object Instance Segmentation](/202607/21/2607.17754v1-da-fusion-deformable-attention-based-rgb-d-fusion-transformer-for-unseen-object-instance-segmentation)  
+   evidence：前馈式多视角人脸重建并保持拓扑一致性
+3. [ZeroSplat: Generalized Referring Segmentation in 3D Gaussian Splatting](/202607/22/2607.18801v1-zerosplat-generalized-referring-segmentation-in-3d-gaussian-splatting)  
    标签：评分：9.0/10、query:partseg
-   evidence：基于RGB-D融合Transformer的未知物体实例分割
-4. [CDIS: Cross-Dimensional Class-Agnostic 3D Instance Segmentation via 2D Mask Tracking and 3D-2D Projection Merging](/202607/21/2607.17778v1-cdis-cross-dimensional-class-agnostic-3d-instance-segmentation-via-2d-mask-tracking-and-3d-2d-projection-merging)  
-   标签：评分：9.0/10、query:partseg
-   evidence：通过2D掩膜追踪与3D-2D投影合并的3D实例分割
-5. [FF-ProCams: Feed-Forward Gaussian Splatting for Projector-Camera System](/202607/21/2607.17803v1-ff-procams-feed-forward-gaussian-splatting-for-projector-camera-system)  
+   evidence：三维高斯泼溅中的广义指代分割，支持动态目标数量
+4. [Latent Riemannian Flow Matching for Geometry-Grounded 3D Foundation Models](/202607/22/2607.19120v1-latent-riemannian-flow-matching-for-geometry-grounded-3d-foundation-models)  
    标签：评分：9.0/10、query:ffdr
-   evidence：用于投影-相机系统的前馈3D高斯逆渲染
-6. [Clarify Before Executing: A Self-Evolving Agent for Resolving Intent Asymmetry in 3D Tool Orchestration](/202607/21/2607.16352v1-clarify-before-executing-a-self-evolving-agent-for-resolving-intent-asymmetry-in-3d-tool-orchestration)  
-   标签：评分：8.0/10、query:dgen
-   evidence：通过澄清对话实现自动化3D资产创建的智能体
-7. [Scene-SAM3D: Multi-View Scene Asset Generation Without Fine-Tuning](/202607/21/2607.16805v1-scene-sam3d-multi-view-scene-asset-generation-without-fine-tuning)  
-   标签：评分：8.0/10、query:dgen
-   evidence：从多视角图像生成场景资产且无需微调
-8. [Fine-Detail Monocular Geometry Estimation with Self-Guided Sparse Volumetric Refinement](/202607/21/2607.17967v1-fine-detail-monocular-geometry-estimation-with-self-guided-sparse-volumetric-refinement)  
+   evidence：在前馈3D基础模型VGGT潜在空间上进行流匹配
+5. [Splat-based 3D Scene Reconstruction with Extreme Motion-blur](/202607/22/2607.16926v1-splat-based-3d-scene-reconstruction-with-extreme-motion-blur)  
    标签：评分：8.0/10、query:ffdr
-   evidence：通过自引导稀疏体素细化实现精细细节的单目几何估计
+   evidence：基于Splat的3D场景重建处理极端运动模糊
+6. [Seeing Before Generating: Object Perception Enhances Single-View 3D Reconstruction](/202607/22/2607.18630v1-seeing-before-generating-object-perception-enhances-single-view-3d-reconstruction)  
+   标签：评分：8.0/10、query:dgen
+   evidence：利用感知信息的单视图三维重建
 
 ### 速读区论文标签
-1. [HarmoHOI: Harmonizing Appearance and 3D Motion for Multi-view Hand-Object Interaction Synthesis](/202607/21/2607.17097v1-harmohoi-harmonizing-appearance-and-3d-motion-for-multi-view-hand-object-interaction-synthesis)  
-   标签：评分：8.0/10、query:dgen
-   evidence：用于多视角手物交互生成的生成式扩散模型
-2. [VGOcc: Learning Visual-Geometric Gaussians for Vision-Centric 3D Driving Occupancy Prediction](/202607/21/2607.18078v1-vgocc-learning-visual-geometric-gaussians-for-vision-centric-3d-driving-occupancy-prediction)  
-   标签：评分：8.0/10、query:ffdr
-   evidence：基于视觉-几何高斯体的视觉中心3D占用预测
-3. [COLMAR: Cooperative View Policy Learning for Multi-Agent Active 3D Reconstruction](/202607/21/2607.13524v1-colmar-cooperative-view-policy-learning-for-multi-agent-active-3d-reconstruction)  
-   标签：评分：7.0/10、query:ffdr
-   evidence：多智能体协作视角策略用于高效3D重建
-4. [CSS-BA: Gate-Guided Column Space Search for Bundle Adjustment](/202607/21/2607.15652v1-css-ba-gate-guided-column-space-search-for-bundle-adjustment)  
-   标签：评分：7.0/10、query:ffdr
-   evidence：用于三维重建的束调整优化方法
-5. [Autoregressive B-Rep Shape Generation with Parametric Surfaces](/202607/21/2607.17093v1-autoregressive-b-rep-shape-generation-with-parametric-surfaces)  
+1. [$K$-NeAS: Scalable Multi-Material CT Reconstruction Using Neural SDFs](/202607/22/2607.14415v1-k-neas-scalable-multi-material-ct-reconstruction-using-neural-sdfs)  
    标签：评分：7.0/10、query:dgen
-   evidence：自回归生成带有参数曲面的B-Rep CAD模型
-6. [Feature-Guided Diffusion for Non-Differentiable Inverse Rendering](/202607/21/2607.17411v1-feature-guided-diffusion-for-non-differentiable-inverse-rendering)  
+   evidence：稀疏视图CT重建及多材料表面分割
+2. [ReViV: Reconstructing the Viewer and the View in 4D from Monocular Egocentric Video](/202607/22/2607.17790v1-reviv-reconstructing-the-viewer-and-the-view-in-4d-from-monocular-egocentric-video)  
    标签：评分：7.0/10、query:dgen
-   evidence：使用扩散模型从图像进行逆渲染，无需梯度，可重构3D属性
-7. [MuViSeg: Multi-View Segment Correspondences from Dense Geometry Priors](/202607/21/2607.17938v1-muviseg-multi-view-segment-correspondences-from-dense-geometry-priors)  
-   标签：评分：7.0/10、query:partseg
-   evidence：使用3D基础模型的实例片段匹配
-8. [A Generative Model-Free Form Deformation Approach for the Generation of Mesh Motions with Applications to PDE](/202607/21/2607.13202v1-a-generative-model-free-form-deformation-approach-for-the-generation-of-mesh-motions-with-applications-to-pde)  
+   evidence：从自我中心视频进行统一的4D重建
+3. [Fluid-SDF: Ultra-Lightweight and Editable Implicit Shape Representation via Differentiable Primitives](/202607/22/2607.18646v1-fluid-sdf-ultra-lightweight-and-editable-implicit-shape-representation-via-differentiable-primitives)  
+   标签：评分：7.0/10、query:dgen
+   evidence：用于三维重建的隐式形状表示
+4. [SynGallery: A Synthetic Gallery of Real Paintings for Instance-Level Artwork Recognition](/202607/22/2607.18907v1-syngallery-a-synthetic-gallery-of-real-paintings-for-instance-level-artwork-recognition)  
+   标签：评分：7.0/10、query:dgen
+   evidence：程序化生成3D画廊场景用于合成数据创建
+5. [CNS-Edit++: Category-Agnostic 3D Editing with Coupled Neural Shape Representation](/202607/22/2607.16577v2-cns-edit-category-agnostic-3d-editing-with-coupled-neural-shape-representation)  
    标签：评分：6.0/10、query:dgen
-   evidence：用于3D形状的生成式变形模型
-9. [TopoGS: Planar Reconstruction via Topology-aware 3D Gaussian Splatting](/202607/21/2607.16838v1-topogs-planar-reconstruction-via-topology-aware-3d-gaussian-splatting)  
+   evidence：基于耦合神经表示的隐空间3D形状编辑
+6. [Robust Multimodal Dynamic Object Segmentation](/202607/22/2607.18153v1-robust-multimodal-dynamic-object-segmentation)  
+   标签：评分：6.0/10、query:partseg
+   evidence：利用多模态线索的动态物体分割框架
+7. [FlexiAvatar: Unified 3D Gaussian Human Avatars Under Arbitrary Body Visibility](/202607/22/2607.19100v1-flexiavatar-unified-3d-gaussian-human-avatars-under-arbitrary-body-visibility)  
    标签：评分：6.0/10、query:dgen
-   evidence：从原始图像进行平面3D重建
+   evidence：单目视频到3D人体化身重建
 
 
 <div class="dpr-home-promo-card dpr-home-panel">
