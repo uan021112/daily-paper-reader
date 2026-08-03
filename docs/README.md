@@ -18,94 +18,86 @@
 </div>
 
 ## 每次日报
-- 最新运行日期：2026-08-02
-- 运行时间：2026-08-02 21:41:08 UTC
+- 最新运行日期：2026-08-03
+- 运行时间：2026-08-03 22:00:45 UTC
 - 运行状态：成功
-- 本次总论文数：24
-- 精读区：11
+- 本次总论文数：21
+- 精读区：8
 - 速读区：13
 
 ### 今日简报（AI）
-今日聚焦24篇新论文，精读2篇重点研究，速读13篇覆盖多元方向。  
-最值得关注：高分10分的道路表面重建模型RoadVGGT，以及9分的可控3D服装生成框架Fashion-3DLR，分别代表自动驾驶感知与智能设计的突破。  
-建议普通读者优先跟踪道路重建与智能服装生成的技术进展，后续可关注食品分割和立体几何估计的基准工作。
-- 详情：[/202608/02/README](/202608/02/README)
+- 今日共生成 21 篇推荐（精读 8 篇，速读 13 篇）
+- 精读：《S-Avatar: Diffusion-Guided Gaussian Head Avatars from a Single Image》（9.0/10）, 《Meshy T2: Fast Native Mesh Generation with Flow Matching》（9.0/10）
+- 速读：《SAM+D: Parameter-Efficient Dimensional Lifting of SAM-Family Models via Depth-Routed LoRA and Depth Shifting》（8.0/10）, 《PlanCraft: Sketch, Refine, and Furnish for Architect-Inspired Progressive 3D Residential Scene Generation》（7.0/10）, 《DVPSFormer: Efficient Online Depth-aware Video Panoptic Segmentation for Autonomous Driving》（7.0/10）
+- 这些结果覆盖了当下较热的方向，建议先看精读区论文的关键问题与方法。
+- 详情：[/202608/03/README](/202608/03/README)
 
 ### 精读区论文标签
-1. [RoadVGGT: Road-Structure-Aware Feed-Forward Road Surface Reconstruction](/202608/02/2607.23758v1-roadvggt-road-structure-aware-feed-forward-road-surface-reconstruction)  
-   标签：评分：10.0/10、query:ffdr
-   evidence：用于道路表面三维重建的前馈框架，无需每场景优化
-2. [Fashion-3DLR: A Controllable 3D Garment Generation Using Pairwise Fashion Elements for Intelligent Design](/202608/02/2607.23189v1-fashion-3dlr-a-controllable-3d-garment-generation-using-pairwise-fashion-elements-for-intelligent-design)  
+1. [S-Avatar: Diffusion-Guided Gaussian Head Avatars from a Single Image](/202608/03/2607.28164v1-s-avatar-diffusion-guided-gaussian-head-avatars-from-a-single-image)  
    标签：评分：9.0/10、query:dgen
-   evidence：可控三维服装生成，属于生成式三维建模
-3. [UMI3D: Robust 3D Generation on Unconstrained Multi-Image Inputs via Simultaneous Focus Cross-Attention Routing](/202608/02/2607.24298v1-umi3d-robust-3d-generation-on-unconstrained-multi-image-inputs-via-simultaneous-focus-cross-attention-routing)  
+   evidence：基于扩散引导的高斯泼溅，从单张图像直接生成逼真的3D头部化身
+2. [Meshy T2: Fast Native Mesh Generation with Flow Matching](/202608/03/2607.28675v1-meshy-t2-fast-native-mesh-generation-with-flow-matching)  
    标签：评分：9.0/10、query:dgen
-   evidence：针对多图像输入的鲁棒3D生成，从多张非受限图像重建3D资产
-4. [MSVS-VAE: Multi-Scale Anchored VecSet for High-Fidelity 3D Reconstruction](/202608/02/2607.24436v1-msvs-vae-multi-scale-anchored-vecset-for-high-fidelity-3d-reconstruction)  
+   evidence：基于流匹配的快速原生网格生成，面向高质量3D资产生成
+3. [Forwardrobe: Garment-Aware Gaussian Avatars from a Single Image](/202608/03/2607.29106v1-forwardrobe-garment-aware-gaussian-avatars-from-a-single-image)  
    标签：评分：9.0/10、query:ffdr
-   evidence：用于高保真三维重建的前馈VAE
-5. [DreamStyle3D: Efficient 3D Stylized Asset Generation via Dual-Attention Disentanglement](/202608/02/2607.24721v1-dreamstyle3d-efficient-3d-stylized-asset-generation-via-dual-attention-disentanglement)  
+   evidence：用于单图三维人体化身重建的前馈框架
+4. [OASIS: Occlusion-aware Single-image Hand Avatar Reconstruction via 3D Gaussian Splatting](/202608/03/2607.29633v1-oasis-occlusion-aware-single-image-hand-avatar-reconstruction-via-3d-gaussian-splatting)  
    标签：评分：9.0/10、query:dgen
-   evidence：高效的风格化3D资产生成，实现风格与几何解耦
-6. [Spline-Based Boundary Representations for Sparse View Reconstruction and Simulation Using Isogeometric Analysis](/202608/02/2607.26234v1-spline-based-boundary-representations-for-sparse-view-reconstruction-and-simulation-using-isogeometric-analysis)  
-   标签：评分：9.0/10、query:dgen
-   evidence：基于稀疏视图图像重建样条边界表示的3D几何
-7. [Genie Sim PanoWorld: An Infinite Indoor 3D World Generation Pipeline via Panoramic Scene Modeling and Simulation](/202608/02/2607.26646v1-genie-sim-panoworld-an-infinite-indoor-3d-world-generation-pipeline-via-panoramic-scene-modeling-and-simulation)  
-   标签：评分：9.0/10、query:ffdr
-   evidence：无需逐场景优化的两阶段前馈模型，由单张全景图直接重建三维场景
-8. [MeshFM: 2D Features Are All You Need for 3D Shape Understanding](/202608/02/2607.27592v1-meshfm-2d-features-are-all-you-need-for-3d-shape-understanding)  
-   标签：评分：9.0/10、query:ffdr
-   evidence：前馈三维特征预测且推理时无需优化，可直接用于部件分割
-9. [4DHumanDiff: Direct Text-to-4DGS Generation for Consistent 360-Degree Dynamic Humans](/202608/02/2607.27634v1-4dhumandiff-direct-text-to-4dgs-generation-for-consistent-360-degree-dynamic-humans)  
-   标签：评分：9.0/10、query:dgen
-   evidence：使用4D高斯溅射从文本生成动态人物
-10. [Convolutional Neural Shading for High-Quality 3D Reconstruction from Multi-View Images](/202608/02/2607.28132v1-convolutional-neural-shading-for-high-quality-3d-reconstruction-from-multi-view-images)  
-   标签：评分：9.0/10、query:dgen
-   evidence：使用卷积神经着色从多视图图像进行高质量三维重建
-11. [ROAD: Reciprocal-Objective Alignment of Discriminative Semantics for 3D Shape Generation](/202608/02/2607.28581v1-road-reciprocal-objective-alignment-of-discriminative-semantics-for-3d-shape-generation)  
-   标签：评分：9.0/10、query:dgen
-   evidence：结合判别先验的扩散Transformer 3D形状生成
+   evidence：单图三维手部化身重建
+5. [SeasonStereo: Robust Dense Stereo Matching for Multi-Date Satellite Imagery via Generative AI](/202608/03/2607.27139v1-seasonstereo-robust-dense-stereo-matching-for-multi-date-satellite-imagery-via-generative-ai)  
+   标签：评分：8.0/10、query:ffdr
+   evidence：可扩展的卫星影像密集立体匹配，用于大规模三维重建
+6. [MeshFM: 2D Features Are All You Need for 3D Shape Understanding](/202608/03/2607.27592v1-meshfm-2d-features-are-all-you-need-for-3d-shape-understanding)  
+   标签：评分：8.0/10、query:partseg
+   evidence：前馈网络直接预测3D特征，并应用于部件分割
+7. [Articulated Object Reconstruction from Rest-State Observation](/202608/03/2607.27749v1-articulated-object-reconstruction-from-rest-state-observation)  
+   标签：评分：8.0/10、query:dgen
+   evidence：从单一闭合状态观测重建3D物体
+8. [AuricularWorld: Hierarchical Action-Guided World Modeling for Fine-Grained Auricular Structure Segmentation from CT Scans](/202608/03/2607.28487v1-auricularworld-hierarchical-action-guided-world-modeling-for-fine-grained-auricular-structure-segmentation-from-ct-scans)  
+   标签：评分：8.0/10、query:partseg
+   evidence：基于层次化递归分割的CT耳廓嵌套结构精细标注
 
 ### 速读区论文标签
-1. [DishSeg24k: A Large-Scale Benchmark for Food Segmentation with Stochastic Expert Decoding](/202608/02/2607.23070v1-dishseg24k-a-large-scale-benchmark-for-food-segmentation-with-stochastic-expert-decoding)  
+1. [SAM+D: Parameter-Efficient Dimensional Lifting of SAM-Family Models via Depth-Routed LoRA and Depth Shifting](/202608/03/2607.29033v1-samd-parameter-efficient-dimensional-lifting-of-sam-family-models-via-depth-routed-lora-and-depth-shifting)  
    标签：评分：8.0/10、query:partseg
-   evidence：大规模菜品实例分割基准与随机专家解码分割Transformer
-2. [GRAPE: Graduated Routing for Articulated Portrait mesh Estimation](/202608/02/2607.23657v1-grape-graduated-routing-for-articulated-portrait-mesh-estimation)  
-   标签：评分：8.0/10、query:ffdr
-   evidence：单目人像网格估计直接前馈地从像素映射到三维几何
-3. [A Unified Stereo Geometry Estimation Framework for Disparity and Surface Normal](/202608/02/2607.24024v1-a-unified-stereo-geometry-estimation-framework-for-disparity-and-surface-normal)  
-   标签：评分：8.0/10、query:ffdr
-   evidence：前馈立体匹配联合预测视差与表面法向量，属于从图像到三维几何的前馈重建
-4. [PointCHR: Point Cloud Analysis via Curvature-Aware Hyperbolic Rectification](/202608/02/2607.24052v1-pointchr-point-cloud-analysis-via-curvature-aware-hyperbolic-rectification)  
-   标签：评分：8.0/10、query:partseg
-   evidence：保留曲率敏感的细粒度几何信息，促进部件级点云分割
-5. [GenSplatCodec: Feed-Forward Gaussian Splatting Compression via One-Step Diffusion](/202608/02/2607.24403v1-gensplatcodec-feed-forward-gaussian-splatting-compression-via-one-step-diffusion)  
-   标签：评分：8.0/10、query:ffdr
-   evidence：面向前馈三维高斯溅射重建输出的高效压缩编解码器
-6. [Multiview Multi-Person Human Mesh Recovery Under Large Scenes with Occlusions](/202608/02/2607.24302v1-multiview-multi-person-human-mesh-recovery-under-large-scenes-with-occlusions)  
+   evidence：参数高效地将SAM扩展到3D体分割
+2. [PlanCraft: Sketch, Refine, and Furnish for Architect-Inspired Progressive 3D Residential Scene Generation](/202608/03/2607.23491v1-plancraft-sketch-refine-and-furnish-for-architect-inspired-progressive-3d-residential-scene-generation)  
    标签：评分：7.0/10、query:dgen
-   evidence：多视角多人人体网格恢复基准，从图像重建三维人体网格
-7. [Intrinsic and Triangulation-Agnostic Attention: A Simple and Powerful Approach for Learning on Meshes](/202608/02/2607.24954v1-intrinsic-and-triangulation-agnostic-attention-a-simple-and-powerful-approach-for-learning-on-meshes)  
+   evidence：以草图-细化-布置流程渐进式生成3D住宅场景
+3. [DVPSFormer: Efficient Online Depth-aware Video Panoptic Segmentation for Autonomous Driving](/202608/03/2607.26165v1-dvpsformer-efficient-online-depth-aware-video-panoptic-segmentation-for-autonomous-driving)  
    标签：评分：7.0/10、query:partseg
-   evidence：面向三角形网格的注意力机制在几何处理任务中达到 SOTA，可用于三维形状部件分割
-8. [WHTMix: Efficient Stereo Depth Estimation via Walsh-Hadamard Token Mixing](/202608/02/2607.25234v1-whtmix-efficient-stereo-depth-estimation-via-walsh-hadamard-token-mixing)  
-   标签：评分：7.0/10、query:ffdr
-   evidence：前馈立体深度估计，从像素到深度的高效映射
-9. [PanoLess: Environment Reconstruction from Partial Reflective Views](/202608/02/2607.25362v1-panoless-environment-reconstruction-from-partial-reflective-views)  
+   evidence：深度感知视频全景分割，属于实例分割算法
+4. [3DGBGS: 3D Granular Ball Gaussian Splatting for Compact Novel View Synthesis](/202608/03/2607.26578v1-3dgbgs-3d-granular-ball-gaussian-splatting-for-compact-novel-view-synthesis)  
    标签：评分：7.0/10、query:dgen
-   evidence：利用高斯泼溅从部分反射视图重建周围环境照明图，属于从图像恢复三维环境
-10. [ViDS: Video Diffusion Shader using 3D Face Tracking](/202608/02/2607.24124v1-vids-video-diffusion-shader-using-3d-face-tracking)  
+   evidence：三维高斯溅射与粒球自适应锚点用于新视角合成
+5. [FPSGen: Flexible Point Cloud Scene Generation with BEV-Supported Transport Flows](/202608/03/2607.26645v1-fpsgen-flexible-point-cloud-scene-generation-with-bev-supported-transport-flows)  
+   标签：评分：7.0/10、query:dgen
+   evidence：基于BEV先验的3D点云场景生成
+6. [StructureGS: Structure-aware Gaussian Splatting for Articulated Object Reconstruction](/202608/03/2607.26889v1-structuregs-structure-aware-gaussian-splatting-for-articulated-object-reconstruction)  
+   标签：评分：7.0/10、query:partseg
+   evidence：面向铰接物体的结构感知部分分解
+7. [Drawing-Recode: Annotation Grounding for Parametric CAD Code Generation from Raster 2D CAD Drawings](/202608/03/2607.27558v1-drawing-recode-annotation-grounding-for-parametric-cad-code-generation-from-raster-2d-cad-drawings)  
+   标签：评分：7.0/10、query:dgen
+   evidence：从光栅图纸生成参数化CAD代码，恢复3D模型
+8. [Split and Drive: Dual-Axis Disentanglement for Real-Time Gaussian Head Avatars](/202608/03/2607.28032v1-split-and-drive-dual-axis-disentanglement-for-real-time-gaussian-head-avatars)  
+   标签：评分：7.0/10、query:dgen
+   evidence：基于单张图像的高斯泼溅头部虚拟人重建
+9. [Beyond Visual Ambiguity: Guiding Robust Monocular Depth Estimation in Challenging Scenarios via Detailed Long Captions](/202608/03/2607.28285v1-beyond-visual-ambiguity-guiding-robust-monocular-depth-estimation-in-challenging-scenarios-via-detailed-long-captions)  
+   标签：评分：7.0/10、query:ffdr
+   evidence：基于单图像的前馈单目深度估计，利用语言描述引导鲁棒深度预测
+10. [AdaAnchor4D: Anchor-Conditioned Spatiotemporal Feature Aggregation for Monocular UAV 4D Reconstruction](/202608/03/2607.28320v1-adaanchor4d-anchor-conditioned-spatiotemporal-feature-aggregation-for-monocular-uav-4d-reconstruction)  
+   标签：评分：7.0/10、query:dgen
+   evidence：从单目无人机视频进行4D重建
+11. [MonoVoc: Decoupling Geometry and Semantics for Lightweight Monocular Open-Vocabulary 3D Gaussians](/202608/03/2607.28300v1-monovoc-decoupling-geometry-and-semantics-for-lightweight-monocular-open-vocabulary-3d-gaussians)  
    标签：评分：6.0/10、query:dgen
-   evidence：利用三维人脸跟踪和视频扩散模型作为神经着色器，用于肖像动画生成
-11. [Long-Tailed 3D Point Cloud Dataset Distillation](/202608/02/2607.26763v1-long-tailed-3d-point-cloud-dataset-distillation)  
+   evidence：单目三维高斯重建与开放词汇语义
+12. [Group-wise Supervision with Focal-Dice Loss for Long-Tailed Indoor Semantic Occupancy Prediction](/202608/03/2607.28935v1-group-wise-supervision-with-focal-dice-loss-for-long-tailed-indoor-semantic-occupancy-prediction)  
    标签：评分：6.0/10、query:partseg
-   evidence：面向长尾点云的数据集蒸馏方法，可服务部件级分割数据集构建
-12. [Articulated Object Reconstruction from Rest-State Observation](/202608/02/2607.27749v1-articulated-object-reconstruction-from-rest-state-observation)  
-   标签：评分：6.0/10、query:partseg
-   evidence：从静态观测重建关节物体，融合分割与视觉-语言模型输出生成空间一致的部件结构
-13. [TSOG: A Format For Temporally And Spatially Ordered Gaussians](/202608/02/2607.28049v1-tsog-a-format-for-temporally-and-spatially-ordered-gaussians)  
+   evidence：面向长尾3D语义占用的分组监督与焦点Dice损失，可能迁移至部件级分割
+13. [FillGS: Filling Observation Gaps in 4D Gaussian Splatting via Viewpoint-Time Selection and Generative Refinement](/202608/03/2607.29284v1-fillgs-filling-observation-gaps-in-4d-gaussian-splatting-via-viewpoint-time-selection-and-generative-refinement)  
    标签：评分：6.0/10、query:dgen
-   evidence：面向4D高斯溅射内容的高效时空有序高斯格式，支持基于神经渲染的3D内容创作
+   evidence：神经渲染与生成式细化用于4D场景重建
 
 
 <div class="dpr-home-promo-card dpr-home-panel">
