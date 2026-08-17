@@ -25,13 +25,18 @@
       supabaseUrl: 'https://lyucdwgefyfbmaiopjbk.supabase.co',
       supabaseKey: 'sb_publishable_lX-oi64Uxyd7SIVv3_w2Uw_MTOojeKq',
       countsDateColumn: 'visit_date',
+      historyDays: 14,
       githubRepoApi: 'https://api.github.com/repos/ziwenhahaha/daily-paper-reader',
       forkCacheMs: 6 * 60 * 60 * 1000,
       timezone: 'Asia/Shanghai',
       selectors: {
         container: '[data-dpr-site-stats]',
         readers: '[data-dpr-daily-readers]',
+        yesterday: '[data-dpr-yesterday-readers]',
         forks: '[data-dpr-fork-count]',
+        historyChart: '[data-dpr-history-chart]',
+        historyRange: '[data-dpr-history-range]',
+        historyPeak: '[data-dpr-history-peak]',
       },
       storageKeys: {
         visitorId: 'dpr-site-stats-visitor-id',
@@ -108,6 +113,29 @@
         }
       }
       return result.year + '-' + result.month + '-' + result.day;
+    }
+
+    function shiftBeijingDateString(dateString, offsetDays) {
+      var match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateString || ''));
+      if (!match) return '';
+      var shifted = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + Number(offsetDays || 0)));
+      return shifted.toISOString().slice(0, 10);
+    }
+
+    function getPreviousBeijingDateString(dateString) {
+      return shiftBeijingDateString(dateString, -1);
+    }
+
+    function buildContinuousBeijingDates(endDateString, totalDays) {
+      var days = toPositiveInteger(totalDays, 1);
+      if (days < 1) days = 1;
+      var startDate = shiftBeijingDateString(endDateString, -(days - 1));
+      var dates = [];
+      var index;
+      for (index = 0; index < days; index += 1) {
+        dates.push(shiftBeijingDateString(startDate, index));
+      }
+      return dates;
     }
 
     function createUuid(cryptoImpl) {
@@ -228,6 +256,113 @@
       return toPositiveInteger(value, 0).toLocaleString('zh-CN');
     }
 
+    function formatMonthDay(dateString) {
+      var match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateString || ''));
+      if (!match) return '';
+      return String(Number(match[2])) + '/' + String(Number(match[3]));
+    }
+
+    function formatHistoryRange(history) {
+      if (!Array.isArray(history) || history.length === 0) return '';
+      return formatMonthDay(history[0].date) + '-' + formatMonthDay(history[history.length - 1].date);
+    }
+
+    function getHistoryPeak(history) {
+      var peak = 0;
+      var index;
+      if (!Array.isArray(history)) return peak;
+      for (index = 0; index < history.length; index += 1) {
+        peak = Math.max(peak, toPositiveInteger(history[index] && history[index].count, 0));
+      }
+      return peak;
+    }
+
+    function renderHistoryChart(history) {
+      var items = Array.isArray(history) ? history : [];
+      if (!items.length) return '';
+
+      var width = 160;
+      var height = 52;
+      var paddingX = 8;
+      var paddingTop = 6;
+      var paddingBottom = 8;
+      var chartHeight = height - paddingTop - paddingBottom;
+      var peak = Math.max(getHistoryPeak(items), 1);
+      var stepX = items.length > 1 ? (width - paddingX * 2) / (items.length - 1) : 0;
+      var lineParts = [];
+      var areaParts = [];
+      var pointMarkup = [];
+      var index;
+
+      for (index = 0; index < items.length; index += 1) {
+        var point = items[index] || {};
+        var count = toPositiveInteger(point.count, 0);
+        var x = items.length > 1 ? paddingX + stepX * index : width / 2;
+        var y = paddingTop + chartHeight - (count / peak) * chartHeight;
+        var coordinate = x.toFixed(2) + ',' + y.toFixed(2);
+        lineParts.push(coordinate);
+        areaParts.push((index === 0 ? 'M' : 'L') + x.toFixed(2) + ' ' + y.toFixed(2));
+        pointMarkup.push(
+          '<circle cx="' +
+            x.toFixed(2) +
+            '" cy="' +
+            y.toFixed(2) +
+            '" r="2.5" fill="#0f766e"></circle>',
+        );
+      }
+
+      var baselineY = (height - paddingBottom).toFixed(2);
+      var firstX = items.length > 1 ? paddingX : width / 2;
+      var lastX = items.length > 1 ? width - paddingX : width / 2;
+      var areaPath =
+        areaParts.join(' ') +
+        ' L' +
+        lastX.toFixed(2) +
+        ' ' +
+        baselineY +
+        ' L' +
+        firstX.toFixed(2) +
+        ' ' +
+        baselineY +
+        ' Z';
+
+      return (
+        '<svg viewBox="0 0 ' +
+        width +
+        ' ' +
+        height +
+        '" width="100%" height="52" aria-hidden="true" focusable="false">' +
+        '<path class="dpr-home-history-area" d="' +
+        areaPath +
+        '" fill="#14b8a61f"></path>' +
+        '<polyline class="dpr-home-history-line" points="' +
+        lineParts.join(' ') +
+        '" fill="none" stroke="#0f766e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>' +
+        pointMarkup.join('') +
+        '</svg>'
+      );
+    }
+
+    function normalizeCountStats(readerStats) {
+      var history = [];
+      if (readerStats && typeof readerStats === 'object' && !Array.isArray(readerStats)) {
+        history = Array.isArray(readerStats.history) ? readerStats.history : [];
+        return {
+          todayCount: toPositiveInteger(
+            readerStats.todayCount != null ? readerStats.todayCount : readerStats.readerCount,
+            0,
+          ),
+          yesterdayCount: toPositiveInteger(readerStats.yesterdayCount, 0),
+          history: history,
+        };
+      }
+      return {
+        todayCount: toPositiveInteger(readerStats, 0),
+        yesterdayCount: 0,
+        history: history,
+      };
+    }
+
     function readForkCache(storage, storageKey, nowMs, maxAgeMs) {
       var raw = getLocalStorageValue(storage, storageKey);
       if (!raw) return null;
@@ -282,7 +417,11 @@
         return {
           container: doc.querySelector(config.selectors.container),
           readers: doc.querySelector(config.selectors.readers),
+          yesterday: doc.querySelector(config.selectors.yesterday),
           forks: doc.querySelector(config.selectors.forks),
+          historyChart: doc.querySelector(config.selectors.historyChart),
+          historyRange: doc.querySelector(config.selectors.historyRange),
+          historyPeak: doc.querySelector(config.selectors.historyPeak),
         };
       }
 
@@ -294,11 +433,24 @@
 
       function showStats(readerCount, forkCount, targets) {
         targets = targets || getTargets();
+        var normalized = normalizeCountStats(readerCount);
         if (targets.readers) {
-          targets.readers.textContent = formatCount(readerCount);
+          targets.readers.textContent = formatCount(normalized.todayCount);
+        }
+        if (targets.yesterday) {
+          targets.yesterday.textContent = formatCount(normalized.yesterdayCount);
         }
         if (targets.forks) {
           targets.forks.textContent = formatCount(forkCount);
+        }
+        if (targets.historyRange) {
+          targets.historyRange.textContent = formatHistoryRange(normalized.history);
+        }
+        if (targets.historyPeak) {
+          targets.historyPeak.textContent = formatCount(getHistoryPeak(normalized.history));
+        }
+        if (targets.historyChart) {
+          targets.historyChart.innerHTML = renderHistoryChart(normalized.history);
         }
         setHidden(targets.container, false);
         return targets;
@@ -352,13 +504,17 @@
           return { ok: false, error: new Error('fetch unavailable') };
         }
 
-        var url =
-          config.supabaseUrl +
-          '/rest/v1/site_daily_reader_counts?select=reader_count&' +
-          encodeURIComponent(config.countsDateColumn) +
-          '=eq.' +
-          encodeURIComponent(today) +
-          '&limit=1';
+        var historyDays = toPositiveInteger(config.historyDays, DEFAULTS.historyDays);
+        if (historyDays < 1) historyDays = DEFAULTS.historyDays;
+        var historyDates = buildContinuousBeijingDates(today, historyDays);
+        var startDate = historyDates[0];
+        var params = new URLSearchParams();
+        params.set('select', config.countsDateColumn + ',reader_count');
+        params.append(config.countsDateColumn, 'gte.' + startDate);
+        params.append(config.countsDateColumn, 'lte.' + today);
+        params.set('order', config.countsDateColumn + '.asc');
+        params.set('limit', String(historyDays));
+        var url = config.supabaseUrl + '/rest/v1/site_daily_reader_counts?' + params.toString();
 
         try {
           var response = await fetchImpl(url, {
@@ -373,13 +529,35 @@
             return { ok: false, status: response ? response.status : 0 };
           }
           var payload = await response.json();
-          var count = 0;
-          if (Array.isArray(payload) && payload.length > 0 && payload[0]) {
-            count = toPositiveInteger(payload[0].reader_count, 0);
-          } else if (payload && typeof payload === 'object' && payload.reader_count != null) {
-            count = toPositiveInteger(payload.reader_count, 0);
+          var rows = Array.isArray(payload) ? payload : payload && typeof payload === 'object' ? [payload] : [];
+          var countsByDate = {};
+          var rowIndex;
+          for (rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+            var row = rows[rowIndex];
+            if (!row || typeof row !== 'object') continue;
+            var rowDate = row[config.countsDateColumn];
+            if (rowDate == null && rows.length === 1) {
+              rowDate = today;
+            }
+            rowDate = String(rowDate || '').slice(0, 10);
+            if (!rowDate) continue;
+            countsByDate[rowDate] = toPositiveInteger(row.reader_count, 0);
           }
-          return { ok: true, readerCount: count };
+          var history = historyDates.map(function (dateString) {
+            return {
+              date: dateString,
+              count: toPositiveInteger(countsByDate[dateString], 0),
+            };
+          });
+          var todayCount = history.length ? history[history.length - 1].count : 0;
+          var yesterdayCount = history.length > 1 ? history[history.length - 2].count : 0;
+          return {
+            ok: true,
+            readerCount: todayCount,
+            todayCount: todayCount,
+            yesterdayCount: yesterdayCount,
+            history: history,
+          };
         } catch (error) {
           return { ok: false, error: error };
         }
@@ -469,12 +647,15 @@
             };
           }
 
-          showStats(countResult.readerCount, forkResult.forkCount, targets);
+          showStats(countResult, forkResult.forkCount, targets);
           return {
             ok: true,
             date: today,
             displayed: true,
             readerCount: countResult.readerCount,
+            todayCount: countResult.todayCount,
+            yesterdayCount: countResult.yesterdayCount,
+            history: countResult.history,
             forkCount: forkResult.forkCount,
             postSkipped: !!postResult.skipped,
             forkCached: !!forkResult.cached,
@@ -567,9 +748,12 @@
       createSiteStats: createSiteStats,
       createUuid: createUuid,
       formatCount: formatCount,
+      buildContinuousBeijingDates: buildContinuousBeijingDates,
       getBeijingDateString: getBeijingDateString,
+      getPreviousBeijingDateString: getPreviousBeijingDateString,
       resolveGithubToken: resolveGithubToken,
       sha256Hex: sha256Hex,
+      shiftBeijingDateString: shiftBeijingDateString,
     };
   },
 );

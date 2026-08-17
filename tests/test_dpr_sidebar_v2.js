@@ -183,6 +183,7 @@ function testSidebarNavigationContract() {
   assert.equal(typeof tools.parseSidebar, 'function');
 
   const model = tools.parseSidebar(sampleSidebar);
+  assert.equal(model.tutorial.label, '教程', '旧版运行态文案也应归一化为两个字');
   assert.deepEqual(tools.collectPaperHrefsFromModel(model), [
     '#/202606/24/paper-a',
     '#/202606/24/paper-b',
@@ -646,6 +647,11 @@ function testQuickLinksCenterTextAndDetachIcon() {
   const tutorialIndex = headerHtml.indexOf('dpr-sidebar-quick-tutorial');
   const feedbackIndex = headerHtml.indexOf('dpr-sidebar-feedback-btn');
   assert.ok(homeIndex >= 0 && tutorialIndex > homeIndex && feedbackIndex > tutorialIndex);
+  assert.ok(headerHtml.includes('aria-hidden="true">📖</span>教程</span>'));
+
+  const sidebarTemplate = fs.readFileSync('docs_init/_sidebar.md', 'utf8').split('\n').slice(0, 3).join('\n');
+  assert.ok(sidebarTemplate.includes('data-dpr-hash="#/tutorial/README">教程</a>'));
+  assert.ok(!sidebarTemplate.includes('>使用教程</a>'));
 
   const css = fs.readFileSync('app/app.css', 'utf8');
   const headerRule = cssRule(css, '.dpr-sidebar-header');

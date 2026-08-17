@@ -24,6 +24,7 @@ function createElement() {
   return {
     hidden: true,
     textContent: '',
+    innerHTML: '',
     attributes: new Map(),
     setAttribute(name, value) {
       this.attributes.set(name, String(value));
@@ -59,7 +60,11 @@ function createStatDom() {
   const elements = {
     '[data-dpr-site-stats]': createElement(),
     '[data-dpr-daily-readers]': createElement(),
+    '[data-dpr-yesterday-readers]': createElement(),
     '[data-dpr-fork-count]': createElement(),
+    '[data-dpr-history-chart]': createElement(),
+    '[data-dpr-history-range]': createElement(),
+    '[data-dpr-history-peak]': createElement(),
   };
   return {
     elements,
@@ -101,6 +106,13 @@ function emptyResponse(ok, status = ok ? 201 : 500) {
   };
 }
 
+function makeHistoryRows(entries) {
+  return entries.map(([visitDate, readerCount]) => ({
+    visit_date: visitDate,
+    reader_count: readerCount,
+  }));
+}
+
 function buildStats(options = {}) {
   const dom = options.dom || createStatDom();
   const storage = options.storage || createStorage();
@@ -137,7 +149,7 @@ async function testForkRequestUsesGithubTokenWhenAvailable() {
     },
     {
       match: (url) => url.includes('/site_daily_reader_counts'),
-      reply: async () => jsonResponse(true, [{ reader_count: 1 }]),
+      reply: async () => jsonResponse(true, makeHistoryRows([['2026-07-19', 1]])),
     },
     {
       match: (url) => url.includes('api.github.com/repos/ziwenhahaha/daily-paper-reader'),
@@ -169,7 +181,8 @@ async function testBeijingCrossDayUsesLocalDateBoundary() {
       match: (url) => url.includes('/site_daily_reader_counts'),
       reply: async (url) => {
         countUrls.push(url);
-        return jsonResponse(true, [{ reader_count: 7 }]);
+        const today = new URL(url).searchParams.getAll('visit_date')[1].replace('lte.', '');
+        return jsonResponse(true, makeHistoryRows([[today, 7]]));
       },
     },
     {
@@ -205,8 +218,14 @@ async function testBeijingCrossDayUsesLocalDateBoundary() {
   assert.equal(postCalls.length, 2, 'crossing midnight in Beijing should POST again for the new day');
   assert.equal(postDates[0], '2026-07-19');
   assert.equal(postDates[1], '2026-07-20');
-  assert.ok(countUrls[0].includes('visit_date=eq.2026-07-19'));
-  assert.ok(countUrls[1].includes('visit_date=eq.2026-07-20'));
+  assert.deepEqual(
+    new URL(countUrls[0]).searchParams.getAll('visit_date'),
+    ['gte.2026-07-06', 'lte.2026-07-19'],
+  );
+  assert.deepEqual(
+    new URL(countUrls[1]).searchParams.getAll('visit_date'),
+    ['gte.2026-07-07', 'lte.2026-07-20'],
+  );
 }
 
 async function testSameDayPostIsIdempotentAfterFirstSuccess() {
@@ -228,7 +247,15 @@ async function testSameDayPostIsIdempotentAfterFirstSuccess() {
     },
     {
       match: (url) => url.includes('/site_daily_reader_counts'),
-      reply: async () => jsonResponse(true, [{ reader_count: 12 }]),
+      reply: async () =>
+        jsonResponse(
+          true,
+          makeHistoryRows([
+            ['2026-07-06', 1],
+            ['2026-07-18', 11],
+            ['2026-07-19', 12],
+          ]),
+        ),
     },
     {
       match: (url) => url.includes('api.github.com/repos/ziwenhahaha/daily-paper-reader'),
@@ -248,7 +275,7 @@ async function testSameDayPostIsIdempotentAfterFirstSuccess() {
   const githubCalls = fetch.calls.filter((call) => call.url.includes('api.github.com/repos/ziwenhahaha/daily-paper-reader'));
 
   assert.equal(postCalls.length, 1, 'same-day re-init should not POST again after the first success');
-  assert.equal(countCalls.length, 2, 'each init should refresh the current-day reader count');
+  assert.equal(countCalls.length, 2, 'each init should refresh the 14-day history once');
   assert.equal(githubCalls.length, 1, 'fork count should come from cache within 6 hours');
   assert.equal(
     built.storage.getItem(DPRSiteStats.DEFAULTS.storageKeys.successDate),
@@ -256,7 +283,57 @@ async function testSameDayPostIsIdempotentAfterFirstSuccess() {
   );
   assert.equal(built.dom.elements['[data-dpr-site-stats]'].hidden, false);
   assert.equal(built.dom.elements['[data-dpr-daily-readers]'].textContent, '12');
+  assert.equal(built.dom.elements['[data-dpr-yesterday-readers]'].textContent, '11');
   assert.equal(built.dom.elements['[data-dpr-fork-count]'].textContent, '1,491');
+  assert.equal(built.dom.elements['[data-dpr-history-range]'].textContent, '7/6-7/19');
+  assert.equal(built.dom.elements['[data-dpr-history-peak]'].textContent, '12');
+  assert.match(built.dom.elements['[data-dpr-history-chart]'].innerHTML, /<svg[\s\S]*aria-hidden="true"/);
+  assert.match(built.dom.elements['[data-dpr-history-chart]'].innerHTML, /class="dpr-home-history-area"/);
+  assert.match(built.dom.elements['[data-dpr-history-chart]'].innerHTML, /class="dpr-home-history-line"/);
+  assert.match(built.dom.elements['[data-dpr-history-chart]'].innerHTML, /<circle /);
+}
+
+async function testHistoryFetchPadsMissingDatesAcrossMonth() {
+  let capturedUrl = '';
+  const fetch = createFetchStub([
+    {
+      match: (url) => url.includes('/site_daily_reader_counts'),
+      reply: async (url) => {
+        capturedUrl = url;
+        return jsonResponse(
+          true,
+          makeHistoryRows([
+            ['2026-02-27', 3],
+            ['2026-03-02', 9],
+          ]),
+        );
+      },
+    },
+  ]);
+  const built = buildStats({
+    fetch,
+    config: {
+      historyDays: 4,
+    },
+  });
+
+  const result = await built.stats.fetchDailyReaderCount('2026-03-02');
+
+  assert.equal(result.ok, true);
+  assert.equal(result.readerCount, 9);
+  assert.equal(result.todayCount, 9);
+  assert.equal(result.yesterdayCount, 0);
+  assert.deepEqual(result.history, [
+    { date: '2026-02-27', count: 3 },
+    { date: '2026-02-28', count: 0 },
+    { date: '2026-03-01', count: 0 },
+    { date: '2026-03-02', count: 9 },
+  ]);
+
+  const params = new URL(capturedUrl).searchParams;
+  assert.deepEqual(params.getAll('visit_date'), ['gte.2026-02-27', 'lte.2026-03-02']);
+  assert.equal(params.get('order'), 'visit_date.asc');
+  assert.equal(params.get('limit'), '4');
 }
 
 async function testDuplicateConflictCountsAsRecorded() {
@@ -271,7 +348,7 @@ async function testDuplicateConflictCountsAsRecorded() {
     },
     {
       match: (url) => url.includes('/site_daily_reader_counts'),
-      reply: async () => jsonResponse(true, [{ reader_count: 6 }]),
+      reply: async () => jsonResponse(true, makeHistoryRows([['2026-07-19', 6]])),
     },
     {
       match: (url) => url.includes('api.github.com/repos/ziwenhahaha/daily-paper-reader'),
@@ -333,7 +410,7 @@ async function testPostFailureDoesNotPersistSuccessDate() {
     },
     {
       match: (url) => url.includes('/site_daily_reader_counts'),
-      reply: async () => jsonResponse(true, [{ reader_count: 99 }]),
+      reply: async () => jsonResponse(true, makeHistoryRows([['2026-07-19', 99]])),
     },
     {
       match: (url) => url.includes('api.github.com/repos/ziwenhahaha/daily-paper-reader'),
@@ -355,6 +432,7 @@ async function testPostFailureDoesNotPersistSuccessDate() {
 
 async function testForkCacheExpiresAfterSixHours() {
   let githubForkCount = 10;
+  let todayReaderCount = 5;
   const fetch = createFetchStub([
     {
       match: (url) => url.includes('/site_daily_reader_events'),
@@ -362,7 +440,10 @@ async function testForkCacheExpiresAfterSixHours() {
     },
     {
       match: (url) => url.includes('/site_daily_reader_counts'),
-      reply: async () => jsonResponse(true, [{ reader_count: 5 }]),
+      reply: async (url) => {
+        const today = new URL(url).searchParams.getAll('visit_date')[1].replace('lte.', '');
+        return jsonResponse(true, makeHistoryRows([[today, todayReaderCount]]));
+      },
     },
     {
       match: (url) => url.includes('api.github.com/repos/ziwenhahaha/daily-paper-reader'),
@@ -378,6 +459,7 @@ async function testForkCacheExpiresAfterSixHours() {
   await first.stats.init();
 
   githubForkCount = 11;
+  todayReaderCount = 6;
   const second = buildStats({
     storage,
     fetch,
@@ -386,6 +468,7 @@ async function testForkCacheExpiresAfterSixHours() {
   await second.stats.init();
 
   githubForkCount = 15;
+  todayReaderCount = 7;
   const third = buildStats({
     storage,
     fetch,
@@ -406,7 +489,7 @@ async function testFailureKeepsStatsHidden() {
     },
     {
       match: (url) => url.includes('/site_daily_reader_counts'),
-      reply: async () => jsonResponse(true, [{ reader_count: 21 }]),
+      reply: async () => jsonResponse(true, makeHistoryRows([['2026-07-19', 21]])),
     },
     {
       match: (url) => url.includes('api.github.com/repos/ziwenhahaha/daily-paper-reader'),
@@ -447,7 +530,9 @@ function testBrowserGlobalExposureAndAutoInitHook() {
       },
       fetch: async (url) => {
         if (url.includes('/site_daily_reader_events')) return emptyResponse(true, 201);
-        if (url.includes('/site_daily_reader_counts')) return jsonResponse(true, [{ reader_count: 2 }]);
+        if (url.includes('/site_daily_reader_counts')) {
+          return jsonResponse(true, makeHistoryRows([['2026-07-19', 2]]));
+        }
         if (url.includes('api.github.com/repos/ziwenhahaha/daily-paper-reader')) return jsonResponse(true, { forks_count: 3 });
         throw new Error(`unexpected fetch: ${url}`);
       },
@@ -469,6 +554,7 @@ function testBrowserGlobalExposureAndAutoInitHook() {
 Promise.resolve()
   .then(testBeijingCrossDayUsesLocalDateBoundary)
   .then(testSameDayPostIsIdempotentAfterFirstSuccess)
+  .then(testHistoryFetchPadsMissingDatesAcrossMonth)
   .then(testForkRequestUsesGithubTokenWhenAvailable)
   .then(testDuplicateConflictCountsAsRecorded)
   .then(testPaperPageStillRecordsDailyReaderWithoutHomeTargets)

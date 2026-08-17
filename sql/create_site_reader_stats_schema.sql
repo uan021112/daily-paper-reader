@@ -46,11 +46,17 @@ create policy site_daily_reader_events_insert_today
 
 drop policy if exists site_daily_reader_counts_select_today
   on public.site_daily_reader_counts;
-create policy site_daily_reader_counts_select_today
+drop policy if exists site_daily_reader_counts_select_recent
+  on public.site_daily_reader_counts;
+create policy site_daily_reader_counts_select_recent
   on public.site_daily_reader_counts
   for select
   to anon, authenticated
-  using (visit_date = (now() at time zone 'Asia/Shanghai')::date);
+  using (
+    visit_date between
+      ((now() at time zone 'Asia/Shanghai')::date - 29)
+      and (now() at time zone 'Asia/Shanghai')::date
+  );
 
 create or replace function private.increment_site_daily_reader_count()
 returns trigger

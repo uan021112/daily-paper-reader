@@ -4,16 +4,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 NOTICE_FILES = (
-    ROOT / "docs" / "_home_notice.md",
     ROOT / "docs_init" / "_home_notice.md",
-    ROOT / "docs" / "README.md",
+    ROOT / "docs_init" / "README.md",
+)
+
+HOME_README_FILES = (
     ROOT / "docs_init" / "README.md",
 )
 
 PROMO_FILES = (
-    ROOT / "docs" / "_home_promo.md",
     ROOT / "docs_init" / "_home_promo.md",
-    ROOT / "docs" / "README.md",
     ROOT / "docs_init" / "README.md",
 )
 
@@ -30,10 +30,29 @@ def test_home_notice_contains_stats_and_tutorial_entry():
         assert "人加入 Daily Paper Reader" in content, path
 
 
+def test_home_readme_contains_history_trend_selectors():
+    for path in HOME_README_FILES:
+        content = path.read_text(encoding="utf-8")
+        assert "昨天有" in content, path
+        assert 'class="dpr-home-history"' in content, path
+        assert 'class="dpr-home-history-trigger"' in content, path
+        assert "data-dpr-history-trigger" in content, path
+        assert 'class="dpr-home-history-popover"' in content, path
+        assert "data-dpr-history-popover" in content, path
+        assert 'class="dpr-home-history-header"' in content, path
+        assert "data-dpr-history-range" in content, path
+        assert "data-dpr-history-peak" in content, path
+        assert "data-dpr-history-chart" in content, path
+
+
 def test_home_notice_contains_latest_update():
     for path in NOTICE_FILES:
         content = path.read_text(encoding="utf-8")
         assert 'class="dpr-home-notice-entry"' in content, path
+        assert content.count('class="dpr-home-notice-entry"') <= 3, path
+        assert '<time class="dpr-home-notice-date" datetime="2026-07-20">07.20</time>' in content, path
+        assert "反馈功能上线" in content, path
+        assert "欢迎大家踊跃反馈各种建议，我们会第一时间查看并协调处理。" in content, path
         assert re.search(
             r'<time class="dpr-home-notice-date" datetime="\d{4}-\d{2}-\d{2}">\d{2}\.\d{2}</time>',
             content,
@@ -54,13 +73,12 @@ def test_home_promo_uses_the_shared_panel_structure():
         assert "QQ群" in content and "583867967" in content, path
 
 
-def test_home_panel_modules_stay_in_sync_with_init_templates():
-    assert (ROOT / "docs" / "_home_notice.md").read_text(encoding="utf-8") == (
-        ROOT / "docs_init" / "_home_notice.md"
-    ).read_text(encoding="utf-8")
-    assert (ROOT / "docs" / "_home_promo.md").read_text(encoding="utf-8") == (
-        ROOT / "docs_init" / "_home_promo.md"
-    ).read_text(encoding="utf-8")
+def test_home_panel_modules_are_embedded_in_the_init_homepage():
+    readme = (ROOT / "docs_init" / "README.md").read_text(encoding="utf-8")
+    notice = (ROOT / "docs_init" / "_home_notice.md").read_text(encoding="utf-8").strip()
+    promo = (ROOT / "docs_init" / "_home_promo.md").read_text(encoding="utf-8").strip()
+    assert notice in readme
+    assert promo in readme
 
 
 def test_site_stats_script_is_loaded_without_blocking_core_assets():
@@ -74,12 +92,53 @@ def test_home_stats_css_has_desktop_and_mobile_layouts():
     assert ".dpr-home-panel-header" in css
     assert ".dpr-home-site-stats" in css
     assert ".dpr-home-site-stat-value" in css
+    assert ".dpr-home-history" in css
+    assert ".dpr-home-history-trigger" in css
+    assert ".dpr-home-history-popover" in css
+    assert "[data-dpr-history-range]" in css
+    assert "[data-dpr-history-peak]" in css
+    assert "[data-dpr-history-chart]" in css
     assert "font-variant-numeric: tabular-nums" in css
     assert "@media (max-width: 600px)" in css
 
     hidden_rule = css.split(".markdown-section .dpr-home-site-stats[hidden]", 1)[1].split("}", 1)[0]
     assert "visibility: hidden" in hidden_rule
     assert "display: none" not in hidden_rule
+
+    popover_rule = css.split(".markdown-section .dpr-home-history-popover", 1)[1].split("}", 1)[0]
+    assert "opacity: 0" in popover_rule
+    assert "visibility: hidden" in popover_rule
+    assert "pointer-events: none" in popover_rule
+    assert "width: 260px" in popover_rule
+    assert "border-radius: 8px" in popover_rule
+    assert "background: #ffffff" in popover_rule
+    assert "box-shadow:" in popover_rule
+    assert "gradient" not in popover_rule
+
+    trigger_rule = css.split(".markdown-section .dpr-home-history-trigger", 1)[1].split("}", 1)[0]
+    assert "width: 26px" in trigger_rule
+    assert "height: 26px" in trigger_rule
+    assert "border-radius: 999px" in trigger_rule
+
+    chart_rule = css.split(".markdown-section [data-dpr-history-chart]", 1)[1].split("}", 1)[0]
+    assert "border" in chart_rule
+    assert "#278553" in chart_rule or "#2f7a55" in chart_rule
+    assert "gradient" not in chart_rule
+
+    meta_rule = css.split(".markdown-section .dpr-home-history-meta", 1)[1].split("}", 1)[0]
+    assert "display: flex" in meta_rule
+    assert "justify-content: space-between" in meta_rule
+
+    mobile_css = css.split("@media (max-width: 600px)", 1)[1]
+    mobile_popover_rule = mobile_css.split(".markdown-section .dpr-home-history-popover", 1)[1].split("}", 1)[0]
+    assert "left: 0" in mobile_popover_rule
+    assert "left: 50%" not in mobile_popover_rule
+    assert "--dpr-home-history-x: 0" in mobile_popover_rule
+
+    assert ".markdown-section .dpr-home-history:hover .dpr-home-history-popover" in css
+    assert ".markdown-section .dpr-home-history:focus-within .dpr-home-history-popover" in css
+    assert ".dpr-home-history-area" in css
+    assert ".dpr-home-history-line" in css
 
 
 def test_home_panels_share_a_quiet_visual_language():
@@ -92,7 +151,8 @@ def test_home_panels_share_a_quiet_visual_language():
 
     shared_rule = css.split(shared_selector, 1)[1].split("}", 1)[0]
     assert "background: #fbfcfb" in shared_rule
-    assert "border-left: 3px solid #48a878" in shared_rule
+    assert "border: 1px solid #dfe7e2" in shared_rule
+    assert "border-left" not in shared_rule
     assert "border-radius: 6px" in shared_rule
     assert "box-shadow: none" in shared_rule
     assert "gradient" not in shared_rule
