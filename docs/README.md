@@ -41,17 +41,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-07-19 ~ 2026-08-17</span>
+      <span class="dpr-home-dashboard-kicker">2026-08-24</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 29 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 23 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>15</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>9</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>14</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-08-17 03:45:12 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-08-24 21:04:58 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -62,9 +62,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>过去一个月共推荐29篇论文，精读15篇、速读14篇，其中两篇精读论文获得9.0高分。</p>
-<p>最值得关注的方向是前馈高斯泼溅的投影仪-相机系统，以及自监督稀疏体素细化的单目几何估计。</p>
-<p>建议优先精读这两篇高分论文，并留意其与多视图几何、低功耗深度估计的结合点。</p>
+<p>今日共读23篇论文，精读2篇重点关注单目深度估计与4D场景重建方向。最值得看的是PXDepth（像素空间建模保结构）与UniQuery4R（单查询统一4D重建）。建议优先阅读精读论文，并结合速读中的GIFT等深度估计工作对比方法差异。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -73,12 +71,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">15 篇</strong>
+    <strong class="dpr-home-dashboard-count">9 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="FF-ProCams: Feed-Forward Gaussian Splatting for Projector-Camera System">FF-ProCams: Feed-Forward Gaussian Splatting for Projector-Camera System</span></li><li><span class="dpr-home-dashboard-paper-title" title="Fine-Detail Monocular Geometry Estimation with Self-Guided Sparse Volumetric Refinement">Fine-Detail Monocular Geometry Estimation with Self-Guided Sparse Volumetric Refinement</span></li><li><span class="dpr-home-dashboard-paper-title" title="Extending a Large View Synthesis Model for Multi-view Panoptic Segmentation">Extending a Large View Synthesis Model for Multi-view Panoptic Segmentation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="PXDepth: Pixel-Space Modeling for Structure Preserving Monocular Depth Estimation">PXDepth: Pixel-Space Modeling for Structure Preserving Monocular Depth Estimation</span></li><li><span class="dpr-home-dashboard-paper-title" title="UniQuery4R: Unified 4D Scene Reconstruction from a Single Query">UniQuery4R: Unified 4D Scene Reconstruction from a Single Query</span></li><li><span class="dpr-home-dashboard-paper-title" title="GeoWeaver: Accurate Long-Sequence 3D Reconstruction via Hierarchical Geometric Assembly">GeoWeaver: Accurate Long-Sequence 3D Reconstruction via Hierarchical Geometric Assembly</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>9</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>3</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>5</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>3</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -89,9 +87,9 @@
     <strong class="dpr-home-dashboard-count">14 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="MuViSeg: Multi-View Segment Correspondences from Dense Geometry Priors">MuViSeg: Multi-View Segment Correspondences from Dense Geometry Priors</span></li><li><span class="dpr-home-dashboard-paper-title" title="Thinking Fast, Thinking Slow: Adaptive Multimodal Transformer-based Sensor Fusion for Depth Estimation on Ultra-low-power MCUs">Thinking Fast, Thinking Slow: Adaptive Multimodal Transformer-based Sensor Fusion for Depth Estimation on Ultra-low-power MCUs</span></li><li><span class="dpr-home-dashboard-paper-title" title="IGGT4D: Streaming 4D Instance-Grounded Geometry Transformer">IGGT4D: Streaming 4D Instance-Grounded Geometry Transformer</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="SiPhy: Single-Image Physical Property Reasoning">SiPhy: Single-Image Physical Property Reasoning</span></li><li><span class="dpr-home-dashboard-paper-title" title="GIFT: Geometry-Invariant Fine-Tuning for Non-Lambertian Monocular Depth Estimation">GIFT: Geometry-Invariant Fine-Tuning for Non-Lambertian Monocular Depth Estimation</span></li><li><span class="dpr-home-dashboard-paper-title" title="SGFormer: Structure-Guided Transformer for Robust Local Feature Matching">SGFormer: Structure-Guided Transformer for Robust Local Feature Matching</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>4</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>4</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>4</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>7</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>4</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span></div>
 </section>
 </div>
 
