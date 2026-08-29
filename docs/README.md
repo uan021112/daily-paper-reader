@@ -41,7 +41,7 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-08-24</span>
+      <span class="dpr-home-dashboard-kicker">2026-08-29</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
     <strong class="dpr-home-dashboard-count">共 23 篇</strong>
@@ -51,7 +51,7 @@
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>9</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>14</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-08-24 21:04:58 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-08-29 23:06:18 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -62,7 +62,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日共读23篇论文，精读2篇重点关注单目深度估计与4D场景重建方向。最值得看的是PXDepth（像素空间建模保结构）与UniQuery4R（单查询统一4D重建）。建议优先阅读精读论文，并结合速读中的GIFT等深度估计工作对比方法差异。</p>
+<p>今日共筛读23篇论文，精读9篇，重点聚焦3D场景理解与生成式物理网格两大方向。最值得精读的是《Stream3Dv2》（9.0）与《Gen2Physics》（9.0），分别刷新零样本3D场景理解精度和实现物理网格的多视角材质分解。建议优先跟进这两篇的代码与数据集，并留意遥感分割、束调整等8分速读工作的后续扩展。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -74,9 +74,9 @@
     <strong class="dpr-home-dashboard-count">9 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="PXDepth: Pixel-Space Modeling for Structure Preserving Monocular Depth Estimation">PXDepth: Pixel-Space Modeling for Structure Preserving Monocular Depth Estimation</span></li><li><span class="dpr-home-dashboard-paper-title" title="UniQuery4R: Unified 4D Scene Reconstruction from a Single Query">UniQuery4R: Unified 4D Scene Reconstruction from a Single Query</span></li><li><span class="dpr-home-dashboard-paper-title" title="GeoWeaver: Accurate Long-Sequence 3D Reconstruction via Hierarchical Geometric Assembly">GeoWeaver: Accurate Long-Sequence 3D Reconstruction via Hierarchical Geometric Assembly</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Stream3Dv2: Geometric-Semantic Fusion Enhanced Streaming Zero-Shot 3D Scene Understanding">Stream3Dv2: Geometric-Semantic Fusion Enhanced Streaming Zero-Shot 3D Scene Understanding</span></li><li><span class="dpr-home-dashboard-paper-title" title="Gen2Physics: Grounding Generated 3D Meshes in Physics via Multi-View Material Decomposition">Gen2Physics: Grounding Generated 3D Meshes in Physics via Multi-View Material Decomposition</span></li><li><span class="dpr-home-dashboard-paper-title" title="Luce: Relightable Gaussians for 3D Asset Generation">Luce: Relightable Gaussians for 3D Asset Generation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>5</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>3</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>5</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>3</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -87,9 +87,9 @@
     <strong class="dpr-home-dashboard-count">14 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="SiPhy: Single-Image Physical Property Reasoning">SiPhy: Single-Image Physical Property Reasoning</span></li><li><span class="dpr-home-dashboard-paper-title" title="GIFT: Geometry-Invariant Fine-Tuning for Non-Lambertian Monocular Depth Estimation">GIFT: Geometry-Invariant Fine-Tuning for Non-Lambertian Monocular Depth Estimation</span></li><li><span class="dpr-home-dashboard-paper-title" title="SGFormer: Structure-Guided Transformer for Robust Local Feature Matching">SGFormer: Structure-Guided Transformer for Robust Local Feature Matching</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Hierarchical Adaptive Feature Refinement Network for VHR Remote Sensing Image Segmentation">Hierarchical Adaptive Feature Refinement Network for VHR Remote Sensing Image Segmentation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Initialization-Free Bundle Adjustment Revisited: A Controlled Experimental Study">Initialization-Free Bundle Adjustment Revisited: A Controlled Experimental Study</span></li><li><span class="dpr-home-dashboard-paper-title" title="LumiTokens: 3D Relighting via Token-Space Lighting Transformation">LumiTokens: 3D Relighting via Token-Space Lighting Transformation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>7</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>4</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>9</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span></div>
 </section>
 </div>
 
