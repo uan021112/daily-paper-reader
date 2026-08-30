@@ -41,7 +41,7 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-08-29</span>
+      <span class="dpr-home-dashboard-kicker">2026-08-30</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
     <strong class="dpr-home-dashboard-count">共 23 篇</strong>
@@ -51,7 +51,7 @@
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>9</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>14</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-08-29 23:06:18 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-08-30 23:14:03 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -62,7 +62,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日共筛读23篇论文，精读9篇，重点聚焦3D场景理解与生成式物理网格两大方向。最值得精读的是《Stream3Dv2》（9.0）与《Gen2Physics》（9.0），分别刷新零样本3D场景理解精度和实现物理网格的多视角材质分解。建议优先跟进这两篇的代码与数据集，并留意遥感分割、束调整等8分速读工作的后续扩展。</p>
+<p>今日视觉感知与3D重建领域共23篇，精读聚焦多光谱塑料分类与触觉滑动检测两大应用。</p>
+<p>最值得看：相机阵列多光谱方案可提升回收塑料分类精度；基于均匀照明的视触觉传感器配合时空Transformer，能同时实现滑动检测与材料识别。</p>
+<p>建议优先关注这些多模态感知技术在智能分拣和机器人抓取中的落地可能。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -74,9 +76,9 @@
     <strong class="dpr-home-dashboard-count">9 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Stream3Dv2: Geometric-Semantic Fusion Enhanced Streaming Zero-Shot 3D Scene Understanding">Stream3Dv2: Geometric-Semantic Fusion Enhanced Streaming Zero-Shot 3D Scene Understanding</span></li><li><span class="dpr-home-dashboard-paper-title" title="Gen2Physics: Grounding Generated 3D Meshes in Physics via Multi-View Material Decomposition">Gen2Physics: Grounding Generated 3D Meshes in Physics via Multi-View Material Decomposition</span></li><li><span class="dpr-home-dashboard-paper-title" title="Luce: Relightable Gaussians for 3D Asset Generation">Luce: Relightable Gaussians for 3D Asset Generation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Multispectral Household Plastic Classification for Recycling Using a Camera Array">Multispectral Household Plastic Classification for Recycling Using a Camera Array</span></li><li><span class="dpr-home-dashboard-paper-title" title="Robust Slip Detection and Material Classification via Spatiotemporal Transformers on a Uniformly-Illuminated Visuo-Tactile Sensor">Robust Slip Detection and Material Classification via Spatiotemporal Transformers on a Uniformly-Illuminated Visuo-Tactile Sensor</span></li><li><span class="dpr-home-dashboard-paper-title" title="Glass Surface Detection Grounded in 3D Visual Geometry">Glass Surface Detection Grounded in 3D Visual Geometry</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>5</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>3</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>4</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>3</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -87,9 +89,9 @@
     <strong class="dpr-home-dashboard-count">14 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Hierarchical Adaptive Feature Refinement Network for VHR Remote Sensing Image Segmentation">Hierarchical Adaptive Feature Refinement Network for VHR Remote Sensing Image Segmentation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Initialization-Free Bundle Adjustment Revisited: A Controlled Experimental Study">Initialization-Free Bundle Adjustment Revisited: A Controlled Experimental Study</span></li><li><span class="dpr-home-dashboard-paper-title" title="LumiTokens: 3D Relighting via Token-Space Lighting Transformation">LumiTokens: 3D Relighting via Token-Space Lighting Transformation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Contextrast++: Robust Multi-Scale Contextual Contrastive Learning for Semantic Segmentation">Contextrast++: Robust Multi-Scale Contextual Contrastive Learning for Semantic Segmentation</span></li><li><span class="dpr-home-dashboard-paper-title" title="SceneReGen: Generative Reconstruction of 3D Scenes from a Single Image">SceneReGen: Generative Reconstruction of 3D Scenes from a Single Image</span></li><li><span class="dpr-home-dashboard-paper-title" title="PIVOT: A Multi-Trajectory Dataset and Testbed for Pose, Intrinsics, and Novel Viewpoint Evaluation in Real-World 3D Reconstruction">PIVOT: A Multi-Trajectory Dataset and Testbed for Pose, Intrinsics, and Novel Viewpoint Evaluation in Real-World 3D Reconstruction</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>9</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>11</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>3</strong></span></div>
 </section>
 </div>
 
