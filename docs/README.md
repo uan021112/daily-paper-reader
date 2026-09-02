@@ -41,17 +41,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-01</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-02</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 23 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 12 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>9</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>14</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>5</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>7</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-01 23:30:31 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-02 23:24:21 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -62,9 +62,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日精读两篇9分力作，聚焦3D场景图生成与通用重建；速读覆盖SLAM、稀疏视觉与光学挑战场景。</p>
-<p>最值得关注：自回归扩散构建3D层级概念，以及超越观测视角的通用重建新方法。</p>
-<p>建议从这两篇高分精读入手，快速把握3D理解与生成的前沿趋势。</p>
+<p>今日共读12篇论文，精读5篇、速读7篇，重点聚焦三维场景理解与城市建模方向。最值得关注的两项工作分别利用大语言模型从街景图像自动重建建筑门窗细节（9.0分），以及融合动态鲁棒性的开放词汇三维场景理解（8.0分）。建议普通读者优先浏览这两篇精读论文的摘要与图表，再按兴趣从速读列表中挑选相关延伸阅读。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -73,12 +71,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">9 篇</strong>
+    <strong class="dpr-home-dashboard-count">5 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Generation of High-Level Concepts in 3D Scene Graphs via Autoregressive Diffusion">Generation of High-Level Concepts in 3D Scene Graphs via Autoregressive Diffusion</span></li><li><span class="dpr-home-dashboard-paper-title" title="ReconSplat: Generalizable 3D Scene Reconstruction Beyond Observed Views">ReconSplat: Generalizable 3D Scene Reconstruction Beyond Observed Views</span></li><li><span class="dpr-home-dashboard-paper-title" title="NBS: No Bias Stereo">NBS: No Bias Stereo</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="SVI2LoD3: Agent-Driven Reconstruction of LoD3 Facade Openings in Semantic 3D City Models from Volunteered Street View Imagery using Large Language and Visual Models">SVI2LoD3: Agent-Driven Reconstruction of LoD3 Facade Openings in Semantic 3D City Models from Volunteered Street View Imagery using Large Language and Visual Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="Dynamic-Robust Photometric-Semantic Reconstruction for Open-Vocabulary 3D Scene Understanding">Dynamic-Robust Photometric-Semantic Reconstruction for Open-Vocabulary 3D Scene Understanding</span></li><li><span class="dpr-home-dashboard-paper-title" title="ScenePilot: Grow-and-Repair Policy for Text-Driven 3D Indoor Scene Generation">ScenePilot: Grow-and-Repair Policy for Text-Driven 3D Indoor Scene Generation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>4</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>3</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">part-seg <strong>3</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>1</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -86,12 +84,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">14 篇</strong>
+    <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="RoSe-SLAM: Robust Semantic-Aware Gaussian Splatting SLAM from Dynamic Monocular Videos">RoSe-SLAM: Robust Semantic-Aware Gaussian Splatting SLAM from Dynamic Monocular Videos</span></li><li><span class="dpr-home-dashboard-paper-title" title="Seeing Through Extreme Visual Sparsity: Surface Understanding from a Single Random Visual Patch">Seeing Through Extreme Visual Sparsity: Surface Understanding from a Single Random Visual Patch</span></li><li><span class="dpr-home-dashboard-paper-title" title="OptiGeo: Efficient Monocular Geometry for Embodied Perception in Optically Challenging Scenes">OptiGeo: Efficient Monocular Geometry for Embodied Perception in Optically Challenging Scenes</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="GSPotential: Camera Potential Field for Sparse-View 3D Gaussian Splatting">GSPotential: Camera Potential Field for Sparse-View 3D Gaussian Splatting</span></li><li><span class="dpr-home-dashboard-paper-title" title="Inverse Rendering for Modeling with Line Primitives">Inverse Rendering for Modeling with Line Primitives</span></li><li><span class="dpr-home-dashboard-paper-title" title="Feed-Forward Multi-view Multi-person Reconstruction with Contrastive Human-Aware 3D Representation">Feed-Forward Multi-view Multi-person Reconstruction with Contrastive Human-Aware 3D Representation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>6</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>5</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>5</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span></div>
 </section>
 </div>
 
