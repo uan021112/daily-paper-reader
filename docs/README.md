@@ -41,17 +41,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-08-06 ~ 2026-09-04</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-04</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 21 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 13 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>0</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>21</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>9</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>4</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-04 03:15:50 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-04 23:19:45 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -62,9 +62,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日速读21篇3D视觉前沿论文，聚焦长序列重建与高斯基元方法。</p>
-<p>最值得关注：VGGT-Align以满分10分领跑，主攻局部重建与全局一致性；FlexSplat、Gaussian Sculpting均获9分，无需点云对应即可灵活前馈重建。</p>
-<p>建议优先精读这三篇高分论文，从摘要与方法对比入手，快速抓住3D重建技术演进脉络。</p>
+<p>今日聚焦3D重建前沿：13篇论文中，两篇高分解读聚焦无人机大规模在线重建与高斯泼溅网格生成；速读则覆盖3D实例分割、弹性三角面片及全局BA优化。</p>
+<p>最值得关注的是：On-the-Fly3R实现无人机场景的鲁棒在线重建，AnyGS2Mesh则让任意分辨率视图直接生成网格，二者均达9.0高分。</p>
+<p>建议普通读者优先精读这两篇9分论文，重点关注其前馈式重建架构对实时性与泛化能力的提升。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -73,12 +73,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">0 篇</strong>
+    <strong class="dpr-home-dashboard-count">9 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p class="dpr-home-dashboard-empty">今日暂无推荐。</p>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="On-the-Fly3R: Towards Robust Online 3D Reconstruction with Feed-Forward 3R Models for Large-Scale UAV Scenarios">On-the-Fly3R: Towards Robust Online 3D Reconstruction with Feed-Forward 3R Models for Large-Scale UAV Scenarios</span></li><li><span class="dpr-home-dashboard-paper-title" title="AnyGS2Mesh: Feed-Forward Mesh Reconstruction from 3D Gaussian Splatting with Arbitrary-Resolution Views">AnyGS2Mesh: Feed-Forward Mesh Reconstruction from 3D Gaussian Splatting with Arbitrary-Resolution Views</span></li><li><span class="dpr-home-dashboard-paper-title" title="STARS-GS: Structure-Aware Regularized Gaussian Splatting for Large-Scale Aerial Surface Reconstruction">STARS-GS: Structure-Aware Regularized Gaussian Splatting for Large-Scale Aerial Surface Reconstruction</span></li></ul>
   </div>
-
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>6</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -86,12 +86,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">21 篇</strong>
+    <strong class="dpr-home-dashboard-count">4 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="VGGT-Align: Bridging Local Reconstruction and Global Consistency for Long-Sequence 3D Reconstruction">VGGT-Align: Bridging Local Reconstruction and Global Consistency for Long-Sequence 3D Reconstruction</span></li><li><span class="dpr-home-dashboard-paper-title" title="FlexSplat: Flexible Feed-Forward 3D Gaussian Splatting without Point Cloud Correspondence">FlexSplat: Flexible Feed-Forward 3D Gaussian Splatting without Point Cloud Correspondence</span></li><li><span class="dpr-home-dashboard-paper-title" title="Gaussian Sculpting: End-to-End Controllable Surface Reconstruction via Field Optimization">Gaussian Sculpting: End-to-End Controllable Surface Reconstruction via Field Optimization</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="AQ3D: Adaptive Query Transformer for 3D Instance Segmentation">AQ3D: Adaptive Query Transformer for 3D Instance Segmentation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Elastic Triangle Splatting">Elastic Triangle Splatting</span></li><li><span class="dpr-home-dashboard-paper-title" title="Stable and Scalable Bundle Adjustment of Holistic 3D Structures">Stable and Scalable Bundle Adjustment of Holistic 3D Structures</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>9</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>7</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>1</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>1</strong></span></div>
 </section>
 </div>
 
