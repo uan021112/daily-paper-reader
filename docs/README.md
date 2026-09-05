@@ -41,17 +41,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-04</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-05</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 13 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 7 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>9</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>3</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>4</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-04 23:19:45 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-05 22:41:48 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -62,9 +62,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日聚焦3D重建前沿：13篇论文中，两篇高分解读聚焦无人机大规模在线重建与高斯泼溅网格生成；速读则覆盖3D实例分割、弹性三角面片及全局BA优化。</p>
-<p>最值得关注的是：On-the-Fly3R实现无人机场景的鲁棒在线重建，AnyGS2Mesh则让任意分辨率视图直接生成网格，二者均达9.0高分。</p>
-<p>建议普通读者优先精读这两篇9分论文，重点关注其前馈式重建架构对实时性与泛化能力的提升。</p>
+<p>今日精读聚焦3D高斯泼溅改进与零样本深度合成，另涉4篇速读覆盖3D分割与场景建模。</p>
+<p>最值关注TruncGradGS的梯度截断优化方案，以及基于3D基础模型的零样本深度合成新思路。</p>
+<p>建议优先精读两篇9分论文，快速浏览另三项工作以把握3D场景理解演进方向。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -73,12 +73,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">9 篇</strong>
+    <strong class="dpr-home-dashboard-count">3 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="On-the-Fly3R: Towards Robust Online 3D Reconstruction with Feed-Forward 3R Models for Large-Scale UAV Scenarios">On-the-Fly3R: Towards Robust Online 3D Reconstruction with Feed-Forward 3R Models for Large-Scale UAV Scenarios</span></li><li><span class="dpr-home-dashboard-paper-title" title="AnyGS2Mesh: Feed-Forward Mesh Reconstruction from 3D Gaussian Splatting with Arbitrary-Resolution Views">AnyGS2Mesh: Feed-Forward Mesh Reconstruction from 3D Gaussian Splatting with Arbitrary-Resolution Views</span></li><li><span class="dpr-home-dashboard-paper-title" title="STARS-GS: Structure-Aware Regularized Gaussian Splatting for Large-Scale Aerial Surface Reconstruction">STARS-GS: Structure-Aware Regularized Gaussian Splatting for Large-Scale Aerial Surface Reconstruction</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="TruncGradGS: Improved 3D Gaussian Splatting via Truncated Gradient Updates">TruncGradGS: Improved 3D Gaussian Splatting via Truncated Gradient Updates</span></li><li><span class="dpr-home-dashboard-paper-title" title="Zero-Shot Novel Depth Synthesis Using 3D Foundation Models Scene Representations">Zero-Shot Novel Depth Synthesis Using 3D Foundation Models Scene Representations</span></li><li><span class="dpr-home-dashboard-paper-title" title="VCAR: Training-Free 3DGS Segmentation via View Completeness and Axis-Aware Boundary Refinement">VCAR: Training-Free 3DGS Segmentation via View Completeness and Axis-Aware Boundary Refinement</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>6</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -89,9 +89,9 @@
     <strong class="dpr-home-dashboard-count">4 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="AQ3D: Adaptive Query Transformer for 3D Instance Segmentation">AQ3D: Adaptive Query Transformer for 3D Instance Segmentation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Elastic Triangle Splatting">Elastic Triangle Splatting</span></li><li><span class="dpr-home-dashboard-paper-title" title="Stable and Scalable Bundle Adjustment of Holistic 3D Structures">Stable and Scalable Bundle Adjustment of Holistic 3D Structures</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="AQ3D: Adaptive Query Transformer for 3D Instance Segmentation">AQ3D: Adaptive Query Transformer for 3D Instance Segmentation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Lucida: Parse, Generate, and Place for Composable Real-to-Sim Scene Modeling">Lucida: Parse, Generate, and Place for Composable Real-to-Sim Scene Modeling</span></li><li><span class="dpr-home-dashboard-paper-title" title="AdapToPASS: Ambiguity-aware Adaptive Spherical Transformer for Panoramic Semantic Segmentation">AdapToPASS: Ambiguity-aware Adaptive Spherical Transformer for Panoramic Semantic Segmentation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>1</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">part-seg <strong>3</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>1</strong></span></div>
 </section>
 </div>
 
