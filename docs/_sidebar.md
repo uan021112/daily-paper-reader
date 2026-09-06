@@ -1,6 +1,9 @@
 * <a class="dpr-sidebar-root-link" href="#/">首页</a>
 * <a class="dpr-sidebar-root-link dpr-sidebar-noactive-link" href="javascript:void(0)" data-dpr-hash="#/tutorial/README">使用教程</a>
 * Daily Papers
+  * 2026-09-06 <!--dpr-date:20260906-->
+    * 速读区
+      * <a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="#/202609/06/2608.30618v1-aq3d-adaptive-query-transformer-for-3d-instance-segmentation" data-sidebar-item="{&quot;title&quot;: &quot;AQ3D: Adaptive Query Transformer for 3D Instance Segmentation&quot;, &quot;link&quot;: &quot;https://arxiv.org/abs/2608.30618v1-aq3d-adaptive-query-transformer-for-3d-instance-segmentation&quot;, &quot;score&quot;: &quot;6.0&quot;, &quot;tags&quot;: [{&quot;kind&quot;: &quot;query&quot;, &quot;label&quot;: &quot;part-seg&quot;}], &quot;evidence&quot;: &quot;针对不同规模三维场景的自适应查询Transformer实例分割方法，属于三维场景理解与解析相关技术&quot;}">AQ3D: Adaptive Query Transformer for 3D Instance Segmentation</a>
   * 2026-09-05 <!--dpr-date:20260905-->
     * 精读区
       * <a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="#/202609/05/2609.03534v1-truncgradgs-improved-3d-gaussian-splatting-via-truncated-gradient-updates" data-sidebar-item="{&quot;title&quot;: &quot;TruncGradGS: Improved 3D Gaussian Splatting via Truncated Gradient Updates&quot;, &quot;link&quot;: &quot;https://arxiv.org/abs/2609.03534v1-truncgradgs-improved-3d-gaussian-splatting-via-truncated-gradient-updates&quot;, &quot;score&quot;: &quot;9.0&quot;, &quot;tags&quot;: [{&quot;kind&quot;: &quot;query&quot;, &quot;label&quot;: &quot;feed-forward&quot;}], &quot;evidence&quot;: &quot;提出截断梯度更新改进三维高斯溅射优化，缓解梯度消失，提升三维场景重建质量与初始化鲁棒性&quot;}">TruncGradGS: Improved 3D Gaussian Splatting via Truncated Gradient Updates</a>
