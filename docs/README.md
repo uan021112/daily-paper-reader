@@ -41,17 +41,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-06</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-07</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 1 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 12 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>0</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>1</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>4</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>8</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-06 22:02:01 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-07 23:30:54 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -62,9 +62,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日论文速览仅1篇，聚焦3D实例分割方向，暂无精读深入。</p>
-<p>值得关注的是《AQ3D: Adaptive Query Transformer for 3D Instance Segmentation》，评分6.0，属中等偏上工作。</p>
-<p>若想快速跟进该领域，建议先读此文的查询自适应机制与整体分割流程，作为基线了解。</p>
+<p>今日完成12篇3D视觉论文筛选，精读与速读双线推进，重点锁定多视图几何与深度估计方向。</p>
+<p>最值得看《BLASt3R》与《CrossDepth》：前者以任意图像集BA优化+单目前景登顶9.0分，后者用几何约束注意力解决环绕深度估计同样获9.0高分。</p>
+<p>建议优先细读《BLASt3R》，其多视图匹配与单目先验的融合思路对3D重建任务极具实操参考价值。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -73,12 +73,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">0 篇</strong>
+    <strong class="dpr-home-dashboard-count">4 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p class="dpr-home-dashboard-empty">今日暂无推荐。</p>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="BLASt3R: Bundle Adjustment of Any Image Set with Multi-View Matching and Monocular Priors">BLASt3R: Bundle Adjustment of Any Image Set with Multi-View Matching and Monocular Priors</span></li><li><span class="dpr-home-dashboard-paper-title" title="CrossDepth: Geometry-Constrained Attention for Generalizable Multi-View Surround Depth Estimation">CrossDepth: Geometry-Constrained Attention for Generalizable Multi-View Surround Depth Estimation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Open-Set 3D Scene Graphs for Field Robotics: An Outdoor Case Study">Open-Set 3D Scene Graphs for Field Robotics: An Outdoor Case Study</span></li></ul>
   </div>
-
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>1</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -86,12 +86,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">1 篇</strong>
+    <strong class="dpr-home-dashboard-count">8 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="AQ3D: Adaptive Query Transformer for 3D Instance Segmentation">AQ3D: Adaptive Query Transformer for 3D Instance Segmentation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="AQ3D: Adaptive Query Transformer for 3D Instance Segmentation">AQ3D: Adaptive Query Transformer for 3D Instance Segmentation</span></li><li><span class="dpr-home-dashboard-paper-title" title="WorldSculpt: Generating Compositional Worlds from Grounded Videos">WorldSculpt: Generating Compositional Worlds from Grounded Videos</span></li><li><span class="dpr-home-dashboard-paper-title" title="Dior: Drawing the Light of Image via Material-Decoupled Illumination Representation">Dior: Drawing the Light of Image via Material-Decoupled Illumination Representation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>3</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span></div>
 </section>
 </div>
 
