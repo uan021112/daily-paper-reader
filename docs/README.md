@@ -41,17 +41,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-07</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-08</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 12 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 6 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>4</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>8</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>2</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-07 23:30:54 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-08 23:09:33 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -62,9 +62,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日完成12篇3D视觉论文筛选，精读与速读双线推进，重点锁定多视图几何与深度估计方向。</p>
-<p>最值得看《BLASt3R》与《CrossDepth》：前者以任意图像集BA优化+单目前景登顶9.0分，后者用几何约束注意力解决环绕深度估计同样获9.0高分。</p>
-<p>建议优先细读《BLASt3R》，其多视图匹配与单目先验的融合思路对3D重建任务极具实操参考价值。</p>
+<p>今日聚焦3D视觉基础模型与几何重建，共处理6篇论文，精读2篇高分工作。最值得关注《VI3》融合惯性线索提升3D基础模型，及《BLASt3R》用多视角匹配实现任意图像集束调整。建议普通读者优先精读这两篇9.0分论文，感受多模态与几何先验的互补价值。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -76,9 +74,9 @@
     <strong class="dpr-home-dashboard-count">4 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="BLASt3R: Bundle Adjustment of Any Image Set with Multi-View Matching and Monocular Priors">BLASt3R: Bundle Adjustment of Any Image Set with Multi-View Matching and Monocular Priors</span></li><li><span class="dpr-home-dashboard-paper-title" title="CrossDepth: Geometry-Constrained Attention for Generalizable Multi-View Surround Depth Estimation">CrossDepth: Geometry-Constrained Attention for Generalizable Multi-View Surround Depth Estimation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Open-Set 3D Scene Graphs for Field Robotics: An Outdoor Case Study">Open-Set 3D Scene Graphs for Field Robotics: An Outdoor Case Study</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="VI3: Grounding Pretrained 3D Foundation Models with Inertial Cues">VI3: Grounding Pretrained 3D Foundation Models with Inertial Cues</span></li><li><span class="dpr-home-dashboard-paper-title" title="BLASt3R: Bundle Adjustment of Any Image Set with Multi-View Matching and Monocular Priors">BLASt3R: Bundle Adjustment of Any Image Set with Multi-View Matching and Monocular Priors</span></li><li><span class="dpr-home-dashboard-paper-title" title="MINT: A Unified Model for World-Space Camera and Hand Motion Estimation from Scalable Egocentric Pipeline Supervision">MINT: A Unified Model for World-Space Camera and Hand Motion Estimation from Scalable Egocentric Pipeline Supervision</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>1</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -86,12 +84,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">8 篇</strong>
+    <strong class="dpr-home-dashboard-count">2 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="AQ3D: Adaptive Query Transformer for 3D Instance Segmentation">AQ3D: Adaptive Query Transformer for 3D Instance Segmentation</span></li><li><span class="dpr-home-dashboard-paper-title" title="WorldSculpt: Generating Compositional Worlds from Grounded Videos">WorldSculpt: Generating Compositional Worlds from Grounded Videos</span></li><li><span class="dpr-home-dashboard-paper-title" title="Dior: Drawing the Light of Image via Material-Decoupled Illumination Representation">Dior: Drawing the Light of Image via Material-Decoupled Illumination Representation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Where Appearance Fails, Geometry Recognizes: A CAD-Free 3D Shape Prior That Complements Vision Foundation Models">Where Appearance Fails, Geometry Recognizes: A CAD-Free 3D Shape Prior That Complements Vision Foundation Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="VOIM: Training-Free Open-Vocabulary 3D Instance Mapping for RGB-D and Monocular SLAM">VOIM: Training-Free Open-Vocabulary 3D Instance Mapping for RGB-D and Monocular SLAM</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>3</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>1</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
 </section>
 </div>
 
