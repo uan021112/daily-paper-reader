@@ -41,17 +41,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-08</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-09</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 6 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 25 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>4</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>2</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>10</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>15</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-08 23:09:33 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-09 22:17:18 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -62,7 +62,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日聚焦3D视觉基础模型与几何重建，共处理6篇论文，精读2篇高分工作。最值得关注《VI3》融合惯性线索提升3D基础模型，及《BLASt3R》用多视角匹配实现任意图像集束调整。建议普通读者优先精读这两篇9.0分论文，感受多模态与几何先验的互补价值。</p>
+<p>今日共读25篇论文，其中精读10篇；最大亮点是无监督3D点云分割方法MSSP获满分10分，值得优先关注。其次，多视角图像与任意图像集联合优化的3D重建方向（BLASt3R）也表现突出。下一步建议从这两篇的高分思路入手，先理解问题设定，再尝试复现其训练与评测流程。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -71,12 +71,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">4 篇</strong>
+    <strong class="dpr-home-dashboard-count">10 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="VI3: Grounding Pretrained 3D Foundation Models with Inertial Cues">VI3: Grounding Pretrained 3D Foundation Models with Inertial Cues</span></li><li><span class="dpr-home-dashboard-paper-title" title="BLASt3R: Bundle Adjustment of Any Image Set with Multi-View Matching and Monocular Priors">BLASt3R: Bundle Adjustment of Any Image Set with Multi-View Matching and Monocular Priors</span></li><li><span class="dpr-home-dashboard-paper-title" title="MINT: A Unified Model for World-Space Camera and Hand Motion Estimation from Scalable Egocentric Pipeline Supervision">MINT: A Unified Model for World-Space Camera and Hand Motion Estimation from Scalable Egocentric Pipeline Supervision</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="MSSP: Multi-Scale Spatially-Constrained Partition for Unsupervised Semantic Segmentation of 3D Point Clouds">MSSP: Multi-Scale Spatially-Constrained Partition for Unsupervised Semantic Segmentation of 3D Point Clouds</span></li><li><span class="dpr-home-dashboard-paper-title" title="BLASt3R: Bundle Adjustment of Any Image Set with Multi-View Matching and Monocular Priors">BLASt3R: Bundle Adjustment of Any Image Set with Multi-View Matching and Monocular Priors</span></li><li><span class="dpr-home-dashboard-paper-title" title="AVSplat: Dense-View Feed-Forward 3D Gaussian Splatting with Assist-View Preconditioning">AVSplat: Dense-View Feed-Forward 3D Gaussian Splatting with Assist-View Preconditioning</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>5</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -84,12 +84,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">2 篇</strong>
+    <strong class="dpr-home-dashboard-count">15 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Where Appearance Fails, Geometry Recognizes: A CAD-Free 3D Shape Prior That Complements Vision Foundation Models">Where Appearance Fails, Geometry Recognizes: A CAD-Free 3D Shape Prior That Complements Vision Foundation Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="VOIM: Training-Free Open-Vocabulary 3D Instance Mapping for RGB-D and Monocular SLAM">VOIM: Training-Free Open-Vocabulary 3D Instance Mapping for RGB-D and Monocular SLAM</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="WorldSculpt: Generating Compositional Worlds from Grounded Videos">WorldSculpt: Generating Compositional Worlds from Grounded Videos</span></li><li><span class="dpr-home-dashboard-paper-title" title="Scaling 3D Generative Priors to Large-Scale Scene Meshes from Multi-View Images">Scaling 3D Generative Priors to Large-Scale Scene Meshes from Multi-View Images</span></li><li><span class="dpr-home-dashboard-paper-title" title="SHIFT: Surface-aware High-speed Integration For TSDFs">SHIFT: Surface-aware High-speed Integration For TSDFs</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>1</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>5</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>4</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>3</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span></div>
 </section>
 </div>
 
