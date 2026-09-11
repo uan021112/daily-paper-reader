@@ -41,17 +41,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-10</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-11</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 9 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 8 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>1</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>8</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>2</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>6</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-10 21:36:47 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-11 21:31:49 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -62,10 +62,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日共生成 9 篇推荐（精读 1 篇，速读 8 篇）</p>
-<p>精读：《BLASt3R: Bundle Adjustment of Any Image Set with Multi-View Matching and Monocular Priors》（9.0/10）</p>
-<p>速读：《Leveraging Visual and Geometric Priors for Metric-scale and Complete Vehicle Gaussian Reconstruction from Limited Views》（7.0/10）, 《OmniPoint: Universal Monocular Metric Pointcloud from Any Camera》（7.0/10）, 《Learning Global Camera Poses from Noisy View-Graphs for Structure from Motion》（7.0/10）</p>
-<p>这些结果覆盖了当下较热的方向，建议先看精读区论文的关键问题与方法。</p>
+<p>今日精选8篇，精读2篇、速读6篇，主线聚焦3D重建、位姿估计与占用预测。</p>
+<p>最值得看的是两篇9.0分精读：BLASt3R用多视图匹配与单目先验做任意图像集束调整，SAMV-DUSt3R从稀疏多视图做实例级3D场景解耦。</p>
+<p>普通读者可先读这两篇精读，再按兴趣浏览速读中的零样本6DoF位姿估计与双分辨率BEV占用预测。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -74,12 +73,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">1 篇</strong>
+    <strong class="dpr-home-dashboard-count">2 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="BLASt3R: Bundle Adjustment of Any Image Set with Multi-View Matching and Monocular Priors">BLASt3R: Bundle Adjustment of Any Image Set with Multi-View Matching and Monocular Priors</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="BLASt3R: Bundle Adjustment of Any Image Set with Multi-View Matching and Monocular Priors">BLASt3R: Bundle Adjustment of Any Image Set with Multi-View Matching and Monocular Priors</span></li><li><span class="dpr-home-dashboard-paper-title" title="SAMV-DUSt3R: Instance-Centric 3D Scene Decoupling from Sparse Multi-Views">SAMV-DUSt3R: Instance-Centric 3D Scene Decoupling from Sparse Multi-Views</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -87,12 +86,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">8 篇</strong>
+    <strong class="dpr-home-dashboard-count">6 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Leveraging Visual and Geometric Priors for Metric-scale and Complete Vehicle Gaussian Reconstruction from Limited Views">Leveraging Visual and Geometric Priors for Metric-scale and Complete Vehicle Gaussian Reconstruction from Limited Views</span></li><li><span class="dpr-home-dashboard-paper-title" title="OmniPoint: Universal Monocular Metric Pointcloud from Any Camera">OmniPoint: Universal Monocular Metric Pointcloud from Any Camera</span></li><li><span class="dpr-home-dashboard-paper-title" title="Learning Global Camera Poses from Noisy View-Graphs for Structure from Motion">Learning Global Camera Poses from Noisy View-Graphs for Structure from Motion</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Back to the Feature: Zero-Shot 6DoF Pose Estimation via Dense Local Features">Back to the Feature: Zero-Shot 6DoF Pose Estimation via Dense Local Features</span></li><li><span class="dpr-home-dashboard-paper-title" title="DualPathOcc: Dual-Resolution BEV Encoder for 3D Occupancy Prediction">DualPathOcc: Dual-Resolution BEV Encoder for 3D Occupancy Prediction</span></li><li><span class="dpr-home-dashboard-paper-title" title="MARS-CLIP: Multi-Resolution and Attention Refined Zero-Shot Image Segmentation">MARS-CLIP: Multi-Resolution and Attention Refined Zero-Shot Image Segmentation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">part-seg <strong>3</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">geometry <strong>3</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>1</strong></span></div>
 </section>
 </div>
 
