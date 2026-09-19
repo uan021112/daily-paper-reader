@@ -41,17 +41,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-18</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-19</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 11 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 9 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>4</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>2</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>7</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-18 22:09:57 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-19 21:20:37 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -62,9 +62,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日筛出11篇3D视觉论文，精读4篇，重点锁定前馈3D重建与3D场景理解。</p>
-<p>最高分GeoCond（9.0）和SceneBench（8.0）最值得看，分别指向条件感知可靠适配与3D场景层级基准。</p>
-<p>普通读者可先读这两篇精读，再按兴趣速览粒子泼溅、单视图高斯修剪和公里级SLAM。</p>
+<p>今日完成 9 篇 3D 视觉论文筛选，其中 2 篇精读（GeoCond 与 VGGT-GS SLAM，均 9.0 分），7 篇速读。</p>
+<p>最值得看的是前馈 3D 重建的可靠性适配（GeoCond）与免标定单目高斯泼溅 SLAM（VGGT-GS SLAM）这两个方向，速读中的 SceneBench 也提供了 3D 场景视觉语言理解的分层评测基准。</p>
+<p>普通读者可先从前馈先验加高斯泼溅这条主线入手，顺带关注场景理解评测与单视图重建后处理（PhGS）等配套工作。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -73,12 +73,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">4 篇</strong>
+    <strong class="dpr-home-dashboard-count">2 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="GeoCond: A Conditioning-Aware Reliability Adapter for Feed-Forward 3D Reconstruction">GeoCond: A Conditioning-Aware Reliability Adapter for Feed-Forward 3D Reconstruction</span></li><li><span class="dpr-home-dashboard-paper-title" title="SceneBench: A Hierarchical Benchmark for Vision-Language Understanding of 3D Scenes">SceneBench: A Hierarchical Benchmark for Vision-Language Understanding of 3D Scenes</span></li><li><span class="dpr-home-dashboard-paper-title" title="VGGT-GS SLAM: Uncalibrated Monocular Gaussian Splatting SLAM with Feed-Forward Priors">VGGT-GS SLAM: Uncalibrated Monocular Gaussian Splatting SLAM with Feed-Forward Priors</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="GeoCond: A Conditioning-Aware Reliability Adapter for Feed-Forward 3D Reconstruction">GeoCond: A Conditioning-Aware Reliability Adapter for Feed-Forward 3D Reconstruction</span></li><li><span class="dpr-home-dashboard-paper-title" title="VGGT-GS SLAM: Uncalibrated Monocular Gaussian Splatting SLAM with Feed-Forward Priors">VGGT-GS SLAM: Uncalibrated Monocular Gaussian Splatting SLAM with Feed-Forward Priors</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>3</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -89,9 +89,9 @@
     <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="ParticleSplat: Self-supervised Object-centric Latent Particle Splatting">ParticleSplat: Self-supervised Object-centric Latent Particle Splatting</span></li><li><span class="dpr-home-dashboard-paper-title" title="PhGS: Post-Hoc Pruning and Refinement of Single-View Feed-Forward 3D Gaussian Reconstructions">PhGS: Post-Hoc Pruning and Refinement of Single-View Feed-Forward 3D Gaussian Reconstructions</span></li><li><span class="dpr-home-dashboard-paper-title" title="AMB3R-SLAM: Kilometer-scale SLAM with Hierarchical Backend">AMB3R-SLAM: Kilometer-scale SLAM with Hierarchical Backend</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="SceneBench: A Hierarchical Benchmark for Vision-Language Understanding of 3D Scenes">SceneBench: A Hierarchical Benchmark for Vision-Language Understanding of 3D Scenes</span></li><li><span class="dpr-home-dashboard-paper-title" title="GS-PI: An Optimization-Decoupled Appearance Decomposition Approach for Generating PBR Gaussian Assets">GS-PI: An Optimization-Decoupled Appearance Decomposition Approach for Generating PBR Gaussian Assets</span></li><li><span class="dpr-home-dashboard-paper-title" title="PhGS: Post-Hoc Pruning and Refinement of Single-View Feed-Forward 3D Gaussian Reconstructions">PhGS: Post-Hoc Pruning and Refinement of Single-View Feed-Forward 3D Gaussian Reconstructions</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">part-seg <strong>3</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>3</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>1</strong></span></div>
 </section>
 </div>
 
