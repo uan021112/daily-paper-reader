@@ -41,17 +41,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-19</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-20</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 9 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 7 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>2</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>7</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>5</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-19 21:20:37 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-20 21:36:43 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -62,9 +62,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日完成 9 篇 3D 视觉论文筛选，其中 2 篇精读（GeoCond 与 VGGT-GS SLAM，均 9.0 分），7 篇速读。</p>
-<p>最值得看的是前馈 3D 重建的可靠性适配（GeoCond）与免标定单目高斯泼溅 SLAM（VGGT-GS SLAM）这两个方向，速读中的 SceneBench 也提供了 3D 场景视觉语言理解的分层评测基准。</p>
-<p>普通读者可先从前馈先验加高斯泼溅这条主线入手，顺带关注场景理解评测与单视图重建后处理（PhGS）等配套工作。</p>
+<p>2026-09-20 日报：7篇论文中精读2篇，聚焦前馈3D重建与高斯泼</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -86,12 +84,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">7 篇</strong>
+    <strong class="dpr-home-dashboard-count">5 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="SceneBench: A Hierarchical Benchmark for Vision-Language Understanding of 3D Scenes">SceneBench: A Hierarchical Benchmark for Vision-Language Understanding of 3D Scenes</span></li><li><span class="dpr-home-dashboard-paper-title" title="GS-PI: An Optimization-Decoupled Appearance Decomposition Approach for Generating PBR Gaussian Assets">GS-PI: An Optimization-Decoupled Appearance Decomposition Approach for Generating PBR Gaussian Assets</span></li><li><span class="dpr-home-dashboard-paper-title" title="PhGS: Post-Hoc Pruning and Refinement of Single-View Feed-Forward 3D Gaussian Reconstructions">PhGS: Post-Hoc Pruning and Refinement of Single-View Feed-Forward 3D Gaussian Reconstructions</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="SceneBench: A Hierarchical Benchmark for Vision-Language Understanding of 3D Scenes">SceneBench: A Hierarchical Benchmark for Vision-Language Understanding of 3D Scenes</span></li><li><span class="dpr-home-dashboard-paper-title" title="GS-PI: An Optimization-Decoupled Appearance Decomposition Approach for Generating PBR Gaussian Assets">GS-PI: An Optimization-Decoupled Appearance Decomposition Approach for Generating PBR Gaussian Assets</span></li><li><span class="dpr-home-dashboard-paper-title" title="Differentiable Mesh State Estimation via Factor Graph Inference for Deformable Object Reconstruction">Differentiable Mesh State Estimation via Factor Graph Inference for Deformable Object Reconstruction</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>3</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">material-est <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>1</strong></span></div>
 </section>
 </div>
 
