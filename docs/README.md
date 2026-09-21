@@ -41,17 +41,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-20</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-21</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 7 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 11 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>2</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>5</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>4</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-20 21:36:43 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-21 22:43:49 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -62,7 +62,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-09-20 日报：7篇论文中精读2篇，聚焦前馈3D重建与高斯泼</p>
+<p>2026-09-21 日报精选 11 篇（精读 7、速读 4），聚焦前馈 3D 重建与几何表示。最值得看的是双双 9.0 分的 GeoCond 与 VGGT-CAD：前者关注重建可靠性适配，后者从几何 grounding 出发重建参数化 CAD 模型。普通读者可先读这两篇精读，再按兴趣速览物理属性估计与 PBR 高斯资产方向。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -71,12 +71,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">2 篇</strong>
+    <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="GeoCond: A Conditioning-Aware Reliability Adapter for Feed-Forward 3D Reconstruction">GeoCond: A Conditioning-Aware Reliability Adapter for Feed-Forward 3D Reconstruction</span></li><li><span class="dpr-home-dashboard-paper-title" title="VGGT-GS SLAM: Uncalibrated Monocular Gaussian Splatting SLAM with Feed-Forward Priors">VGGT-GS SLAM: Uncalibrated Monocular Gaussian Splatting SLAM with Feed-Forward Priors</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="GeoCond: A Conditioning-Aware Reliability Adapter for Feed-Forward 3D Reconstruction">GeoCond: A Conditioning-Aware Reliability Adapter for Feed-Forward 3D Reconstruction</span></li><li><span class="dpr-home-dashboard-paper-title" title="VGGT-CAD: Reconstructing Parametric CAD 3D Model with Geometric Grounding">VGGT-CAD: Reconstructing Parametric CAD 3D Model with Geometric Grounding</span></li><li><span class="dpr-home-dashboard-paper-title" title="Think Locally, Refine Globally for Memory-Efficient 3D Reconstruction">Think Locally, Refine Globally for Memory-Efficient 3D Reconstruction</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>6</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -84,12 +84,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">5 篇</strong>
+    <strong class="dpr-home-dashboard-count">4 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="SceneBench: A Hierarchical Benchmark for Vision-Language Understanding of 3D Scenes">SceneBench: A Hierarchical Benchmark for Vision-Language Understanding of 3D Scenes</span></li><li><span class="dpr-home-dashboard-paper-title" title="GS-PI: An Optimization-Decoupled Appearance Decomposition Approach for Generating PBR Gaussian Assets">GS-PI: An Optimization-Decoupled Appearance Decomposition Approach for Generating PBR Gaussian Assets</span></li><li><span class="dpr-home-dashboard-paper-title" title="Differentiable Mesh State Estimation via Factor Graph Inference for Deformable Object Reconstruction">Differentiable Mesh State Estimation via Factor Graph Inference for Deformable Object Reconstruction</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="PhysVGGT: Feed-Forward Dense Physical Property Estimation from A Single Image">PhysVGGT: Feed-Forward Dense Physical Property Estimation from A Single Image</span></li><li><span class="dpr-home-dashboard-paper-title" title="GS-PI: An Optimization-Decoupled Appearance Decomposition Approach for Generating PBR Gaussian Assets">GS-PI: An Optimization-Decoupled Appearance Decomposition Approach for Generating PBR Gaussian Assets</span></li><li><span class="dpr-home-dashboard-paper-title" title="Warp-Geo: Differentiable Geometry Representation for Dynamic-Boundary Simulation and Shape Optimization">Warp-Geo: Differentiable Geometry Representation for Dynamic-Boundary Simulation and Shape Optimization</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">material-est <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">material-est <strong>2</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>1</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>1</strong></span></div>
 </section>
 </div>
 
