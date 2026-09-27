@@ -41,17 +41,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-26</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-27</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 9 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 4 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>2</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>7</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>3</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>1</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-26 21:41:31 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-27 22:37:19 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -62,10 +62,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日共生成 9 篇推荐（精读 2 篇，速读 7 篇）</p>
-<p>精读：《VGGT-Prime: Compute-Adaptive Mixture-of-Heads for Efficient Visual Geometry Transformers》（9.0/10）, 《VGGT-CAD: Reconstructing Parametric CAD 3D Model with Geometric Grounding》（8.0/10）</p>
-<p>速读：《HARMONY: Hierarchical Agentic Reasoning for MONocular Image-to-Scene Synthesis》（7.0/10）, 《Estimating Accurate Hand Pose in Camera Space with Vision Transformer》（6.0/10）, 《Geometric and Semantic Coupling for Interaction Understanding in 3D Scenes》（6.0/10）</p>
-<p>这些结果覆盖了当下较热的方向，建议先看精读区论文的关键问题与方法。</p>
+<p>今日完成4篇论文筛选，精读3篇、速读1篇，重点落在高效视觉几何Transformer、结肠镜3D重建与实时多模态建图。</p>
+<p>最值得先看10.0分的VGGT-Prime（计算自适应多头视觉几何Transformer），其次是9.0分的Colon3R（单目结肠镜视频跨域3D重建）。</p>
+<p>普通读者可优先读VGGT-Prime抓效率思路，关注医疗内窥镜场景再跟进Colon3R，OREN-X可作6.0分速读备选。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -74,12 +73,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">2 篇</strong>
+    <strong class="dpr-home-dashboard-count">3 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="VGGT-Prime: Compute-Adaptive Mixture-of-Heads for Efficient Visual Geometry Transformers">VGGT-Prime: Compute-Adaptive Mixture-of-Heads for Efficient Visual Geometry Transformers</span></li><li><span class="dpr-home-dashboard-paper-title" title="VGGT-CAD: Reconstructing Parametric CAD 3D Model with Geometric Grounding">VGGT-CAD: Reconstructing Parametric CAD 3D Model with Geometric Grounding</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="VGGT-Prime: Compute-Adaptive Mixture-of-Heads for Efficient Visual Geometry Transformers">VGGT-Prime: Compute-Adaptive Mixture-of-Heads for Efficient Visual Geometry Transformers</span></li><li><span class="dpr-home-dashboard-paper-title" title="Colon3R: Cross-Domain 3D Reconstruction from Monocular Colonoscopic Video">Colon3R: Cross-Domain 3D Reconstruction from Monocular Colonoscopic Video</span></li><li><span class="dpr-home-dashboard-paper-title" title="HARMONY: Hierarchical Agentic Reasoning for MONocular Image-to-Scene Synthesis">HARMONY: Hierarchical Agentic Reasoning for MONocular Image-to-Scene Synthesis</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -87,12 +86,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">7 篇</strong>
+    <strong class="dpr-home-dashboard-count">1 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="HARMONY: Hierarchical Agentic Reasoning for MONocular Image-to-Scene Synthesis">HARMONY: Hierarchical Agentic Reasoning for MONocular Image-to-Scene Synthesis</span></li><li><span class="dpr-home-dashboard-paper-title" title="Estimating Accurate Hand Pose in Camera Space with Vision Transformer">Estimating Accurate Hand Pose in Camera Space with Vision Transformer</span></li><li><span class="dpr-home-dashboard-paper-title" title="Geometric and Semantic Coupling for Interaction Understanding in 3D Scenes">Geometric and Semantic Coupling for Interaction Understanding in 3D Scenes</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="OREN-X: Octree Residual Network for Real-Time Multi-Modal Mapping">OREN-X: Octree Residual Network for Real-Time Multi-Modal Mapping</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">part-seg <strong>3</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>1</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
 </section>
 </div>
 
