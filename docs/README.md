@@ -44,14 +44,14 @@
       <span class="dpr-home-dashboard-kicker">2026-09-29</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 6 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 16 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
-    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>3</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>3</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>2 次</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>6</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>10</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-29 00:13:21 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-29 23:42:06 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -62,9 +62,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日扫完6篇论文，精读3篇、速读3篇，VGGT-Prime以10.0分成为绝对焦点。</p>
-<p>最值得看的是VGGT-Prime的计算自适应视觉几何Transformer，以及Colon3R用单目结肠镜视频做跨域3D重建。</p>
-<p>普通</p>
+<p>今天精读6篇、速读10篇共16篇，视觉几何Transformer的效率优化是主线。最值得看的是10分的VGGT-Prime用计算自适应多头机制提升视觉几何Transformer效率，以及9分的ReSS以残差恢复稀疏注意力服务3D视觉Transformer。普通读者可先读这两篇精读，再按兴趣浏览开放词汇3D场景图与重建生成统一方向的速读文章。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -73,12 +71,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">3 篇</strong>
+    <strong class="dpr-home-dashboard-count">6 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="VGGT-Prime: Compute-Adaptive Mixture-of-Heads for Efficient Visual Geometry Transformers">VGGT-Prime: Compute-Adaptive Mixture-of-Heads for Efficient Visual Geometry Transformers</span></li><li><span class="dpr-home-dashboard-paper-title" title="Colon3R: Cross-Domain 3D Reconstruction from Monocular Colonoscopic Video">Colon3R: Cross-Domain 3D Reconstruction from Monocular Colonoscopic Video</span></li><li><span class="dpr-home-dashboard-paper-title" title="HARMONY: Hierarchical Agentic Reasoning for MONocular Image-to-Scene Synthesis">HARMONY: Hierarchical Agentic Reasoning for MONocular Image-to-Scene Synthesis</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="VGGT-Prime: Compute-Adaptive Mixture-of-Heads for Efficient Visual Geometry Transformers">VGGT-Prime: Compute-Adaptive Mixture-of-Heads for Efficient Visual Geometry Transformers</span></li><li><span class="dpr-home-dashboard-paper-title" title="ReSS: Residual-Restoring Sparse Attention for 3D Vision Transformers">ReSS: Residual-Restoring Sparse Attention for 3D Vision Transformers</span></li><li><span class="dpr-home-dashboard-paper-title" title="Many Eyes, One World: Feed-Forward 3D Reconstruction from Mixed Cameras">Many Eyes, One World: Feed-Forward 3D Reconstruction from Mixed Cameras</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>5</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -86,12 +84,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">3 篇</strong>
+    <strong class="dpr-home-dashboard-count">10 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="TRACKGRAPH: Online Open-Vocabulary 3D Scene Graphs via Image-Space Tracking">TRACKGRAPH: Online Open-Vocabulary 3D Scene Graphs via Image-Space Tracking</span></li><li><span class="dpr-home-dashboard-paper-title" title="ARS-Avatar: Animatable and Relightable Surfel Avatars with Learnable Ambient Occlusion">ARS-Avatar: Animatable and Relightable Surfel Avatars with Learnable Ambient Occlusion</span></li><li><span class="dpr-home-dashboard-paper-title" title="DepthEvidence: Unifying Metric Depth Prediction and Geometric Reasoning in Multimodal Language Models">DepthEvidence: Unifying Metric Depth Prediction and Geometric Reasoning in Multimodal Language Models</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="TRACKGRAPH: Online Open-Vocabulary 3D Scene Graphs via Image-Space Tracking">TRACKGRAPH: Online Open-Vocabulary 3D Scene Graphs via Image-Space Tracking</span></li><li><span class="dpr-home-dashboard-paper-title" title="From Feed-Forward to Flow: Unifying Reconstruction and Generation Is Easier Than You Think">From Feed-Forward to Flow: Unifying Reconstruction and Generation Is Easier Than You Think</span></li><li><span class="dpr-home-dashboard-paper-title" title="Learned Localized Mesh Refinement">Learned Localized Mesh Refinement</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">geometry <strong>4</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>1</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span></div>
 </section>
 </div>
 
