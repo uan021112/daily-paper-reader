@@ -41,17 +41,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-29</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-30</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 16 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 5 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
-    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>2 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>6</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>10</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>1</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>4</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-29 23:42:06 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-30 23:31:00 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -62,7 +62,10 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今天精读6篇、速读10篇共16篇，视觉几何Transformer的效率优化是主线。最值得看的是10分的VGGT-Prime用计算自适应多头机制提升视觉几何Transformer效率，以及9分的ReSS以残差恢复稀疏注意力服务3D视觉Transformer。普通读者可先读这两篇精读，再按兴趣浏览开放词汇3D场景图与重建生成统一方向的速读文章。</p>
+<p>今日共生成 5 篇推荐（精读 1 篇，速读 4 篇）</p>
+<p>精读：《ReSS: Residual-Restoring Sparse Attention for 3D Vision Transformers》（10.0/10）</p>
+<p>速读：《VGGT-Diff: Visual Geometry Meets Diffusion for Sparse-View Novel View Synthesis》（7.0/10）, 《GraphWrit3R: End-to-End 3D Scene Graph Writing》（6.0/10）, 《From Feed-Forward to Flow: Unifying Reconstruction and Generation Is Easier Than You Think》（6.0/10）</p>
+<p>这些结果覆盖了当下较热的方向，建议先看精读区论文的关键问题与方法。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -71,12 +74,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">6 篇</strong>
+    <strong class="dpr-home-dashboard-count">1 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="VGGT-Prime: Compute-Adaptive Mixture-of-Heads for Efficient Visual Geometry Transformers">VGGT-Prime: Compute-Adaptive Mixture-of-Heads for Efficient Visual Geometry Transformers</span></li><li><span class="dpr-home-dashboard-paper-title" title="ReSS: Residual-Restoring Sparse Attention for 3D Vision Transformers">ReSS: Residual-Restoring Sparse Attention for 3D Vision Transformers</span></li><li><span class="dpr-home-dashboard-paper-title" title="Many Eyes, One World: Feed-Forward 3D Reconstruction from Mixed Cameras">Many Eyes, One World: Feed-Forward 3D Reconstruction from Mixed Cameras</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="ReSS: Residual-Restoring Sparse Attention for 3D Vision Transformers">ReSS: Residual-Restoring Sparse Attention for 3D Vision Transformers</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>5</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -84,12 +87,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">10 篇</strong>
+    <strong class="dpr-home-dashboard-count">4 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="TRACKGRAPH: Online Open-Vocabulary 3D Scene Graphs via Image-Space Tracking">TRACKGRAPH: Online Open-Vocabulary 3D Scene Graphs via Image-Space Tracking</span></li><li><span class="dpr-home-dashboard-paper-title" title="From Feed-Forward to Flow: Unifying Reconstruction and Generation Is Easier Than You Think">From Feed-Forward to Flow: Unifying Reconstruction and Generation Is Easier Than You Think</span></li><li><span class="dpr-home-dashboard-paper-title" title="Learned Localized Mesh Refinement">Learned Localized Mesh Refinement</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="VGGT-Diff: Visual Geometry Meets Diffusion for Sparse-View Novel View Synthesis">VGGT-Diff: Visual Geometry Meets Diffusion for Sparse-View Novel View Synthesis</span></li><li><span class="dpr-home-dashboard-paper-title" title="GraphWrit3R: End-to-End 3D Scene Graph Writing">GraphWrit3R: End-to-End 3D Scene Graph Writing</span></li><li><span class="dpr-home-dashboard-paper-title" title="From Feed-Forward to Flow: Unifying Reconstruction and Generation Is Easier Than You Think">From Feed-Forward to Flow: Unifying Reconstruction and Generation Is Easier Than You Think</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">geometry <strong>4</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>1</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>1</strong></span></div>
 </section>
 </div>
 
