@@ -41,17 +41,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-10-02</span>
+      <span class="dpr-home-dashboard-kicker">2026-10-03</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 23 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 20 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>9</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>14</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>8</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-10-02 23:41:54 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-03 22:38:29 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -62,7 +62,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日扫完 23 篇论文，精读 9 篇、速读 14 篇，重点锁定 3D 视觉与重建方向。最值得看的是两个 9 分工作：ReSS 用残差恢复稀疏注意力改进 3D Vision Transformer，OTT3R 以 1% 算力做多视角 3D 重建并快速生成数据集。普通读者可先读这两篇的精读笔记，再按兴趣跟进 StereoGaussians、OptimusMesh、ARROW 等 8 分速读工作。</p>
+<p>今日从20篇3D视觉论文中精读8篇、速读12篇，聚焦高效注意力与多视图重建。最值得看的是《ReSS》用残差恢复稀疏注意力改造3D视觉Transformer，以及《OTT3R》以1%算力完成多视图3D重建并快速生成数据集，均获9.0分。普通读者可先读这两篇，再扫《StereoGaussians》《Dyna3》了解前馈高斯泼溅与免训练4D重建的落地思路。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -71,12 +71,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">9 篇</strong>
+    <strong class="dpr-home-dashboard-count">8 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="ReSS: Residual-Restoring Sparse Attention for 3D Vision Transformers">ReSS: Residual-Restoring Sparse Attention for 3D Vision Transformers</span></li><li><span class="dpr-home-dashboard-paper-title" title="OTT3R: Multi-View 3D Reconstruction and Fast Dataset Generation at 1% Compute">OTT3R: Multi-View 3D Reconstruction and Fast Dataset Generation at 1% Compute</span></li><li><span class="dpr-home-dashboard-paper-title" title="RelationVGGT: Visual Geometry Transformers for 3D Spatial Relation Segmentation">RelationVGGT: Visual Geometry Transformers for 3D Spatial Relation Segmentation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="ReSS: Residual-Restoring Sparse Attention for 3D Vision Transformers">ReSS: Residual-Restoring Sparse Attention for 3D Vision Transformers</span></li><li><span class="dpr-home-dashboard-paper-title" title="OTT3R: Multi-View 3D Reconstruction and Fast Dataset Generation at 1% Compute">OTT3R: Multi-View 3D Reconstruction and Fast Dataset Generation at 1% Compute</span></li><li><span class="dpr-home-dashboard-paper-title" title="VASC: Value-Aware Sparse Attention with Cross-Layer Memory for Efficient 3D Reconstruction">VASC: Value-Aware Sparse Attention with Cross-Layer Memory for Efficient 3D Reconstruction</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>8</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>8</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -84,12 +84,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">14 篇</strong>
+    <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="StereoGaussians: Feed-Forward 3D Gaussian Splatting from Stereo Images">StereoGaussians: Feed-Forward 3D Gaussian Splatting from Stereo Images</span></li><li><span class="dpr-home-dashboard-paper-title" title="OptimusMesh: Compact Autoregressive Mesh Generation from Point Clouds via Sparse Latent Pivots">OptimusMesh: Compact Autoregressive Mesh Generation from Point Clouds via Sparse Latent Pivots</span></li><li><span class="dpr-home-dashboard-paper-title" title="ARROW: Arbitrary Reconstruction and Tracking of 4D Observations in the Wild">ARROW: Arbitrary Reconstruction and Tracking of 4D Observations in the Wild</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="StereoGaussians: Feed-Forward 3D Gaussian Splatting from Stereo Images">StereoGaussians: Feed-Forward 3D Gaussian Splatting from Stereo Images</span></li><li><span class="dpr-home-dashboard-paper-title" title="Agentic Relative Camera Pose Estimation via Learned Ranking and Verification">Agentic Relative Camera Pose Estimation via Learned Ranking and Verification</span></li><li><span class="dpr-home-dashboard-paper-title" title="Dyna3: VLM-Guided Training-Free 4D Reconstruction via Depth Foundation Models">Dyna3: VLM-Guided Training-Free 4D Reconstruction via Depth Foundation Models</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>6</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>3</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>8</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span></div>
 </section>
 </div>
 
