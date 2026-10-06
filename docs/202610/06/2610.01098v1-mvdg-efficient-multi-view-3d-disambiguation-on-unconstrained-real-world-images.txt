@@ -1,0 +1,971 @@
+MVDG: Efficient Multi-view 3D Disambiguation
+on Unconstrained Real-World Images
+Hanyuan Xiao1,2, Gonglin Chen1,2, Haolin Xiong1,2, Wenbin Teng1,2,
+Haiwei Chen1,2, and Yajie Zhao1,2
+1 University of Southern California
+2 Institute for Creative Technologies
+Fig. 1: Overview of MVDG for multi-view 3D disambiguation. MVDGclas-
+sifies image pairs with similar 2D appearance that may correspond to different view-
+points. We train a classification decoder and a confidence module to select effective
+encoder depths adaptively. By exiting at early layers when confidence is high, our
+method improves efficiency while maintaining accuracy. (Left) Red-boxed examples
+are false pairs (different scene/view), and green-boxed examples are true pairs (same
+scene/view). (Right) We show a comparison of structure-from-motion result without
+vs. with MVDG to remove visually ambiguous images.
+Abstract. Illusory matches between distinct yet visually similar 3D
+surfaces—doppelgangers—remain a fundamental obstacle for large-scale,
+in-the-wild 3D reconstruction and visual localization. Prior work mit-
+igates this issue with pairwise classifiers, but this design limits multi-
+view contextual reasoning and incurs O(n2) inference complexity for
+downstream structure-from-motion (SfM). We present MVDG, a scal-
+able multi-view disambiguation framework built on the 3D foundation
+model VGGT, which jointly reasons over an arbitrary number of multi-
+view images. By incorporating 3D-aware multi-view features, our method
+reduces dependence on pairwise comparisons by encoding and decoding
+views in a single pass. We further observe that direct multi-view fine-
+tuning of VGGT can be unstable under noisy supervision; motivated by
+label ambiguity in Doppelgangers, we construct a pseudo-pairwise train-
+ing set from AerialMegaDepth and show that fine-tuning on sampled
+subsets yields stable optimization and strong generalization to held-out
+scenes. Finally, because full SfM evaluation (even with faster pipelines
+arXiv:2610.01098v1  [cs.CV]  1 Oct 2026
+
+
+2
+H.Xiao et al.
+such as GLOMAP) remains expensive, we process a pseudo-pairwise
+dataset for efficient validation; we derive a predictive relationship be-
+tween regular SfM metrics and the classification accuracy on this pseudo-
+pairwise test. Experiments show that our method achieves compara-
+ble pairwise accuracy while improving both SfM accuracy and inference
+speed over baselines.
+Keywords: Doppelgangers · 3D foundation model · Structure-from-
+motion
+1
+Introduction
+Fig. 2: Ambiguous inputs can mislead 3D scene understanding. We feed
+VGGT [19] with multi-view images from a VisymScenes scene [22] containing repet-
+itive patterns. Among the eight input images, two viewpoint groups are evident to
+human observers (all from the same physical scene): six red-marked images and two
+orange-marked images. (Left) When all views, including transition geometry, are pro-
+vided, the backbone robustly disambiguates views and reconstructs a coherent scene.
+(Right) When only two views from different viewpoints are provided, VGGT fails to
+disambiguate and reconstructs an incorrect joint scene.
+Recovering coherent 3D structure from multi-view imagery is a central goal in
+computer vision. Conventional pipelines rely on hand-crafted local features and
+robust 2D correspondence estimation for 3D point reconstruction in Structure-
+from-Motion (SfM) and Multi-View Stereo (MVS) [4,11,12,15]. In contrast, re-
+cent data-driven approaches [19–21] largely bypass explicit 2D feature matching
+by tokenizing images and decoding geometry in a feed-forward manner, enabling
+direct inference of 3D properties (e.g., camera parameters, depth, tracking) with-
+out iterative optimization. Despite their different paradigms, both families re-
+main vulnerable to the doppelgangers problem: when non-covisible viewpoints
+capture visually similar surfaces, the model may incorrectly match those views
+and reconstruct inconsistent geometry. This bottleneck has long hindered down-
+stream tasks and real-world deployments.
+A natural formulation treats doppelganger detection as binary classification:
+image pairs with sufficient covisibility (i.e., overlap in visible 3D points) and
+
+
+MVDG
+3
+rigid transformations are labeled true, and pairs below a threshold are labeled
+false. [1] trains a pairwise classifier to reject non-covisible image pairs using
+differentiable feature evidence; the filtered image sets can then be passed to
+downstream 3D pipelines such as COLMAP [11, 12]. To leverage pre-trained
+3D foundation models, [22] incorporates feed-forward 3D features from [6] for
+pairwise disambiguation. While effective, pairwise designs underuse multi-view
+constraints and scale poorly in large-scale image collections, where cross-view
+consistency can expose aliasing contradictions (Fig. 2). They also incur substan-
+tial inference overhead when enumerating all candidate pairs.
+We address these limitations with MVDG, a scalable multi-view 3D disam-
+biguation framework built on VGGT [19]. First, we bridge the data gap be-
+tween pairwise supervision and multi-view inference. Both Doppelgangers and
+VisymScenes are pairwise datasets [1,22]; we convert them into coarse multi-view
+groups by transferring positive pair labels to anchor-centric neighborhoods. How-
+ever, annotation noise in Doppelgangers introduces ambiguity (Sec. 10), which
+makes convergence less stable. We therefore derive a pseudo-pairwise dataset
+from AerialMegaDepth [17] and show that fine-tuning on these subsets improves
+training stability and generalization to held-out scenes. Since end-to-end SfM
+validation at each checkpoint is prohibitively expensive, we also establish an
+empirical relationship between pseudo-pairwise classification accuracy and SfM
+metrics (e.g., inlier ratios), yielding a practical proxy for monitoring convergence.
+Second, to accelerate inference, we train a confidence-based early-exit module
+that avoids unnecessary deeper-layer computation when early encoder and de-
+coder features already provide reliable predictions. Overall, this design reduces
+SfM-stage runtime by approximately 40%.
+In summary, our contributions are:
+1. We present MVDG, a scalable multi-view 3D disambiguation framework
+built on VGGT, and augment pairwise training resources with pseudo-pairwise
+supervision from AerialMegaDepth to improve training stability and gener-
+alization.
+2. We establish an empirical relationship between pseudo-pairwise classification
+accuracy and downstream SfM metrics (e.g., inlier ratio), enabling practical
+validation without running full SfM.
+3. We introduce an early-exit inference strategy that halts unnecessary deeper-
+layer computation when confidence is sufficient, reducing runtime overhead
+by ∼40% on SfM evaluation.
+2
+Related Works
+Classical SfM/MVS and the limits of 2D matching. Early pipelines for image-
+based 3D reconstruction—typified by COLMAP—combine robust local feature
+detection and matching (e.g., SIFT) with incremental Structure-from-Motion
+(SfM) and dense Multi-View Stereo (MVS) [8,11,12]. COLMAP remains a stan-
+dard open-source baseline; its core contributions include robust incremental SfM
+and pixelwise view-selection MVS with strong completeness and accuracy across
+
+
+4
+H.Xiao et al.
+datasets. These systems scale to large, unordered photo collections and set com-
+petitive baselines on multi-view depth and point-cloud benchmarks [13]. How-
+ever, classical pipelines rely on 2D correspondences [3, 10, 23] and are vulnera-
+ble to visual aliasing—repetitive or near-duplicate textures—which can trigger
+catastrophic misassociations and broken reconstructions. Recent learned match-
+ers improve robustness and efficiency, including SuperPoint [2], attention-based
+SuperGlue [10], and detector-free LoFTR [16]. Still, under severe symmetry and
+repetition, short-range 2D evidence alone remains insufficient.
+Learned multi-view geometry and feed-forward 3D backbones. Recent feed-forward
+3D geometry networks directly infer scene attributes from raw images, moving
+beyond iterative geometric optimization loops. [21] casts pairwise reconstruction
+as camera-agnostic point-map regression, enabling robust wide-baseline align-
+ment without priors.
+[6] further grounds matching in 3D by augmenting [21]
+with dense local features and a fast reciprocal matcher, improving both accuracy
+and speed on challenging localization benchmarks.
+[18] introduces a spatial-
+memory mechanism that predicts per-image point maps in a global coordinate
+frame, eliminating post-hoc global alignment and inferring frame sequences in
+real time. In parallel,
+[20] models a persistent state with a continuously up-
+dated transformer, producing metric point maps online as new views arrive.
+Most recently, VGGT generalizes this paradigm from one to hundreds of views
+and directly predicts camera parameters, multi-view depth, dense point maps,
+and 3D tracks [19]. Despite these gains, computation scales unfavorably with the
+number of frames because multi-view attention is quadratic in tokens. A concur-
+rent study accelerates VGGT via token-redundancy reduction [14], but it does
+not explicitly address doppelgangers because ambiguous patch mismatches are
+not modeled. We take a complementary route: confidence-conditioned, depth-
+adaptive computation for multi-view disambiguation.
+Visual aliasing and Doppelgangers.
+[1] formalized the Doppelgangers problem
+and proposed a pairwise classifier trained on a curated dataset, where posi-
+tive/negative supervision is tied to covisibility and relative rigid-transformation
+consistency, using keypoints and matches to estimate affine consistency cues. [22]
+improved robustness by leveraging 3D-aware features from [6] within a trans-
+former classifier and demonstrated gains when integrating into SfM pipelines
+across real-world scenes. These works, however, remain pairwise: they do not
+exploit the richer geometric constraints available when more than two views are
+jointly encoded, and consequently may under-utilize multi-view redundancy that
+can disambiguate aliasing. SALAD [5] serves as a strong 2D retrieval baseline in
+our comparisons, isolating the gap between global visual similarity and strict 3D
+covisibility disambiguation. Our approach targets this gap by operating directly
+on a multi-view 3D backbone, aggregating layer-wise tokens across arbitrary
+numbers of frames.
+
+
+MVDG
+5
+Fig. 3: Architecture of the proposed pipeline. Given a reference image (Ir) and
+database images (I1, I2), our method encodes all inputs and extracts geometry-aware
+tokens to classify whether each database image corresponds to the same scene and
+viewpoint as the reference. We freeze the pre-trained VGGT encoder and train a DPT-
+style decoder to obtain per-patch features, which are then average pooled into global
+descriptors. Positionally encoded descriptors are fed to an MLP-based doppelgangers
+classifier. To accelerate inference, a confidence-based early-exit module halts unneces-
+sary deeper-layer computation. LN denotes LayerNorm.
+3
+Preliminaries
+Our method builds on VGGT [19], a 3D foundation model that supports di-
+verse downstream geometry tasks. Given a set of multi-view images, VGGT
+predicts task-dependent 3D attributes through lightweight decoder heads. The
+backbone is a transformer encoder with L = 24 attention blocks, each combin-
+ing frame attention and global attention. Initialized from DINOv2 [9] features,
+the network transitions from local 2D correspondence cues in shallow layers to
+stronger geometric reasoning in deeper layers. Consequently, tokens aggregated
+from selected layers (default: 4, 11, 17, 23) provide rich multi-scale information
+for downstream decoding. However, for disambiguation, it remains unclear which
+layers best separate visually ambiguous but non-covisible image pairs.
+4
+Method
+4.1
+Overview
+Given an unordered image set I = {Ii}N
+i=1 of a static 3D scene, our task is
+to output covisibility by predicting a binary classification label si,j ∈{0, 1} for
+
+
+6
+H.Xiao et al.
+pairs (Ii, Ij). We input all views through a frozen VGGT encoder to obtain layer-
+wise multi-view tokens. After each encoder block, a decoder takes the patch-wise
+tokens as input and learns to output patch features capable of disambiguation.
+The decoded features are pooled into a global descriptor vector f(I) within the
+scene context for each input image. Pairwise features formed from (f(Ii), f(Ij))
+are classified by an MLP head together with a confidence-driven early-exit mod-
+ule. If the confidence exceeds a threshold, we halt further encoding and take the
+current prediction as the final decision; otherwise, we continue into later lay-
+ers. This difficulty-adaptive depth reduces computation for easy cases while still
+leveraging deeper-layer tokens for challenging ones.
+4.2
+Multi-view Supervision from Pairwise Data
+Existing doppelganger datasets are pairwise [1,22]. The raw input lists pairs for
+a given anchor image, with between 2 and 88 images paired to the same anchor.
+We therefore organize the data as a dictionary indexed by image, where each key
+Ii maps to the set of its paired images {Ij} along with their labels yi,j ∈{0, 1}
+(both positive and negative). This preserves the original pairwise supervision
+while exposing an anchor-centric multi-view neighborhood during training.
+Pseudo-pairwise supervision. For large-scale multi-view scenes, we derive pseudo-
+pairwise labels using geometric overlap computed from available 3D or camera
+information. We define a covisibility ratio
+  \l a bel {eq
+:co v is-ratio} \rho _{i,j} = \frac {|\mathcal {P}_i \cap \mathcal {P}_j|}{|\mathcal {P}_i \cup \mathcal {P}_j|}, 
+(1)
+and assign
+  \l a bel {e q :pseudo-label} y_{i,j} = \mathds {1}[\rho _{i,j} \ge \gamma ], 
+(2)
+where Pi denotes the visible 3D keypoints for Ii extracted by [11,12] and γ is a
+threshold. We compute Pi by projecting the ground-truth 3D point cloud pro-
+vided in AerialMegaDepth into the ground-truth camera view of Ii. We evaluate
+discrete thresholds in {0.1, 0.2, . . . , 1.0} and empirically choose γ = 0.4 because
+it stabilizes multi-view training. We use AerialMegaDepth to fine-tune the model
+after pairwise training on Doppelgangers and VisymScenes has converged but
+SfM accuracy remains unstable. These transferred and pseudo-pairwise labels
+supervise decoder training in Sec. 4.3.
+4.3
+Multi-view Decoder & Covisibility Classifier
+Let L = 24 denote the total number of encoder layers and T(l) the multi-view
+tokens at layer l. We pass I through the frozen VGGT encoder to obtain lay-
+erwise multi-view tokens T(l) = {T (l)
+1 , . . . , T (l)
+N } for l = 1, . . . , L. Our goal is to
+use these intermediate representations to predict whether each pair (Ii, Ij) is
+covisible. Note that we train the decoder and scoring head through all L layers
+in this stage.
+
+
+MVDG
+7
+Per-layer image descriptors. For any image Ii and layer l, a DPT-style head
+maps the corresponding tokens to P refined patch descriptors {f (l)
+p (Ii)}P
+p=1. We
+aggregate them into a single image-level vector:
+  \label {e
+q
+:
+i
+m
+g
+-de
+s c} 
+\ math
+b
+f {f}^{(l)}(I_i) \;=\; \operatorname {LN}\!\left (\frac {1}{P}\sum _{p=1}^{P} \mathbf {f}^{(l)}_{p}(I_i)\right ) \in \mathbb {R}^{C}, 
+(3)
+where LN denotes LayerNorm.
+Pairwise feature construction. To classify the pair (Ii, Ij) at depth l, we con-
+struct a symmetric, interaction-rich representation that captures agreements and
+discrepancies:
+  \l
+abe l {eq: p
+a
+i r-feat} \ begin {a ligne d} \mat h b f {g}^{(l ) }_{i,j} = \mathr
+m
+ {PE}(l) \;+\; \big [ \mathbf {f}^{(l)}(I_i),\; \mathbf {f}^{(l)}(I_j),\; \text {abs}(\mathbf {f}^{(l)}(I_i) - \mathbf {f}^{(l)}(I_j)),\; \mathbf {f}^{(l)}(I_i) \odot \mathbf {f}^{(l)}(I_j) \big ], \end {aligned} 
+(4)
+where ⊙denotes element-wise product and PE(l) is a positional encoding of the
+layer index to make the classifier layer-aware.
+Per-layer MLP scoring. We feed g(l)
+i,j into a lightweight MLP classifier to obtain
+a covisibility probability:
+  \l
+abe l {eq:m
+l
+p-lo
+git
+}
+ 
+z^{(
+l)} _ {i,j} =
+ 
+\ope
+rat
+o
+rname {MLP}_{\mathrm {cls}}\!\left (\mathbf {g}^{(l)}_{i,j}\right ), \quad p^{(l)}_{i,j} = \operatorname {Sigmoid}\!\left (z^{(l)}_{i,j}\right ). 
+(5)
+A binary covisibility label at depth l is then
+  \l
+abe l {eq:m
+lp- t hresh} s^{(l)}_{i,j} = \mathds {1}[p^{(l)}_{i,j} \ge \theta ]. 
+(6)
+During training we supervise predictions from all layers (l = 1, . . . , L) to maxi-
+mize attainable accuracy and to enable calibrated early exits later. At inference
+we select depth adaptively (Sec. 4.4). We set θ = 0.5 for pairwise evaluation and
+θ = 0.8 for SfM evaluation to include positive images more strictly; both values
+match the baseline Doppelgängers protocol for fair comparison.
+4.4
+Confidence-Driven Early-Exit Gating
+We observed that distinctive non-covisible pairs can be rejected using shal-
+low features, while challenging pairs benefit from deeper geometric aggregation
+(Sec. 5.5). Therefore, in the second stage of training, we attach a confidence
+head that estimates whether the current prediction would agree with the final
+(full-depth) prediction.
+Confidence head. For each layer l and pair (Ii, Ij), we compute
+  \l
+abe l {eq:co
+n
+f} \sig
+m
+a ^{
+(l)
+}_
+{i,j} \;=\; \operatorname {Sigmoid}\!\left (\operatorname {MLP}_{\mathrm {conf}}\!\left (\mathbf {g}^{(l)}_{i,j}\right )\right ), 
+(7)
+interpreted as the probability that the decision at depth l matches the decision
+at depth L. At inference we use a fixed threshold τ ∈(0, 1): if σ(l)
+i,j ≥τ, we exit at
+layer l and take p(l)
+i,j as final; otherwise we proceed to l+1. We empirically choose
+τ = 0.8 as the confidence threshold considering the marginal gain in prediction
+accuracy (Sec. 5.5).
+
+
+8
+H.Xiao et al.
+4.5
+Relationship between pseudo-pairwise accuracy and SfM inliers
+We use pseudo-pairwise labels to measure classification quality on held-out scenes
+and relate it to downstream SfM outcomes. Let S denote a set of scenes and Ps
+the evaluated image pairs in scene s.
+Motivation. We observe that even after pairwise classification training and val-
+idation converge, SfM accuracy (e.g., inlier ratios) can remain unstable and os-
+cillate between high and low values during training. Running full SfM evalu-
+ation during validation is infeasible because it is time-consuming (even with
+GLOMAP) and can exceed GPU memory. We therefore study a correlation be-
+tween pseudo-pairwise accuracy and SfM inlier ratio as a lightweight proxy: when
+pseudo-pairwise accuracy is high, downstream SfM accuracy tends to be high as
+well. This provides a practical signal to visualize and validate convergence on
+the SfM task without running the full pipeline each time.
+Pseudo-pairwise accuracy. We compute per-scene accuracy as
+  \l a
+b
+el {
+e
+q:pp-acc
+} \math r m {Ac c}_s = \frac {1}{|\mathcal {P}_s|}\sum _{(i,j)\in \mathcal {P}_s} \mathds {1}\left [\hat {s}_{i,j}=y_{i,j}\right ]. 
+(8)
+SfM inlier ratio. We summarize SfM quality with an inlier ratio
+  \labe l {eq:sfm
+-
+i
+nlier} 
+\
+m
+athrm {Inlier}_s = \frac {|\mathcal {I}^{\mathrm {inlier}}_s|}{|\mathcal {I}^{\mathrm {input}}_s|}, 
+(9)
+where Iinput
+s
+denotes the set of input cameras after doppelganger-based filtering,
+and Iinlier
+s
+denotes the reconstructed inlier cameras.
+Predictive relationship. We fit a saturating exponential mapping from pseudo-
+pairwise accuracy to SfM inlier ratio:
+  \labe l { e q :a c c-i nli er} \m athrm {Inlier}_s = y_0 + A\left (1 - \exp \left (-k\,\mathrm {Acc}_s\right )\right ), 
+(10)
+equivalently y = y0 + A (1 −exp(−kx)) with x = Accs and y = Inliers. We
+report fitted coefficients and evaluation protocol in Sec. 5.
+5
+Experiments
+Overview. We first describe training data and implementation details, then re-
+port quantitative and qualitative results, followed by ablations, a retrieval vari-
+ant, and downstream SfM evaluations. Plots and fitted curves are provided in
+this section; formulas are defined in Sec. 4.
+
+
+MVDG
+9
+5.1
+Training Dataset
+We follow [22] and train our models on a union of Doppelgangers (DG) [1],
+MegaDepth [7], and VisymScenes [22]. The training split comprises 1,184 scenes
+with 171,498 positive and 171,508 negative image pairs. To standardize resolution
+while preserving aspect ratio, images are resized to a fixed width W = 518 and
+height H
+ 
+\! = \! 
+\l
+eft \lfloor H_0 \cdot \frac {518}{W_0} \right \rfloor 
+, where (H0, W0) are the original dimensions; all images
+in a batch share the same (H, W) with padding. For multi-view training, we
+transfer pairwise supervision into coarse view groups as described in Sec. 4.2.
+5.2
+Implementation Details
+We train with a batch size of 8 and keep the VGGT encoder frozen. For each
+encoder layer, a lightweight two-layer DPT head produces per-image descriptors,
+which are fed to the scoring head described in Sec. 4.3, along with an early-exit
+confidence head. The decoder/channel dimension is set to 1024 with 8 attention
+heads. We use gradient accumulation of 8 steps for stable training. The learning
+rate to train the first stage starts at 1×10−4 and follows a stepped schedule
+down to 1×10−5 by the end of each epoch; for the second stage, the learning
+rate decays from 1×10−5 to 1×10−6 within a 5000-step schedule. Unless otherwise
+noted, all experiments are conducted on 2× NVIDIA H100 GPUs. We train the
+similarity scoring head (Sec. 4.3) with focal loss (gamma= 1) and the confidence
+head (Sec. 4.4) with binary cross-entropy (BCE) loss.
+5.3
+Quantitative Results
+Table 1: Comparison of image disambiguation methods on pairwise test
+datasets.
+Accuracy↑
+Precision↑
+Recall↑
+F1 ↑
+Inference time (msec)↓
+VisymScenes DG++ VisymScenes DG++ VisymScenes DG++ VisymScenes DG++
+SALAD
+0.8104
+0.6233
+0.7695
+0.5894
+0.8862
+0.8128
+0.8237
+0.6833
+9.87
+Doppelgangers++
+0.9355
+0.937
+0.9095
+0.970
+0.9673
+0.901
+0.9375
+0.934
+165
+Ours
+0.9441
+0.889
+0.9215
+0.877
+0.9712
+0.903
+0.9457
+0.890
+103.92
+We quantitatively evaluate our method on the VisymScenes test dataset,
+which provides multiple positive and negative pairs per reference view and has
+been shown to benefit training for 3D disambiguation [22]. The test dataset
+contains 3,180 labeled image pairs drawn from diverse scenes (Tab. 1). We re-
+port standard metrics: accuracy = (Tp + Tn)/total, precision = Tp/(Tp + Fp),
+recall = Tp/(Tp + Fn) and F1 = 2 · precision · recall/(precision + recall), where
+Tp, Tn, Fp, Fn denote true positives, true negatives, false positives, and false neg-
+atives, respectively. Our model outperforms Doppelgangers++ on VisymScenes
+while running faster, but underperforms on the DG++ pairwise benchmark
+
+
+10
+H.Xiao et al.
+(Tab. 1). We suspect this gap is related to supervision noise in Doppelgangers
+labels and additional ambiguity introduced when pairwise labels are propagated
+to multi-view groups for training and validation; these failure modes are illus-
+trated in Sec. 10. Ablation studies (Sec. 5.5) further analyze the contributions
+of layer selection and confidence gating. For clarity, the Ours score in Tab. 1
+(0.9441 on VisymScenes) corresponds to the full model without early exit, while
+the higher 0.9503 result is obtained after enabling confidence-driven early exit
+(Tab. 3, τ = 0.8).
+We also benchmark against the state-of-the-art VPR method SALAD [5] on
+the same test set. Because SALAD outputs a static global descriptor for each
+image, we perform a 200-step threshold sweep over cosine similarity to select the
+operating point that maximizes F1 on the test dataset; at the optimal threshold
+(0.3171), SALAD still yields more false positives and false negatives than both
+Doppelgangers++ and our method (Tab. 1). This gap reflects a mismatch in
+objective: VPR pipelines optimize global descriptor retrieval in 2D and are not
+explicitly trained to resolve ambiguous 3D geometry. Without modeling multi-
+view geometric consistency, 2D descriptors can be deceived by visually similar,
+non-covisible structures prevalent in our benchmark.
+5.4
+Qualitative Results
+We further compare against Doppelgangers++ and SALAD in Fig. 4 on chal-
+lenging scenes. Our approach adapts to illumination and viewpoint changes by
+efficiently extracting geometry-aware cues from multiple views. It also proves
+robust to transient distractors (e.g., pedestrians, vehicles, seasonal decorations),
+focusing instead on stable structural elements such as building facades and store-
+fronts.
+Additional qualitative examples and analysis are provided in the supplemen-
+tary material.
+5.5
+Ablation Studies
+Table 2: Ablation study on pool-
+ing and fine-tuning variants on the
+VisymScenes test set [22].
+Accuracy↑Precision↑Recall↑F1 ↑
+Ours w/ AttnPool 0.9378
+0.9156
+0.9649 0.9396
+Ours w/ GeMPool 0.9039
+0.8790
+0.9373 0.9072
+Ours (retrieval)
+0.9089
+0.8766
+0.9524 0.8969
+Ours w/ finetune
+0.9522
+0.9413
+0.9649 0.9530
+Ours
+0.9441
+0.9215
+0.9712 0.9457
+Table 3: Ablation study on confi-
+dence threshold: accuracy vs. infer-
+ence time on the VisymScenes test
+set.
+Confidence Threshold 0.5
+0.8
+0.9
+0.95
+Inference Time (msec) 99.56
+103.92 104.42 103.69
+Accuracy
+0.8676 0.9503 0.9500 0.9447
+
+
+MVDG
+11
+Fig. 4: Qualitative comparison on Doppelgangers and VisymScenes [1, 22].
+The predicted classification probabilities of ours and Doppelgangers++ are thresholded
+at 0.5. Because SALAD [5] outputs static global descriptors, SALAD* denotes cosine
+similarity thresholded at 0.3171, which gives the best F1 score (Sec. 5.3). The legend
+shown in the first top-left negative example applies to all examples; each tile follows
+the same annotation scheme. Red-boxed examples are false pairs (different scene/view),
+and green-boxed examples are true pairs (same scene/view).
+Pairwise vs. Multi-view. We compare full-model training under pairwise-only
+supervision versus our multi-view supervision transfer (Sec. 4.2) to measure
+whether multi-view context improves downstream behavior beyond runtime gains.
+Relative to pairwise training, multi-view training yields consistent gains on
+broader-range metrics and SfM relevance: AUC@5 improves from 0.690 to 0.701
+(+0.011), AUC@10 from 0.753 to 0.775 (+0.022), and inlier ratio from 0.7579
+to 0.7698 (+0.0119), while AUC@3 changes only marginally from 0.626 to 0.624
+(−0.002). Overall, the trend indicates that exposing the model to multi-view ge-
+ometric context improves medium/long-range discrimination and translates to
+more reliable SfM-oriented filtering.
+5.6
+Pseudo-pairwise SfM Dataset
+We use the pseudo-pairwise SfM dataset processed from AerialMegaDepth in two
+ways. During validation, we use pseudo-pairwise accuracy as a lightweight proxy
+for downstream SfM quality, which avoids running expensive full SfM evalua-
+tion at every checkpoint. After convergence on Doppelgangers and VisymScenes,
+we fine-tune on this pseudo-pairwise dataset to improve training stability and
+downstream SfM behavior on the test set.
+
+
+12
+H.Xiao et al.
+(a) SfM inlier ratio.
+(b) AUC@3.
+Fig. 5: Correlation between pseudo-pairwise accuracy and downstream SfM
+metrics.
+Correlation between pseudo-pairwise accuracy & SfM metrics. We analyze how
+pseudo-pairwise accuracy predicts downstream SfM accuracy on processed scenes
+(Sec. 4.5). We evaluate 44 model checkpoints and fit a saturating exponential
+curve to capture the plateau behavior when pseudo accuracy saturates while
+SfM metrics fluctuate within a high-value regime. The fitted parameters are
+y0 = 0.572, A = 0.412, and k = 3.51 with MSE = 9.56 × 10−3 for inlier ratio,
+and y0 = 0.586, A = 0.412, and k = 3.11 with MSE = 1.23 × 10−2 for AUC@3.
+As shown in Fig. 5, variance shrinks as SfM inlier ratio increases. Therefore,
+when pseudo accuracy is stably high (≥0.9), SfM performance also tends to
+become stable after pseudo-pairwise fine-tuning.
+Improvement in training stability. We quantify stability over checkpoints from
+iterations 38k to 112k (saved every 2k steps), comparing models with and with-
+out pseudo-pairwise finetuning on AerialMegaDepth. To avoid data leakage, we
+hold out scenes for pseudo-pairwise fine-tuning and report SfM metrics only on
+disjoint test scenes. Finetuning increases the mean number of inlier cameras from
+241.67 to 266.06 and reduces its deviation from 45.11 to 25.46, indicating sub-
+stantially more stable reconstructions. Translation and rotation values denote
+camera-pose errors, i.e., differences between reconstructed camera poses and
+ground-truth poses; these also improve in mean (translation: 2581.44 →448.77;
+rotation: 5.96→3.70), with much lower translation deviation (3864.74→878.97)
+and a slight increase in rotation deviation (3.26→3.53). For camera-pose AUC,
+trends are mixed: AUC@3 improves slightly (0.3167→0.3238), while AUC@5 and
+AUC@10 decrease (0.5010→0.4699 and 0.7062→0.6082), albeit with lower de-
+viations after finetuning. Overall, pseudo-pairwise finetuning provides markedly
+better training stability, especially for inlier count and translation consistency.
+5.7
+Structure-from-motion Results
+We evaluate our method as a view-graph pruning module before SfM using
+GLOMAP on AerialMegaDepth [7,17]. Following Sec. 5.6, we use only MegaDepth
+ground-level images as model input and use aerial views only as reference-pose
+
+
+MVDG
+13
+Fig. 6: Qualitative results on SfM using AerialMegaDepth. For visualization,
+we clip the point cloud to [−150, 150]2 on the ground plane to focus on the scene center;
+this removes some points and cameras.
+supervision for metric computation. For each reconstruction, we align predicted
+and reference cameras with RANSAC. Higher inlier ratio (reconstructed cameras
+/ input cameras after pruning) and higher pose AUC indicate better geometric
+accuracy. We use the same decision threshold as DG++ (τ=0.8).
+
+
+14
+H.Xiao et al.
+Table 4: Quantitative SfM evaluation on AerialMegaDepth.
+AUC@3
+AUC@5
+AUC@10
+Inlier ratio
+DG++ Ours
+DG++ Ours
+DG++ Ours
+DG++
+Ours
+Big Ben
+0.326
+0.339 0.455
+0.537 0.511
+0.747 252/748
+256/730
+Louvre Pyramid
+0.830
+0.852 0.886
+0.896 0.928
+0.930 207/296
+227/297
+Phatheon Paris
+0.912
+0.910 0.929
+0.929 0.944
+0.942 491/537
+493/536
+Ponte Di Rialto
+0.068
+0.442 0.246
+0.466 0.438
+0.483 161/329
+173/369
+Reichstag Building
+0.720
+0.723 0.832
+0.832 0.916
+0.914 163/222 161/221
+Sacre Cœur Basilica
+0.811
+0.797 0.884
+0.875 0.940
+0.935 561/699
+570/696
+St. Stephens Cathedral 0.852
+0.855 0.910
+0.911 0.953
+0.953 647/699 642/698
+St. Vitus Cathedral
+0.693
+0.707 0.815
+0.823 0.907
+0.910 482/500
+483/500
+Tower London
+0.493
+0.496 0.511
+0.513 0.527
+0.527 469/561
+482/562
+6
+Conclusion
+In this work, we addressed multi-view 3D disambiguation with a confidence-
+driven early-exit framework built on a strong feed-forward backbone. By lever-
+aging selective intermediate-layer tokens from a frozen VGGT encoder and cou-
+pling them with a lightweight decoder-classifier, we show that many scenes can be
+disambiguated confidently before the deepest layers. This reduces computation
+and often improves accuracy by avoiding overly invariant deep representations
+that can reintroduce ambiguity. Our approach complements both 2D retrieval
+pipelines and pairwise 3D-feature methods, offering competitive disambiguation
+accuracy with stronger scalability and runtime efficiency in multi-view settings.
+Future work includes tighter integration with downstream SfM/MVS pipelines
+for closed-loop filtering, as well as extensions to streaming video and active view
+selection. We also plan to audit and correct annotation errors in Doppelgangers,
+and to release improved multi-view disambiguation datasets for the community.
+References
+1. Cai, R., Tung, J., Wang, Q., Averbuch-Elor, H., Hariharan, B., Snavely, N.:
+Doppelgangers: Learning to disambiguate images of similar structures (2023),
+https://arxiv.org/abs/2309.02420
+2. DeTone, D., Malisiewicz, T., Rabinovich, A.: Superpoint: Self-supervised interest
+point detection and description (2018), https://arxiv.org/abs/1712.07629
+3. Edstedt, J., Sun, Q., Bökman, G., Wadenbäck, M., Felsberg, M.: Roma: Robust
+dense feature matching. In: Proceedings of the IEEE/CVF Conference on Com-
+puter Vision and Pattern Recognition. pp. 19790–19800 (2024)
+4. Furukawa, Y., Curless, B., Seitz, S.M., Szeliski, R.: Towards internet-scale multi-
+view stereo. In: 2010 IEEE Computer Society Conference on Computer Vision and
+Pattern Recognition. pp. 1434–1441 (2010). https://doi.org/10.1109/CVPR.
+2010.5539802
+5. Izquierdo, S., Civera, J.: Optimal transport aggregation for visual place recognition.
+In: Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR) (June 2024)
+
+
+MVDG
+15
+6. Leroy, V., Cabon, Y., Revaud, J.: Grounding image matching in 3d with mast3r
+(2024), https://arxiv.org/abs/2406.09756
+7. Li, Z., Snavely, N.: Megadepth: Learning single-view depth prediction from internet
+photos. In: Computer Vision and Pattern Recognition (CVPR) (2018)
+8. Lowe, D.G.: Distinctive image features from scale-invariant keypoints. Int. J. Com-
+put. Vis. 60(2), 91–110 (2004), http://dblp.uni-trier.de/db/journals/ijcv/
+ijcv60.html#Lowe04
+9. Oquab, M., Darcet, T., Moutakanni, T., Vo, H., Szafraniec, M., Khalidov, V.,
+Fernandez, P., Haziza, D., Massa, F., El-Nouby, A., Assran, M., Ballas, N., Galuba,
+W., Howes, R., Huang, P.Y., Li, S.W., Misra, I., Rabbat, M., Sharma, V., Synnaeve,
+G., Xu, H., Jegou, H., Mairal, J., Labatut, P., Joulin, A., Bojanowski, P.: Dinov2:
+Learning robust visual features without supervision (2024), https://arxiv.org/
+abs/2304.07193
+10. Sarlin, P.E., DeTone, D., Malisiewicz, T., Rabinovich, A.: Superglue: Learning
+feature matching with graph neural networks (2020), https://arxiv.org/abs/
+1911.11763
+11. Schönberger, J.L., Frahm, J.M.: Structure-from-motion revisited. In: Conference
+on Computer Vision and Pattern Recognition (CVPR) (2016)
+12. Schönberger, J.L., Zheng, E., Pollefeys, M., Frahm, J.M.: Pixelwise view selection
+for unstructured multi-view stereo. In: European Conference on Computer Vision
+(ECCV) (2016)
+13. Schops, T., Schonberger, J.L., Galliani, S., Sattler, T., Schindler, K., Pollefeys,
+M., Geiger, A.: A multi-view stereo benchmark with high-resolution images and
+multi-camera videos. In: Proceedings of the IEEE Conference on Computer Vision
+and Pattern Recognition (CVPR) (July 2017)
+14. Shen, Y., Zhang, Z., Qu, Y., Cao, L.: Fastvggt: Training-free acceleration of visual
+geometry transformer (2025), https://arxiv.org/abs/2509.02560
+15. Snavely, N., Seitz, S.M., Szeliski, R.: Photo tourism: exploring photo collections in
+3d. In: ACM SIGGRAPH 2006 Papers. p. 835–846. SIGGRAPH ’06, Association
+for Computing Machinery, New York, NY, USA (2006). https://doi.org/10.
+1145/1179352.1141964, https://doi.org/10.1145/1179352.1141964
+16. Sun, J., Shen, Z., Wang, Y., Bao, H., Zhou, X.: Loftr: Detector-free local feature
+matching with transformers (2021), https://arxiv.org/abs/2104.00680
+17. Vuong,
+K.,
+Ghosh,
+A.,
+Ramanan,
+D.,
+Narasimhan,
+S.,
+Tulsiani,
+S.:
+Aerialmegadepth: Learning aerial-ground reconstruction and view synthesis.
+In: Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (2025)
+18. Wang, H., Agapito, L.: 3d reconstruction with spatial memory (2024), https:
+//arxiv.org/abs/2408.16061
+19. Wang, J., Chen, M., Karaev, N., Vedaldi, A., Rupprecht, C., Novotny, D.: Vggt:
+Visual geometry grounded transformer (2025), https://arxiv.org/abs/2503.
+11651
+20. Wang, Q., Zhang, Y., Holynski, A., Efros, A.A., Kanazawa, A.: Continuous 3d
+perception model with persistent state (2025), https://arxiv.org/abs/2501.
+12387
+21. Wang, S., Leroy, V., Cabon, Y., Chidlovskii, B., Revaud, J.: Dust3r: Geometric 3d
+vision made easy (2024), https://arxiv.org/abs/2312.14132
+22. Xiangli, Y., Cai, R., Chen, H., Byrne, J., Snavely, N.: Doppelgangers++: Improved
+visual disambiguation with geometric 3d features (2025), https://arxiv.org/abs/
+2412.05826
+
+
+16
+H.Xiao et al.
+23. Yi, K.M., Trulls, E., Ono, Y., Lepetit, V., Salzmann, M., Fua, P.: Learning to find
+good correspondences (2018), https://arxiv.org/abs/1711.05971
+
+
+MVDG
+1
+Overview. In this supplementary material, we present our solution to a key
+dataset bottleneck (Sec. 7), additional qualitative results, more SfM evaluation,
+and extra ablations (Sec. 8), additional implementation details (Sec. 9), and a
+discussion of failure cases (Sec. 10).
+7
+Permutation-invariant Classification
+We observe that classification accuracy degrades significantly when the input
+image order is shuffled at test time. A likely reason is that some images are more
+often used as reference views during dataset construction. To mitigate this issue,
+we enforce permutation invariance in three ways. First, during sampling we ran-
+domly swap the two images in each pair with probability 0.5, exposing the model
+to both orderings throughout training. Second, we construct a symmetric pair
+feature as in Eq. 4; specifically, absolute difference and element-wise product are
+permutation invariant. Third, instead of attention pooling (which can implicitly
+encode ordering), we use permutation-invariant average pooling over patches to
+obtain frame descriptors.
+8
+Additional Qualitative and Ablation Results
+8.1
+Additional Qualitative Results
+We evaluate qualitatively on the Doppelgangers test set [1]. Fig. 7 visualizes
+classification for a reference image with two retrieved positives and two retrieved
+negatives. For each pair, we report predicted confidence, the early-exit layer
+where inference halts, and the corresponding score (thresholded at θ; Sec. 4.3).
+We observe that deeper layers generally yield higher confidence and stronger
+scores.
+8.2
+More SfM Evaluation
+In Fig. 8, we show more structure-from-motion results on AerialMegaDepth
+scenes that complement Fig. 6 in the main paper. Again, we clip the point
+cloud to [−150, 150]2 on the ground plane to focus on the scene center, and this
+may remove some points and cameras for demonstration purposes.
+In the supplementary ZIP file, we provide the HTML used to generate Fig. 6
+and Fig. 8. Due to upload space limits, we include only a subset of scenes. You
+may hover the cursor around the point cloud and click on cameras to open and
+inspect the corresponding images.
+8.3
+Additional Ablation Results
+Choosing encoder layers via attention. We compare fixed-layer selection against
+(i) using all layers and (ii) our confidence-driven early exit. The VGGT paper
+aggregates fixed layers [4, 7, 11, 23] for downstream decoding; however, in our
+
+
+2
+H.Xiao et al.
+Table 5: Ablation study on encoder layer selection for classification accu-
+racy.
+Used Layers
+[4]
+[4, 11] [4, 11, 17] [4, 11, 17, 23]
+Training Accuracy 0.9547 0.8929 0.9846
+0.8904
+Test Accuracy
+0.5245 0.6570 0.7028
+0.7598
+Table
+6:
+DPT-style
+decoder
+vs.
+transformer
+encoder
+(averaged
+on
+AerialMegaDepth).
+AUC@3 AUC@5 AUC@10 Inlier ratio Inference speed
+DPT
+0.640
+0.723
+0.801
+0.7369
+3.38 sec/it
+Encoder 0.643
+0.726
+0.802
+0.7360
+3.10 sec/it
+classification setting this choice is prone to overfitting, with training accuracy
+rising while test accuracy lagging. Tab. 5 shows that using only early layers
+(e.g., [4]) yields poor generalization, while [4, 11, 17] improves convergence yet
+remains inferior to using all layers or our adaptive policy. Fig. 9 visualizes atten-
+tion maps across depth: we observe extended stretches of qualitatively similar
+patterns, with notably distinct behaviors emerging around layers 4, 17, and 23.
+This supports our design to (a) expose the classifier to multiple depths during
+training and (b) allow the model to adapt the effective depth at inference.
+DPT-style decoder vs. encoder-only variant. We compare two heads on AerialMegaDepth:
+a DPT-style decoder and a lighter encoder-only global descriptor head (Tab. 6).
+Their headline SfM metrics are very close, with the encoder-only variant be-
+ing slightly faster. We retain the DPT-style design because it preserves patch-
+/image-space outputs that are useful for follow-up geometry tasks (e.g., dense
+correspondence reasoning), while maintaining competitive downstream SfM per-
+formance.
+Confidence thresholds vs. accuracy and time. We study how the confidence
+threshold τ ∈{0.50, 0.80, 0.90, 0.95} trades off accuracy and latency (Tab. 3)
+on the VisymScenes test set. Inference time is reported as average wall-clock
+latency per image group. Fig. 10 shows how τ affects the earliest selected layer:
+across thresholds, the confidence head selects pre-final layers for a substantial
+fraction of pairs, indicating significant opportunity for early halting while pre-
+serving strong accuracy around τ = 0.8.
+More SfM metrics on fine-tune vs. skipping In Fig. 11, we show detailed SfM
+metrics that demonstrate the effectiveness of fine-tuning our multi-view model
+on the proposed pseudo-pairwise dataset. By testing on held-out scenes (i.e., not
+used in training or fine-tuning), we observe improved stability on the standard
+SfM task in translation and rotation errors, compared to skipping fine-tuning.
+We also observe improved test metrics, such as higher inlier ratio and a larger
+number of inlier cameras. Although there is no conspicuous improvement in
+
+
+MVDG
+3
+AUC@X, the quantitative results in Sec. 5.6 of the main paper show that this
+extra step yields comparable overall results.
+9
+Implementation Details
+VGGT backbone aggregator. We reuse the VGGT encoder as a frozen backbone.
+Given a batch of B images and S frames per scene, the aggregator produces a
+list of per-layer token tensors
+  \{\ma
+thbf
+ {X} ^ {(l)}\ }_{l=1}^{L}, \quad \mathbf {X}^{(l)} \in \mathbb {R}^{B \times S \times P \times C}, 
+and a patch start index indicating the token range corresponding to image
+patches. We use up to layer 23 when constructing the head inputs. We ob-
+serve that training can become unstable when deeper-layer encodings are added
+indiscriminately. Therefore, we early-stop stage 1 and then train stage 2 (the
+early-exit module). Using earlier encoding layers for easier cases yields more
+stable performance.
+Classification head. For each selected encoder layer index l, patch tokens are
+first projected to a decoder dimension via a per-frame linear layer, augmented
+with a learned layer positional embedding. We then apply a stack of PyTorch
+TransformerDecoderLayers per selected layer, with positional encoding over
+patches. We decode tokens from each layer independently following VGGT. We
+then reduce the layer dimension by summation followed by LayerNorm, and
+reduce the patch dimension with average pooling. A final MLP classifier maps
+each frame descriptor to logits over two classes (false and true).
+Because the training dataset provides only pairwise images, the classifica-
+tion head outputs y ∈RB×2×2, corresponding to two frames and two classes.
+At test time, when more than two images are provided, the same head can op-
+tionally output y ∈RB×(S−1)×2×2, representing anchor-versus-others pairwise
+predictions.
+10
+Limitations
+We present failure cases in Fig. 12. Our pipeline is weaker in four scenarios.
+First, large domain shifts between input images (e.g., capture time, season, or
+color processing) reduce robustness, likely because VGGT was trained primarily
+on static-scene reconstruction within narrower domains. Fine-tuning the VGGT
+encoder on this data can partially mitigate this issue, as shown in the main
+paper. Second, if one image in a pair is an extreme zoom-in, finding reliable
+correspondences becomes difficult. Third, ground-truth labels can be ambigu-
+ous. As described in [1], Doppelgangers relies on coarse directional labels (e.g.,
+north/south), without strict geometric rules such as treating viewpoint differ-
+ences greater than 90◦as false pairs. Consequently, in the third row (Vaguely
+Labeled), two pairs with similar visual offsets (about 45◦) receive different labels.
+
+
+4
+H.Xiao et al.
+Fourth, some pairs are visually nearly indistinguishable and lack additional local-
+ization cues; this becomes especially challenging when horizontal flips are used
+in augmentation, as a pair labeled true before flipping can become effectively
+false after flipping.
+
+
+MVDG
+5
+Fig. 7: Qualitative results on the Doppelgangers dataset [1]. Classification
+scores are thresholded at 0.5: scores < 0.5 are classified as false pairs, and scores ≥0.5
+as true pairs.
+
+
+6
+H.Xiao et al.
+Fig. 8: More SfM testing on AerialMegaDepth scenes.
+
+
+MVDG
+7
+Fig. 9: Heatmaps of encoder-layer attention. We average output patch tokens at
+each encoder layer and upsample them via bilinear interpolation. The heatmaps show
+similar attention patterns across l0, . . . , l11.
+Fig. 10: Frequency of earliest layers meeting the confidence threshold. Statis-
+tics are computed on the VisymScenes test set [22].
+
+
+8
+H.Xiao et al.
+Fig. 11: Fine-tuning with our pseudo-pairwise dataset vs. skipping, on stan-
+dard SfM metrics.
+
+
+MVDG
+9
+Fig. 12: Failure cases.

@@ -1,0 +1,1216 @@
+OTT3R: Multi-View 3D Reconstruction and Fast
+Dataset Generation at 1% Compute
+Brandon Leblanc
+and Charalambos Poullis
+Immersive and Creative Technologies Lab, Concordia University, Montreal, Canada
+brandon.leblanc@mail.concordia.ca, charalambos.poullis@concordia.ca
+Fig. 1: Sample 3D reconstructions produced by OTT3R on diverse scenes: outdoor
+object, indoor room, and object-centric capture, all from RGB-only input.
+Abstract. Feed-forward 3D reconstruction models have achieved im-
+pressive performance by scaling model and dataset size, but their cost
+excludes most research groups and precludes edge deployment. Addi-
+tionally, generating 3D supervision without sensors still relies on slow,
+unreliable Structure-from-Motion, as the community lacks a COLMAP-
+like system for neural 3D pseudo-label generation. We present OTT3R
+(RGB-Only Tiny Transformer for 3D Reconstruction), a knowledge dis-
+tillation framework that addresses both problems on a single workstation
+equipped with 2 GPUs. Distilling π3 (959M parameters) into a 102M-
+parameter student yields 9.4× compression and up to 7× faster inference,
+trained at 1.6% of VGGT’s training compute. An integrated pseudo-label
+pipeline offers a reliable, high-throughput alternative to COLMAP, gen-
+erating dense per-pixel point maps and SE(3) camera poses for a 667K-
+image corpus in 3.5 hours on two commodity GPUs and succeeding on
+every sequence we tested, including those where COLMAP fails. The gen-
+eral student tracks the teacher on in-distribution monocular depth and,
+zero-shot, outperforms COLMAP on 7-Scenes and on DTU completion,
+but it does not replace the teacher on out-of-distribution multi-view ge-
+ometry. The deployable artifact is the domain-specialized student: after
+specialization at 0.2% compute, it is 4× more accurate than COLMAP
+on 7-Scenes at 980× throughput, with near-teacher completion. Code is
+available at https://github.com/TheFourthKaramazov/OTT3R.
+Keywords: feed-forward 3D reconstruction · knowledge distillation ·
+pseudo-label generation · efficient deep learning
+arXiv:2609.36374v1  [cs.CV]  28 Sep 2026
+
+
+2
+B. Leblanc and C. Poullis
+1
+Introduction
+Feed-forward 3D reconstruction has advanced rapidly since DUSt3R [71] demon-
+strated that dense geometry and implicit camera poses could be regressed di-
+rectly from image pairs without following the classical Structure-from-Motion
+(SfM) and Multi-View Stereo pipeline [17, 22, 48, 49, 54]. Subsequent work ex-
+tended this paradigm with models like Fast3R [78], VGGT [66], and π3 [72],
+achieving state-of-the-art results by processing all views jointly through global
+attention mechanisms, thus avoiding the cost associated with post-hoc align-
+ment of pairwise predictions and subsequent pose recovery via PnP [32]. These
+advances follow a familiar trajectory in deep learning: rapid gains driven by
+exponential increases in model capacity and dataset scale [11, 24, 27]. Fast3R
+trains on 128 A100 GPUs for 6 days with approximately 650M parameters; π3
+contains 959M parameters and requires similar infrastructure; more recent work,
+VGGT-Ω[67], scales the model size by 10×, the number of scenes by 15×, and
+trains on 128 H100 GPUs. Although these models produce high-quality recon-
+structions, their size and computational requirements create two limitations:
+they cannot be deployed on the edge devices required by applications such as
+robotics and computer-assisted surgery where 3D reconstruction is most valu-
+able [3,31,34,76], and they cannot be trained or adapted by researchers without
+access to industrial-scale compute. In this work we ask how much feed-forward
+3D reconstruction is achievable at roughly 1% of the training compute used by
+these systems, on commodity hardware that a single research group or practi-
+tioner can realistically own.
+This accessibility problem has led the research community to approaches that
+avoid the core training challenge entirely. Most recent work targets inference-only
+acceleration through token merging, sparse attention, quantization [6,16,50,52,
+64], or partial fine-tuning [44]: useful for deployment, but unable to adapt models
+to new domains or let researchers iterate on architectures. The few methods that
+do train new architectures still require datacenter infrastructure [5,43], leaving
+most groups unable to participate. To our knowledge, only Distill3R [31] has
+demonstrated single-workstation feed-forward 3D distillation, but its student is
+effectively restricted to monocular reconstruction; we extend that line of work
+to multi-view reconstruction, configurable sampling, parallelizable pseudo-label
+generation, and a 3× more storage-efficient pipeline.
+A related problem compounds this accessibility gap: generating 3D supervi-
+sion for new datasets remains difficult. Traditional SfM pipelines [49] are slow,
+processing at approximately 0.3 FPS in our evaluation experiments at reduced
+resolution, and require hours per scene at the higher resolutions needed to avoid
+failure. They are unreliable, with documented failure modes including texture-
+less regions, repetitive structures, and dynamic objects that produce insufficient
+point matches; failure rates increase further at lower resolutions practitioners
+often use to keep runtime tractable. They are fragile, requiring careful parame-
+ter tuning for each scene type. As a result, researchers are increasingly turning
+to feed-forward models like π3 and VGGT to generate pseudo-labels for down-
+stream tasks [41], but the community lacks a COLMAP-like system for neural 3D
+
+
+OTT3R: 3D Reconstruction at 1% Compute
+3
+pseudo-label generation. In particular, VGGT-Ωdemonstrates that feed-forward
+3D models continue to benefit from larger datasets, extending the trend estab-
+lished from DUSt3R to VGGT, yet the community lacks the internet-scale 3D
+supervision required to sustain this scaling because such data is prohibitively
+costly to generate and annotate [20]. OTT3R’s pseudo-label pipeline requires
+only unposed RGB images and generates a full suite of dense 3D supervision
+for hundreds of thousands of images in hours rather than the days or weeks
+COLMAP would require, while remaining reliable on sequences where SfM fails.
+To address both problems, we introduce OTT3R (Fig. 1), a knowledge dis-
+tillation framework that compresses π3 into a compact student model while
+providing infrastructure for domain-specific training using neurally-generated
+pseudo-labels in place of SfM, all at between 0.2% and 1.6% of the training
+compute used by large feed-forward 3D models. We extend single-workstation
+distillation with 2 GPUs to multi-view reconstruction by leveraging the teacher’s
+explicit SE(3) outputs for direct pose supervision and a configurable sampling
+system that produces the wide-baseline pairs pose supervision requires. At this
+budget, the general student tracks the teacher on in-distribution depth and, zero-
+shot, beats COLMAP on 7-Scenes and DTU completion, but does not replace
+the teacher out of distribution; the deployable artifact is the domain-specialized
+student. Our main contributions are as follows:
+1. A pseudo-label generation pipeline that serves as a reliable, high-throughput
+neural alternative to COLMAP, featuring configurable overlap sampling strate-
+gies, manifest-based dataset management for easy extensibility, multi-sample
+generation from long sequences for data augmentation, quality filtering via
+confidence and depth-edge masking, and overlap-based sampling for dataset
+compression and large-scale generation. The pipeline generates dense super-
+vision signals, including camera poses, for a 667K-image corpus in 3.5 hours
+on two commodity GPUs, and produces a cache roughly 3× smaller per
+image than the closest prior distillation work [31].
+2. A 102M-parameter student architecture that achieves 9.4× compression from
+the 959M-parameter teacher, with up to 7× faster inference and peak mem-
+ory requirements reduced by 2–4×. Full general training completes on 2×
+RTX 6000 Ada GPUs at approximately 1.6% of VGGT’s training com-
+pute [66] (64 A100s for 9 days), and domain specialization on 7-Scenes [51]
+runs in 23 hours at roughly 0.2%. Zero-shot, the general student beats
+COLMAP with dense MVS on 7-Scenes and on DTU completion; the domain-
+specialized student is 4× more accurate on 7-Scenes at 980× the throughput.
+3. The first distillation framework with direct SE(3) pose supervision via teacher
+outputs, enabling multi-view reconstruction, complemented by a hybrid con-
+fidence loss for calibrated uncertainty. A systematic analysis of design choices
+at this compute budget shows that pose supervision and sampling diversity
+produce categorical improvements, while loss formulation, encoder backbone,
+and model size within reasonable bounds produce only small, robust differ-
+ences; no choice we ablated closes the remaining gap to the teacher, which
+we attribute to the compute budget.
+
+
+4
+B. Leblanc and C. Poullis
+2
+Related Work
+Below we provide a brief overview of relevant work grouped according to their
+paradigm.
+From Procedural SfM to Feed-Forward 3D Reconstruction. Recov-
+ering 3D geometry from unposed images has historically relied on Structure-
+from-Motion (SfM) [2, 17, 22, 49, 54], a multi-stage procedure combining local
+features [9,12,37,82,86], pairwise matching [15,36,46,57], geometric verification,
+and bundle adjustment, often followed by dense multi-view stereo [18,21,48,79].
+Its sequential nature compounds failure modes such as weak textures, repeated
+structure, dynamic objects and runtime grows superlinearly with image count
+[38,40,75]. Learned matching [14,26,46], self-supervised descriptors [63], and dif-
+ferentiable bundle adjustment [59,61,68,74] close part of the gap, but the system
+remains fragile outside curated benchmarks and slow at the resolutions needed to
+avoid failure. OTT3R replaces this workflow with a feed-forward neural pipeline
+that produces 3D supervision.
+Feed-forward networks predict a dense per-pixel point map that fuses pose
+and geometry into a single output and is learned end-to-end from large cu-
+rated 3D datasets [3, 7, 8, 35, 42, 47, 80, 81]. The DUSt3R formulation is pair-
+wise: any multi-view reconstruction requires a post-hoc alignment step using
+pose solvers [30, 32, 69] whose cost grows rapidly with view count. Subsequent
+work introduces matching heads [33], sequential memory [65], dynamic-scene
+handling [84], conditioning on priors [25], sparse-view camera and appearance
+estimation [85], and multi-view stereo coupling [4,60]. Fast3R [78], VGGT [66],
+and π3 [72] replace pairwise reasoning with joint global attention over all views,
+producing scene-consistent reconstructions in one forward pass. These networks
+also predict per-pixel confidence [28, 29], a signal for both supervision filtering
+and loss weighting. Their datacenter-scale training that consists of up to 128
+H100 GPUs for VGGT-Ω[67], a dataset consisting of 4M sequences, and up to
+10B parameter counts rule out edge deployment and place training beyond most
+research groups.
+Efficient Feed-Forward 3D. Most efficiency work targets inference rather
+than training: token-level methods reduce work per forward pass via merging,
+sparse attention, or post-training quantization [6, 16, 50, 52, 56, 58, 64, 73], and
+memory or retrieval extensions handle longer sequences [83, 87]. Methods that
+do train new architectures, such as Speed3R [43] and Reliev3R [5], require 8
+H20 GPUs and 64 NPUs respectively, sitting outside the commodity-hardware
+regime. These inference-time methods are orthogonal and complementary to our
+goal rather than baselines for it: they reduce the cost of an already-trained
+network while preserving its accuracy, whereas OTT3R targets training from
+scratch at ∼1% compute. Because token merging, sparse attention, and quanti-
+zation operate on a trained transformer at inference, they apply to the OTT3R
+student exactly as they do to the teacher, and can be stacked on top of it for
+further speedups.
+Knowledge Distillation. Knowledge distillation [19, 23, 62] is the natu-
+ral mechanism for training compact models under tight compute budgets. The
+
+
+OTT3R: 3D Reconstruction at 1% Compute
+5
+DUNE encoder [45], which we adopt as our backbone, shows that heteroge-
+neous co-distillation can yield compact 3D-aware representations that exceed
+their teachers on downstream geometric tasks. Prior 3D distillation efforts tar-
+get neighboring problems such as monocular depth [55,77] and multi-view depth,
+where KD-MVS [10] distills depth without ground-truth labels but assumes
+known camera parameters and does not pursue compression. The per-scene effort
+of [13] distills DUSt3R one scene at a time and does not produce a general model.
+Closest to our work, Distill3R [31] demonstrated that a feed-forward 3D model
+(Fast3R) can be compressed into a 72M-parameter student trainable on a single
+workstation with 2 GPUs using offline teacher caching inspired by TinyViT [76]
+together with a confidence-weighted geometric loss. Distill3R has two principal
+limitations: the absence of camera-pose supervision and a temporally-local sam-
+pling regime that preserves correspondence consistency but rarely exposes the
+student to viewpoint changes large enough to learn pose estimation, yielding
+effectively monocular reconstructions. OTT3R targets both, using the teacher’s
+explicit SE(3) outputs for direct pose supervision and a configurable sampler that
+produces the wide-baseline transitions that learning pose estimation requires.
+3
+Method
+3.1
+Problem Formulation
+Given N uncalibrated RGB images I = {I1, . . . , IN} depicting a scene, we aim
+to train a compact student model S that approximates the outputs of a large
+teacher model T (π3, 959M parameters). For each image Ik, both models pro-
+duce a local point map Pℓ
+k ∈RH×W ×3 of per-pixel 3D coordinates in the camera
+frame (denoted Ps
+k and Pt
+k for the student and teacher respectively in the losses
+below), a per-pixel confidence map Ck ∈RH×W , and a camera pose Tk ∈SE(3)
+as a camera-to-world transformation. We do not store global point maps; global
+geometry is recovered when needed by transforming local points with the pre-
+dicted poses, Pg
+k = Tk · ˜Pℓ
+k, where ˜Pℓ
+k denotes homogeneous coordinates. This
+avoids redundant per-pixel supervision and reduces both storage and training
+cost. Additionally, [66] observed that performance is better when using local
+point maps combined with predicted camera poses rather than directly predict-
+ing global point maps. Our objective is to minimize the discrepancy between
+student and teacher outputs through a hybrid distillation loss Ltotal.
+3.2
+Pseudo-Label Generation Pipeline
+We provide infrastructure for generating dense 3D supervision from RGB images
+at scale (Fig. 2). Unlike COLMAP, our pipeline requires no parameter tuning, is
+orders of magnitude faster, and did not fail on any sequence we tested, including
+the low-resolution and low-texture sequences where SfM breaks down.
+Dataset Distillation and Sampling Strategies. To ensure training is
+feasible on limited hardware, we first compress and distill external datasets us-
+ing strided sampling based on scene length. Because these datasets are organized
+
+
+6
+B. Leblanc and C. Poullis
+Fig. 2: Pseudo-label generation pipeline. Given RGB images, we generate dense
+3D supervision using π3. Our configurable sampling strategy selects frames with either
+strided (hard) or temporal (easy) spacing. Teacher outputs are compressed and cached
+for efficient student training.
+temporally, we reduce their size while preserving geometric variance by scaling
+the sampling stride to scene length: a 1000-image sequence is heavily subsampled,
+while a 20-image scene is kept in full. This compresses a multi-terabyte corpus
+into a manageable 400 GB dataset. Training on temporally-adjacent frames alone
+produces students that handle easy transitions but fail on challenging viewpoint
+changes. Our pipeline provides two base sampling strategies and a configurable
+mix of them. Strided sampling spreads views across the full sequence by com-
+puting base positions via linear interpolation, then adding random jitter to in-
+troduce variation while maintaining coverage. Indices are clipped rather than
+wrapped to avoid artificial discontinuities, creating wide-baseline pairs that re-
+quire the student to learn robust pose estimation. We show that the student
+model fails to learn pose estimation without strided sampling (see Sec. 4.3).
+Temporal sampling selects consecutive frames with a small baseline for video
+and SLAM applications. Mixed sampling combines both at a user-specified ratio
+using Bresenham-style interleaving: for sample index i and hard ratio r, strided
+sampling is used when ⌊(i + 1) · r⌋> ⌊i · r⌋, producing evenly distributed hard
+and easy samples regardless of the ratio.
+Quality Filtering, Storage, and Extensibility. Before caching, each pixel
+undergoes quality filtering to ensure reliable supervision. We apply a sigmoid and
+threshold to discard low-confidence pixels because the teacher outputs raw confi-
+dence logits. We additionally discard depth-edge pixels, where adjacent relative
+depth changes sharply, as the teacher’s predictions at these boundaries often
+contain interpolation artifacts. The final validity mask combines both criteria,
+
+
+OTT3R: 3D Reconstruction at 1% Compute
+7
+and invalid pixels are excluded from all training losses. We compress teacher
+outputs before caching, quantizing geometry and confidence while keeping cam-
+era poses at full precision, which keeps storage and I/O manageable at scale.
+The pipeline uses a manifest-based architecture in which datasets are defined
+via CSV files listing image paths, scene IDs, and dataset names, so adding a
+new dataset requires only appending rows to the manifest.
+Scalability. Cache generation and training are fully decoupled. Users gener-
+ate pseudo-labels from many datasets (CO3D [42], ARKitScenes [3], MegaDepth
+[35], etc.) in a single pass, then train on a subset without regenerating (the train-
+ing setup is illustrated in Appendix A): for example, filtering to indoor scenes
+alone for a domain-specific model. The pipeline generates dense 3D supervision
+for our full 667K-image corpus in 3.5 hours on two RTX 6000 Ada GPUs, and
+a 26K-image domain-specific cache in under 10 minutes. This is possible be-
+cause generation is GPU-bound: at ∼23 images per second per GPU the π3
+forward pass dominates, so throughput is relatively stable across worker counts.
+Data loading is not a significant bottleneck on a single workstation, although
+this may change if the number of GPUs is scaled significantly. The pipeline can
+adapt to any number of GPUs and wall-clock scales linearly with GPU count
+(Tab. 4). It is both faster and more storage-efficient than the closest prior dis-
+tillation pipeline: Distill3R generates 450K images in 11.3 hours (∼11 img/s)
+and caches them in ∼600 GB [31], whereas we generate at more than twice the
+per-GPU throughput and store 667K images in 283 GB, a 3× improvement in
+per-image cost achieved by recovering global geometry from local points and
+poses rather than caching it explicitly.
+3.3
+Student Architecture
+We initialize the encoder with DUNE ViT-Small [45], shared across all N views.
+DUNE’s heterogeneous co-distillation from 2D and 3D teachers provides a strong
+initialization for dense 3D regression, which we adapt to the teacher’s output dis-
+tribution; we observe comparable performance using DINOv2 [39] (see Sec. 4.3),
+indicating the framework is robust to the choice of encoder within this family. A
+multi-layer transformer uses an alternating attention pattern for cross-view rea-
+soning, following the global-attention designs of VGGT [66] and π3 [72]. Three
+parallel transformer decoders produce the final outputs from shared decoder
+features. The point decoder produces local 3D coordinates in each camera’s ref-
+erence frame, the confidence decoder outputs per-pixel certainty, and the camera
+decoder regresses SE(3) poses as camera-to-world transformations.
+3.4
+Distillation Loss
+Point Loss. We use scale-invariant L1 loss with optimal scale alignment:
+  \mat h
+c
+a
+l {L}
+_
+{
+\
+text {po
+int}} = \ f ra
+c {1 } {\
+sum _k |\mathcal {M}_k|} \sum _{k} \sum _{(i,j) \in \mathcal {M}_k} w_{k,ij} \cdot \| s^* \cdot \mathbf {p}^{s}_{k,ij} - \mathbf {p}^{t}_{k,ij} \|_1 
+(1)
+
+
+8
+B. Leblanc and C. Poullis
+A single optimal scale s∗per sample, shared across all N views, is com-
+puted via weighted L1 alignment using the ROE solver [70, 72] and detached
+from the gradient graph to prevent degenerate solutions. Depth-based weights
+w = 1/(d + ϵ) prioritize closer points where depth estimates are more reliable.
+The valid masks Mk are the sets of valid pixel coordinates (i, j) in view k, de-
+fined by teacher confidence, preventing the student from destabilizing training by
+predicting low confidence on difficult regions or high confidence in early training
+when predictions are inaccurate.
+Camera Loss. We directly supervise SE(3) poses, but compute them against
+teacher poses over all
+ N
+2
+
+view pairs, providing dense supervision that captures
+both small and large viewpoint changes:
+  \math c
+a
+l 
+{
+L
+}
+_{\
+te x t {camera }} = \frac {1}{\binom {N}{2}}\sum _{a<b} \left ( \alpha \cdot \mathcal {L}_{\text {trans}}(a,b) + \mathcal {L}_{\text {rot}}(a,b) \right ) 
+(2)
+where the sum is over all view pairs (a, b), Ltrans(a, b) = Huberδ(s∗ts
+ab −tt
+ab)
+is Huber loss on relative translation, using the same detached per-sample s∗as
+the point loss so that the scale-free student is compared in the teacher’s scale, and
+Lrot is geodesic angle loss on relative rotation: Lrot(a, b) = arccos
+
+tr(Rs
+ab
+⊤Rt
+ab)−1
+2
+
+.
+The weighting α = 100, adopted from π3, balances gradient magnitudes between
+rotation and translation.
+Hybrid Confidence Loss. Regressing student confidence directly to teacher
+values via L1 collapses to teacher mimicry, while using only BCE with binary
+labels saturates the confidence head and ignores the teacher’s uncertainty esti-
+mates (see Sec. 4.3). Our hybrid formulation blends both per pixel:
+  \ma t hc a l {L } _{ \ tex t {conf}} = c^t \cdot \mathcal {L}_{\text {BCE}} + (1 - c^t) \cdot \mathcal {L}_{\text {L1}} 
+(3)
+where ct is the teacher confidence at each pixel. The BCE labels are derived
+from the student’s own reconstruction error: y = 1[¯e < θ] where ¯e is the depth-
+weighted mean point error. In high-confidence regions (ct ≈1), the loss teaches
+the student to predict confidence based on its geometry quality. In low-confidence
+regions (ct ≈0), the loss becomes L1 regression to the teacher’s estimate, de-
+ferring to teacher uncertainty rather than learning unreliable self-assessment in
+difficult areas. Although the BCE labels depend on the student’s current recon-
+struction error and therefore evolve during training, we observe stable conver-
+gence in practice; we compare the hybrid against pure-L1 and pure-BCE variants
+in Sec. 4.3.
+Normal Loss. We additionally enforce surface consistency with a normal
+loss Lnormal [72], computing per-pixel normals from cross-products of adjacent
+point differences and minimizing the angular difference between predicted and
+teacher normals. This term is added to the point loss to ensure that geometric
+and surface-orientation supervision are optimized together. The total loss is:
+  \mat h cal {L } _{\text {total
+}
+} 
+=
+ \
+under
+brace {\math c al {L}_{\text {point}} + \lambda _{\text {normal}} \mathcal {L}_{\text {normal}}}_{\mathcal {L}_{\text {point}}^{+}} + \lambda _{\text {cam}} \mathcal {L}_{\text {camera}} + \lambda _{\text {conf}} \mathcal {L}_{\text {conf}} 
+(4)
+where L+
+point denotes the point loss with the normal term included.
+
+
+OTT3R: 3D Reconstruction at 1% Compute
+9
+4
+Experiments
+4.1
+Implementation Details
+Model Architecture. Our student uses a DUNE ViT-Small [45] encoder with
+384-dim, 12 layers, 6 heads, patch size of 14, and 21M parameters. The main
+decoder has 512-dim, 12 layers, and 8 heads. Task decoders for points, confidence,
+and camera each use 4 transformer layers with 512-dim embeddings and 8 heads.
+The camera head outputs 384-dim features. The total parameters are 102M, a
+9.4× compression from the 959M-parameter teacher.
+Training. We train on 2 RTX 6000 Ada GPUs (182 BF16 TFLOPS each
+at FP32 accumulate) using PyTorch with bf16-mixed precision. Measured in
+TFLOPS·h at this precision, VGGT [66] costs 64 × 312 × 216 h ≈4.31M (312
+TFLOPS per A100); our general student costs 2 × 182 × 192 h ≈69.9K (1.62%),
+full pseudo-label generation 3.5 h ≈1.3K (0.03%), and the 7-Scenes student 23 h
+≈8.4K (0.19%). Because π3 initializes from VGGT and trains further on 64
+A100s, these ratios are upper bounds relative to our teacher; as is standard in
+distillation, we exclude the frozen public π3 and DUNE checkpoints. Batch size
+is 2 per GPU with 4× gradient accumulation, giving an effective batch of 16,
+for 200 epochs on 667K images (33K 20-view samples) drawn from CO3D [42],
+MegaDepth [35], ARKitScenes [3], ScanNet++ [81], Habitat [47], and Blended-
+MVS [80]. We use AdamW with learning rate 10−4, weight decay 0.01, and cosine
+decay to 10−5. Full training completes in approximately 8 days. For 7-Scenes spe-
+cialization we train from scratch on pseudo-labels generated from the 7-Scenes
+training split, for 500 epochs with minimum learning rate 10−6, completing in
+approximately 23 hours. Quality filtering uses confidence threshold τ = 0.1 on
+the sigmoid teacher output and a 3% relative-depth threshold for depth-edge
+detection. Strided sampling jitters bin positions by ±35%. Loss settings: Huber
+threshold δ = 0.1 for translation, BCE error threshold θ = 0.02 for the hybrid
+confidence loss, and loss weights λcam = 0.1, λconf = 0.05, λnormal = 1.0. These
+loss settings follow π3; a grid search over alternatives produced changes that
+were either negligible or harmful.
+4.2
+Results
+Multi-view Reconstruction. We evaluate multi-view reconstruction on 7-
+Scenes [51], a standard benchmark and the primary target of our domain-specific
+training, and on DTU [1], a second benchmark outside our training data, fol-
+lowing π3’s official protocol with Sim3 (Umeyama) alignment, ICP refinement,
+and accuracy/completion metrics under normal consistency. On 7-Scenes the
+keyframe interval is 20 and the evaluation set is unseen during training. All
+evaluations are at 518×224 resolution unless otherwise noted. For a fair dense-
+to-dense comparison, the COLMAP baseline runs the complete pipeline: feature
+extraction, exhaustive matching, sparse reconstruction, and dense multi-view
+stereo (MVS), so that it produces the same dense per-pixel geometry our met-
+rics evaluate, not only a sparse point cloud. The failed scenes are not counted
+towards the COLMAP reconstruction metrics to ensure fairness.
+
+
+10
+B. Leblanc and C. Poullis
+Table 1: Multi-view reconstruction on 7-Scenes [51] and DTU [1] (Acc/Comp in cm,
+π3 protocol, 518×224). The general student is evaluated zero-shot on both benchmarks;
+the domain student is specialized on 7-Scenes at ∼0.2% of VGGT’s training compute.
+COLMAP runs at 640×480 and is evaluated only on the scenes it reconstructs.
+7-Scenes
+DTU
+Method
+Params
+Acc ↓
+Comp ↓
+FPS ↑
+Acc ↓Comp ↓FPS ↑
+π3 Teacher [72]
+959M
+1.52
+2.03
+40
+0.11
+0.13
+59
+COLMAP + dense MVS‡ [49]
+–
+24.27 ± 1.20 57.56 ± 8.41 0.28 ± 0.02 0.68
+6.69
+0.32
+Distill3R† [31]
+72M
+8.76
+8.88
+78
+–
+–
+–
+OTT3R (general, zero-shot)
+102M
+10.16
+34.84
+273
+0.91
+3.62
+331
+OTT3R (domain)
+102M
+6.16
+2.84
+274
+n/a
+n/a
+n/a
+†Per-view monocular evaluation [31, Sec. IV-B, Tab. II]; no multi-view result is available.
+‡7-Scenes: mean ± std over 5 runs. Failure rate 9% (7-Scenes) and 8% (DTU) at 640×480, 28%
+and 64% at 518×224; failed scenes are excluded.
+Table 2: Camera pose on CO3D [42]. The
+teacher is measured against ground truth [72];
+student
+rows
+measure
+agreement
+with
+the
+teacher poses it distills, not absolute accuracy.
+Median translation in teacher scale.
+Method
+Ref. RRA@5 ↑RRA@30 ↑Med. rot.◦↓Med. trans. ↓
+π3 Teacher [72]
+GT
+–
+99.0
+–
+–
+OTT3R (temporal) π3
+61.9
+96.1
+2.8
+0.047
+OTT3R (strided)
+π3
+38.7
+65.3
+15.3
+0.264
+OTT3R (all)
+π3
+50.3
+80.7
+4.9
+0.081
+Table 3: Student depth quality vs
+teacher on diverse datasets.
+Dataset
+Model
+Params Abs Rel ↓δ < 1.25 ↑
+ARKitScenes [3] π3
+959M
+3.64%
+98.8%
+OTT3R (base) 102M
+4.91%
+97.0%
+Habitat [47]
+π3
+959M
+3.96%
+98.3%
+OTT3R (base) 102M
+7.05%
+93.9%
+7-Scenes [51]
+π3
+959M
+2.50%
+98.9%
+OTT3R (base) 102M
+13.07%
+85.7%
+OTT3R†
+102M
+5.72%
+98.1%
+†Domain-specific student.
+On 7-Scenes the headline comparison is against COLMAP, the SfM tool prac-
+titioners often use for room-scale reconstruction. Our domain-specific student is
+4× more accurate than COLMAP and runs 980× faster, while reaching near-
+teacher completion at one-seventh the latency (Tab. 1 and Fig. 3). Zero-shot, the
+general student also beats COLMAP on 7-Scenes and on DTU completion but
+does not reach the teacher, as its out-of-distribution poses are too inaccurate to
+align views; specialization closes most of this gap. To make the comparison fa-
+vorable to SfM, COLMAP is run at 640×480 against our 518×224. This is a real
+handicap for us, because COLMAP’s success rate collapses at lower resolution,
+from 91% to 72% on 7-Scenes and from 92% to 36% on DTU. COLMAP entries
+are reported as the mean over 5 runs due to RANSAC non-determinism, with
+±1.20 cm accuracy and ±8.41 cm completion variance across runs. Even with
+extra pixels and averaging across runs, COLMAP still performs worse on all
+7-Scenes metrics and fails on roughly 9% of 7-Scenes and 8% of DTU sequences
+at the upscaled resolution, although it remains more accurate than the general
+student on DTU; we therefore position our pipeline on reliability, throughput,
+and completion rather than per-point accuracy.
+Table 1 also includes Distill3R, the closest prior distillation work, with one
+important caveat: Distill3R has no pose head or loss, and its global point maps
+
+
+OTT3R: 3D Reconstruction at 1% Compute
+11
+fail to align views [31, Sec. V-C]; its numbers come from the strictly easier
+monocular setting [31, Sec. IV-B, Tab. II], where each view is reconstructed
+independently and no global view alignment is required. Despite this asymme-
+try, OTT3R’s multi-view metrics outperform Distill3R’s monocular metrics by
+30% on accuracy, 68% on completion, and 3.5× on throughput, reflecting the
+combination of direct SE(3) pose supervision, sampling diversity, and an im-
+proved pseudo-label pipeline. No compact multi-view model trained from scratch
+at comparable compute has been released, so the strongest learned baseline is
+the teacher itself; inference-time accelerations (Sec. 2) reduce a trained model’s
+FLOPs, not its training cost.
+Camera Pose Estimation. The capability that distinguishes OTT3R from
+prior single-workstation distillation is direct SE(3) pose supervision, so we eval-
+uate pose quality directly rather than only through reconstruction. We adopt
+the relative-pose protocol of [72], comparing the relative rotation between ev-
+ery image pair within a sample; this is invariant to the global coordinate frame
+and to scene scale, and therefore requires no trajectory alignment. We evaluate
+on CO3D over 14,460 twenty-view samples (∼5.5M pairs) and report relative
+rotation accuracy (RRA@5 and RRA@30, the fraction of pairs whose relative
+rotation lies within 5◦or 30◦of the reference) together with the median rota-
+tion error and the median relative translation error in the teacher’s scale, using
+the median because the error distribution is heavy-tailed. The teacher fixes the
+ceiling: against ground truth, π3 reaches 99.0 RRA@30 (and 88.4 AUC@30)
+on CO3D [72], i.e. near-saturated pose accuracy. Because the teacher sits this
+close to ground truth, agreement with it is informative about absolute accuracy,
+though not a direct measure of it, and is precisely the quantity distillation op-
+timizes. Table 1 also offers indirect ground-truth evidence: a single Sim3 aligns
+the fused cloud to ground-truth geometry, so near-teacher completion requires
+accurate relative poses.
+Table 2 shows the student reproduces teacher pose closely on small-baseline
+transitions and trails on wide-baseline ones. On temporally-adjacent pairs it
+matches the teacher to a median 2.8◦, with 61.9% of relative rotations within
+5◦and 96.1% within 30◦; on strided wide-baseline pairs the median rises to
+15.3◦and agreement falls to 38.7% within 5◦and 65.3% within 30◦(combined:
+4.9◦, 50.3%, 80.7%). Median relative translation error follows the same pattern
+(0.047 temporal, 0.264 strided, 0.081 combined). Even the wide-baseline figure
+is far above chance: uniformly random rotations fall within 30◦under 1% of
+the time so the student has clearly learned wide-baseline pose; its fidelity is
+simply lowest where the task is hardest. The residual tail on strided pairs is
+dominated by front/back confusions on near-symmetric CO3D objects viewed
+from opposing sides, a failure the teacher shares, which is why we report medians.
+Qualitatively, however, the rotation gap is not visually apparent. See Appendix B
+for student reconstructions on temporal small-baseline and strided wide-baseline
+samples: despite the wide-baseline rotation error, the strided reconstructions
+remain visually comparable to the small-baseline ones and structurally coherent;
+Appendix C shows cases where they are not.
+
+
+12
+B. Leblanc and C. Poullis
+Table 4: Cache generation scaling
+on RTX 6000 Ada and wall-clock
+for the full 667K-image cache.
+GPUs Workers Throughput (img/s) Full cache
+1
+1
+23.1
+7h 44m
+1
+2
+23.0
+7h 58m
+2
+1
+22.9
+3h 50m
+2
+2
+22.9
+3h 37m
+2
+16
+22.5
+3h 20m
+Table 5: Inference latency (s) and peak memory
+(GB) on RTX 6000 Ada at 518×224.
+Latency ↓
+Memory ↓
+Method
+Params N=32 N=64 N=128 N=32 N=64 N=128
+VGGT [66]
+1B
+2.28
+6.40
+OOM 33.98 38.41 OOM
+Fast3R [78]
+650M
+1.14
+3.26
+10.11
+12.11 21.11
+44.36
+π3 Teacher [72] 959M
+1.49
+4.30
+12.82
+7.07
+8.99
+12.34
+Distill3R [31]
+72M
+0.41
+1.02
+2.69
+9.97
+21.80
+31.90
+OTT3R
+102M 0.24
+0.68
+2.20
+1.83
+2.93
+5.20
+Student Depth Quality and Domain Specialization. For monocular
+depth, per-view depth is extracted from the Z component of predicted camera-
+space points and aligned to ground truth by median scaling before computing
+Abs Rel and δ < 1.25. Table 3 reports depth on three datasets. The π3 rows
+also give the quality of our pseudo-labels: under 4% Abs Rel and over 98%
+δ < 1.25 on both LiDAR-captured ARKitScenes and synthetic Habitat. On
+ARKitScenes, the general student stays close to the teacher: 97.0% δ < 1.25
+against the teacher’s 98.8%, with the Abs Rel gap under 1.3%. On Habitat, the
+student remains competitive at 93.9% δ < 1.25 versus 98.3% and 7.05% Abs Rel
+versus 3.96%. This is a small gap given 9× less capacity, a significantly smaller
+training set, and roughly 1.6% of the compute. The general student degrades
+on 7-Scenes, the most out-of-distribution of the three (85.7% δ < 1.25, 13.1%
+Abs Rel), reflecting room geometry and scale statistics underrepresented in its
+training mix.
+The framework’s response to this degradation is to train a domain-specific
+student rather than chase scale. On 7-Scenes, domain specialization recovers
+δ < 1.25 from 85.7% to 98.1%, within 0.8% of the teacher’s 98.9%, and more
+than halves Abs Rel (13.1% to 5.7%), while running 6.8× faster than the teacher.
+The end-to-end cost is principally the sub-10-minute cache generation and 23-
+hour training run, both on the same single-workstation setup used for the general
+student. Any practitioner can specialize a compact 3D reconstruction model to
+their target domain in under a day, recovering near-teacher quality at a fraction
+of the inference cost and compute.
+Inference Efficiency. Table 5 reports inference latency and peak memory
+across view counts. OTT3R is 6.2× faster than its teacher at 32 views using
+roughly a quarter of the memory. The gap widens with sequence length, where
+at 128 views VGGT runs out of memory (48GB VRAM) and the teacher needs
+12.3 GB while OTT3R completes in 2.2 s using 5.2 GB. This is enough margin
+for deployment on consumer and edge hardware where 1B-parameter models are
+not viable.
+4.3
+Ablations
+Pose Supervision and Sampling Diversity Are Necessary. Removing di-
+rect SE(3) camera supervision (Tab. 6) reproduces the failure mode of prior
+
+
+OTT3R: 3D Reconstruction at 1% Compute
+13
+Chess
+Fire
+Office
+Kitchen
+Fig. 3: Qualitative multi-view reconstruction on 7-Scenes test set. Top row: π3 teacher
+(959M). Bottom row: OTT3R student (102M).
+single-workstation distillation: completion degrades by 17× (2.84 to 49.57 cm)
+as the student loses the ability to align views into a coherent scene. Restricting
+training to temporal-only sampling (Tab. 6) produces a similar collapse: com-
+pletion degrades by 9× (2.84 to 25.22 cm) because the student never sees the
+wide-baseline pairs pose supervision requires. Each ablation isolates a pipeline
+contribution: pose supervision enables multi-view reconstruction, and config-
+urable sampling produces the training distribution that pose supervision needs.
+Confidence Loss Formulation. Pure-L1 and pure-BCE degrade 3–7%
+compared to the hybrid (Tab. 6) but differ in calibration: pure-L1 collapses
+to teacher mimicry (correlation 0.88) and pure-BCE saturates to overconfidence
+(mean 0.97 vs teacher 0.70), while the hybrid stays calibrated (correlation 0.79).
+The geometric gap is small; the hybrid is preferable mainly for downstream tasks
+that consume confidence as a signal.
+Encoder Choice. DUNE [45] ViT-S and DINOv2 [39] ViT-S at matched pa-
+rameter count produce comparable reconstruction quality (Tab. 7), with DINOv2-
+S slightly ahead on accuracy (5.74 vs 6.16 cm) but slightly behind on comple-
+tion. DINOv3 [53] ViT-S underperforms both with our specific architecture due
+to patch size differences requiring interpolation. Scaling to DINOv2-B (280M)
+degrades quality substantially (9.66 cm accuracy, 20.97 cm completion), indi-
+cating that at this compute budget, additional encoder capacity is not produc-
+tively used. Halving the student to 54M also degrades reconstruction quality.
+The framework is encoder-robust within this group at the chosen scale; capacity
+matters, but more capacity is not better at fixed compute.
+Limitations. OTT3R’s student does not match teacher multi-view geo-
+metric precision, particularly on out-of-distribution scenes; its strength is in-
+distribution monocular depth, where it tracks the teacher closely, and domain
+
+
+14
+B. Leblanc and C. Poullis
+Table 6: Loss and sampling ablations
+on 7-Scenes (domain-specific setting,
+500 epochs). Pose supervision and sam-
+pling diversity are necessary.
+Variant
+Acc ↓Comp ↓NC1 ↑
+Baseline (hybrid)
+6.16
+2.84
+0.626
+No camera loss
+8.88
+49.57
+0.531
+Temporal-only sampling 11.52
+25.22
+0.565
+L1-only conf
+6.43
+3.03
+0.626
+BCE-only conf
+6.33
+2.97
+0.630
+Table 7: Architectural ablations (same set-
+ting as Tab. 6). DUNE and DINOv2-S are
+competitive at matched capacity; halving to
+54M degrades quality.
+Variant
+Params Acc ↓Comp ↓NC1 ↑
+Baseline (DUNE-S) 102M
+6.16
+2.84
+0.626
+DINOv2-S
+102M
+5.74
+3.16
+0.628
+DINOv2-B
+280M
+9.66
+20.97
+0.560
+DINOv3-S
+102M
+6.94
+5.53
+0.613
+54M student
+54M
+6.62
+3.19
+0.624
+specialization that recovers near-teacher quality on a target distribution in un-
+der a day. Practitioners requiring high-fidelity general reconstruction should use
+the teacher, while those targeting a specific domain or deployment scenario can
+specialize on commodity hardware. Pose is evaluated against the teacher, which
+is the student’s effective ceiling, rather than ground truth. The pipeline inherits
+the teacher’s limitations on strongly dynamic or non-rigid scenes. We did not
+sweep the filtering thresholds, individually ablate confidence filtering, depth-
+edge masking, cache quantization, or the normal loss, or run multiple seeds.
+Representative failure cases appear in Appendix C.
+5
+Conclusion
+We presented OTT3R, a knowledge distillation framework that compresses feed-
+forward 3D reconstruction models into a 102M-parameter student trainable on
+a single workstation at roughly 1.6% of the compute used by comparable feed-
+forward 3D models, together with a pseudo-label generation pipeline for down-
+stream supervision. The framework’s two practical artifacts are the student and
+the pseudo-label generation pipeline. The student runs at 274 FPS, remains com-
+petitive with the teacher on in-distribution monocular depth, and after domain
+specialization at ∼0.2% of the teacher’s compute beats COLMAP by 4× on 7-
+Scenes multi-view accuracy. The pseudo-label generation pipeline can produce
+dense per-pixel supervision for hundreds of thousands of images in hours, scal-
+ing linearly with GPU count, providing a mechanism for generating the large-
+scale 3D supervision required for scaling 3D vision applications in areas such as
+robotics.
+Acknowledgments. This research was undertaken, in part, based on support
+from the Natural Sciences and Engineering Research Council of Canada Grant
+RGPIN-2021-03479 (NSERC DG) and through the Natural Sciences and Engi-
+neering Research Council of Canada CGS-M scholarship (NSERC CGS-M).
+
+
+OTT3R: 3D Reconstruction at 1% Compute
+15
+References
+1. Aanæs, H., et al.: Large-scale data for multiple-view stereopsis. International Jour-
+nal of Computer Vision 120, 153–168 (2016)
+2. Agarwal, S., Snavely, N., Simon, I., Seitz, S.M., Szeliski, R.: Building Rome in
+a day. In: Proceedings of the IEEE/CVF International Conference on Computer
+Vision. pp. 72–79 (2009)
+3. Baruch, G., et al.: ARKitScenes: A diverse real-world dataset for 3D indoor scene
+understanding using mobile RGB-D data. In: Advances in Neural Information Pro-
+cessing Systems (2021)
+4. Cabon, Y., et al.: MUSt3R: Multi-view network for stereo 3D reconstruction. In:
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recog-
+nition (2025)
+5. Chen, Y., Jiang, J., Luo, Y., Jiang, K., Liu, X., Yan, X., Chen, D.Z.: Reliev3R:
+Relieving feed-forward 3D reconstruction from multi-view geometric annotations.
+In: Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (2026)
+6. Chen, Y., Qiu, Y., Li, R., Patrikar, J., Scherer, S.: Co-Me: Confidence guided
+token merging for visual geometric transformers. In: Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition (2026)
+7. Dai, A., et al.: ScanNet: Richly-annotated 3D reconstructions of indoor scenes.
+In: Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition. pp. 5828–5839 (2017)
+8. Deitke, M., et al.: Objaverse: A universe of annotated 3D objects. In: Proceedings
+of the IEEE/CVF Conference on Computer Vision and Pattern Recognition. pp.
+13142–13153 (2023)
+9. DeTone, D., Malisiewicz, T., Rabinovich, A.: SuperPoint: Self-supervised interest
+point detection and description. In: Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition Workshops. pp. 224–236 (2018)
+10. Ding, Y., Zhu, Q., Liu, X., Yuan, W., Zhang, H., Zhang, C.: KD-MVS: Knowledge
+distillation based self-supervised learning for multi-view stereo. In: Proceedings of
+the European Conference on Computer Vision. pp. 630–646. Springer (2022)
+11. Dosovitskiy, A., et al.: An image is worth 16x16 words: Transformers for image
+recognition at scale. In: Proceedings of the International Conference on Learning
+Representations (2021)
+12. Dusmanu, M., et al.: D2-Net: A trainable CNN for joint description and detection
+of local features. In: Proceedings of the IEEE/CVF Conference on Computer Vision
+and Pattern Recognition. pp. 8092–8101 (2019)
+13. Dutt, A., Lunawat, I., Kaur, M.: Multi-view 3D reconstruction using knowledge
+distillation. arXiv preprint arXiv:2412.02039 (2024)
+14. Edstedt, J., Athanasiadis, I., Wadenbäck, M., Felsberg, M.: DKM: Dense kernel-
+ized feature matching for geometry estimation. In: Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition. pp. 17765–17775 (2023)
+15. Edstedt, J., Sun, Q., Bökman, G., Wadenbäck, M., Felsberg, M.: RoMa: Robust
+dense feature matching. In: Proceedings of the IEEE/CVF Conference on Com-
+puter Vision and Pattern Recognition. pp. 19790–19800 (2024)
+16. Feng, W., et al.: Quantized visual geometry grounded transformer. In: Proceedings
+of the International Conference on Learning Representations (2026)
+17. Frahm, J.M., et al.: Building Rome on a cloudless day. In: Proceedings of the
+European Conference on Computer Vision. pp. 368–381 (2010)
+
+
+16
+B. Leblanc and C. Poullis
+18. Furukawa, Y., Hernandez, C.: Multi-view stereo: A tutorial. Found. Trends Com-
+put. Graph. Vis. 9(1-2), 1–148 (2015)
+19. Gou, J., Yu, B., Maybank, S.J., Tao, D.: Knowledge distillation: A survey. Inter-
+national Journal of Computer Vision 129(6), 1789–1819 (2021)
+20. Gu, Q., Kuwajerwala, A., Morin, S., Jatavallabhula, K.M., Sen, B., Agarwal,
+A., Rivera, C., Paul, W., Ellis, K., Chellappa, R., et al.: ConceptGraphs: Open-
+vocabulary 3D scene graphs for perception and planning. In: Proceedings of the
+IEEE International Conference on Robotics and Automation. pp. 5021–5028 (2024)
+21. Gu, X., et al.: Cascade cost volume for high-resolution multi-view stereo and stereo
+matching. In: Proceedings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition. pp. 2495–2504 (2020)
+22. Hartley, R., Zisserman, A.: Multiple View Geometry in Computer Vision. Cam-
+bridge University Press, 2nd edn. (2004)
+23. Hinton, G.E., Vinyals, O., Dean, J.: Distilling the knowledge in a neural network.
+arXiv preprint arXiv:1503.02531 (2015)
+24. Hoffmann, J., et al.: Training compute-optimal large language models. arXiv
+preprint arXiv:2203.15556 (2022)
+25. Jang, W., Weinzaepfel, P., Leroy, V., Agapito, L., Revaud, J.: Pow3R: Empowering
+unconstrained 3D reconstruction with camera and scene priors. In: Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern Recognition (2025)
+26. Jin, Y., Mishkin, D., Mishchuk, A., Matas, J., Fua, P., Yi, K.M., Trulls, E.: Image
+matching across wide baselines: From paper to practice. International Journal of
+Computer Vision 129(2), 517–547 (2021)
+27. Kaplan, J., et al.: Scaling laws for neural language models. arXiv preprint
+arXiv:2001.08361 (2020)
+28. Kendall, A., Cipolla, R.: Modelling uncertainty in deep learning for camera relo-
+calization. In: Proceedings of the IEEE International Conference on Robotics and
+Automation (ICRA). IEEE (2016)
+29. Kendall, A., Gal, Y.: What uncertainties do we need in Bayesian deep learning for
+computer vision? In: Advances in Neural Information Processing Systems. vol. 30
+(2017)
+30. Kendall, A., Grimes, M., Cipolla, R.: PoseNet: A convolutional network for real-
+time 6-DOF camera relocalization. In: Proceedings of the IEEE/CVF International
+Conference on Computer Vision. pp. 2938–2946 (2015)
+31. Leblanc, B., Poullis, C.: Distill3R: A pipeline for democratizing 3D foundation
+models on commodity hardware. arXiv preprint arXiv:2602.00865 (2026)
+32. Lepetit, V., Moreno-Noguer, F., Fua, P.: EPnP: An accurate O(n) solution to the
+PnP problem. International Journal of Computer Vision 81, 155–166 (2009)
+33. Leroy, V., Cabon, Y., Revaud, J.: Grounding image matching in 3D with MASt3R.
+In: Proceedings of the European Conference on Computer Vision. pp. 71–91 (2024)
+34. Letellier, G., Srivastava, S., Jurie, F., Sharma, G.: Foundry: Distilling 3D founda-
+tion models for the edge. In: Proceedings of the IEEE/CVF Conference on Com-
+puter Vision and Pattern Recognition (2026)
+35. Li, Z., Snavely, N.: MegaDepth: Learning single-view depth prediction from internet
+photos. In: Proceedings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition. pp. 2041–2050 (2018)
+36. Lindenberger, P., Sarlin, P.E., Pollefeys, M.: LightGlue: Local feature matching
+at light speed. In: Proceedings of the IEEE/CVF International Conference on
+Computer Vision. pp. 17627–17638 (2023)
+37. Lowe, D.G.: Distinctive image features from scale-invariant keypoints. Interna-
+tional Journal of Computer Vision 60(2), 91–110 (2004)
+
+
+OTT3R: 3D Reconstruction at 1% Compute
+17
+38. Oliensis, J.: A critique of structure-from-motion algorithms. Comput. Vis. Image
+Underst. 80(2), 172–214 (2000)
+39. Oquab, M., et al.: DINOv2: Learning robust visual features without supervision.
+Transactions on Machine Learning Research (2024)
+40. Özyeşil, O., Voroninski, V., Basri, R., Singer, A.: A survey of structure from motion.
+Acta Numerica 26, 305–364 (2017)
+41. Peddi, R., Saurabh, Shanmugam, S., Pallapothula, L., Xiang, Y., Singla, P.,
+Gogate, V.: Towards spatio-temporal world scene graph generation from monocular
+videos. arXiv preprint arXiv:2603.13185 (2026)
+42. Reizenstein, J., et al.: Common objects in 3D: Large-scale learning and evaluation
+of real-life 3D category reconstruction. In: Proceedings of the IEEE/CVF Interna-
+tional Conference on Computer Vision. pp. 10901–10911 (2021)
+43. Ren, W., Tan, X., Han, K.: Speed3R: Sparse feed-forward 3D reconstruction mod-
+els. In: Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR) Findings (2026)
+44. Ren, W., Wang, H., Tan, X., Han, K.: Fin3R: Fine-tuning feed-forward 3D re-
+construction models via monocular knowledge distillation. In: Advances in Neural
+Information Processing Systems. vol. 38, pp. 152535–152568 (2025)
+45. Sarıyıldız, M.B., et al.: DUNE: Distilling a universal encoder from heterogeneous
+2D and 3D teachers. In: Proceedings of the IEEE/CVF Conference on Computer
+Vision and Pattern Recognition (2025)
+46. Sarlin, P.E., DeTone, D., Malisiewicz, T., Rabinovich, A.: SuperGlue: Learning
+feature matching with graph neural networks. In: Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition. pp. 4938–4947 (2020)
+47. Savva, M., et al.: Habitat: A platform for embodied AI research. In: Proceedings
+of the IEEE/CVF International Conference on Computer Vision. pp. 9339–9347
+(2019)
+48. Schönberger, J.L., Zheng, E., Frahm, J.M., Pollefeys, M.: Pixelwise view selection
+for unstructured multi-view stereo. In: Proceedings of the European Conference on
+Computer Vision. pp. 501–518 (2016)
+49. Schönberger, J.L., Frahm, J.M.: Structure-from-motion revisited. In: Proceedings
+of the IEEE/CVF Conference on Computer Vision and Pattern Recognition. pp.
+4104–4113 (2016)
+50. Shen, Y., Zhang, Z., Qu, Y., Zheng, X., Ji, J., Zhang, S., Cao, L.: FastVGGT: Fast
+visual geometry transformer. In: Proceedings of the International Conference on
+Learning Representations (2026)
+51. Shotton, J., et al.: Scene coordinate regression forests for camera relocalization in
+RGB-D images. In: Proceedings of the IEEE/CVF Conference on Computer Vision
+and Pattern Recognition. pp. 2930–2937 (2013)
+52. Shu, Z., Lin, C., Xie, T., Yin, W., Li, B., Pu, Z., Li, W., Yao, Y., Cao, X., Guo,
+X., et al.: LiteVGGT: Boosting vanilla VGGT via geometry-aware cached token
+merging. In: Proceedings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition (2026)
+53. Siméoni, O., Vo, H.V., Seitzer, M., Baldassarre, F., Oquab, M., Jose, C., Khali-
+dov, V., Szafraniec, M., Yi, S., Ramamonjisoa, M., et al.: DINOv3. arXiv preprint
+arXiv:2508.10104 (2025)
+54. Snavely, N., Seitz, S.M., Szeliski, R.: Photo tourism: Exploring photo collections
+in 3D. In: Proceedings of ACM SIGGRAPH. pp. 835–846 (2006)
+55. Song, J., Lee, S.J.: Knowledge distillation of multi-scale dense prediction trans-
+former for self-supervised depth estimation. Sci. Rep. 13(1), 18939 (2023)
+
+
+18
+B. Leblanc and C. Poullis
+56. Stary, M., Gaubil, J., Tewari, A., Sitzmann, V.: Understanding multi-view trans-
+formers. arXiv preprint arXiv:2510.24907 (2025)
+57. Sun, J., Shen, Z., Wang, Y., Bao, H., Zhou, X.: LoFTR: Detector-free local feature
+matching with transformers. In: Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition. pp. 8922–8931 (2021)
+58. Sun, X., et al.: AVGGT: Rethinking global attention for accelerating VGGT. In:
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recog-
+nition (2026)
+59. Tang, C., Tan, P.: BA-Net: Dense bundle adjustment networks. In: Proceedings of
+the International Conference on Learning Representations (2019)
+60. Tang, Z., Fan, Y., Wang, D., Xu, H., Ranjan, R., Schwing, A., Yan, Z.: MV-
+DUSt3R+: Single-stage scene reconstruction from sparse views in 2 seconds. In:
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recog-
+nition. pp. 5283–5293 (2025)
+61. Teed, Z., Deng, J.: DeepV2D: Video to depth with differentiable structure from mo-
+tion. In: Proceedings of the International Conference on Learning Representations
+(2020)
+62. Touvron, H., et al.: Training data-efficient image transformers & distillation
+through attention. In: Proceedings of the International Conference on Machine
+Learning. pp. 10347–10357 (2021)
+63. Tyszkiewicz, M., Fua, P., Trulls, E.: DISK: Learning local features with policy
+gradient. In: Advances in Neural Information Processing Systems. vol. 33, pp.
+14254–14265 (2020)
+64. Wang, C.S.B., Schmidt, C., Piekenbrinck, J., Leibe, B.: Block-sparse global at-
+tention for efficient multi-view geometry transformers. In: Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern Recognition (2026)
+65. Wang, H., Agapito, L.: 3D reconstruction with spatial memory. In: Proceedings of
+the International Conference on 3D Vision. pp. 78–89. IEEE (2025)
+66. Wang, J., Chen, M., Karaev, N., Vedaldi, A., Rupprecht, C., Novotny, D.: VGGT:
+Visual geometry grounded transformer. In: Proceedings of the IEEE/CVF Confer-
+ence on Computer Vision and Pattern Recognition. pp. 5294–5306 (2025)
+67. Wang, J., Chen, M., Zhang, S., Karaev, N., Schönberger, J., Labatut, P., Bo-
+janowski, P., Novotny, D., Vedaldi, A., Rupprecht, C.: VGGT-Ω. In: Proceedings
+of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (2026)
+68. Wang, J., Karaev, N., Rupprecht, C., Novotny, D.: VGGSfM: Visual geometry
+grounded deep structure from motion. In: Proceedings of the IEEE/CVF Confer-
+ence on Computer Vision and Pattern Recognition. pp. 21686–21697 (2024)
+69. Wang, J., Rupprecht, C., Novotny, D.: PoseDiffusion: Solving pose estimation via
+diffusion-aided bundle adjustment. In: Proceedings of the IEEE/CVF International
+Conference on Computer Vision. pp. 9773–9783 (2023)
+70. Wang, R., Xu, S., Dai, C., Xiang, J., Deng, Y., Tong, X., Yang, J.: MoGe: Unlocking
+accurate monocular geometry estimation for open-domain images with optimal
+training supervision. In: Proceedings of the IEEE/CVF Conference on Computer
+Vision and Pattern Recognition. pp. 5261–5271 (2025)
+71. Wang, S., Leroy, V., Cabon, Y., Chidlovskii, B., Revaud, J.: DUSt3R: Geometric
+3D vision made easy. In: Proceedings of the IEEE/CVF Conference on Computer
+Vision and Pattern Recognition. pp. 20697–20709 (2024)
+72. Wang, Y., Zhou, J., Zhu, H., Chang, W., Zhou, Y., Li, Z., Chen, J., Pang, J., Shen,
+C., He, T.: π3: Permutation-equivariant visual geometry learning. In: Proceedings
+of the International Conference on Learning Representations (2026)
+
+
+OTT3R: 3D Reconstruction at 1% Compute
+19
+73. Wang, Z., Xu, D.: FlashVGGT: Efficient and scalable visual geometry transformers
+with compressed descriptor attention. In: Proceedings of the IEEE/CVF Confer-
+ence on Computer Vision and Pattern Recognition (2026)
+74. Wei, X., Zhang, Y., Li, Z., Fu, Y., Xue, X.: DeepSFM: Structure from motion via
+deep bundle adjustment. In: Proceedings of the European Conference on Computer
+Vision. pp. 230–247. Springer (2020)
+75. Wu, C.: Towards linear-time incremental structure from motion. In: Proceedings
+of the International Conference on 3D Vision. pp. 127–134. IEEE (2013)
+76. Wu, K., et al.: TinyViT: Fast pretraining distillation for small vision transformers.
+In: Proceedings of the European Conference on Computer Vision (2022)
+77. Wu, Z., Li, Z., Fan, Z.G., Wu, Y., Wang, X., Tang, R., Pu, J.: ADU-Depth:
+Attention-based distillation with uncertainty modeling for depth estimation. In:
+Conference on Robot Learning. pp. 3167–3179. PMLR (2023)
+78. Yang, J., et al.: Fast3R: Towards 3D reconstruction of 1000+ images in one for-
+ward pass. In: Proceedings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition. pp. 21924–21935 (2025)
+79. Yao, Y., Luo, Z., Li, S., Fang, T., Quan, L.: MVSNet: Depth inference for unstruc-
+tured multi-view stereo. In: Proceedings of the European Conference on Computer
+Vision (2018)
+80. Yao, Y., et al.: BlendedMVS: A large-scale dataset for generalized multi-view stereo
+networks. In: Proceedings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition. pp. 1790–1799 (2020)
+81. Yeshwanth, C., Liu, Y.C., Nießner, M., Dai, A.: ScanNet++: A high-fidelity dataset
+of 3D indoor scenes. In: Proceedings of the IEEE/CVF International Conference
+on Computer Vision. pp. 12–22 (2023)
+82. Yi, K.M., Trulls, E., Lepetit, V., Fua, P.: LIFT: Learned invariant feature trans-
+form. In: Proceedings of the European Conference on Computer Vision. pp. 467–
+483 (2016)
+83. Yuan, S., Yang, Y., Yang, X., Zhang, X., Zhao, Z., Zhang, L., Zhang, Z.: In-
+finiteVGGT: Visual geometry grounded transformer for endless streams. arXiv
+preprint arXiv:2601.02281 (2026)
+84. Zhang, J., Herrmann, C., Hur, J., Jampani, V., Darrell, T., Cole, F., Sun, D., Yang,
+M.H.: MonST3R: A simple approach for estimating geometry in the presence of
+motion. In: Proceedings of the International Conference on Learning Representa-
+tions (2025)
+85. Zhang, S., et al.: FLARE: Feed-forward geometry, appearance and camera estima-
+tion from uncalibrated sparse views. In: Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition. pp. 21936–21947 (2025)
+86. Zhao, X., et al.: ALIKED: A lighter keypoint and descriptor extraction network
+via deformable transformation. IEEE Trans. Instrum. Meas. 72, 1–16 (2023)
+87. Zou, Z., Jia, X., Wu, Z., Jiang, Y.G.: Attention itself could retrieve. RetrieveVGGT:
+Training-free long context streaming 3D reconstruction via query-key similarity
+retrieval. arXiv preprint arXiv:2605.09644 (2026)
+
+
+20
+B. Leblanc and C. Poullis
+Supplementary Material
+This supplementary material provides additional qualitative results and im-
+plementation details omitted from the main paper. Appendix A details the offline
+training pipeline, Appendix B shows qualitative multi-view reconstructions un-
+der temporal and strided sampling, and Appendix C shows representative failure
+cases.
+A
+Training Pipeline
+Fig. 4: Training pipeline. The teacher is run once to populate an offline cache of
+quantized point maps, confidence, and SE(3) poses; the student then trains against
+this cache without re-invoking the teacher. Gradients update only the student.
+Fig. 4 illustrates the offline distillation setup. Cache generation and student
+training are fully decoupled: the teacher π3 is run once over all source datasets
+and its outputs are quantized and stored (main Section 3.2), after which train-
+ing reads only from this cache and the teacher is never invoked again. This is
+what makes single-workstation training tractable: the 959M-parameter teacher
+forward pass, the dominant cost, is amortized across every epoch rather than
+repeated.
+During training, each batch loads a pre-sampled group of N views with their
+cached teacher point maps, confidence maps, and SE(3) poses. Gradients flow
+only through the student; the cached targets are constant. The student’s three
+heads are supervised against the corresponding cached signals through the hybrid
+loss of main Section 3.4: the point and normal terms against teacher geometry,
+the camera term against teacher relative poses over all
+ N
+2
+
+view pairs, and the
+confidence term against the student’s own reconstruction error blended with
+
+
+OTT3R: 3D Reconstruction at 1% Compute
+21
+teacher confidence. Because supervision is fully precomputed, the only online
+computation per step is the student forward and backward pass, so memory and
+wall-clock are governed by the 102M student alone rather than the teacher.
+B
+Qualitative Multi-View Reconstructions
+We visualize OTT3R reconstructions on held-out CO3D sequences to illustrate
+the effect of sampling strategy on reconstruction quality. In each pair the same
+scene is reconstructed from temporal sampling (left, consecutive frames with
+a small baseline) and strided sampling (right, evenly-spaced frames spanning
+a wide baseline). Both regimes produce coherent geometry: despite the larger
+viewpoint changes and higher relative-rotation error of the strided case (main
+Section 4.2), its reconstructions remain visually comparable to the small-baseline
+ones, with the residual pose error manifesting as noise rather than visible struc-
+tural misalignment in these examples; Appendix C shows failure cases. All re-
+constructions use 20 input views at 518 × 224 resolution. In every row, left is
+temporal and right is strided.
+
+
+22
+B. Leblanc and C. Poullis
+
+
+OTT3R: 3D Reconstruction at 1% Compute
+23
+
+
+24
+B. Leblanc and C. Poullis
+C
+Failure Cases
+We show representative failure cases of the student. Fig. 5 compares the general
+student, evaluated zero-shot, with the domain-specialized student on the same 7-
+Scenes sequences: without specialization, out-of-distribution pose errors prevent
+views from correctly aligning (34.84 vs. 2.84 cm completion averaged over 7-
+Scenes, main Table 1). Fig. 6 shows CO3D objects reconstructed from temporal
+and strided samples, where wide-baseline relative-rotation errors misalign the
+strided reconstruction; front/back confusions on near-symmetric objects, which
+the teacher shares, dominate this error tail (main Table 2).
+
+
+OTT3R: 3D Reconstruction at 1% Compute
+25
+Fig. 5: Out-of-distribution failures on 7-Scenes. Left: general student, zero-shot.
+Right: domain-specialized student on the same sequence.
+
+
+26
+B. Leblanc and C. Poullis
+Fig. 6: Wide-baseline failures on CO3D. Left: temporal (small-baseline) sampling.
+Right: strided (wide-baseline) sampling of the same object, where relative-rotation
+errors misalign the reconstruction.
