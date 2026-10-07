@@ -44,14 +44,14 @@
       <span class="dpr-home-dashboard-kicker">2026-10-06</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 32 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
-    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>9</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>10</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>2 次</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>13</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>19</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-10-06 00:49:37 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-07 00:04:58 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -62,7 +62,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-10-06 日报共筛出19篇，精读9篇速读10篇，视觉几何与三维重建是绝对主线。最值得看的是拿下9.0分的VGGT-Diff（把扩散模型引入稀疏视角新视角合成）和ReSS（为3D视觉Transformer设计残差恢复稀疏注意力）。普通读者可先从这两篇精读入手，再按兴趣扫一眼纹理空间材质扩散和360深度估计等速读方向。</p>
+<p>2026-10-06 日报：共筛32篇，精读13篇、速读19篇，聚焦3D视觉与重建。最值得看的是满分9.0的ReSS稀疏注意力（提速3D ViT）和OTT3R（仅1%算力完成多视角3D重建与数据集生成）。普通读者可优先从这两篇入手，再按兴趣跟进稀疏视角重建与360深度估计方向。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -71,12 +71,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">9 篇</strong>
+    <strong class="dpr-home-dashboard-count">13 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="VGGT-Diff: Visual Geometry Meets Diffusion for Sparse-View Novel View Synthesis">VGGT-Diff: Visual Geometry Meets Diffusion for Sparse-View Novel View Synthesis</span></li><li><span class="dpr-home-dashboard-paper-title" title="ReSS: Residual-Restoring Sparse Attention for 3D Vision Transformers">ReSS: Residual-Restoring Sparse Attention for 3D Vision Transformers</span></li><li><span class="dpr-home-dashboard-paper-title" title="OTT3R: Multi-View 3D Reconstruction and Fast Dataset Generation at 1% Compute">OTT3R: Multi-View 3D Reconstruction and Fast Dataset Generation at 1% Compute</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="ReSS: Residual-Restoring Sparse Attention for 3D Vision Transformers">ReSS: Residual-Restoring Sparse Attention for 3D Vision Transformers</span></li><li><span class="dpr-home-dashboard-paper-title" title="OTT3R: Multi-View 3D Reconstruction and Fast Dataset Generation at 1% Compute">OTT3R: Multi-View 3D Reconstruction and Fast Dataset Generation at 1% Compute</span></li><li><span class="dpr-home-dashboard-paper-title" title="SFE-VGGT: Source-Free VGGT Distillation for Event-Based Monocular Depth Estimation">SFE-VGGT: Source-Free VGGT Distillation for Event-Based Monocular Depth Estimation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>8</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>11</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -84,12 +84,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">10 篇</strong>
+    <strong class="dpr-home-dashboard-count">19 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Texture Space Material Diffusion">Texture Space Material Diffusion</span></li><li><span class="dpr-home-dashboard-paper-title" title="Decoupling Spherical Reasoning from Dense Prediction for 360 Depth Estimation">Decoupling Spherical Reasoning from Dense Prediction for 360 Depth Estimation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Less Decoder is More Encoder: Geometric Representation Learning from Novel View Synthesis">Less Decoder is More Encoder: Geometric Representation Learning from Novel View Synthesis</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Sparse-GS2Mesh: 3D Gaussian Splatting Guided by Novel Stereo Views and 2DGS for Sparse View Surface Reconstruction}">Sparse-GS2Mesh: 3D Gaussian Splatting Guided by Novel Stereo Views and 2DGS for Sparse View Surface Reconstruction}</span></li><li><span class="dpr-home-dashboard-paper-title" title="Texture Space Material Diffusion">Texture Space Material Diffusion</span></li><li><span class="dpr-home-dashboard-paper-title" title="Decoupling Spherical Reasoning from Dense Prediction for 360 Depth Estimation">Decoupling Spherical Reasoning from Dense Prediction for 360 Depth Estimation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">geometry <strong>3</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>7</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>5</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>3</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>3</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span></div>
 </section>
 </div>
 
