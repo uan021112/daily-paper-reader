@@ -41,17 +41,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-10-07</span>
+      <span class="dpr-home-dashboard-kicker">2026-10-08</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 20 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 22 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>6</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>14</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>9</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>13</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-10-07 23:49:47 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-09 00:17:29 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -62,8 +62,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-10-07 日报：20篇中精读6、速读14，MVDG与Deep Prior Learning for Embodied Perception以9.0分领跑。</p>
-<p>最值得看多视图3D消歧与具身感知</p>
+<p>2026-10-08日报完成22篇论文筛选，精读9篇、速读13篇，主线集中在3D视觉、几何Transformer与动态重建。最值得看的是两篇9分精读——RelationVGGT用视觉几何Transformer做3D空间关系分割，VGGT-Bridge用粗步长跳跃边超越序列位姿图；速读中的单目航天器导航、RDGSplat新视角合成、DynStream动态4D高斯也值得扫一眼。普通读者可先读两篇9分精读，再按兴趣选1篇速读，重点看方法如何把几何先验与Transformer结合。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -72,12 +71,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">6 篇</strong>
+    <strong class="dpr-home-dashboard-count">9 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="MVDG: Efficient Multi-view 3D Disambiguation on Unconstrained Real-World Images">MVDG: Efficient Multi-view 3D Disambiguation on Unconstrained Real-World Images</span></li><li><span class="dpr-home-dashboard-paper-title" title="Deep Prior Learning for Embodied Perception">Deep Prior Learning for Embodied Perception</span></li><li><span class="dpr-home-dashboard-paper-title" title="VGGT-Bridge: Beyond Sequential Pose Graphs via Coarse-Stride Skip Edges">VGGT-Bridge: Beyond Sequential Pose Graphs via Coarse-Stride Skip Edges</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="RelationVGGT: Visual Geometry Transformers for 3D Spatial Relation Segmentation">RelationVGGT: Visual Geometry Transformers for 3D Spatial Relation Segmentation</span></li><li><span class="dpr-home-dashboard-paper-title" title="VGGT-Bridge: Beyond Sequential Pose Graphs via Coarse-Stride Skip Edges">VGGT-Bridge: Beyond Sequential Pose Graphs via Coarse-Stride Skip Edges</span></li><li><span class="dpr-home-dashboard-paper-title" title="MVDG: Efficient Multi-view 3D Disambiguation on Unconstrained Real-World Images">MVDG: Efficient Multi-view 3D Disambiguation on Unconstrained Real-World Images</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>6</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>9</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -85,12 +84,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">14 篇</strong>
+    <strong class="dpr-home-dashboard-count">13 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="EagleDepth: Efficient Fine-Grained Depth Estimation via Pixel Diffusion Decoder">EagleDepth: Efficient Fine-Grained Depth Estimation via Pixel Diffusion Decoder</span></li><li><span class="dpr-home-dashboard-paper-title" title="GeoWM: Efficient Direct World Modeling in Explicit Geometry">GeoWM: Efficient Direct World Modeling in Explicit Geometry</span></li><li><span class="dpr-home-dashboard-paper-title" title="DensiTok: Making Feed-Forward 3D Gaussian Splatting See More Views Than It Is Given">DensiTok: Making Feed-Forward 3D Gaussian Splatting See More Views Than It Is Given</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Monocular Navigation Relative to Unknown Spacecraft Using a Transformer-Aided Kalman Filter">Monocular Navigation Relative to Unknown Spacecraft Using a Transformer-Aided Kalman Filter</span></li><li><span class="dpr-home-dashboard-paper-title" title="RDGSplat: Render-Dedicated Geometry for Novel View Synthesis">RDGSplat: Render-Dedicated Geometry for Novel View Synthesis</span></li><li><span class="dpr-home-dashboard-paper-title" title="DynStream: Online Streaming 4D Gaussian Reconstruction of Dynamic Worlds from Unposed Video">DynStream: Online Streaming 4D Gaussian Reconstruction of Dynamic Worlds from Unposed Video</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>6</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>3</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>6</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>4</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span></div>
 </section>
 </div>
 
