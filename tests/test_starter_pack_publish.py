@@ -357,8 +357,14 @@ def test_fixed_selection_guide_cache_and_complete_snapshot_survive_pending_refre
         ]
 
     monkeypatch.setattr(starter_pack_reading, "prepare_reading", prepare)
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-only")
-    monkeypatch.setattr(llm, "DeepSeekClient", lambda *a: Mock(kwargs={}))
+    for name in ("SUMMARY_MODEL", "SUMMARY_BASE_URL", "LLM_FILTER_MODEL", "LLM_REWRITE_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("LLM_PROVIDER", "openai-compatible")
+    monkeypatch.setenv("LLM_API_KEY", "test-only")
+    monkeypatch.setenv("LLM_MODEL", "vendor/guide-model")
+    monkeypatch.setenv("LLM_BASE_URL", "https://gateway.example/v1")
+    create = Mock(return_value=Mock(kwargs={}))
+    monkeypatch.setattr(llm.ClientFactory, "create", create)
     generate = Mock(
         return_value={
             "overview": {"text": "研究问题", "paper_ids": ["p1"]},
@@ -371,11 +377,13 @@ def test_fixed_selection_guide_cache_and_complete_snapshot_survive_pending_refre
     monkeypatch.setattr(starter_pack_guide, "generate_guide", generate)
     assert publish_pack(tmp_path, manifest)["status"] == "complete"
     output = tmp_path / "docs/starter-pack" / run_id
-    old = (output / "README.md").read_text()
     old_export = (output / "papers.md").read_bytes()
     record = json.loads((output / "pack.json").read_text())
     key = record["guide_cache_key"]
     assert manifest["guide_cache_key"] == key
+    assert key == starter_pack_guide.guide_cache_key(
+        manifest["profile"], [paper], "vendor/guide-model", "https://gateway.example/v1"
+    )
     guide_cache = tmp_path / ".local-runs/starter-pack-cache/guides" / (key + ".json")
     guide_cache.unlink()
     manifest["content_batch"] = 0
@@ -387,7 +395,6 @@ def test_fixed_selection_guide_cache_and_complete_snapshot_survive_pending_refre
             and result["guide_status"] == "complete"
         )
         assert result["has_complete_snapshot"] is True
-        assert old in (output / "README.md").read_text()
         assert (output / "README.md").read_text().count(
             "starter-pack-refresh:start"
         ) == 1

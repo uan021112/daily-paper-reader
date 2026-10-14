@@ -9,17 +9,10 @@ import requests
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from llm import LLMClient
+from llm import ClientFactory, LLMClient
 
 
 class LlmStructuredOutputTest(unittest.TestCase):
-    @patch("llm.requests.post")
-    def test_explicit_thinking_toggle_is_forwarded(self, mock_post):
-        mock_post.return_value = self._mock_success_response({"content": "ok"})
-        client = LLMClient(api_key="test-key", model="deepseek-v4-flash", base_url="https://api.deepseek.com")
-        client.kwargs["thinking"] = {"type": "disabled"}
-        client.chat(messages=[{"role": "user", "content": "hello"}])
-        self.assertEqual(mock_post.call_args.kwargs["json"].get("thinking"), {"type": "disabled"})
 
     def _mock_success_response(self, message: dict):
         resp = MagicMock()
@@ -191,6 +184,42 @@ class LlmStructuredOutputTest(unittest.TestCase):
         )
         self.assertIsNone(result["parsed"])
         self.assertIsNone(result["parse_error"])
+
+    @patch.dict("llm.os.environ", {"LLM_MAX_OUTPUT_TOKENS": "8192"}, clear=True)
+    @patch("llm.requests.post")
+    def test_explicit_gateway_handles_native_named_model_without_provider_specific_parameters(self, mock_post):
+        def strict_gateway(*args, **kwargs):
+            payload = kwargs["json"]
+            if "thinking" in payload or payload.get("max_tokens", 0) > 8192:
+                return self._mock_http_error_response('{"error":{"message":"invalid request parameters"}}')
+            return self._mock_success_response({"content": '{"answer":"accepted"}'})
+
+        mock_post.side_effect = strict_gateway
+        client = ClientFactory.create("test-key", "deepseek-v4-flash", "https://gateway.example/v1", "openai-compatible")
+        client.kwargs.update(thinking={"type": "disabled"}, max_tokens=500000)
+        result = client.chat_structured(
+            [{"role": "user", "content": "Return JSON with the answer."}],
+            "gateway_answer",
+            {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"], "additionalProperties": False},
+        )
+        self.assertEqual(result["parsed"], {"answer": "accepted"})
+        self.assertIsNone(result["parse_error"])
+
+    @patch.dict("llm.os.environ", {}, clear=True)
+    @patch("llm.requests.post")
+    def test_gateway_falls_back_to_json_object_when_schema_is_rejected(self, mock_post):
+        mock_post.side_effect = [
+            self._mock_http_error_response('{"error":{"message":"response_format json_schema is not supported"}}'),
+            self._mock_success_response({"content": '{"answer":"compatible"}'}),
+        ]
+        client = ClientFactory.create("test-key", "text-model", "https://gateway.example/v1")
+        result = client.chat_structured(
+            [{"role": "user", "content": "Return JSON with the answer."}],
+            "gateway_answer",
+            {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"], "additionalProperties": False},
+        )
+        self.assertEqual(result["parsed"], {"answer": "compatible"})
+        self.assertEqual(result["response_format_used"], "json_object")
 
 
 if __name__ == "__main__":

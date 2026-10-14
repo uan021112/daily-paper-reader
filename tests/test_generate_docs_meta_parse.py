@@ -10,24 +10,15 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         root = Path(__file__).resolve().parents[1]
+        src_dir = str(root / "src")
+        if src_dir not in sys.path:
+            sys.path.insert(0, src_dir)
         if "fitz" not in sys.modules:
             import types
 
             fitz_stub = types.ModuleType("fitz")
             fitz_stub.open = lambda *args, **kwargs: None
             sys.modules["fitz"] = fitz_stub
-        if "llm" not in sys.modules:
-            import types
-
-            llm_stub = types.ModuleType("llm")
-
-            class DummyDeepSeekClient:
-                def __init__(self, *args, **kwargs):
-                    pass
-
-            llm_stub.DeepSeekClient = DummyDeepSeekClient
-            llm_stub.resolve_max_output_tokens = lambda default=393216: default
-            sys.modules["llm"] = llm_stub
 
         src_path = root / "src" / "6.generate_docs.py"
         spec = importlib.util.spec_from_file_location("gen6_mod", src_path)

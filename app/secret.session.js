@@ -453,6 +453,10 @@
         if (!model || !apiKey || !endpoint) {
           throw new Error('模型配置缺少 apiKey、baseUrl 或 model。');
         }
+        const utils = getLLMUtils();
+        const browserBlock = typeof utils.browserRequestError === 'function'
+          ? utils.browserRequestError(endpoint) : null;
+        if (browserBlock) throw browserBlock;
         if (statusEl) {
           statusEl.textContent = `正在测试模型 ${i + 1}/${entries.length}：${model} ...`;
           statusEl.style.color = '#666';
@@ -472,7 +476,13 @@
           body: JSON.stringify(requestPayload),
           signal: controller.signal,
         });
-        let resp = await doFetch(payload);
+        let resp;
+        try {
+          resp = await doFetch(payload);
+        } catch (error) {
+          throw typeof utils.browserRequestError === 'function'
+            ? utils.browserRequestError(endpoint, error) : error;
+        }
         if (!resp.ok && payload.max_completion_tokens != null) {
           const text = await resp.text().catch(() => '');
           if (resp.status === 400 && /max_completion_tokens/i.test(text)) {
@@ -498,7 +508,7 @@
       }
     } catch (e) {
       if (controller.signal.aborted) {
-        throw new Error('DeepSeek 连接测试超时，请稍后重试');
+        throw new Error('模型连接测试超时，请稍后重试');
       }
       throw e;
     } finally {
@@ -698,16 +708,6 @@
         throw new Error('Reranker 配置不完整，无法写入 GitHub Secrets。');
       }
 
-      const secretNameSummKey = 'Summarized_LLM_API_KEY';
-      const secretNameSummUrl = 'Summarized_LLM_BASE_URL';
-      const secretNameSummModel = 'Summarized_LLM_MODEL';
-      const secretNameSummaryApiKey = 'SUMMARY_API_KEY';
-      const secretNameSummaryBaseUrl = 'SUMMARY_BASE_URL';
-      const secretNameSummaryModel = 'SUMMARY_MODEL';
-      const secretNameDeepSeekKey = 'DEEPSEEK_API_KEY';
-      const secretNameDeepSeekBase = 'DEEPSEEK_BASE_URL';
-      const secretNameDeepSeekModel = 'DEEPSEEK_MODEL';
-      const secretNameLlmPrimaryBase = 'LLM_PRIMARY_BASE_URL';
       const secretNameSkipRerank = 'DPR_SKIP_RERANK';
       const secretNameLocalRerankModel = 'LOCAL_RERANK_MODEL';
       const secretNameRerankProfile = 'RERANK_PROFILE';
@@ -747,16 +747,14 @@
       };
 
       const secrets = [
-        { name: secretNameSummKey, value: summarizedApiKey },
-        { name: secretNameSummUrl, value: summarizedBaseUrl },
-        { name: secretNameSummModel, value: summarizedModel },
-        { name: secretNameSummaryApiKey, value: summarizedApiKey },
-        { name: secretNameSummaryBaseUrl, value: summarizedBaseUrl },
-        { name: secretNameSummaryModel, value: summarizedModel },
-        { name: secretNameDeepSeekKey, value: summarizedApiKey },
-        { name: secretNameDeepSeekBase, value: summarizedBaseUrl },
-        { name: secretNameDeepSeekModel, value: summarizedModel },
-        { name: secretNameLlmPrimaryBase, value: summarizedBaseUrl },
+        ...getLLMUtils().buildCanonicalLlmSecrets({
+          providerType: safeOptions.providerType || inferProviderType({ summarizedLLM: { baseUrl: summarizedBaseUrl } }),
+          summarizedApiKey,
+          summarizedBaseUrl,
+          summarizedModel,
+          filterModel,
+          rewriteModel,
+        }),
         { name: secretNameSkipRerank, value: skipRerank ? 'true' : 'false' },
         { name: secretNameLocalRerankModel, value: localRerankModel },
         { name: secretNameRerankProfile, value: rerankerProfile },
@@ -1129,7 +1127,7 @@
       }, 100);
     };
 
-    // 初始化向导：第 2 步（仅保留 DeepSeek API）
+    // 初始化向导：第 2 步（LLM 与独立 Reranker 配置）
     const renderInitStep2 = (password) => {
       setStep2Modal(true);
       const currentSecret =
@@ -1142,6 +1140,8 @@
           ? currentSecret.chatLLMs[0] || {}
           : {};
       const currentReranker = resolveRerankerConfig(currentSecret);
+      const initialProvider = inferProviderType(currentSecret);
+      const currentRoles = currentSecret.llmProvider || {};
 
       const initialGithubToken = normalizeText(
         currentSecret.github && currentSecret.github.token,
@@ -1183,6 +1183,11 @@
                 需要使用 <code>Classic PAT</code>，并同时具备 <code>repo</code>、<code>workflow</code> 和 <code>gist</code> 权限。
               </div>
             </div>
+            <div class="secret-setup-step2-block">
+              <div class="secret-setup-step2-title">LLM 服务商</div>
+              <label><input type="radio" name="secret-setup-provider" value="deepseek" /> DeepSeek 官方</label>
+              <label><input type="radio" name="secret-setup-provider" value="openai-compatible" /> OpenAI-compatible（Sub2API）</label>
+            </div>
 
             <div id="secret-setup-deepseek-section" class="secret-setup-step2-block">
               <div class="secret-setup-step2-title">DeepSeek API（必填）</div>
@@ -1209,17 +1214,33 @@
               </div>
 
               <div style="font-weight:500; margin-bottom:4px; display:flex; align-items:center; gap:4px;">
-                用于工作流总结 / 过滤的大模型
+                用于工作流总结的大模型
                 <span class="secret-model-tip">!
                   <span class="secret-model-tip-popup">
-                    当前只保留 DeepSeek 官方 API。<br/>
-                    Reranker API Key 与 DeepSeek 分开配置。
+                    总结、过滤、query rewrite 可独立选择模型。<br/>
+                    Reranker API Key 单独配置。
                   </span>
                 </span>
               </div>
               <div id="secret-setup-deepseek-models" style="font-size:13px;">
                 <select id="secret-setup-deepseek-model-select" class="secret-setup-select"></select>
               </div>
+            </div>
+            <div id="secret-setup-custom-section" class="secret-setup-step2-block">
+              <div class="secret-setup-step2-title">OpenAI-compatible / Sub2API</div>
+              <label>API Key<input id="secret-setup-custom-api-key" type="password" autocomplete="off" class="secret-setup-select" /></label>
+              <label>Base URL<input id="secret-setup-custom-base-url" type="text" placeholder="HTTP 或 HTTPS Base URL（可含 /v1）" class="secret-setup-select" /></label>
+              <label>聊天模型（逗号或换行分隔，上游原始 ID）<textarea id="secret-setup-custom-model-1" class="secret-setup-select" rows="2"></textarea></label>
+              <label>总结模型<input id="secret-setup-custom-model-2" type="text" placeholder="上游模型 ID" class="secret-setup-select" /></label>
+              <button id="secret-setup-custom-test" type="button" class="secret-gate-btn secondary">测试当前配置</button>
+              <div id="secret-setup-custom-status" style="min-height:18px; font-size:12px; color:#666;"></div>
+              <p class="secret-setup-step2-note">HTTP 地址可供后端使用；HTTPS 页面不能直连公共 HTTP（mixed content）。浏览器聊天还需要网关允许本站 Origin 及 Authorization / Content-Type 的 CORS 预检。</p>
+              <label id="secret-setup-backend-only-row" style="display:none;"><input id="secret-setup-backend-only" type="checkbox" /> 浏览器连接未验证；仅保存后端配置，我会在后端验证 API Key / 模型。此操作不会绕过 HTTPS / CORS 安全限制。</label>
+            </div>
+            <div class="secret-setup-step2-block">
+              <label>过滤模型<input id="secret-setup-filter-model" type="text" class="secret-setup-select" placeholder="留空则使用总结模型" /></label>
+              <label>Query rewrite 模型<input id="secret-setup-rewrite-model" type="text" class="secret-setup-select" placeholder="留空则使用总结模型" /></label>
+              <datalist id="secret-setup-model-options"></datalist>
             </div>
           </div>
 
@@ -1257,18 +1278,8 @@
                 </div>
               </div>
               <div id="secret-setup-reranker-status" style="font-size:12px; color:#666; line-height:1.6;"></div>
-              <input type="radio" name="secret-setup-provider" value="deepseek" checked style="display:none;" />
             </div>
 
-            <div id="secret-setup-custom-section" style="display:none;">
-              <input id="secret-setup-custom-api-key" type="hidden" />
-              <input id="secret-setup-custom-base-url" type="hidden" />
-              <input id="secret-setup-custom-model-1" type="hidden" />
-              <input id="secret-setup-custom-model-2" type="hidden" />
-              <input id="secret-setup-custom-model-3" type="hidden" />
-              <button id="secret-setup-custom-test" type="button" style="display:none;"></button>
-              <div id="secret-setup-custom-status" style="display:none;"></div>
-            </div>
           </div>
         </div>
 
@@ -1304,7 +1315,12 @@
       const customBaseUrlInput = document.getElementById('secret-setup-custom-base-url');
       const customModel1Input = document.getElementById('secret-setup-custom-model-1');
       const customModel2Input = document.getElementById('secret-setup-custom-model-2');
-      const customModel3Input = document.getElementById('secret-setup-custom-model-3');
+      const customSection = document.getElementById('secret-setup-custom-section');
+      const filterModelInput = document.getElementById('secret-setup-filter-model');
+      const rewriteModelInput = document.getElementById('secret-setup-rewrite-model');
+      const backendOnlyInput = document.getElementById('secret-setup-backend-only');
+      const backendOnlyRow = document.getElementById('secret-setup-backend-only-row');
+      const modelOptions = document.getElementById('secret-setup-model-options');
       const customTestBtn = document.getElementById('secret-setup-custom-test');
       const customStatusEl = document.getElementById('secret-setup-custom-status');
       const rerankerProfileSelect = document.getElementById('secret-setup-reranker-profile');
@@ -1334,7 +1350,12 @@
         !customBaseUrlInput ||
         !customModel1Input ||
         !customModel2Input ||
-        !customModel3Input ||
+        !customSection ||
+        !filterModelInput ||
+        !rewriteModelInput ||
+        !backendOnlyInput ||
+        !backendOnlyRow ||
+        !modelOptions ||
         !customTestBtn ||
         !customStatusEl ||
         !rerankerProfileSelect ||
@@ -1360,12 +1381,20 @@
       deepseekInput.value = initialApiKey;
 
       providerInputs.forEach((input) => {
-        input.checked = input.value === 'deepseek';
+        input.checked = input.value === initialProvider;
       });
       deepseekModelSelect.value = initialDeepSeekModel || 'deepseek-v4-flash';
       if (!deepseekModelSelect.value) {
         deepseekModelSelect.value = 'deepseek-v4-flash';
       }
+      customApiKeyInput.value = initialProvider === 'openai-compatible' ? initialApiKey : '';
+      customBaseUrlInput.value = initialProvider === 'openai-compatible' ? (currentSummaryLLM.baseUrl || '') : '';
+      customModel1Input.value = initialProvider === 'openai-compatible'
+        ? sanitizeModelList(currentChatEntry.models || [], 99).join(', ') : '';
+      customModel2Input.value = initialProvider === 'openai-compatible' ? (currentSummaryLLM.model || '') : '';
+      filterModelInput.value = currentRoles.filterModel || '';
+      rewriteModelInput.value = currentRoles.rewriteModel || '';
+      [customModel2Input, filterModelInput, rewriteModelInput].forEach(input => input.setAttribute('list', 'secret-setup-model-options'));
       rerankerProfileSelect.innerHTML = RERANKER_PROFILES
         .map(
           (item) =>
@@ -1380,7 +1409,9 @@
       rerankerBaseUrlInput.value = currentReranker.baseUrl || '';
 
       let githubOk = !!initialGithubToken;
-      let deepseekOk = !!initialApiKey;
+      let deepseekOk = initialProvider === 'deepseek' && !!initialApiKey;
+      let customOk = false;
+      let customBrowserUnverified = false;
 
       const setErrorText = (text, color) => {
         if (!errorEl) return;
@@ -1432,8 +1463,18 @@
         rerankerBaseUrlInput.setAttribute('data-reranker-profile', profile.value);
         rerankerStatusEl.textContent = `${profile.note} 模型：${profile.model}`;
       };
+      const selectedProvider = () => (providerInputs.find(input => input.checked) || {}).value || 'deepseek';
       const syncProviderSections = () => {
-        deepseekSection.style.display = 'block';
+        const isDeepSeek = selectedProvider() === 'deepseek';
+        deepseekSection.style.display = isDeepSeek ? 'block' : 'none';
+        customSection.style.display = isDeepSeek ? 'none' : 'block';
+        modelOptions.replaceChildren();
+        const models = isDeepSeek ? getDefaultDeepSeekChatModels() : sanitizeModelList(customModel1Input.value, 99);
+        models.forEach(model => {
+          const option = document.createElement('option');
+          option.value = model;
+          modelOptions.appendChild(option);
+        });
       };
 
       const resetGithubStatus = () => {
@@ -1449,6 +1490,11 @@
         deepseekStatusEl.style.color = '#999';
       };
       const resetCustomStatus = () => {
+        customOk = false;
+        customBrowserUnverified = false;
+        backendOnlyInput.checked = false;
+        backendOnlyRow.style.display = 'none';
+        syncProviderSections();
         customStatusEl.innerHTML =
           '将依次用已填写聊天模型发送 <code>hello world</code>，检查接口与模型是否可用。';
         customStatusEl.style.color = '#999';
@@ -1495,42 +1541,39 @@
         return `${raw}/v1/rerank`;
       };
 
-      const collectProviderDraft = () => {
-        const apiKey = normalizeText(deepseekInput.value);
-        const model = selectedDeepSeekModel();
-        if (!apiKey) {
-          throw new Error('请先输入 DeepSeek API Key。');
-        }
-        if (!model) {
-          throw new Error('请选择用于工作流总结的大模型。');
-        }
-        const reranker = buildRerankerDraft(apiKey, getDefaultDeepSeekBaseUrl());
+      const collectProviderDraft = (includeReranker = true) => {
+        const providerType = selectedProvider();
+        const isDeepSeek = providerType === 'deepseek';
+        const apiKey = normalizeText(isDeepSeek ? deepseekInput.value : customApiKeyInput.value);
+        const model = isDeepSeek ? selectedDeepSeekModel() : normalizeText(customModel2Input.value);
+        if (!apiKey || !model) throw new Error('请填写 API Key 和总结模型。');
+        const baseUrl = getLLMUtils().validateBaseUrl(isDeepSeek ? getDefaultDeepSeekBaseUrl() : customBaseUrlInput.value);
+        const filterModel = normalizeText(filterModelInput.value) || model;
+        const rewriteModel = normalizeText(rewriteModelInput.value) || model;
+        const chatModels = isDeepSeek ? getDefaultDeepSeekChatModels() : sanitizeModelList(customModel1Input.value, 99);
+        if (!chatModels.length) throw new Error('请填写至少一个聊天模型的上游 ID。');
+        const reranker = includeReranker ? buildRerankerDraft(apiKey, baseUrl) : null;
         return {
-          providerType: 'deepseek',
+          providerType,
           summaryApiKey: apiKey,
-          summaryBaseUrl: getDefaultDeepSeekBaseUrl(),
+          summaryBaseUrl: baseUrl,
           summaryModel: model,
-          chatModels: getDefaultDeepSeekChatModels(),
+          filterModel,
+          rewriteModel,
+          chatModels,
           skipRerank: false,
-          reranker: {
-            ...reranker,
-          },
+          reranker,
         };
       };
 
       const buildPingEntries = () => {
-        const apiKey = normalizeText(deepseekInput.value);
-        const model = selectedDeepSeekModel();
-        if (!apiKey || !model) {
-          throw new Error('请先填写 DeepSeek API Key 并选择模型。');
-        }
-        return [
-          {
-            apiKey,
-            baseUrl: getDefaultDeepSeekBaseUrl(),
-            model,
-          },
-        ];
+        const draft = collectProviderDraft(false);
+        const models = sanitizeModelList([draft.summaryModel, draft.filterModel, draft.rewriteModel, ...draft.chatModels], 99);
+        return models.map(model => ({
+          apiKey: draft.summaryApiKey,
+          baseUrl: draft.summaryBaseUrl,
+          model,
+        }));
       };
 
       const bindResetOnInput = (elements, resetFn) => {
@@ -1546,7 +1589,7 @@
         githubStatusEl.style.color = '#666';
       }
       if (initialApiKey) {
-        deepseekStatusEl.textContent = '已载入当前 DeepSeek 配置；如更换 API Key 或模型，建议点击测试按钮。';
+        (initialProvider === 'deepseek' ? deepseekStatusEl : customStatusEl).textContent = '已载入当前加密配置；更换 API Key、端点或模型后请重新测试。';
         deepseekStatusEl.style.color = '#666';
       }
 
@@ -1555,9 +1598,9 @@
       resetRerankerTestStatus();
 
       bindResetOnInput([githubInput], resetGithubStatus);
-      bindResetOnInput([deepseekInput, deepseekModelSelect], resetDeepSeekStatus);
+      bindResetOnInput([deepseekInput, deepseekModelSelect, filterModelInput, rewriteModelInput], resetDeepSeekStatus);
       bindResetOnInput(
-        [customApiKeyInput, customBaseUrlInput, customModel1Input, customModel2Input, customModel3Input],
+        [customApiKeyInput, customBaseUrlInput, customModel1Input, customModel2Input, filterModelInput, rewriteModelInput],
         resetCustomStatus,
       );
       bindResetOnInput([rerankerApiKeyInput, rerankerBaseUrlInput], resetRerankerTestStatus);
@@ -1629,7 +1672,7 @@
         input.addEventListener('change', () => {
           syncProviderSections();
           setErrorText(
-            'DeepSeek 密钥将加密写入 GitHub Secrets（用于 GitHub Actions），并同步生成本地 secret.private 备份。',
+            'LLM 密钥将加密写入 GitHub Secrets（用于 GitHub Actions），并同步生成本地 secret.private 备份。',
             '#999',
           );
         });
@@ -1742,6 +1785,26 @@
           deepseekVerifyBtn.disabled = false;
         }
       });
+      customTestBtn.addEventListener('click', async () => {
+        customOk = false;
+        customBrowserUnverified = false;
+        backendOnlyInput.checked = false;
+        backendOnlyRow.style.display = 'none';
+        customTestBtn.disabled = true;
+        try {
+          const models = await pingChatModels(buildPingEntries(), customStatusEl);
+          customStatusEl.textContent = `✅ 浏览器连接验证成功：${models.join(', ')}`;
+          customStatusEl.style.color = '#28a745';
+          customOk = true;
+        } catch (error) {
+          customBrowserUnverified = error.code === 'BROWSER_UNVERIFIED';
+          backendOnlyRow.style.display = customBrowserUnverified ? 'block' : 'none';
+          customStatusEl.textContent = `浏览器测试未通过：${error.message || error}`;
+          customStatusEl.style.color = customBrowserUnverified ? '#a66b00' : '#c00';
+        } finally {
+          customTestBtn.disabled = false;
+        }
+      });
 
       genBtn.addEventListener('click', async () => {
         const githubToken = normalizeText(githubInput.value);
@@ -1763,17 +1826,35 @@
           setErrorText('请先点击“测试当前配置”，确认 DeepSeek 配置可用。', '#c00');
           return;
         }
+        if (providerDraft.providerType === 'openai-compatible' && !customOk) {
+          const diagnostic = getLLMUtils().browserRequestError(buildChatCompletionsEndpoint(providerDraft.summaryBaseUrl));
+          if (diagnostic) {
+            customBrowserUnverified = true;
+            backendOnlyRow.style.display = 'block';
+            customStatusEl.textContent = diagnostic.message;
+          }
+          if (!(customBrowserUnverified && backendOnlyInput.checked)) {
+            setErrorText(customBrowserUnverified
+              ? '浏览器未验证连接。确认“仅保存后端配置”后可保存；这不表示 API Key 或模型已验证。'
+              : '请先测试当前网关配置；实际 HTTP 错误必须修正后才能保存。', '#a66b00');
+            return;
+          }
+        }
 
         const nowIso = new Date().toISOString();
         const plainConfig = {
+          ...currentSecret,
           createdAt: currentSecret.createdAt || nowIso,
           updatedAt: nowIso,
           github: {
             token: githubToken,
           },
           llmProvider: {
+            ...(currentSecret.llmProvider || {}),
             type: providerDraft.providerType,
             skipRerank: providerDraft.skipRerank,
+            filterModel: providerDraft.filterModel,
+            rewriteModel: providerDraft.rewriteModel,
           },
           summarizedLLM: {
             apiKey: providerDraft.summaryApiKey,

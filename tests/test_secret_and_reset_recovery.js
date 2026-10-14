@@ -25,8 +25,11 @@ function sandbox() {
 
 function secretSandbox() {
   const s = sandbox();
+  s.context.location = s.context.window.location;
+  vm.runInContext(fs.readFileSync('app/llm-config-utils.js', 'utf8'), s.context);
+  s.context.window.DPRLLMConfigUtils = s.context.DPRLLMConfigUtils;
   const code = fs.readFileSync('app/secret.session.js', 'utf8')
-    .replace(/\}\)\(\);\s*$/, 'window.probe = {fetchStaticSecretPayload, pingChatModels, init, resolveRerankerConfig, RERANKER_PROFILES};})();');
+    .replace(/\}\)\(\);\s*$/, 'window.probe = {fetchStaticSecretPayload, pingChatModels, init, setupOverlay, saveSummarizeSecretsToGithub, resolveRerankerConfig, RERANKER_PROFILES};})();');
   vm.runInContext(code, s.context);
   return s;
 }
@@ -66,11 +69,112 @@ async function testDeepSeekTimeoutAndHttpError() {
   const timer = [...timers.values()].find(t => t.ms === 20000);
   assert.ok(timer);
   timer.fn();
-  await assert.rejects(pending, { message: 'DeepSeek 连接测试超时，请稍后重试' });
+  await assert.rejects(pending);
   assert.equal(timers.size, 0);
   context.fetch = async () => response(401);
   await assert.rejects(context.window.probe.pingChatModels(entries, null), /HTTP 401/);
 }
+
+async function testGatewayProbeDistinguishesBrowserBlockingAndReachableFailure() {
+  const { context, timers } = secretSandbox();
+  const entries = [{ model: 'vendor/chat', apiKey: 'test-only', baseUrl: 'http://gateway.test:8080/v1' }];
+  let calls = 0;
+  context.fetch = async () => { calls++; return response(200, { choices: [{ message: { content: 'hello world' } }] }); };
+  await assert.rejects(context.window.probe.pingChatModels(entries, null), error => error.code === 'BROWSER_UNVERIFIED');
+  assert.equal(calls, 0, 'Mixed content is diagnosed without pretending a probe succeeded');
+  entries[0].baseUrl = 'https://gateway.test/v1';
+  context.fetch = async () => { throw new TypeError('Failed to fetch'); };
+  await assert.rejects(context.window.probe.pingChatModels(entries, null), error => error.code === 'BROWSER_UNVERIFIED');
+  context.fetch = async () => response(401);
+  await assert.rejects(context.window.probe.pingChatModels(entries, null), error => !error.code && /HTTP 401/.test(error.message));
+  context.fetch = async () => response(200, { choices: [{ message: { content: 'hello world' } }] });
+  assert.deepEqual(Array.from(await context.window.probe.pingChatModels(entries, null)), ['vendor/chat']);
+  assert.equal(timers.size, 0);
+}
+
+async function testGatewayWizardSavesRolesAndReopensWithoutChangingEndpoint() {
+  const { context } = secretSandbox();
+  Object.assign(context.window.location, { hostname: 'localhost', origin: 'https://localhost:8000', href: 'https://localhost:8000/' });
+  const nodes = {};
+  let radios = [];
+  const makeNode = () => ({
+    value: '', checked: false, textContent: '', style: {}, attrs: {}, children: [], listeners: {},
+    classList: { add() {}, remove() {}, toggle() {} },
+    addEventListener(name, fn) { if (!this.listeners[name]) this.listeners[name] = []; this.listeners[name].push(fn); },
+    async emit(name) { for (const fn of this.listeners[name] || []) await fn({ currentTarget: this }); },
+    setAttribute(name, value) { this.attrs[name] = value; }, getAttribute(name) { return this.attrs[name] || ''; },
+    closest() { return this; }, appendChild(node) { this.children.push(node); }, replaceChildren() { this.children = []; }, focus() {},
+  });
+  nodes['secret-gate-overlay'] = makeNode();
+  const modal = nodes['secret-gate-modal'] = makeNode();
+  Object.defineProperty(modal, 'innerHTML', { set(value) {
+    for (const match of value.matchAll(/id="([^"]+)"/g)) nodes[match[1]] = makeNode();
+    radios = Array.from(value.matchAll(/name="secret-setup-provider" value="([^"]+)"/g), match => Object.assign(makeNode(), { value: match[1] }));
+  } });
+  const stored = new Map([['dpr_secret_password_v1', 'Test-password-123!']]);
+  context.window.localStorage = { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value) };
+  context.document.getElementById = id => nodes[id] || null;
+  context.document.querySelectorAll = () => radios;
+  context.document.createElement = () => makeNode();
+  context.document.dispatchEvent = () => {};
+  context.requestAnimationFrame = fn => fn();
+  context.crypto = require('node:crypto').webcrypto;
+  context.window.crypto = context.crypto;
+  context.TextEncoder = TextEncoder;
+  context.TextDecoder = TextDecoder;
+  context.btoa = value => Buffer.from(value, 'binary').toString('base64');
+  context.window.decoded_secret_private = { readState: { paper: true }, createdAt: 'original' };
+  context.window.probe.setupOverlay(false);
+  context.window.DPRSecretSetup.openStep2();
+  assert.deepEqual(radios.map(radio => radio.value), ['deepseek', 'openai-compatible']);
+  assert.equal(radios.find(radio => radio.checked).value, 'deepseek');
+  radios.forEach(radio => { radio.checked = radio.value === 'openai-compatible'; });
+  await radios[1].emit('change');
+  assert.equal(nodes['secret-setup-custom-section'].style.display, 'block');
+  assert.equal(nodes['secret-setup-deepseek-section'].style.display, 'none');
+  nodes['secret-setup-custom-api-key'].value = 'test-only';
+  nodes['secret-setup-custom-base-url'].value = 'http://gateway.test:8080/v1/';
+  nodes['secret-setup-custom-model-1'].value = 'vendor/chat, vendor/second';
+  nodes['secret-setup-custom-model-2'].value = 'vendor/summary';
+  nodes['secret-setup-filter-model'].value = 'vendor/filter';
+  nodes['secret-setup-rewrite-model'].value = 'vendor/rewrite';
+  let localSave;
+  context.fetch = async (url, options) => {
+    localSave = JSON.parse(options.body);
+    return response(200, { ok: true });
+  };
+  await nodes['secret-setup-custom-test'].emit('click');
+  assert.equal(nodes['secret-setup-backend-only-row'].style.display, 'block');
+  await nodes['secret-setup-generate'].emit('click');
+  assert.equal(localSave, undefined, 'Unverified config requires explicit acknowledgement');
+  nodes['secret-setup-backend-only'].checked = true;
+  await nodes['secret-setup-generate'].emit('click');
+  assert.ok(localSave, 'Acknowledged backend-only configuration is saved');
+  assert.equal(localSave.secret.llmProvider.type, 'openai-compatible');
+  assert.equal(localSave.secret.llmProvider.filterModel, 'vendor/filter');
+  assert.equal(localSave.secret.llmProvider.rewriteModel, 'vendor/rewrite');
+  assert.equal(localSave.secret.summarizedLLM.baseUrl, 'http://gateway.test:8080/v1');
+  assert.equal(localSave.secret.summarizedLLM.model, 'vendor/summary');
+  assert.deepEqual(localSave.secret.chatLLMs[0].models, ['vendor/chat', 'vendor/second']);
+  assert.deepEqual(localSave.secret.readState, { paper: true });
+  assert.equal(localSave.secret.createdAt, 'original');
+  for (const field of ['salt', 'iv', 'ciphertext']) assert.equal(typeof localSave.payload[field], 'string');
+  context.window.DPRSecretSetup.openStep2();
+  assert.equal(radios.find(radio => radio.checked).value, 'openai-compatible');
+  assert.equal(nodes['secret-setup-custom-base-url'].value, 'http://gateway.test:8080/v1');
+  assert.equal(nodes['secret-setup-custom-model-2'].value, 'vendor/summary');
+  assert.equal(nodes['secret-setup-filter-model'].value, 'vendor/filter');
+  assert.equal(nodes['secret-setup-rewrite-model'].value, 'vendor/rewrite');
+  nodes['secret-setup-custom-base-url'].value = 'https://gateway.test/v1';
+  await nodes['secret-setup-custom-base-url'].emit('input');
+  context.fetch = async () => response(401);
+  await nodes['secret-setup-custom-test'].emit('click');
+  assert.equal(nodes['secret-setup-backend-only-row'].style.display, 'none');
+  localSave = undefined;
+  await nodes['secret-setup-generate'].emit('click');
+  assert.equal(localSave, undefined, 'Reachable HTTP rejection cannot be bypassed as a browser limitation');
+}
+
 
 async function testSecretErrorUiPreservesPasswordAndCanRetry() {
   const { context } = secretSandbox();
@@ -150,7 +254,7 @@ async function testWorkflowReturnsDispatchResultBeforeMonitoring() {
       return response(200, { default_branch: 'main', fork: true });
     };
     const code = fs.readFileSync('app/workflows.runner.js', 'utf8')
-      .replace(/\n  return \{\n/, '\n  return {\n    dispatchAndMonitor, setUi: (s,r) => {statusEl=s;runsEl=r;},\n');
+      .replace(/\r?\n  return \{\r?\n/, '\n  return {\n    dispatchAndMonitor, setUi: (s,r) => {statusEl=s;runsEl=r;},\n');
     vm.runInContext(code, context);
     const api = context.window.DPRWorkflowRunner;
     const statusEl = { textContent: '', style: {}, classList: { toggle() {} } };
@@ -174,7 +278,7 @@ async function testLegacyLocalRerankerMovesToCloud() {
 }
 
 (async () => {
-  for (const test of [testLegacyLocalRerankerMovesToCloud, testSecretReadFailuresAndRetry, testDeepSeekTimeoutAndHttpError, testSecretErrorUiPreservesPasswordAndCanRetry,
+  for (const test of [testLegacyLocalRerankerMovesToCloud, testSecretReadFailuresAndRetry, testDeepSeekTimeoutAndHttpError, testGatewayProbeDistinguishesBrowserBlockingAndReachableFailure, testGatewayWizardSavesRolesAndReopensWithoutChangingEndpoint, testSecretErrorUiPreservesPasswordAndCanRetry,
     testResetWaitsForAcknowledgement, testWorkflowReturnsDispatchResultBeforeMonitoring]) {
     await test();
     console.log(test.name + ' passed');

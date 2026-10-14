@@ -9,19 +9,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_module():
+    src_dir = str(ROOT / "src")
+    if src_dir not in sys.path:
+        sys.path.insert(0, src_dir)
     if "fitz" not in sys.modules:
         fitz_stub = types.ModuleType("fitz")
         fitz_stub.open = lambda *args, **kwargs: None
         sys.modules["fitz"] = fitz_stub
-    if "llm" not in sys.modules:
-        llm_stub = types.ModuleType("llm")
-
-        class DummyDeepSeekClient:
-            def __init__(self, *args, **kwargs):
-                pass
-
-        llm_stub.DeepSeekClient = DummyDeepSeekClient
-        sys.modules["llm"] = llm_stub
 
     src_path = ROOT / "src" / "6.generate_docs.py"
     spec = importlib.util.spec_from_file_location("gen6_home_dashboard", src_path)

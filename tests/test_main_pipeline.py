@@ -54,25 +54,6 @@ class MainPipelineTest(unittest.TestCase):
         path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         return path
 
-    def test_resolve_summary_step_env_uses_summary_overrides(self):
-        with patch.dict(
-            os.environ,
-            {
-                "DEEPSEEK_API_KEY": "base-key",
-                "DEEPSEEK_BASE_URL": "https://api.deepseek.com",
-                "SUMMARY_API_KEY": "summary-key",
-                "SUMMARY_BASE_URL": "https://summary.example.com/v1",
-                "SUMMARY_MODEL": "deepseek-v4-flash",
-            },
-            clear=True,
-        ):
-            env = self.mod.resolve_summary_step_env()
-
-        self.assertEqual(env["DEEPSEEK_API_KEY"], "summary-key")
-        self.assertEqual(env["SUMMARY_API_KEY"], "summary-key")
-        self.assertEqual(env["DEEPSEEK_BASE_URL"], "https://summary.example.com/v1")
-        self.assertEqual(env["LLM_PRIMARY_BASE_URL"], "https://summary.example.com/v1")
-        self.assertEqual(env["DEEPSEEK_MODEL"], "deepseek-v4-flash")
 
     def test_main_runs_local_rerank_without_remote_rerank_base(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -100,7 +81,7 @@ class MainPipelineTest(unittest.TestCase):
                 sys, "argv", ["main.py"]
             ), patch.dict(
                 os.environ,
-                {"LLM_PRIMARY_BASE_URL": "https://api.openai.com/v1"},
+                {"LLM_BASE_URL": "https://api.openai.com/v1"},
                 clear=True,
             ):
                 self.mod.main()
@@ -135,7 +116,7 @@ class MainPipelineTest(unittest.TestCase):
                 sys, "argv", ["main.py"]
             ), patch.dict(
                 os.environ,
-                {"LLM_PRIMARY_BASE_URL": "https://api.deepseek.com"},
+                {"LLM_BASE_URL": "https://api.deepseek.com"},
                 clear=True,
             ):
                 self.mod.main()

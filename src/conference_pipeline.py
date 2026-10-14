@@ -143,7 +143,7 @@ def main() -> None:
     parser.add_argument("--rerank-top-n", type=int, default=80)
     parser.add_argument("--rerank-device", type=str, default=os.getenv("LOCAL_RERANK_DEVICE", "cpu"))
     parser.add_argument("--rerank-batch-size", type=int, default=int(os.getenv("LOCAL_RERANK_BATCH_SIZE") or "4"))
-    parser.add_argument("--run-llm-refine", action="store_true", help="继续运行 DeepSeek 相关性打分。")
+    parser.add_argument("--run-llm-refine", action="store_true", help="继续运行 LLM 相关性打分。")
     parser.add_argument("--llm-min-star", type=int, default=4)
     parser.add_argument("--llm-batch-size", type=int, default=10)
     parser.add_argument("--llm-filter-concurrency", type=int, default=2)
@@ -242,7 +242,7 @@ def main() -> None:
     llm_path = None
     if args.run_llm_refine:
         if rerank_path is None:
-            raise RuntimeError("DeepSeek 打分需要先生成 rerank 结果。")
+            raise RuntimeError("LLM 打分需要先生成 rerank 结果。")
         rank_dir = rerank_path.parent
         llm_path = rank_dir / f"conference-{conf_token}-{year_token}.supabase.llm.json"
         llm_cmd = [
@@ -261,7 +261,7 @@ def main() -> None:
         ]
         if args.config and str(args.config).strip() != "-":
             llm_cmd.extend(["--config", args.config])
-        run_step("Conference DeepSeek refine", llm_cmd)
+        run_step("Conference LLM refine", llm_cmd)
         prune_llm_result(llm_path, float(args.display_min_score))
 
     manifest = {

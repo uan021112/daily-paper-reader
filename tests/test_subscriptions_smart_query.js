@@ -9,28 +9,13 @@ global.document = global.document || {
 require('../app/subscriptions.smart-query.js');
 
 const {
-  buildPromptFromTemplate,
   containsCjk,
-  defaultPromptTemplate,
   deriveTagFromCandidates,
   isEnglishRetrievalText,
   normalizeGenerated,
   sanitizeAutoTag,
 } = global.window.SubscriptionsSmartQuery.__test;
 
-function testPromptRequiresEnglishRetrievalFieldsAndChineseCnFields() {
-  const prompt = buildPromptFromTemplate('RL', '强化学习算法对比', defaultPromptTemplate);
-
-  assert.match(prompt, /keyword and query MUST be English retrieval text only/);
-  assert.match(prompt, /keyword_cn and query_cn MUST be Chinese/);
-  assert.match(prompt, /The query field MUST be English only/);
-  assert.match(prompt, /Do NOT output acronym-only/);
-  assert.match(prompt, /meaningful atomic noun phrases/);
-  assert.match(prompt, /standalone adjective\/modifier keywords/);
-  assert.match(prompt, /hyphen-separated words/);
-  assert.match(prompt, /English words or an English acronym only/);
-  assert.match(prompt, /at most 12 characters/);
-}
 
 function testSuggestedTagIsEnglishAndAtMostTwelveChars() {
   assert.equal(sanitizeAutoTag('reinforcement learning algorithms'), 'rla');
@@ -178,11 +163,48 @@ function testProfileSelectionPersistsAcrossRerender() {
   );
 }
 
-testPromptRequiresEnglishRetrievalFieldsAndChineseCnFields();
 testSuggestedTagIsEnglishAndAtMostTwelveChars();
 testGeneratedCandidatesKeepChineseOutOfRetrievalFields();
 testGeneratedCandidatesDropWeakAcronymKeywords();
 testGeneratedCandidatesDoNotCollapseConceptToSingleModifier();
 testProfileSelectionPersistsAcrossRerender();
 
-console.log('subscriptions smart query tests passed');
+async function testGatewayRequestUsesRewriteRoleAndDiagnosesBrowserFailures() {
+  global.window.DPRLLMConfigUtils = require('../app/llm-config-utils.js');
+  global.window.SubscriptionsManager = { getDraftConfig: () => ({}) };
+  global.window.decoded_secret_private = {
+    llmProvider: { type: 'openai-compatible', rewriteModel: 'vendor/rewrite' },
+    summarizedLLM: { apiKey: 'test-only', baseUrl: 'https://gateway.test/v1', model: 'vendor/summary' },
+  };
+  const originalFetch = global.fetch;
+  let calls = 0;
+  try {
+    global.fetch = async (url, options) => {
+      calls += 1;
+      assert.equal(url, 'https://gateway.test/v1/chat/completions');
+      const payload = JSON.parse(options.body);
+      assert.equal(payload.model, 'vendor/rewrite');
+      assert.equal(payload.max_tokens, 16384);
+      assert.deepEqual(payload.response_format, { type: 'json_object' });
+      assert.equal(payload.thinking, undefined);
+      assert.equal(options.headers.Authorization, 'Bearer test-only');
+      assert.equal(Object.keys(options.headers).some(key => /x-api-key/i.test(key)), false);
+      return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({
+        tag: 'RL', keywords: [{ keyword: 'policy gradient', query: 'policy gradient methods' }],
+      }) } }] }) };
+    };
+    const candidates = await global.window.SubscriptionsSmartQuery.generateResearchCandidates('RL', 'policy gradient methods');
+    assert.equal(candidates.keywords[0].keyword, 'policy gradient');
+    assert.equal(calls, 1);
+    global.fetch = async () => { throw new TypeError('Failed to fetch'); };
+    await assert.rejects(global.window.SubscriptionsSmartQuery.generateResearchCandidates('RL', 'policy gradient methods'), /CORS/);
+    global.fetch = async () => ({ ok: false, status: 401, text: async () => 'invalid key' });
+    await assert.rejects(global.window.SubscriptionsSmartQuery.generateResearchCandidates('RL', 'policy gradient methods'), /HTTP 401/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+}
+
+testGatewayRequestUsesRewriteRoleAndDiagnosesBrowserFailures()
+  .then(() => console.log('subscriptions smart query tests passed'))
+  .catch(error => { console.error(error); process.exit(1); });

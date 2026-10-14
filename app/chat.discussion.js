@@ -108,25 +108,10 @@ window.PrivateDiscussionChat = (function () {
     });
     return models;
   };
-  const inferChatApiProfile = (baseUrl, model) => {
-    const utils = window.DPRLLMConfigUtils || {};
-    if (typeof utils.inferChatApiProfile === 'function') {
-      return utils.inferChatApiProfile(baseUrl, model);
-    }
-    const normalizedBaseUrl = String(baseUrl || '').trim().toLowerCase();
-    const normalizedModel = String(model || '').trim().toLowerCase();
-    if (
-      /(^|\/\/)(api\.)?deepseek\.com(?:$|\/)/i.test(normalizedBaseUrl)
-      || normalizedModel.startsWith('deepseek-')
-    ) {
-      return 'deepseek';
-    }
-    return 'unsupported';
-  };
-	  const buildStreamingChatPayload = (baseUrl, model, messages) => {
+	  const buildStreamingChatPayload = (baseUrl, model, messages, provider) => {
 	    const utils = window.DPRLLMConfigUtils || {};
 	    if (typeof utils.buildStreamingChatPayload === 'function') {
-	      return utils.buildStreamingChatPayload({ baseUrl, model, messages });
+	      return utils.buildStreamingChatPayload({ baseUrl, model, messages, provider });
 	    }
 	    const payload = {
 	      model,
@@ -1232,7 +1217,13 @@ window.PrivateDiscussionChat = (function () {
       let resp = null;
 
       const baseUrl = (modelEntry && modelEntry.baseUrl ? modelEntry.baseUrl : '').trim();
-	      const primaryPayload = buildStreamingChatPayload(baseUrl, model, messages);
+	      const primaryPayload = buildStreamingChatPayload(baseUrl, model, messages, modelEntry && modelEntry.provider);
+          const utils = window.DPRLLMConfigUtils || {};
+          const browserBlock = typeof utils.browserRequestError === 'function' ? utils.browserRequestError(endpoint) : null;
+          if (browserBlock) {
+            clearTimeout(timerId);
+            throw browserBlock;
+          }
 	      const fallbackPayload = {
 	        model,
 	        messages,
@@ -1278,6 +1269,9 @@ window.PrivateDiscussionChat = (function () {
             resp._dprErrorPreview = retryText;
           }
         }
+      } catch (error) {
+        throw typeof utils.browserRequestError === 'function'
+          ? utils.browserRequestError(endpoint, error) : error;
       } finally {
         clearTimeout(timerId);
       }
@@ -1418,11 +1412,12 @@ window.PrivateDiscussionChat = (function () {
           statusEl.textContent = '聊天请求超时，请检查网络。';
           statusEl.style.color = '#c00';
         }
-      } else if (e && e.name === 'TypeError') {
-        aiAnswerDiv.textContent = '网络连接异常（可能为 CORS 或跨域问题）。';
+      } else if (e && (e.name === 'TypeError' || e.code === 'BROWSER_UNVERIFIED')) {
+        const diagnostic = e.code === 'BROWSER_UNVERIFIED' ? e.message
+          : '浏览器网络请求失败：请检查 HTTPS / mixed content、网关 CORS 预检（Origin、Authorization、Content-Type）、TLS 和网络连接。后端可保存 HTTP 配置，但不代表浏览器可调用。';
+        aiAnswerDiv.textContent = diagnostic;
         if (statusEl) {
-          statusEl.textContent =
-            '请求失败：网络连接异常，请确认模型端点可访问（含 CORS）及代理设置。';
+          statusEl.textContent = diagnostic;
           statusEl.style.color = '#c00';
         }
       } else {

@@ -228,7 +228,7 @@ def review_batch(papers, topic, cache, client_factory, model_key):
         schema=SCHEMA,
     )
     if response.get("parse_error") or not isinstance(response.get("parsed"), dict):
-        raise ValueError("DeepSeek评审结果不完整，可重跑复用已完成进度")
+        raise ValueError("模型评审结果不完整，可重跑复用已完成进度")
     reviews = response["parsed"].get("papers") or []
     # 兼容已有客户端返回原ID，但不允许混用编号/ID或猜测、修正版本号。
     if len(reviews) == len(missing) and {r.get('id') for r in reviews} == set(aliases):
@@ -238,7 +238,7 @@ def review_batch(papers, topic, cache, client_factory, model_key):
     }:
         write_json(Path(cache) / 'failures' / (fingerprint([p['id'] for p, _ in missing]) + '.json'),
                    {'expected_ids':[p['id'] for p, _ in missing], 'received_ids':[r.get('id') for r in reviews]})
-        raise ValueError("DeepSeek返回ID缺失或重复，未把本批次标为完成")
+        raise ValueError("模型返回ID缺失或重复，未把本批次标为完成")
     by_id = {r["id"]: r for r in reviews}
     validated = [
         (p, path, classify_review(by_id[p["id"]], p, topic)) for p, path in missing
@@ -359,8 +359,13 @@ def run_review(config, days, root, run_token):
         raise RuntimeError(
             "以下专题没有启用的关键词或语义查询：" + "、".join(missing_tags)
         )
-    if not os.getenv("DEEPSEEK_API_KEY"):
-        raise RuntimeError("专题回溯需要 DEEPSEEK_API_KEY")
+    try:
+        from llm import ClientFactory, resolve_llm_config
+    except ImportError:
+        from .llm import ClientFactory, resolve_llm_config
+    llm_config = resolve_llm_config("filter")
+    if not llm_config["api_key"]:
+        raise RuntimeError("专题回溯需要 LLM_API_KEY、DEEPSEEK_API_KEY 或 SUMMARY_API_KEY")
     # 从固定运行标识推导日期，跨UTC午夜和重跑时不会使窗口漂移。
     end = datetime.strptime(run_token[-8:], "%Y%m%d").replace(
         tzinfo=timezone.utc
@@ -371,19 +376,9 @@ def run_review(config, days, root, run_token):
     except ImportError:
         from .model_loader import load_sentence_transformer
 
-    try:
-        from llm import DeepSeekClient
-    except ImportError:
-        from .llm import DeepSeekClient
-    model_name = (
-        os.getenv("DEEPSEEK_FILTER_MODEL")
-        or os.getenv("DEEPSEEK_MODEL")
-        or "deepseek-v4-flash"
-    )
-    base_url = os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
 
     def client_factory():
-        client = DeepSeekClient(os.environ["DEEPSEEK_API_KEY"], model_name, base_url)
+        client = ClientFactory.create(**llm_config)
         client.kwargs.update(
             temperature=0, max_tokens=6000, thinking={"type": "disabled"}
         )
@@ -496,7 +491,7 @@ def run_review(config, days, root, run_token):
                     topic,
                     cache,
                     client_factory,
-                    [model_name, base_url],
+                    [llm_config["model"], llm_config["base_url"]],
                 )
                 pending[task] = tag
         for i, task in enumerate(as_completed(pending), 1):
@@ -528,7 +523,7 @@ def run_review(config, days, root, run_token):
             "end_exclusive": end.isoformat(),
             "days": days,
             "source": "arxiv",
-            "model": model_name,
+            "model": llm_config["model"],
             "vector_per_30_days_per_query": VECTOR_PER_MONTH,
             "coverage_note": "关键词按分片取至不满页；向量每30天每查询Top100补漏，不宣称找全。评分不是人工金标准。",
         },

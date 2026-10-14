@@ -1111,7 +1111,7 @@ window.SubscriptionsManager = (function () {
   };
   const runSelectedQuickFetchByMode = () => {
     if (quickRunMode === '90' || quickRunMode === '365') {
-      if (!window.confirm('将对所选词条进行 arXiv 长周期回溯，只检索 arXiv。全部候选需调用 DeepSeek 评审，宽泛专题可能有上万篇，耗时和费用按实际量增长；不下载全量PDF。确认开始？')) return false;
+      if (!window.confirm('将对所选词条进行 arXiv 长周期回溯，只检索 arXiv。全部候选需调用已配置的 LLM 评审，宽泛专题可能有上万篇，耗时和费用按实际量增长；不下载全量PDF。确认开始？')) return false;
       return runSelectedQuickFetch(Number(quickRunMode), { fetchMode: 'skims' });
     }
     if (quickRunMode === '30-skims') {

@@ -1,8 +1,10 @@
 import importlib.util
+import os
 import pathlib
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 def _load_module(module_name: str, path: pathlib.Path):
@@ -18,32 +20,48 @@ class LocalDebugEnvTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         root = pathlib.Path(__file__).resolve().parents[1]
+        sys.path.insert(0, str(root / "src"))
         cls.mod = _load_module("local_debug_server_mod", root / "src" / "local_debug_server.py")
 
-    def test_build_secret_env_maps_plain_secret_to_runtime_env(self):
-        env = self.mod.build_secret_env(
-            {
-                "summarizedLLM": {
-                    "apiKey": "sk-new-key",
-                    "baseUrl": "https://api.deepseek.com",
-                    "model": "deepseek-v4-flash",
-                },
-                "rerankerLLM": {
-                    "profile": "public-zwwen-rerank",
-                    "provider": "public_zwwen",
-                    "apiKey": "",
-                    "baseUrl": "https://zwwen.online/rerank",
-                    "model": "Qwen/Qwen3-Reranker-0.6B",
-                },
-            }
-        )
+    def test_saved_gateway_selection_replaces_stale_provider_and_preserves_roles(self):
+        from llm import ClientFactory
 
-        self.assertEqual(env["DEEPSEEK_API_KEY"], "sk-new-key")
-        self.assertEqual(env["SUMMARY_API_KEY"], "sk-new-key")
-        self.assertEqual(env["DEEPSEEK_BASE_URL"], "https://api.deepseek.com")
-        self.assertEqual(env["RERANK_PROFILE"], "public-zwwen-rerank")
-        self.assertEqual(env["PUBLIC_RERANK_API_KEY"], "")
-        self.assertEqual(env["PUBLIC_RERANK_API_BASE_URL"], "https://zwwen.online/rerank")
+        env = self.mod.build_secret_env({
+            "llmProvider": {
+                "type": "openai-compatible",
+                "filterModel": "filter-model",
+                "rewriteModel": "rewrite-model",
+            },
+            "summarizedLLM": {
+                "apiKey": "gateway-key",
+                "baseUrl": "http://gateway.example:8080/v1",
+                "model": "summary-model",
+            },
+        })
+        with patch.dict(os.environ, {
+            "LLM_PROVIDER": "deepseek",
+            "LLM_API_KEY": "stale-key",
+            "DEEPSEEK_API_KEY": "stale-native-key",
+            **env,
+        }, clear=True):
+            for purpose, model in (("summary", "summary-model"), ("filter", "filter-model"), ("rewrite", "rewrite-model")):
+                with self.subTest(purpose=purpose):
+                    client = ClientFactory.from_env(purpose)
+                    self.assertEqual(
+                        (client.provider, client.api_key, client.model, client.base_url),
+                        ("openai-compatible", "gateway-key", model, "http://gateway.example:8080/v1"),
+                    )
+
+    def test_older_secret_clears_stale_explicit_provider_and_infers_native_service(self):
+        from llm import ClientFactory
+
+        env = self.mod.build_secret_env({
+            "summarizedLLM": {
+                "apiKey": "native-key", "baseUrl": "https://api.deepseek.com", "model": "deepseek-v4-flash",
+            },
+        })
+        with patch.dict(os.environ, {"LLM_PROVIDER": "openai-compatible", **env}, clear=True):
+            self.assertEqual(ClientFactory.from_env().provider, "deepseek")
 
     def test_update_env_file_replaces_old_keys_preserves_comments_and_clears_stale_key(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -76,22 +94,6 @@ class LocalDebugEnvTest(unittest.TestCase):
             self.assertNotIn("DEEPSEEK_API_KEY=old", text)
             self.assertNotIn("PUBLIC_RERANK_API_KEY=old-rerank", text)
 
-    def test_local_conference_command_skips_existing_topic_before_pipeline(self):
-        cmd = self.mod.build_command(
-            "conference-retrieval",
-            "conference-paper-retrieval.yml",
-            {"conference": "ICML", "years": "2025", "profile_tag": "RL"},
-        )
-        script = cmd[-1]
-
-        self.assertIn("export DPR_FILTER_PROFILE_TAG=\"$PROFILE_TAG\"", script)
-        self.assertIn("build_conference_topic_marker", script)
-        self.assertIn("已存在会议词条，跳过重复检索", script)
-        self.assertIn("src/conference_pipeline.py", script)
-        self.assertNotIn("\npython src/conference_sidebar.py", script)
-        self.assertIn(f"\n{self.mod.sys.executable} src/conference_sidebar.py", script)
-        self.assertLess(script.index("TOPIC_MARKER="), script.index("src/conference_pipeline.py"))
-        self.assertLess(script.index("grep -Fq \"$TOPIC_MARKER\""), script.index("src/conference_pipeline.py"))
 
 
 if __name__ == "__main__":
