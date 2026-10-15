@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-10-06 ~ 2026-10-15</span>
+      <span class="dpr-home-dashboard-kicker">2026-10-15</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 27 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 33 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>12</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>18</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>15</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-10-15 01:14:06 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-15 22:37:03 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,9 +69,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>10 天梳理 27 篇研究，精读 12 篇、速读 15 篇，聚焦 3D 视觉与几何重建。</p>
-<p>最值得关注的是长序列视图合成与位姿估计（LVSPM）和 RGB-D 物体网格精修，两篇均获 9.0 分；点云去噪与高斯泼溅也值得留意。</p>
-<p>下步可先读两篇高分精读，再按兴趣延伸到单图重建或机器人点云处理。</p>
+<p>今日精选 33 篇论文，覆盖 18 篇精读与 15 篇速读。</p>
+<p>最值得关注的是语义不确定性驱动的开放词汇 3D 建图，以及适应多地形的四足机器人节能步态。</p>
+<p>建议先读两篇 9 分精读，了解机器人建图与运动控制的最新探索。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -80,12 +80,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">12 篇</strong>
+    <strong class="dpr-home-dashboard-count">18 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="LVSPM: Long Sequence View Synthesis and Pose Estimation Model">LVSPM: Long Sequence View Synthesis and Pose Estimation Model</span></li><li><span class="dpr-home-dashboard-paper-title" title="RGBD-to-3D Object Mesh Refinement via Depth Matching and Symmetry Propagation">RGBD-to-3D Object Mesh Refinement via Depth Matching and Symmetry Propagation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Zebra3D: Efficient Hybrid Foundation Models For Scalable 3D Reconstruction">Zebra3D: Efficient Hybrid Foundation Models For Scalable 3D Reconstruction</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="ActiveLang: Active Open-Vocabulary 3D Mapping with Semantic-Uncertainty-Guided Exploration">ActiveLang: Active Open-Vocabulary 3D Mapping with Semantic-Uncertainty-Guided Exploration</span></li><li><span class="dpr-home-dashboard-paper-title" title="Energy-Efficient Gait Adaptation via Hierarchical Reinforcement Learning for Quadrupedal Locomotion Across Diverse Terrains">Energy-Efficient Gait Adaptation via Hierarchical Reinforcement Learning for Quadrupedal Locomotion Across Diverse Terrains</span></li><li><span class="dpr-home-dashboard-paper-title" title="RobotWorld: Benchmarking Multimodal Agents for Robot Use Across Diverse Tasks and Embodiments">RobotWorld: Benchmarking Multimodal Agents for Robot Use Across Diverse Tasks and Embodiments</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>4</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>3</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>11</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>4</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -96,9 +96,9 @@
     <strong class="dpr-home-dashboard-count">15 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Building Rome from a Single Image">Building Rome from a Single Image</span></li><li><span class="dpr-home-dashboard-paper-title" title="GUARD: Geometric Uncertainty-Aware Point Cloud Denoising and Segmentation for Robotic Hard Disk Drive Disassembly">GUARD: Geometric Uncertainty-Aware Point Cloud Denoising and Segmentation for Robotic Hard Disk Drive Disassembly</span></li><li><span class="dpr-home-dashboard-paper-title" title="PCAsplat: Gaussian Splatting with Local PCA Regularization">PCAsplat: Gaussian Splatting with Local PCA Regularization</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="COOL: Curiosity-Driven Object Ownership Learning for Personalized Robotic Assistance">COOL: Curiosity-Driven Object Ownership Learning for Personalized Robotic Assistance</span></li><li><span class="dpr-home-dashboard-paper-title" title="ΔWAM: Distilling Action Tangent Fields into World Action Models">ΔWAM: Distilling Action Tangent Fields into World Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="PointVGGT: Zero-Shot Multiview RGB-D Point Cloud Registration with Visual Geometry Foundation Priors">PointVGGT: Zero-Shot Multiview RGB-D Point Cloud Registration with Visual Geometry Foundation Priors</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">surf-recon <strong>7</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>4</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>1</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>4</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>4</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>3</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span></div>
 </section>
 </div>
 
