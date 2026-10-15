@@ -4,17 +4,24 @@
     <a class="dpr-home-notice-tutorial" href="#/tutorial/README">使用教程 <span aria-hidden="true">›</span></a>
   </div>
   <div class="dpr-home-notice-entry">
-    <time class="dpr-home-notice-date" datetime="2026-07-20">07.20</time>
+    <time class="dpr-home-notice-date" datetime="2026-10-14">10.14</time>
     <div>
-      <strong class="dpr-home-notice-entry-title">反馈功能上线</strong>
-      <span class="dpr-home-notice-entry-summary">新增反馈功能，欢迎大家踊跃反馈各种建议，我们会第一时间查看并协调处理。</span>
+      <strong class="dpr-home-notice-entry-title">支持自有 API 网关</strong>
+      <span class="dpr-home-notice-entry-summary">密钥设置新增 OpenAI-compatible / Sub2API 选项，可分别配置聊天、总结、筛选和改写模型，保留 DeepSeek。网页直连仍需 HTTPS 与 CORS。</span>
     </div>
   </div>
   <div class="dpr-home-notice-entry">
-    <time class="dpr-home-notice-date" datetime="2026-07-19">07.19</time>
+    <time class="dpr-home-notice-date" datetime="2026-10-05">10.05</time>
     <div>
-      <strong class="dpr-home-notice-entry-title">首页新增社区统计</strong>
-      <span class="dpr-home-notice-entry-summary">现在可以看到今天看论文的人数和项目加入人数。</span>
+      <strong class="dpr-home-notice-entry-title">medRxiv 自动更新已恢复</strong>
+      <span class="dpr-home-notice-entry-summary">修复超长摘要导致的向量生成失败，维护任务现会限制单条 embedding 文本长度并分片写入。受影响范围已重新同步，公开读取、关键词检索与语义检索均已验证。</span>
+    </div>
+  </div>
+  <div class="dpr-home-notice-entry">
+    <time class="dpr-home-notice-date" datetime="2026-09-16">09.16</time>
+    <div>
+      <strong class="dpr-home-notice-entry-title">日报跨日重复推荐已修复</strong>
+      <span class="dpr-home-notice-entry-summary">历史推荐现按原始召回标签与 arXiv 论文标识去重，暂停词条不再参与评分；同一专题次日不会重复推荐相同论文。已有历史页面保留，不自动删除。</span>
     </div>
   </div>
   <div class="dpr-home-site-stats" data-dpr-site-stats hidden aria-live="polite">
@@ -41,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-10-08</span>
+      <span class="dpr-home-dashboard-kicker">2026-10-06 ~ 2026-10-15</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 22 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 27 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>9</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>13</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>12</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>15</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-10-09 00:17:29 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-15 01:14:06 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -62,7 +69,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-10-08日报完成22篇论文筛选，精读9篇、速读13篇，主线集中在3D视觉、几何Transformer与动态重建。最值得看的是两篇9分精读——RelationVGGT用视觉几何Transformer做3D空间关系分割，VGGT-Bridge用粗步长跳跃边超越序列位姿图；速读中的单目航天器导航、RDGSplat新视角合成、DynStream动态4D高斯也值得扫一眼。普通读者可先读两篇9分精读，再按兴趣选1篇速读，重点看方法如何把几何先验与Transformer结合。</p>
+<p>10 天梳理 27 篇研究，精读 12 篇、速读 15 篇，聚焦 3D 视觉与几何重建。</p>
+<p>最值得关注的是长序列视图合成与位姿估计（LVSPM）和 RGB-D 物体网格精修，两篇均获 9.0 分；点云去噪与高斯泼溅也值得留意。</p>
+<p>下步可先读两篇高分精读，再按兴趣延伸到单图重建或机器人点云处理。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -71,12 +80,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">9 篇</strong>
+    <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="RelationVGGT: Visual Geometry Transformers for 3D Spatial Relation Segmentation">RelationVGGT: Visual Geometry Transformers for 3D Spatial Relation Segmentation</span></li><li><span class="dpr-home-dashboard-paper-title" title="VGGT-Bridge: Beyond Sequential Pose Graphs via Coarse-Stride Skip Edges">VGGT-Bridge: Beyond Sequential Pose Graphs via Coarse-Stride Skip Edges</span></li><li><span class="dpr-home-dashboard-paper-title" title="MVDG: Efficient Multi-view 3D Disambiguation on Unconstrained Real-World Images">MVDG: Efficient Multi-view 3D Disambiguation on Unconstrained Real-World Images</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="LVSPM: Long Sequence View Synthesis and Pose Estimation Model">LVSPM: Long Sequence View Synthesis and Pose Estimation Model</span></li><li><span class="dpr-home-dashboard-paper-title" title="RGBD-to-3D Object Mesh Refinement via Depth Matching and Symmetry Propagation">RGBD-to-3D Object Mesh Refinement via Depth Matching and Symmetry Propagation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Zebra3D: Efficient Hybrid Foundation Models For Scalable 3D Reconstruction">Zebra3D: Efficient Hybrid Foundation Models For Scalable 3D Reconstruction</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>9</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>4</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>3</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -84,12 +93,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">13 篇</strong>
+    <strong class="dpr-home-dashboard-count">15 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Monocular Navigation Relative to Unknown Spacecraft Using a Transformer-Aided Kalman Filter">Monocular Navigation Relative to Unknown Spacecraft Using a Transformer-Aided Kalman Filter</span></li><li><span class="dpr-home-dashboard-paper-title" title="RDGSplat: Render-Dedicated Geometry for Novel View Synthesis">RDGSplat: Render-Dedicated Geometry for Novel View Synthesis</span></li><li><span class="dpr-home-dashboard-paper-title" title="DynStream: Online Streaming 4D Gaussian Reconstruction of Dynamic Worlds from Unposed Video">DynStream: Online Streaming 4D Gaussian Reconstruction of Dynamic Worlds from Unposed Video</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Building Rome from a Single Image">Building Rome from a Single Image</span></li><li><span class="dpr-home-dashboard-paper-title" title="GUARD: Geometric Uncertainty-Aware Point Cloud Denoising and Segmentation for Robotic Hard Disk Drive Disassembly">GUARD: Geometric Uncertainty-Aware Point Cloud Denoising and Segmentation for Robotic Hard Disk Drive Disassembly</span></li><li><span class="dpr-home-dashboard-paper-title" title="PCAsplat: Gaussian Splatting with Local PCA Regularization">PCAsplat: Gaussian Splatting with Local PCA Regularization</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>6</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>4</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">surf-recon <strong>7</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>4</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>1</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span></div>
 </section>
 </div>
 
