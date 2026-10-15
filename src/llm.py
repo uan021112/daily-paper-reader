@@ -9,12 +9,13 @@ import requests
 """
 统一的 LLM 客户端封装。
 
-提供商/模型命名规则：'provider/model'，provider 大小写不敏感，model 保留大小写与路径。
-当前运行链路仅支持 DeepSeek；本地 reranker 不走 LLM API。
+通用配置使用 LLM_PROVIDER + 原始 LLM_MODEL；未指定提供商时也支持 'provider/model'。
+支持 DeepSeek 与 OpenAI-compatible API 网关；本地 reranker 不走 LLM API。
 """
 
 # 单次实验级别的全局 token 统计（需由调用方在实验开始前手动 reset）
 DEFAULT_MAX_OUTPUT_TOKENS = 393216
+DEFAULT_COMPATIBLE_MAX_OUTPUT_TOKENS = 16384
 
 
 def resolve_max_output_tokens(default: int = DEFAULT_MAX_OUTPUT_TOKENS) -> int:
@@ -37,6 +38,43 @@ GLOBAL_TOKENS = {
 GLOBAL_TIME_SECONDS: float = 0.0
 
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+
+
+def infer_llm_provider(base_url: str, model: str) -> str:
+    if re.search(r"(^|//)(api\.)?deepseek\.com(?:$|/)", base_url.strip(), re.IGNORECASE):
+        return "deepseek"
+    if model.strip().lower().startswith("deepseek-"):
+        return "deepseek"
+    return "openai-compatible"
+
+
+def resolve_llm_config(purpose: str = "default") -> Dict[str, str]:
+    """统一解析通用网关配置及原有 DeepSeek/摘要角色配置。"""
+    def first(*names: str) -> str:
+        return next((value for name in names if (value := os.getenv(name, "").strip())), "")
+
+    role_model = {"filter": "LLM_FILTER_MODEL", "rewrite": "LLM_REWRITE_MODEL"}.get(purpose)
+    legacy_role = {"filter": "DEEPSEEK_FILTER_MODEL", "rewrite": "DEEPSEEK_REWRITE_MODEL"}.get(purpose)
+    model = first(*(name for name in (role_model, "LLM_MODEL", legacy_role, "SUMMARY_MODEL", "DEEPSEEK_MODEL") if name))
+    model = model or "deepseek-v4-flash"
+    provider = first("LLM_PROVIDER").lower()
+    if not provider and "/" in model:
+        prefix, suffix = model.split("/", 1)
+        if prefix.lower() in ("deepseek", "openai-compatible"):
+            provider, model = prefix.lower(), suffix
+    if not model:
+        raise ValueError("LLM_MODEL 缺少模型名称")
+    if provider and provider not in ("deepseek", "openai-compatible"):
+        raise ValueError(f"不支持的 LLM_PROVIDER: {provider}")
+
+    legacy_prefixes = ("SUMMARY", "DEEPSEEK") if purpose == "summary" else ("DEEPSEEK", "SUMMARY")
+    api_key = first("LLM_API_KEY", *(f"{prefix}_API_KEY" for prefix in legacy_prefixes))
+    base_url = first("LLM_BASE_URL", *(f"{prefix}_BASE_URL" for prefix in legacy_prefixes))
+    provider = provider or infer_llm_provider(base_url, model)
+    base_url = base_url or (DEFAULT_DEEPSEEK_BASE_URL if provider == "deepseek" else DEFAULT_OPENAI_BASE_URL)
+    return {"provider": provider, "api_key": api_key, "base_url": base_url, "model": model}
+
 
 
 def reset_global_tokens():
@@ -71,7 +109,7 @@ class LLMClient:
         'total': 0,
     }
 
-    def __init__(self, api_key: str, model: str, base_url: str):
+    def __init__(self, api_key: str, model: str, base_url: str, provider: str | None = None):
         """
         初始化 LLM 客户端。
 
@@ -82,6 +120,7 @@ class LLMClient:
         self.api_key = api_key
         self.model = model
         self.base_url = base_url
+        self.provider = provider or infer_llm_provider(base_url, model)
         self._base_urls = self._normalize_base_urls([base_url])
         # 实例级别的累计统计（无需显式 reset；通常每个实验构造一个 client）
         self._call_index = 0
@@ -94,14 +133,17 @@ class LLMClient:
         # 实例级别的累计耗时（秒）
         self._cum_time_seconds: float = 0.0
         self.kwargs: Dict[str, Any] = {
-            'max_tokens': resolve_max_output_tokens(),
+            'max_tokens': self.output_token_limit(),
             'temperature': 0.6,
             'top_p': 0.3,
-            'top_k': 50,
             'frequency_penalty': 0.5,
             'n': 1,
             'stream': False,
         }
+
+    def output_token_limit(self) -> int:
+        default = DEFAULT_MAX_OUTPUT_TOKENS if self.provider == "deepseek" else DEFAULT_COMPATIBLE_MAX_OUTPUT_TOKENS
+        return resolve_max_output_tokens(default)
 
     @staticmethod
     def _normalize_base_urls(urls: List[str | None]) -> List[str]:
@@ -144,16 +186,7 @@ class LLMClient:
         return attempts
 
     def _provider_name(self, base_url: str | None = None) -> str:
-        try:
-            url = (base_url or self.base_url or '').lower()
-            model = str(self.model or '').strip().lower()
-            if 'deepseek' in url:
-                return 'deepseek'
-            if model.startswith('deepseek-'):
-                return 'deepseek'
-        except Exception:
-            pass
-        return 'llm'
+        return self.provider
 
     @staticmethod
     def _is_authentication_error(exc: Exception) -> bool:
@@ -323,7 +356,9 @@ class LLMClient:
         if override in ("json_schema", "schema", "structured"):
             return ["json_schema", "json_object", "prompt_only"]
 
-        return ["json_object", "prompt_only"]
+        if self.provider == "deepseek":
+            return ["json_object", "prompt_only"]
+        return ["json_schema", "json_object", "prompt_only"]
 
     @staticmethod
     def _messages_contain_json_instruction(messages: List[Dict[str, str]]) -> bool:
@@ -493,20 +528,13 @@ class LLMClient:
         统一 Chat Completions 请求。
 
         :param messages: OpenAI 格式的消息列表
-        :param response_format: 可选，结构化输出配置（DeepSeek JSON mode）
+        :param response_format: 可选，结构化输出配置
         """
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
         model_name = self.model
-        if 'qwen3' in model_name.lower():
-            if '/think' in model_name:
-                self.kwargs['enable_thinking'] = True
-                model_name = model_name.replace('/think', '')
-            else:
-                self.kwargs['enable_thinking'] = False
-                model_name = model_name.replace('/think', '')
 
         payload: Dict[str, Any] = {
             "model": model_name,
@@ -519,6 +547,8 @@ class LLMClient:
             'tools', 'tool_choice', 'logit_bias',
             'response_format',
         }
+        if self.provider == "deepseek":
+            allowed_keys.add('thinking')
         if isinstance(self.kwargs, dict):
             for k, v in self.kwargs.items():
                 if k in allowed_keys:
@@ -526,9 +556,9 @@ class LLMClient:
         if response_format is not None:
             payload['response_format'] = response_format
 
-        # 对输出 token 上限做保护；DeepSeek V4 支持更长输出，默认按 384K 预留。
+        # 角色调用的输出预算不能超过当前提供商的配置上限。
         try:
-            max_output_tokens = resolve_max_output_tokens()
+            max_output_tokens = self.output_token_limit()
             if isinstance(payload.get('max_tokens'), int) and payload['max_tokens'] > max_output_tokens:
                 payload['max_tokens'] = max_output_tokens
         except Exception:
@@ -775,51 +805,24 @@ class LLMClient:
 
 class DeepSeekClient(LLMClient):
     def __init__(self, api_key: str, model: str, base_url: str = DEFAULT_DEEPSEEK_BASE_URL):
-        super().__init__(api_key=api_key, model=model, base_url=base_url)
+        super().__init__(api_key=api_key, model=model, base_url=base_url, provider="deepseek")
 
 
-def parse_provider_model(model_str: str) -> Tuple[str, str]:
-    """
-    解析模型字符串为 (provider, model)。
-
-    规则：第一个 '/' 之前为提供商（大小写不敏感），之后的全部为模型名（大小写敏感，允许包含 '/').
-    示例：
-    - "deepseek/deepseek-v4-flash" -> ("deepseek", "deepseek-v4-flash")
-    """
-    if not isinstance(model_str, str) or '/' not in model_str:
-        raise ValueError("缺少模型提供商：请使用 'deepseek/model' 格式，例如 'deepseek/deepseek-v4-flash'")
-    provider, model = model_str.split('/', 1)
-    return provider.lower(), model
+class OpenAICompatibleClient(LLMClient):
+    def __init__(self, api_key: str, model: str, base_url: str = DEFAULT_OPENAI_BASE_URL):
+        super().__init__(api_key=api_key, model=model, base_url=base_url, provider="openai-compatible")
 
 
 class ClientFactory:
     @staticmethod
-    def from_env():
-        """
-        基于环境变量创建具体客户端。
-
-        必填：
-        - LLM_MODEL：形如 'provider/model'。
-        选填：
-        - LLM_API_KEY：通用 API key（优先级高于各 provider 专用 key）
-        - LLM_BASE_URL：通用 base_url（优先级高于默认 base_url）
-        """
-        model_env = (os.getenv('LLM_MODEL') or '').strip()
-        if not model_env:
-            raise ValueError("缺少必要环境变量: LLM_MODEL（格式为 'deepseek/model'）")
-
-        provider, model = parse_provider_model(model_env)
-        api_key = (os.getenv('LLM_API_KEY') or '').strip() or None
-        base_url = (os.getenv('LLM_BASE_URL') or '').strip() or None
-
-        if provider == 'deepseek':
-            base_url = base_url or DEFAULT_DEEPSEEK_BASE_URL
-            return DeepSeekClient(api_key=api_key or os.getenv('DEEPSEEK_API_KEY', ''), model=model, base_url=base_url)
-        raise ValueError(f"当前仅支持 DeepSeek API，请使用 'deepseek/模型名'，当前 provider={provider}")
+    def create(api_key: str, model: str, base_url: str, provider: str | None = None) -> LLMClient:
+        selected = provider or infer_llm_provider(base_url, model)
+        if selected == "deepseek":
+            return DeepSeekClient(api_key=api_key, model=model, base_url=base_url)
+        if selected == "openai-compatible":
+            return OpenAICompatibleClient(api_key=api_key, model=model, base_url=base_url)
+        raise ValueError(f"不支持的 LLM_PROVIDER: {selected}")
 
     @staticmethod
-    def from_config(_config: dict | None = None):
-        """
-        兼容旧调用入口，但不再读取 config 文件，统一从环境变量读取。
-        """
-        return ClientFactory.from_env()
+    def from_env(purpose: str = "default") -> LLMClient:
+        return ClientFactory.create(**resolve_llm_config(purpose))

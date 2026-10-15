@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List
 
-from llm import DeepSeekClient, resolve_max_output_tokens
+from llm import ClientFactory, LLMClient, resolve_llm_config
 from subscription_plan import build_pipeline_inputs
 
 SCRIPT_DIR = os.path.dirname(__file__)
@@ -20,13 +20,6 @@ ARCHIVE_DIR = os.path.join(ROOT_DIR, "archive", TODAY_STR)
 RANKED_DIR = os.path.join(ARCHIVE_DIR, "rank")
 CONFIG_FILE = os.getenv("DPR_CONFIG_FILE") or os.path.join(ROOT_DIR, "config.yaml")
 
-DEFAULT_FILTER_MODEL = (
-    os.getenv("DEEPSEEK_FILTER_MODEL")
-    or os.getenv("SUMMARY_MODEL")
-    or os.getenv("DEEPSEEK_MODEL")
-    or "deepseek-v4-flash"
-)
-DEFAULT_DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL") or os.getenv("SUMMARY_BASE_URL") or "https://api.deepseek.com"
 DEFAULT_FILTER_CONCURRENCY = 4
 MAX_FILTER_RETRIES = 3
 
@@ -256,9 +249,27 @@ def build_user_requirements(
             }
         )
 
-    profiles = (((config or {}).get("subscriptions") or {}).get("intent_profiles") or [])
+    # composite 必须复用 subscription_plan 的运行时选择结果：默认排除暂停词条，
+    # 但 DPR_FILTER_PROFILE_TAG 明确点选暂停词条时仍允许本次运行使用它。
+    selected_tags = {
+        _norm_text(tag).lower()
+        for tag in (pipeline_inputs.get("tags") or [])
+        if _norm_text(tag)
+    }
+    has_runtime_profile_filter = bool(
+        _norm_text(os.getenv("DPR_FILTER_PROFILE_TAG"))
+        or _norm_text(os.getenv("DPR_PROFILE_TAG"))
+    )
+    profiles = pipeline_inputs.get("profiles") or []
     if isinstance(profiles, list):
         for idx, profile in enumerate(profiles):
+            profile_tag = _norm_text((profile or {}).get("tag")).lower()
+            if not profile_tag or profile_tag not in selected_tags:
+                continue
+            if not has_runtime_profile_filter and _as_bool(
+                (profile or {}).get("paused"), False
+            ):
+                continue
             composite_req = _build_profile_composite_requirement(profile, idx, seen)
             if composite_req:
                 requirements.append(composite_req)
@@ -320,7 +331,7 @@ def build_repeated_user_prompt(query: str) -> str:
 
 
 def call_filter(
-    client: DeepSeekClient,
+    client: LLMClient,
     all_requirements: List[Dict[str, str]],
     docs: List[Dict[str, str]],
     debug_dir: str,
@@ -641,14 +652,16 @@ def recover_filter_results(
     )
 
 
-def _make_filter_client(api_key: str, model: str, max_output_tokens: int) -> DeepSeekClient:
-    client = DeepSeekClient(api_key=api_key, model=model, base_url=DEFAULT_DEEPSEEK_BASE_URL)
+def _make_filter_client(api_key: str, model: str, max_output_tokens: int) -> LLMClient:
+    llm_config = resolve_llm_config("filter")
+    llm_config.update(api_key=api_key, model=model)
+    client = ClientFactory.create(**llm_config)
     client.kwargs.update({"temperature": 0.1, "max_tokens": max_output_tokens})
     return client
 
 
 def _make_filter_runner(
-    client: DeepSeekClient,
+    client: LLMClient,
     all_requirements: List[Dict[str, str]],
     debug_dir: str,
     base_tag: str,
@@ -793,9 +806,9 @@ def process_file(
         return
     paper_map = build_paper_map(papers)
 
-    api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("SUMMARY_API_KEY")
+    api_key = resolve_llm_config("filter")["api_key"]
     if not api_key:
-        raise RuntimeError("missing DEEPSEEK_API_KEY or SUMMARY_API_KEY")
+        raise RuntimeError("missing LLM_API_KEY, DEEPSEEK_API_KEY or SUMMARY_API_KEY")
 
     group_start(f"Step 4 - llm refine {os.path.basename(input_path)}")
     log(
@@ -926,7 +939,7 @@ def process_file(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Step 4: filter papers with 4o-mini for recommendations.",
+        description="Step 4: filter papers with the configured LLM for recommendations.",
     )
     parser.add_argument(
         "--input",
@@ -956,7 +969,7 @@ def main() -> None:
         "--batch-size",
         type=int,
         default=10,
-        help="batch size for 4o-mini.",
+        help="batch size for LLM filtering.",
     )
     parser.add_argument(
         "--max-chars",
@@ -967,13 +980,13 @@ def main() -> None:
     parser.add_argument(
         "--filter-model",
         type=str,
-        default=DEFAULT_FILTER_MODEL,
-        help="model for filter (gemini-3-flash-preview-nothinking).",
+        default=resolve_llm_config("filter")["model"],
+        help="model for LLM filtering (overrides the configured filter model).",
     )
     parser.add_argument(
         "--max-output-tokens",
         type=int,
-        default=resolve_max_output_tokens(),
+        default=ClientFactory.from_env("filter").output_token_limit(),
         help="max tokens for model output.",
     )
     parser.add_argument(

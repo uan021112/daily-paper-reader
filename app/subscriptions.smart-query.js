@@ -611,10 +611,12 @@ window.SubscriptionsSmartQuery = (function () {
   const loadLlmConfig = () => {
     const secret = window.decoded_secret_private || {};
     const summarized = secret.summarizedLLM || {};
+    const roles = secret.llmProvider || {};
+    const provider = roles.type || '';
     const baseUrl = normalizeText(summarized.baseUrl || '');
     const apiKey = normalizeText(summarized.apiKey || '');
-    const model = normalizeText(summarized.model || '');
-    if (baseUrl && apiKey && model) return { baseUrl, apiKey, model };
+    const model = normalizeText(roles.rewriteModel || summarized.model || '');
+    if (baseUrl && apiKey && model) return { baseUrl, apiKey, model, provider };
 
     const chatLLMs = Array.isArray(secret.chatLLMs) ? secret.chatLLMs : [];
     if (chatLLMs.length > 0) {
@@ -622,8 +624,8 @@ window.SubscriptionsSmartQuery = (function () {
       const cBase = normalizeText(first.baseUrl || '');
       const cKey = normalizeText(first.apiKey || '');
       const models = Array.isArray(first.models) ? first.models : [];
-      const cModel = normalizeText(models[0] || '');
-      if (cBase && cKey && cModel) return { baseUrl: cBase, apiKey: cKey, model: cModel };
+      const cModel = normalizeText(roles.rewriteModel || models[0] || '');
+      if (cBase && cKey && cModel) return { baseUrl: cBase, apiKey: cKey, model: cModel, provider };
     }
     return null;
   };
@@ -956,33 +958,15 @@ window.SubscriptionsSmartQuery = (function () {
     const template = defaultPromptTemplate;
     const prompt = buildPromptFromTemplate(tag, desc, template);
     const buildEndpoints = () => {
-      const out = [];
-      const pushUnique = (u) => {
-        if (u && !out.includes(u)) out.push(u);
-      };
-      const expandEndpoint = (base) => {
-        const src = normalizeText(base).replace(/\/+$/, '');
-        if (!src) return;
-        if (src.includes('/chat/completions')) {
-          pushUnique(src);
-          pushUnique(src.replace(/\/chat\/completions$/, '/v1/chat/completions'));
-          return;
-        }
-        if (/\/v\d+$/i.test(src)) {
-          pushUnique(`${src}/chat/completions`);
-          pushUnique(`${src}/v1/chat/completions`);
-          return;
-        }
-        pushUnique(`${src}/v1/chat/completions`);
-        pushUnique(`${src}/chat/completions`);
-      };
-
-      const raw = normalizeText(llm.baseUrl);
-      if (!raw) {
-        return out;
+      const utils = window.DPRLLMConfigUtils || {};
+      if (typeof utils.buildChatCompletionsEndpoint === 'function') {
+        const endpoint = utils.buildChatCompletionsEndpoint(llm.baseUrl);
+        return endpoint ? [endpoint] : [];
       }
-      expandEndpoint(raw);
-      return out;
+      const raw = normalizeText(llm.baseUrl).replace(/\/+$/, '');
+      if (!raw) return [];
+      return [/\/chat\/completions$/i.test(raw) ? raw
+        : `${raw}${/\/v\d+$/i.test(raw) ? '' : '/v1'}/chat/completions`];
     };
     const endpoints = buildEndpoints();
     if (!endpoints.length) {
@@ -996,6 +980,7 @@ window.SubscriptionsSmartQuery = (function () {
           baseUrl: llm.baseUrl,
           model: llm.model,
           preferSchema: false,
+          provider: llm.provider,
         });
       }
       return 'json_object';
@@ -1023,6 +1008,7 @@ window.SubscriptionsSmartQuery = (function () {
 	        const maxTokens = utils.resolveMaxOutputTokens({
 	          baseUrl: llm.baseUrl,
 	          model: llm.model,
+	          provider: llm.provider,
 	        });
 	        if (maxTokens) {
 	          payload.max_tokens = maxTokens;
@@ -1044,17 +1030,25 @@ window.SubscriptionsSmartQuery = (function () {
       endpoint,
       options = { useResponseFormat: true, includeTools: true },
     ) => {
+      const utils = window.DPRLLMConfigUtils || {};
+      const browserBlock = typeof utils.browserRequestError === 'function' ? utils.browserRequestError(endpoint) : null;
+      if (browserBlock) throw browserBlock;
       const headers = {
         'Content-Type': 'application/json',
         Accept: 'application/json',
         Authorization: `Bearer ${llm.apiKey}`,
       };
-      return fetch(endpoint, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(requestPayload(options)),
-        signal: controller.signal,
-      });
+      try {
+        return await fetch(endpoint, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(requestPayload(options)),
+          signal: controller.signal,
+        });
+      } catch (error) {
+        throw typeof utils.browserRequestError === 'function'
+          ? utils.browserRequestError(endpoint, error) : error;
+      }
     };
 
     let res = null;
@@ -2901,6 +2895,8 @@ window.SubscriptionsSmartQuery = (function () {
     clearPendingDeletedProfileIds,
     setRunSelectionMode,
     getSelectedProfilesForRun,
+    getResearchProfiles: () => (currentProfiles || []).map(deepClone),
+    generateResearchCandidates: (tag, description) => requestCandidatesByDesc(tag, description),
     getSelectedProfileTags,
     clearRunSelection,
     setProfileSelection,

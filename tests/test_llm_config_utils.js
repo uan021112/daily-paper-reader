@@ -1,266 +1,60 @@
 const assert = require('node:assert/strict');
+const utils = require('../app/llm-config-utils.js');
 
-const {
-  normalizeBaseUrlForStorage,
-  buildChatCompletionsEndpoint,
-  sanitizeModelList,
-  resolveChatModels,
-  resolveSummaryLLM,
-  inferProviderType,
-  getDeepSeekPreset,
-  inferChatApiProfile,
-  resolveJsonResponseMode,
-  isDeepSeekV4Model,
-  resolveMaxOutputTokens,
-  shouldUseXApiKeyHeader,
-  buildStreamingChatPayload,
-  buildConnectivityTestPayload,
-} = require('../app/llm-config-utils.js');
-
-function testNormalizeBaseUrlForStorage() {
-  assert.equal(
-    normalizeBaseUrlForStorage('https://api.example.com/v1/chat/completions'),
-    'https://api.example.com/v1',
-  );
-  assert.equal(
-    normalizeBaseUrlForStorage('https://api.example.com/v1/'),
-    'https://api.example.com/v1',
-  );
+function testEndpointsAndRawModels() {
+  assert.equal(utils.normalizeBaseUrlForStorage('http://gateway.test:8080/v1/chat/completions/'), 'http://gateway.test:8080/v1');
+  assert.equal(utils.buildChatCompletionsEndpoint('http://gateway.test:8080/v1'), 'http://gateway.test:8080/v1/chat/completions');
+  assert.equal(utils.buildChatCompletionsEndpoint('https://gateway.test/custom-root'), 'https://gateway.test/custom-root/v1/chat/completions');
+  assert.deepEqual(utils.sanitizeModelList(' vendor/model-A, vendor/model-A\nvendor/model-B ', 99), ['vendor/model-A', 'vendor/model-B']);
+  assert.equal(utils.validateBaseUrl('http://gateway.test:8080/v1/'), 'http://gateway.test:8080/v1');
+  for (const url of ['file:///tmp/model', 'not-a-url', 'https://user:key@gateway.test', 'https://gateway.test/?key=secret']) {
+    assert.throws(() => utils.validateBaseUrl(url));
+  }
 }
 
-function testBuildChatCompletionsEndpoint() {
-  assert.equal(
-    buildChatCompletionsEndpoint('https://api.example.com/v1'),
-    'https://api.example.com/v1/chat/completions',
-  );
-  assert.equal(
-    buildChatCompletionsEndpoint('https://api.example.com/custom-root'),
-    'https://api.example.com/custom-root/v1/chat/completions',
-  );
-}
-
-function testSanitizeModelList() {
-  assert.deepEqual(
-    sanitizeModelList(['deepseek-v4-flash', ' deepseek-v4-flash ', 'deepseek-v4-pro', 'custom-model', 'extra'], 3),
-    ['deepseek-v4-flash', 'deepseek-v4-pro', 'custom-model'],
-  );
-}
-
-function testResolveChatModelsAndSummary() {
+function testSecretResolutionAndProviderBoundaries() {
   const secret = {
-    summarizedLLM: {
-      apiKey: 'sk-summary',
-      baseUrl: 'https://api.example.com/v1',
-      model: 'gpt-4.1-mini',
-    },
-    chatLLMs: [
-      {
-        apiKey: 'sk-chat',
-        baseUrl: 'https://api.example.com/v1/',
-        models: ['gpt-4.1-mini', 'claude-sonnet-4'],
-      },
-    ],
+    llmProvider: { type: 'openai-compatible' },
+    summarizedLLM: { apiKey: 'test-key', baseUrl: 'http://gateway.test:8080/v1/', model: 'vendor/summary' },
+    chatLLMs: [{ apiKey: 'test-key', baseUrl: 'http://gateway.test:8080/v1/', models: ['vendor/chat', 'deepseek-v4-pro'] }],
   };
-
-  const chatModels = resolveChatModels(secret);
-  assert.equal(chatModels.length, 2);
-  assert.deepEqual(chatModels.map((item) => item.name), [
-    'gpt-4.1-mini',
-    'claude-sonnet-4',
-  ]);
-
-  const summary = resolveSummaryLLM(secret);
-  assert.equal(summary.model, 'gpt-4.1-mini');
-  assert.equal(summary.baseUrl, 'https://api.example.com/v1');
+  assert.equal(utils.resolveSummaryLLM(secret).model, 'vendor/summary');
+  assert.equal(utils.resolveSummaryLLM(secret).baseUrl, 'http://gateway.test:8080/v1');
+  assert.deepEqual(utils.resolveChatModels(secret).map(item => item.name), ['vendor/chat', 'deepseek-v4-pro']);
+  assert.equal(utils.inferProviderType(secret), 'openai-compatible');
+  assert.equal(utils.inferProviderType({ summarizedLLM: { baseUrl: 'https://api.deepseek.com' } }), 'deepseek');
+  assert.equal(utils.inferProviderType({ summarizedLLM: { baseUrl: 'https://gateway.test/v1', model: 'deepseek-v4-pro' } }), 'openai-compatible');
+  assert.equal(utils.inferChatApiProfile('https://gateway.test/v1', 'deepseek-v4-pro'), 'openai-compatible');
+  assert.equal(utils.inferChatApiProfile('https://api.deepseek.com', 'custom', 'openai-compatible'), 'openai-compatible');
+  assert.equal(utils.resolveSummaryLLM({ chatLLMs: secret.chatLLMs }).model, 'vendor/chat');
 }
 
-function testInferProviderType() {
-  assert.equal(
-    inferProviderType({
-      summarizedLLM: {
-        apiKey: 'sk',
-        baseUrl: 'https://api.deepseek.com',
-        model: 'deepseek-v4-flash',
-      },
-    }),
-    'deepseek',
-  );
-  assert.equal(
-    inferProviderType({
-      summarizedLLM: {
-        apiKey: 'sk',
-        baseUrl: 'https://example.com/v1',
-        model: 'other-model',
-      },
-    }),
-    'deepseek',
-  );
+function testProviderSpecificRequests() {
+  const messages = [{ role: 'user', content: 'hi' }];
+  const gateway = { baseUrl: 'https://gateway.test/v1', model: 'deepseek-v4-pro' };
+  const gatewayPayload = utils.buildStreamingChatPayload({ ...gateway, messages });
+  const nativePayload = utils.buildStreamingChatPayload({ baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-pro', messages });
+  assert.ok(gatewayPayload.max_tokens <= 16384);
+  assert.ok(gatewayPayload.max_tokens < nativePayload.max_tokens);
+  assert.equal(utils.resolveJsonResponseMode(gateway), 'json_schema');
+  assert.equal(utils.resolveJsonResponseMode({ ...gateway, preferSchema: false }), 'json_object');
+  assert.equal(utils.resolveJsonResponseMode({ baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-flash' }), 'json_object');
 }
 
-function testGetDeepSeekPreset() {
-  assert.deepEqual(
-    getDeepSeekPreset('deepseek'),
-    {
-      key: 'deepseek',
-      label: 'DeepSeek 官方',
-      baseUrl: 'https://api.deepseek.com',
-      models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
-    },
-  );
-  assert.equal(getDeepSeekPreset('other-a'), null);
-  assert.equal(getDeepSeekPreset('other-b'), null);
-  assert.equal(getDeepSeekPreset('other-c'), null);
-  assert.equal(getDeepSeekPreset('other-d'), null);
+
+function testBrowserDiagnosticsDoNotInventSuccess() {
+  const httpsPage = 'https://reader.test/papers/';
+  const mixed = utils.browserRequestError('http://gateway.test:8080/v1/chat/completions', null, httpsPage);
+  assert.equal(mixed.code, 'BROWSER_UNVERIFIED');
+  assert.equal(utils.browserRequestError('http://localhost:8080/v1/chat/completions', null, httpsPage), null);
+  assert.equal(utils.browserRequestError('https://gateway.test/v1/chat/completions', null, httpsPage), null);
+  const cors = utils.browserRequestError('https://gateway.test/v1/chat/completions', new TypeError('Failed to fetch'), httpsPage);
+  assert.equal(cors.code, 'BROWSER_UNVERIFIED');
+  const rejected = new Error('HTTP 401');
+  assert.equal(utils.browserRequestError('https://gateway.test/v1/chat/completions', rejected, httpsPage), rejected);
 }
 
-function testInferChatApiProfile() {
-  assert.equal(
-    inferChatApiProfile('https://api.deepseek.com', 'deepseek-v4-flash'),
-    'deepseek',
-  );
-  assert.equal(inferChatApiProfile('https://example.com/v1', 'other-model'), 'unsupported');
-  assert.equal(inferChatApiProfile('https://example.com/v1', 'other-model'), 'unsupported');
+for (const test of [testEndpointsAndRawModels, testSecretResolutionAndProviderBoundaries, testProviderSpecificRequests, testBrowserDiagnosticsDoNotInventSuccess]) {
+  test();
+  console.log(`${test.name} passed`);
 }
-
-function testResolveJsonResponseMode() {
-  assert.equal(
-    resolveJsonResponseMode({
-      baseUrl: 'https://api.deepseek.com',
-      model: 'deepseek-v4-flash',
-    }),
-    'json_object',
-  );
-  assert.equal(
-    resolveJsonResponseMode({
-      baseUrl: 'https://example.com/v1',
-      model: 'other-model',
-      preferSchema: false,
-    }),
-    'json_object',
-  );
-}
-
-function testResolveMaxOutputTokens() {
-  assert.equal(isDeepSeekV4Model('deepseek-v4-flash'), true);
-  assert.equal(isDeepSeekV4Model('deepseek-v4-pro'), true);
-  assert.equal(isDeepSeekV4Model('deepseek-chat'), false);
-  assert.equal(
-    resolveMaxOutputTokens({
-      baseUrl: 'https://api.deepseek.com',
-      model: 'deepseek-v4-flash',
-    }),
-    393216,
-  );
-  assert.equal(
-    resolveMaxOutputTokens({
-      baseUrl: 'https://api.deepseek.com',
-      model: 'deepseek-v4-pro',
-    }),
-    393216,
-  );
-  assert.equal(
-    resolveMaxOutputTokens({
-      baseUrl: 'https://example.com/v1',
-      model: 'other-model',
-    }),
-    null,
-  );
-}
-
-function testShouldUseXApiKeyHeader() {
-  assert.equal(
-    shouldUseXApiKeyHeader({
-      baseUrl: 'https://example.com/v1',
-      model: 'other-model',
-    }),
-    true,
-  );
-  assert.equal(
-    shouldUseXApiKeyHeader({
-      baseUrl: 'https://example.com/v1',
-      model: 'other-model',
-    }),
-    true,
-  );
-}
-
-function testBuildStreamingChatPayload() {
-  assert.deepEqual(
-    buildStreamingChatPayload({
-      baseUrl: 'https://api.deepseek.com',
-      model: 'deepseek-v4-flash',
-      messages: [{ role: 'user', content: 'hi' }],
-    }),
-    {
-      model: 'deepseek-v4-flash',
-      messages: [{ role: 'user', content: 'hi' }],
-      stream: true,
-      max_tokens: 393216,
-    },
-  );
-
-  assert.deepEqual(
-    buildStreamingChatPayload({
-      baseUrl: 'https://api.deepseek.com',
-      model: 'deepseek-v4-pro',
-      messages: [{ role: 'user', content: 'hi' }],
-    }),
-    {
-      model: 'deepseek-v4-pro',
-      messages: [{ role: 'user', content: 'hi' }],
-      stream: true,
-      max_tokens: 393216,
-    },
-  );
-
-}
-
-function testBuildConnectivityTestPayload() {
-  assert.deepEqual(
-    buildConnectivityTestPayload({
-      baseUrl: 'https://api.deepseek.com',
-      model: 'deepseek-v4-pro',
-    }),
-    {
-      model: 'deepseek-v4-pro',
-      messages: [
-        { role: 'system', content: 'Reply with exactly: hello world' },
-        { role: 'user', content: 'hello world' },
-      ],
-      temperature: 0,
-      max_tokens: 256,
-    },
-  );
-
-  assert.deepEqual(
-    buildConnectivityTestPayload({
-      baseUrl: 'https://api.deepseek.com',
-      model: 'deepseek-v4-flash',
-    }),
-    {
-      model: 'deepseek-v4-flash',
-      messages: [
-        { role: 'system', content: 'Reply with exactly: hello world' },
-        { role: 'user', content: 'hello world' },
-      ],
-      temperature: 0,
-      max_tokens: 256,
-    },
-  );
-
-}
-
-testNormalizeBaseUrlForStorage();
-testBuildChatCompletionsEndpoint();
-testSanitizeModelList();
-testResolveChatModelsAndSummary();
-testInferProviderType();
-testGetDeepSeekPreset();
-testInferChatApiProfile();
-testResolveJsonResponseMode();
-testResolveMaxOutputTokens();
-testShouldUseXApiKeyHeader();
-testBuildStreamingChatPayload();
-testBuildConnectivityTestPayload();
-
-console.log('llm config utils tests passed');

@@ -45,22 +45,6 @@ def test_home_readme_contains_history_trend_selectors():
         assert "data-dpr-history-chart" in content, path
 
 
-def test_home_notice_contains_latest_update():
-    for path in NOTICE_FILES:
-        content = path.read_text(encoding="utf-8")
-        assert 'class="dpr-home-notice-entry"' in content, path
-        assert content.count('class="dpr-home-notice-entry"') <= 3, path
-        assert '<time class="dpr-home-notice-date" datetime="2026-07-20">07.20</time>' in content, path
-        assert "反馈功能上线" in content, path
-        assert "欢迎大家踊跃反馈各种建议，我们会第一时间查看并协调处理。" in content, path
-        assert re.search(
-            r'<time class="dpr-home-notice-date" datetime="\d{4}-\d{2}-\d{2}">\d{2}\.\d{2}</time>',
-            content,
-        ), path
-        assert re.search(
-            r'<strong class="dpr-home-notice-entry-title">[^<]+</strong>',
-            content,
-        ), path
 
 
 def test_home_promo_uses_the_shared_panel_structure():

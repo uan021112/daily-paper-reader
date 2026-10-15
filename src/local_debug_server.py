@@ -52,14 +52,14 @@ def build_secret_env(secret: dict[str, Any] | None) -> dict[str, str]:
         model = norm_text(first_chat.get("models")[0])
 
     env: dict[str, str] = {}
+    provider = secret.get("llmProvider") if isinstance(secret.get("llmProvider"), dict) else {}
     if summarized or first_chat:
-        env["SUMMARY_API_KEY"] = api_key
-        env["DEEPSEEK_API_KEY"] = api_key
-        env["SUMMARY_BASE_URL"] = base_url
-        env["DEEPSEEK_BASE_URL"] = base_url
-        env["LLM_PRIMARY_BASE_URL"] = base_url
-        env["SUMMARY_MODEL"] = model
-        env["DEEPSEEK_MODEL"] = model
+        env["LLM_PROVIDER"] = norm_text(provider.get("type"))
+        env["LLM_API_KEY"] = api_key
+        env["LLM_BASE_URL"] = base_url
+        env["LLM_MODEL"] = model
+        env["LLM_FILTER_MODEL"] = norm_text(provider.get("filterModel") or model)
+        env["LLM_REWRITE_MODEL"] = norm_text(provider.get("rewriteModel") or model)
 
     reranker = secret.get("rerankerLLM") if isinstance(secret.get("rerankerLLM"), dict) else {}
     rerank_profile = norm_text(reranker.get("profile"))

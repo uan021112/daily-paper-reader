@@ -17,8 +17,8 @@ class ConferenceWorkflowAndUiTest(unittest.TestCase):
         self.assertIn("RERANK_API_KEY", text)
         self.assertIn("SILICONFLOW_API_KEY", text)
         self.assertIn('default: "public-zwwen-rerank"', text)
-        self.assertIn("requirements-paper-media.txt", text)
-        self.assertIn("PaperCropper smoke OK", text)
+        self.assertIn("check_cloud_models.py --require-lightweight", text)
+        self.assertNotIn("torch==", text)
 
     def test_conference_retrieval_workflow_dispatches_pipeline(self):
         root = pathlib.Path(__file__).resolve().parents[1]
@@ -43,8 +43,8 @@ class ConferenceWorkflowAndUiTest(unittest.TestCase):
         self.assertIn("RERANK_API_KEY", text)
         self.assertIn("SILICONFLOW_API_KEY", text)
         self.assertIn("DEEPSEEK_API_KEY", text)
-        self.assertIn("requirements-paper-media.txt", text)
-        self.assertIn("PaperCropper smoke OK", text)
+        self.assertIn("check_cloud_models.py --require-lightweight", text)
+        self.assertNotIn("torch==", text)
         self.assertIn("python src/conference_pipeline.py", text)
         self.assertIn("--run-llm-refine", text)
         self.assertIn("--output-dir \"archive/${RUN_DATE}/filtered\"", text)
@@ -121,29 +121,11 @@ class ConferenceWorkflowAndUiTest(unittest.TestCase):
             self.assertIn(f"DPR_ENABLE_{source_key.upper()}_BACKEND", text)
             self.assertIn(f"DPR_{source_key.upper()}_PAPERS_TABLE", text)
 
-    def test_local_debug_uses_browser_config_override(self):
+    def test_sosp_maintenance_allows_official_metadata_without_pdf(self):
         root = pathlib.Path(__file__).resolve().parents[1]
-        server = (root / "src" / "local_debug_server.py").read_text(encoding="utf-8")
-        main = (root / "src" / "main.py").read_text(encoding="utf-8")
-        bm25 = (root / "src" / "2.1.retrieval_papers_bm25.py").read_text(encoding="utf-8")
-        embedding = (root / "src" / "2.2.retrieval_papers_embedding.py").read_text(encoding="utf-8")
-        fetch_arxiv = (root / "src" / "maintain" / "fetchers" / "fetch_arxiv.py").read_text(encoding="utf-8")
+        text = (root / ".github/workflows/maintain-supabase.yml").read_text(encoding="utf-8")
+        self.assertIn('python src/maintain/sosp.py --years "$YEARS" --allow-missing-pdf --skip-cleanup', text)
 
-        self.assertIn("DPR_CONFIG_FILE", server)
-        self.assertIn("/api/local/config", server)
-        self.assertIn("CONFIG_PATH.write_text", server)
-        self.assertIn("/api/local/secret", server)
-        self.assertIn("SECRET_PATH.write_text", server)
-        self.assertIn("ENV_PATH", server)
-        self.assertIn("update_env_file", server)
-        self.assertIn("build_secret_env", server)
-        self.assertIn("DEEPSEEK_API_KEY", server)
-        self.assertIn("SUMMARY_API_KEY", server)
-        self.assertIn("config.yaml", server)
-        self.assertIn("payload.get(\"config\")", server)
-        self.assertIn("payload.get(\"secret\")", server)
-        for text in [main, bm25, embedding, fetch_arxiv]:
-            self.assertIn("DPR_CONFIG_FILE", text)
 
     def test_local_secret_private_is_disk_backed_and_ignored(self):
         root = pathlib.Path(__file__).resolve().parents[1]

@@ -281,20 +281,16 @@ def prepare_rerank_fallback(input_path: str, output_path: str) -> bool:
 
 def resolve_summary_step_env() -> dict[str, str]:
     env = os.environ.copy()
-    summary_api_key = _read_env_text("SUMMARY_API_KEY", "DEEPSEEK_API_KEY")
-    summary_base_url = _read_env_text("SUMMARY_BASE_URL", "DEEPSEEK_BASE_URL")
-    summary_model = _read_env_text("SUMMARY_MODEL", "DEEPSEEK_MODEL")
+    summary_api_key = _read_env_text("LLM_API_KEY", "SUMMARY_API_KEY", "DEEPSEEK_API_KEY")
+    summary_base_url = _read_env_text("LLM_BASE_URL", "SUMMARY_BASE_URL", "DEEPSEEK_BASE_URL")
+    summary_model = _read_env_text("LLM_MODEL", "SUMMARY_MODEL", "DEEPSEEK_MODEL")
 
     if summary_api_key:
-        env["SUMMARY_API_KEY"] = summary_api_key
-        env["DEEPSEEK_API_KEY"] = summary_api_key
+        env["LLM_API_KEY"] = summary_api_key
     if summary_base_url:
-        env["LLM_PRIMARY_BASE_URL"] = summary_base_url
-        env["SUMMARY_BASE_URL"] = summary_base_url
-        env["DEEPSEEK_BASE_URL"] = summary_base_url
+        env["LLM_BASE_URL"] = summary_base_url
     if summary_model:
-        env["SUMMARY_MODEL"] = summary_model
-        env["DEEPSEEK_MODEL"] = summary_model
+        env["LLM_MODEL"] = summary_model
     return env
 
 
@@ -533,13 +529,13 @@ def main() -> None:
         "--fetch-days",
         type=int,
         default=None,
-        help="Pass --days to Step1 (fetch arxiv). Default: use config.yaml/state logic.",
+        help="回溯1–365天；1–30天沿用日报流程，31天以上为arXiv专题回溯。",
     )
     parser.add_argument(
         "--fetch-mode",
         default="auto",
         choices=("auto", "standard", "skims"),
-        help="Force fetch-run mode: auto(按阈值), standard(非skims), skims(强制skims).",
+        help="1–30天：auto/standard/skims；31–365天固定使用独立arXiv专题回溯。",
     )
     parser.add_argument(
         "--profile-tag",
@@ -566,6 +562,8 @@ def main() -> None:
         help="强制执行 Step 1（全量数据拉取），即使 Supabase 已启用。",
     )
     args = parser.parse_args()
+    if args.fetch_days is not None and not 1 <= args.fetch_days <= 365:
+        parser.error('--fetch-days 必须在 1–365 天之间')
 
     python = sys.executable
 
@@ -581,6 +579,15 @@ def main() -> None:
     else:
         os.environ.pop("DPR_FILTER_PROFILE_TAG", None)
         os.environ.pop("DPR_INCLUDE_CONFERENCE_ONLY_PROFILES", None)
+    if args.fetch_days is not None and args.fetch_days > 30:
+        if args.skip_fetch is False:
+            parser.error('31–365天专题回溯只读取Supabase，不支持 --no-skip-fetch')
+        from long_range_review import run_review
+        print('[INFO] 启用 arXiv 专题研究：90/365天使用固定候选和评审预算，最终最多100篇；内容独立续跑。', flush=True)
+        if args.run_enrich and args.fetch_days not in (90, 365):
+            run_step('Step 0 - enrich config', [python, os.path.join(SRC_DIR, '0.enrich_config_queries.py')])
+        run_review(_load_full_config(), args.fetch_days, ROOT_DIR, run_date_token)
+        return
     fetch_mode = (args.fetch_mode or "auto").strip().lower()
     if fetch_mode == "skims":
         use_skims_mode = True

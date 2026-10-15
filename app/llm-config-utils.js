@@ -84,6 +84,8 @@
           name,
           apiKey,
           baseUrl,
+          provider: normalizeText(item.provider || (safeSecret.llmProvider || {}).type)
+            || inferChatApiProfile(baseUrl, name),
         });
       });
     });
@@ -113,10 +115,11 @@
     const safeSecret = secret && typeof secret === 'object' ? secret : {};
     const llmProvider = safeSecret.llmProvider || {};
     const explicit = normalizeText(llmProvider.type || llmProvider.provider || '').toLowerCase();
-    if (explicit === 'deepseek') {
-      return 'deepseek';
-    }
-    return 'deepseek';
+    if (explicit === 'deepseek' || explicit === 'openai-compatible') return explicit;
+    const summary = safeSecret.summarizedLLM || {};
+    const chat = (safeSecret.chatLLMs || [])[0] || {};
+    const baseUrl = summary.baseUrl || chat.baseUrl || '';
+    return baseUrl ? inferChatApiProfile(baseUrl, summary.model) : 'deepseek';
   };
 
   const getDeepSeekPreset = (key) => {
@@ -131,20 +134,19 @@
     };
   };
 
-  const inferChatApiProfile = (baseUrl, model) => {
+  const inferChatApiProfile = (baseUrl, model, provider) => {
+    const explicit = normalizeText(provider).toLowerCase();
+    if (explicit === 'deepseek' || explicit === 'openai-compatible') return explicit;
     const normalizedBaseUrl = normalizeBaseUrlForStorage(baseUrl || '').toLowerCase();
-    const normalizedModel = normalizeText(model || '').toLowerCase();
     if (/(^|\/\/)(api\.)?deepseek\.com(?:$|\/)/i.test(normalizedBaseUrl)) {
       return 'deepseek';
     }
-    if (normalizedModel.startsWith('deepseek-')) {
-      return 'deepseek';
-    }
-    return 'unsupported';
+    return 'openai-compatible';
   };
 
-  const resolveJsonResponseMode = ({ baseUrl, model, preferSchema = true }) => {
-    return 'json_object';
+  const resolveJsonResponseMode = ({ baseUrl, model, provider, preferSchema = true }) => {
+    return preferSchema && inferChatApiProfile(baseUrl, model, provider) !== 'deepseek'
+      ? 'json_schema' : 'json_object';
   };
 
   const isDeepSeekV4Model = (model) => {
@@ -152,25 +154,62 @@
     return normalizedModel === 'deepseek-v4-flash' || normalizedModel === 'deepseek-v4-pro';
   };
 
-  const resolveMaxOutputTokens = ({ baseUrl, model } = {}) => {
-    const profile = inferChatApiProfile(baseUrl, model);
+  const resolveMaxOutputTokens = ({ baseUrl, model, provider } = {}) => {
+    const profile = inferChatApiProfile(baseUrl, model, provider);
     if (profile === 'deepseek' && isDeepSeekV4Model(model)) {
       return DEEPSEEK_V4_MAX_OUTPUT_TOKENS;
     }
-    return null;
+    return profile === 'openai-compatible' ? 16384 : null;
   };
 
-  const shouldUseXApiKeyHeader = ({ baseUrl, model }) => {
-    return true;
+
+  const browserRequestError = (endpoint, error, pageUrl) => {
+    const page = pageUrl || (typeof location !== 'undefined' ? location.href : '');
+    let mixedContent = false;
+    try {
+      const target = new URL(endpoint);
+      const host = target.hostname.toLowerCase();
+      mixedContent = new URL(page).protocol === 'https:' && target.protocol === 'http:'
+        && !['localhost', '127.0.0.1', '[::1]'].includes(host);
+    } catch {
+      // URL validity is checked by the configuration form.
+    }
+    if (!mixedContent && (!error || error.name !== 'TypeError')) return error || null;
+    const diagnostic = new Error(mixedContent
+      ? 'HTTPS 页面不能调用公共 HTTP 网关（浏览器 mixed content 限制）。后端可保存 HTTP 配置，但浏览器聊天需要 HTTPS 网关及允许本站的 CORS。浏览器连接未验证。'
+      : '浏览器未收到可读响应：可能是 CORS、网络、TLS 或网关不可达。请检查网关允许本站 Origin、Authorization 和 Content-Type 的 CORS 预检；浏览器无法确认后端配置是否有效。');
+    diagnostic.code = 'BROWSER_UNVERIFIED';
+    return diagnostic;
   };
 
-  const buildStreamingChatPayload = ({ baseUrl, model, messages }) => {
+  const validateBaseUrl = (value) => {
+    const normalized = normalizeBaseUrlForStorage(value);
+    let url;
+    try { url = new URL(normalized); } catch { throw new Error('请填写有效的 HTTP/HTTPS Base URL。'); }
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+      throw new Error('Base URL 必须是无用户名、密码、查询参数或片段的 HTTP/HTTPS 地址。');
+    }
+    return normalized;
+  };
+
+  const buildCanonicalLlmSecrets = ({ providerType, summarizedApiKey, summarizedBaseUrl, summarizedModel, filterModel, rewriteModel }) => {
+    return [
+      { name: 'LLM_PROVIDER', value: providerType },
+      { name: 'LLM_API_KEY', value: normalizeText(summarizedApiKey) },
+      { name: 'LLM_BASE_URL', value: normalizeBaseUrlForStorage(summarizedBaseUrl) },
+      { name: 'LLM_MODEL', value: normalizeText(summarizedModel) },
+      { name: 'LLM_FILTER_MODEL', value: normalizeText(filterModel || summarizedModel) },
+      { name: 'LLM_REWRITE_MODEL', value: normalizeText(rewriteModel || summarizedModel) },
+    ];
+  };
+
+  const buildStreamingChatPayload = ({ baseUrl, model, provider, messages }) => {
     const payload = {
       model: normalizeText(model),
       messages: Array.isArray(messages) ? messages : [],
       stream: true,
     };
-    const maxTokens = resolveMaxOutputTokens({ baseUrl, model });
+    const maxTokens = resolveMaxOutputTokens({ baseUrl, model, provider });
     if (maxTokens) {
       payload.max_tokens = maxTokens;
     }
@@ -212,8 +251,10 @@
     resolveJsonResponseMode,
     isDeepSeekV4Model,
     resolveMaxOutputTokens,
-    shouldUseXApiKeyHeader,
     buildStreamingChatPayload,
     buildConnectivityTestPayload,
+    browserRequestError,
+    validateBaseUrl,
+    buildCanonicalLlmSecrets,
   };
 });
