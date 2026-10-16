@@ -1,0 +1,2822 @@
+GenIA: Generative Reconstruction with Test-Time Input Alignment
+Stefano Esposito1, Naama Pearl1, Polina Karpikova1, Samuel Rota Bulò2,
+Lorenzo Porzi2, Peter Kontschieder2, Andreas Geiger1, Jonathon Luiten2
+1Tübingen AI Center, University of Tübingen
+2Meta Reality Labs
+Monocular-Static
+Multiview-Static
+Monocular-Dynamic
+Ours
+Baseline
+SAM3D
+CUPID
+MV-SAM3D
+RecGen
+Lift4D
+· · ·
+Figure 1. GenIA reconstructs complete, detailed, and input-aligned 3D objects from monocular images, multi-view images, and
+monocular videos. Our inference-time framework aligns the frozen SAM3D [9] model to the inputs using geometric and photometric
+constraints, improving pose and appearance consistency while preserving generative completion. These contributions extend SAM3D beyond
+the single-view static setting it was trained for, enabling multi-view reconstruction. Given a temporal coarse shape as input, they enable
+dynamic reconstruction with improved image quality and stable tracking. We show object reconstructions from custom and DAVIS [54]
+scenes, alongside representative baselines (SAM3D [9], CUPID [15], MV-SAM3D [27], RecGen [85], Lift4D [36]) and input images.
+Abstract
+Reconstructing complete 3D object assets from monocu-
+lar or sparse multi-view observations remains challenging.
+Generative 3D foundation models can complete object ge-
+ometry beyond the observed views, but their predictions
+may not faithfully reproduce the observed geometry, ap-
+pearance, or pose. We introduce GenIA, a framework for
+test-time input-aligned generation that grounds SAM3D’s
+generative prior in geometric and photometric observations
+without retraining the foundation model. We improve ob-
+ject pose by deriving translation and scale from geometry
+while retaining the learned rotation prior, and align appear-
+ance through visibility-biased attention, cross-observation
+fusion, and differentiable rendering guidance during de-
+noising.
+An optional post-denoising refinement further
+adapts the appearance latent, lightweight decoder adapters,
+and object placement to the observations. Our framework
+also supports externally supplied geometry; when given
+temporal shapes of dynamic objects, it recovers a shared,
+input-aligned canonical appearance and stable world-space
+placement. Across synthetic and real benchmarks, GenIA
+improves pose prediction and object reconstruction from
+monocular, multi-view, and dynamic inputs, outperform-
+ing recent optimization-based, per-frame image-to-3D, and
+video-to-4D methods.
+Our project page is available at
+https://facebookresearch.github.io/GenIA.
+1. Introduction
+Photorealistic 3D reconstruction requires recovering com-
+plete geometry, faithful appearance, and correct placement
+from one or more observations. For dynamic objects, these
+properties must also remain coherent over time. Such assets
+are central to content creation, immersive media, robotics
+1
+arXiv:2610.12388v1  [cs.CV]  8 Oct 2026
+
+
+simulation, and embodied AI, yet remain difficult to recover
+from casual images or videos. The core challenge is to com-
+bine generative priors that complete unseen regions with
+reconstruction constraints that faithfully reproduce the ob-
+served evidence.
+Recent 3D foundation models learn strong generative
+priors from large-scale data, but often trade fidelity to the
+observed inputs for generative completeness. SAM3D [9],
+for example, predicts complete object geometry, appearance,
+and rigid pose from a single image, but its geometry and
+appearance may not tightly reproduce the observations, and
+its pose estimates can be inaccurate. At the other extreme,
+pixel-aligned predictors like Pixal3D [28] faithfully recon-
+struct observed geometry and appearance but offer weaker
+completion of unseen regions and typically do not recover
+explicit object pose. Another line of work narrows this gap
+by retraining generative models with reconstruction cues:
+ReconViaGen [3] conditions structured-latent generation on
+multi-view features and steers sampling toward the inputs,
+while CUPID [15] jointly recovers camera pose and injects
+pixel-aligned features into a single-image generator. How-
+ever, both specialize the generator to a particular input setting
+at training time, and neither addresses dynamic objects.
+In this work, we instead align the generative prior to
+its inputs at inference time, without retraining the founda-
+tion model. We call this approach test-time Input-Aligned
+Generation (GenIA). Geometric and photometric signals
+constrain the observed regions, while the generative is
+steered toward consistent completion of what remains un-
+seen. The same mechanism spans monocular, multi-view,
+and dynamic inputs.
+GenIA aligns generation to the observations at three lev-
+els. First, we recover translation and scale using depth-
+derived cues while retaining the generative rotation prior.
+Second, we condition appearance on geometry and visi-
+bility, directing local features toward the image regions
+that observe them and fusing predictions across views or
+frames with visibility weighting. Third, differentiable ren-
+dering provides both in-trajectory guidance and optional
+post-denoising refinement. Our grounding mechanisms are
+geometry-predictor agnostic and therefore also support ex-
+ternally supplied shapes. We demonstrate this with Action-
+Mesh [60], which provides canonical dynamic geometry
+but neither world-space placement nor appearance; GenIA
+complements it with input-aligned canonical appearance and
+temporally stable rigid placement.
+GenIA improves pose and object reconstruction from
+monocular and multi-view inputs without retraining the un-
+derlying foundation model, and produces temporally con-
+sistent dynamic video reconstructions. It outperforms per-
+frame image-to-3D, optimization-based, and recent video-to-
+4D methods on both real and synthetic benchmarks.
+Our contributions are:
+1. An inference-time framework that aligns SAM3D’s gener-
+ative prior with geometric and photometric observations
+without retraining the foundation model, optionally sup-
+porting externally supplied temporal geometry.
+2. A visibility-aware appearance approach combining at-
+tention bias, rendering guidance, and cross-observation
+fusion for monocular, multi-view, and dynamic inputs, all
+applied to the frozen generator.
+3. A geometry-grounded object placement strategy with
+sequence-level rotation aggregation for improved and
+temporally stable poses.
+4. An optional post-denoising refinement that jointly opti-
+mizes the appearance latent, lightweight decoder adapters,
+and object placement via differentiable rendering, bridg-
+ing the gap between the frozen decoder’s capacity and
+the observed appearance while preserving the pretrained
+prior.
+2. Related work
+2.1. 3D reconstruction and generation
+High-fidelity 3D reconstruction was long dominated by
+per-scene optimization, from neural radiance fields [48,
+49, 66, 83] to 3D Gaussian Splatting [23].
+Monocular
+depth estimation has simultaneously progressed from special-
+ized predictors [57] to foundation-scale models [2, 21, 80],
+while general 3D foundation models directly regress dense
+geometry and cameras from uncalibrated image collec-
+tions [22, 26, 65, 69, 70].
+Building on these advances,
+feed-forward 3DGS models recover scene-level Gaussian
+representations from calibrated views [4, 10, 76] or uncali-
+brated image collections [13, 16, 35, 41, 46], while recurrent
+refinement methods improve these predictions through ren-
+dering feedback [53, 77]. While faithful to the observed
+imagery, these methods reconstruct only visible geometry
+and do not recover complete, object-centric assets with ex-
+plicit world-space grounding.
+Complementary to reconstruction, object-centric gen-
+eration infers complete geometry and appearance condi-
+tioned on text or sparse observations. Early approaches
+distill pretrained 2D diffusion priors through score distilla-
+tion [34, 55, 63] or improve the multi-view consistency of
+image-conditioned generation [38, 40, 42], while large re-
+construction models [5, 14, 78] bridge the two paradigms by
+regressing complete objects from single or sparse views. Re-
+cent methods instead operate directly in native 3D represen-
+tations, learning structured latent spaces over voxels, meshes,
+or Gaussian primitives [29, 73, 74, 79, 89]. Pixal3D [28]
+departs from canonical-space generation by predicting pixel-
+aligned assets through explicit image-to-geometry corre-
+spondence. ReconViaGen [3] and CUPID [15] narrow the
+gap between generation and reconstruction through stronger
+learned alignment to the input: ReconViaGen targets multi-
+2
+
+
+view reconstruction, while CUPID jointly models object
+generation and camera pose from a single image. These
+approaches rely on specialized architectures and incorporate
+alignment directly into the training process; in contrast, we
+ground pose and appearance at inference time on a frozen
+generator, with the same framework spanning monocular,
+multi-view, and dynamic inputs.
+Our work builds on SAM3D [9], which predicts com-
+plete object geometry, appearance, and pose from a single
+image using large-scale generative priors. Subsequent work
+accelerates inference [12], extends generation to multiple
+views [27, 90], or retrains the pipeline for pose-conditioned
+appearance [85]. Nevertheless, these approaches remain
+driven primarily by learned priors and do not explicitly en-
+force consistency with observed images during inference.
+Our work is complementary to this line of research.
+Rather than improving the underlying generative prior, we
+ground SAM3D’s pose and appearance in observations
+through depth-based initialization, visibility-aware reason-
+ing, differentiable rendering guidance, and optional test-time
+refinement.
+2.2. 4D reconstruction and generation
+Dynamic reconstruction extends static reconstruction by
+enforcing temporal consistency across geometry, appear-
+ance, and motion. Early deformable neural rendering meth-
+ods [11, 25, 43, 51, 52, 56, 67, 71, 81, 82] optimize dy-
+namic scenes for each video, introducing explicit time-
+varying Gaussian representations through persistent track-
+ing, deformation fields, or compact motion models. Per-
+scene monocular methods improve dynamic reconstruc-
+tion via temporally consistent meshes [37], better motion
+representations [33, 72], or diffusion-based inpainting of
+novel views [7]. Other methods optimize over learned pri-
+ors [8, 31, 45, 88] or predict 4D geometry and motion di-
+rectly [20, 47, 87]. However, optimization-based methods
+are costly per sequence, and all of these methods recover
+geometry only for surfaces observed in the input, leaving
+unseen regions incomplete.
+Generative video-to-4D introduces learned priors to aid
+or replace per-sequence optimization. Early approaches
+distill pretrained 2D diffusion models into dynamic rep-
+resentations and supervise 4D optimization using gener-
+ated multi-view videos [17, 30, 75]. Feed-forward meth-
+ods directly predict temporally complete geometry from
+monocular videos [44, 59], while more recent work unifies
+reconstruction and generation in learned spatio-temporal
+latent spaces [60, 61, 84, 86].
+Other works combine
+image-to-3D priors with per-sequence deformation optimiza-
+tion [6, 36, 62, 64].
+Rather than generating 4D geometry itself, we lever-
+age temporally coherent geometry from existing backbones
+such as ActionMesh and recover the complementary compo-
+nents they lack: observation-grounded appearance and stable
+world-space trajectories, without dataset-level retraining.
+3. Preliminaries
+Each observation provides an image I, an object mask M, a
+depth map D, the camera intrinsics K and extrinsics E.
+3.1. SAM3D
+We build on SAM3D [9], which operates on a single ob-
+servation. SAM3D predicts a coarse occupancy grid O,
+appearance A, and pose ρ := (R, t, s), mapping local ob-
+ject coordinates to the camera frame. These are predicted
+conditioned on a single observation (I, M, K, D). K and
+D are internally predicted by a monocular depth estimator
+(MoGe [68]) and converted into a conditioning pointmap P.
+The camera extrinsics E are assumed to be identity, so world
+and camera space coincide.
+The model is a two-stage rectified flow-matching pipeline
+that denoises a set of modality m latents xm, conditioned on
+input features c. The first stage predicts the coarse shape O
+and the pose ρ; the second predicts a structured latent (SLAT)
+Z that jointly encodes fine geometry S and appearance A.
+Both stages use 25-step rectified conditional flow matching
+with a linear interpolant xm
+τ := τ xm
+1 +(1−τ) xm
+0 , τ ∈[0, 1],
+xm
+0 ∼N(0, I), target velocity vm := ˙xm
+τ = xm
+1 −xm
+0 , and
+learned velocity vm
+θ (xm
+τ , c, τ). Generation then integrates
+the ODE
+xm
+τ+∆τ = xm
+τ
++ vm
+θ (xm
+τ , c, τ) ∆τ .
+(1)
+The velocity is classifier-free guided: each step evaluates
+a conditioned pass and a condition-free pass, in which the
+conditioning c is replaced by a null embedding ∅, and ex-
+trapolates between them with guidance strength w:
+vm
+θ
+:= (1 + w) vm
+θ (xm
+τ , c, τ) −w vm
+θ (xm
+τ , ∅, τ)
+(2)
+Coarse geometry stage. DINOv2 [50] encodes the image–
+mask pair at full and mask-cropped resolution into four
+token channels, concatenated with separately embedded
+pointmap tokens into the conditioning c. A Mixture-of-
+Transformers [32] jointly denoises (i) a coarse, voxelized
+version of the true object shape as a 163 × 8 shape latent
+xO, decoded by the structure decoder Do into a 643 occu-
+pancy grid O, and (ii) an object pose as three pose tokens
+xR, xt, xs decoded by the pose decoder Dρ into ρ. Informa-
+tion flows unidirectionally from the shape stream to the pose
+stream through multi-modal self-attention.
+Fine geometry and appearance stage. The input images
+and masks are encoded as in the coarse geometry stage into
+the conditioning c; pointmap tokens are omitted. A sparse
+latent flow transformer denoises the SLAT Z over the active
+voxels of the coarse occupancy O. The representation can
+be decoded with Dg to a set of 3D Gaussians G in the object
+frame defined by the predicted coarse shape O.
+3
+
+
+🔥
+🔁
+&
+🔁
+&
+&
+🔥
+🔥
+🔥
+Figure 2. Our pipeline. Left to right, top to bottom, we obtain the coarse shape from SAM3D’s first pass or (optionally) inject an external
+one into SAM3D’s shape tokens (Sec. 4.1), denoise each object’s per-frame pose over that fixed shape (Sec. 4.2), predict observation-aligned
+appearance as SLAT features (Sec. 4.3), and (optionally) do test-time refinement of the reconstruction against the input views (Sec. 4.4).
+Dotted arrows denote gradient flow. We illustrate the single-view setting; multi-view and dynamic extensions are described in the text.
+4. Method
+Given posed observations, GenIA recovers input-aligned ob-
+ject reconstructions with per-frame world-space poses. By
+default, SAM3D jointly denoises coarse shape and rotation.
+When external geometry is available, we instead inject it into
+SAM3D’s coarse latent representation (Sec. 4.1) and keep
+the shape fixed while denoising rotation. We then derive
+translation and scale from depth while retaining SAM3D’s
+rotation prior (Sec. 4.2), recover a shared appearance repre-
+sentation using visibility and rendering constraints (Sec. 4.3),
+and optionally refine the instance representation and world-
+space pose at test time (Sec. 4.4). Figure 2 summarizes
+the pipeline. All stages operate at inference time without
+updating the pretrained SAM3D weights; optional refine-
+ment optimizes only an object-specific appearance latent, a
+lightweight low-rank decoder adapter, and pose.
+We index each observation by view j ∈{1, . . . , nv} and
+frame k ∈{1, . . . , nf}: nv distinguishes monocular (= 1)
+from multi-view (> 1) inputs, while nf distinguishes static
+(= 1) from dynamic (> 1) scenes. Rather than using MoGe,
+which provides single-view depth but no camera pose, we
+use MapAnything [22] to obtain metric depth and camera
+calibration (D(k,j), E(k,j), K(k,j)) across all settings. Our
+framework remains agnostic to the geometry predictor, sup-
+porting any method that provides geometrically consistent
+pointmaps and camera parameters.
+4.1. Optional Shape Injection
+When external geometry S is available, we replace SAM3D’s
+coarse shape prediction by voxelizing S into an occupancy
+grid O and inverting it into the clean latent xO
+1 expected
+by SAM3D’s frozen occupancy decoder. The inversion
+uses a reconstruction objective with moment-matching reg-
+ularization to match the empirical distribution of SAM3D
+shape tokens (E[xO
+1 ] ≈0, Var(xO
+1 ) ≈0.9). Pose denoising
+(Sec. 4.2) is then conditioned on the injected latent; without
+external geometry, injection is skipped and SAM3D denoises
+coarse shape and pose jointly.
+For dynamic inputs, this external geometry additionally
+specifies an object-local deformation field δ, relating the
+canonical shape to each frame (details in Sec. A.3). We
+invert each deformed shape while preserving these corre-
+spondences.
+4.2. Pose prediction
+We use SAM3D’s coarse geometry model to predict the
+reconstructed object’s world-space pose ρk := (Rk, tk, sk)
+at frame k.
+Denoising. Without external geometry, coarse shape and
+pose are jointly denoised for SAM3D’s default 25 steps.
+With an injected shape latent xO
+k,1, the fixed shape conditions
+the pose integration (1) for 10 steps. For static multi-view
+inputs (nv > 1), we denoise the pose from the first view
+(j = 1). For dynamic objects, the injected shapes already
+capture non-rigid motion and local rotation, so we only need
+to recover a single global root orientation R rather than one
+per frame. We find this as the coordinate-wise median of the
+rotation velocities predicted across frames at each ODE step.
+Depth-grounded translation and scale. Translation and
+scale dominate SAM3D’s image-space pose errors (ablated
+in Sec. A.1). We therefore retain the denoised rotation
+Rk and instead estimate translation and scale from geo-
+metric cues. Given the camera-space pointmap Pk, object
+mask Mk, and intrinsics Kk = (fx, fy, cx, cy), we mea-
+sure three quantities: the object’s depth dk (the median z
+of Pk over the mask), its center (¯uk, ¯vk), and its angular
+4
+
+
+Figure 3. Visibility on the object’s coarse shape. Left: camera
+view; orbiting reveals visible and occluded voxels.
+size ak = max(∆uk/fx, ∆vk/fy), where (∆uk, ∆vk) is
+the extent of the mask bounding box in pixels. We then seek
+the translation and scale at which the posed coarse shape O,
+projected with Kk, yields matching predictions: a silhouette
+with angular size ˆa, center (ˆu, ˆv), and median visible depth
+ˆd. We initialize by back-projecting the mask at dk,
+t ←dk
+ ¯uk −cx
+fx
+, ¯vk −cy
+fy
+, 1
+
+,
+s ←dk ak,
+(3)
+We then perform five fixed-point iterations that update, in or-
+der, scale, depth, and lateral position, each from the residual
+of its own predicted quantity:
+s ←s ak
+ˆa ,
+tz ←tz + dk −ˆd,
+(tx, ty) ←(tx, ty) +
+  ¯uk−ˆu
+fx , ¯vk−ˆv
+fy
+
+tz,
+(4)
+The result replaces the denoised translation and scale. For
+multi-view inputs, translation and scale are estimated per
+view as above, mapped to world coordinates with E(k,j),
+and the median center and scale define a shared world-space
+pose. For dynamic objects, they remain frame-specific. The
+object’s world-space pose at frame k then follows by com-
+posing the camera-space pose ρ(k,j) with E(k,j).
+Registration. Finally, we refine the initialized pose by reg-
+istering the coarse shape to the metric input pointmap with a
+short iterative closest point (ICP) optimization [1] (details in
+Sec. A.9).
+4.3. Appearance prediction
+With the coarse shape O fixed and the object pose ρ given,
+the appearance stage predicts a structured latent representa-
+tion Z that encodes fine geometry and appearance. Condi-
+tioned on the voxel grid and the input images, a sparse latent
+flow transformer denoises Z through (1); the resulting latent
+is decoded into a set of 3D Gaussians (Sec. 3).
+Conditioned on one observation, the SAM3D backbone
+predicts the velocity for the latent trajectory. At every denois-
+ing step, we first bias cross-attention toward image patches
+that observe each voxel and then apply rendering guidance
+to the resulting velocity prediction. The per-observation
+guided velocity predictions are then fused at every denoising
+step using visibility-based weights, yielding a shared latent
+trajectory.
+In the following, we index observations by b
+∈
+{1, . . . , no}: a camera view in the static multi-view setting
+(no=nv) and a frame in the dynamic setting (no=nf).
+Per-voxel visibility. A voxel occluded in a view receives
+no reliable appearance information from it. We therefore
+compute a per-observation voxel visibility mask νi(b) ∈
+{0, 1}. A voxel i is marked visible νi(b) = 1 if the ray from
+the voxel to the camera reaches the image plane without
+first intersecting another occupied cell, accounting for self-
+occlusion. Figure 3 visualizes the resulting visibility on a
+voxelized shape. For each voxel, we also define Πi(b) as the
+set of conditioning patches covering voxel i in observation
+b; if the voxel is not visible, then Πi(b) = ∅(details in
+Sec. A.4).
+Visibility attention bias. The appearance predictor cross-
+attends to conditioning patches c. We bias this attention
+toward the patches that directly observe the voxels. For each
+voxel i and observation b, we add +α (α=5) to the logits
+of Πi(b) in the full- and cropped-RGB conditioning groups;
+occluded voxels receive no bias. The bias is applied only
+to the conditioned CFG branch vθ(xτ, c, τ). Since softmax
+spans all conditioning tokens, we also subtract a per-voxel
+offset from the RGB logits to approximately preserve the
+attention share of unbiased mask and global tokens while
+retaining the eα visible-patch boost; derivation and exact
+passive-stream compensation are given in Sec. A.5.
+Rendering guidance. The visibility bias acts through the
+frozen conditioning pathway; rendering guidance, instead,
+directly supervises the decoded reconstruction during the
+flow trajectory. Each observation’s latent Zb is advanced by
+its own CFG-combined velocity v(b)
+θ
+(2); rendering guidance
+corrects this velocity independently for every observation.
+At each ODE step τ, we estimate the clean latent by extrapo-
+lating along the flow using the flow-matching analogue of
+Tweedie’s formula: ˆZb(τ) = Zb(τ) + (1 −τ)v(b)
+θ . This
+is decoded to Gaussians and rendered under the fixed pose
+ρb to obtain (ˆIb, ˆDb). The per-observation rendering loss
+combines photometric and depth supervision:
+L(b)
+rend = Lrgb(ˆIb, Ib) + 0.2Lssim(ˆIb, Ib)
++ 0.5Llpips(ˆIb, Ib) + 0.1Ldepth( ˆDb, Db).
+(5)
+Implementation details are in Sec. A.6. The rendering gradi-
+ent corrects each observation’s velocity. To do so, we first
+rescale the gradient to the current velocity norm and then
+apply v(b)
+θ
+←v(b)
+θ
+−λ ∇Zb(τ)L(b)
+rend, where λ controls the
+relative guidance strength.
+Visibility-weighted observation fusion. For each voxel
+i,
+we fuse the per-observation latents as (Z)i
+=
+Pno
+b=1 wi(b)(Zb)i, with
+˜wi(b) =
+exp(γ νi(b))
+Pno
+b′=1 exp(γ νi(b′)),
+wi(b) =
+max( ˜
+wi(b),ϵ)
+Pno
+b′=1 max( ˜
+wi(b′),ϵ). (6)
+We use γ = 30 and ϵ = 10−3. Since visibility is binary,
+observations that see a voxel receive equal weight, while the
+5
+
+
+1 view (0)
+Multi-view
+Views
+SAM3D [9]
+TripoSplat [79]
+TRELLISv2 [74]
+Pixal3D [28]
+RecGen [85]
+CUPID [15]
+Ours
+SAM3D
+w/o TTR
+Ours
+SAM3D
+w/ TTR
+MV-SAM3D [27] Depth-3DGS [23] ReconViaGen [3]
+Ours
+MV-SAM3D
+w/o TTR
+Ours
+MV-SAM3D
+w/ TTR
+GT
+GSO-30
+0
+1
+2
+3
+4
+Train
+Test
+CO3D
+0
+1
+2
+3
+Train
+Test
+(a) Static datasets (GSO-30 top, CO3D bottom).
+Sequence
+SAM3D [9]
+Lift4D [36]
+HiMoR [33]
+Any4D [20]
+Ours
+ActionMesh
+w/o TTR
+Ours
+ActionMesh
+w/ TTR
+GT
+ActionBench
+0
+4
+7
+11
+15
+Train
+Test
+DAVIS
+0
+5
+10
+15
+Train
+Test
+N.A.
+(b) Dynamic datasets (ActionBench top, DAVIS bottom).
+Figure 4. Qualitative comparison. (a) GSO-30 and CO3D reconstructed from one input view and from multi-view inputs (5 views
+for GSO-30, 4 for CO3D). (b) ActionBench and DAVIS reconstructed from 16-frame sequences; for DAVIS, we show the first and last
+reconstructed frames. Methods are described in Sec. 5. DAVIS provides no ground-truth test views, so its test subrow shows synthesized
+novel views at the same timestamps. Each render is badged with per-scene PSNR (↑) on train views and CLIP-I (↑) on test views.
+floor retains a small contribution from occluded observations.
+Visibility is computed once on fixed coarse geometry and
+remains constant throughout denoising.
+In the static multi-view setting, all observations share the
+same voxel grid, and fusion is applied at every ODE step.
+The same formulation extends to dynamic objects, us-
+ing the deformation field δ (Sec. 4.1) to establish corre-
+spondences between each frame-specific grid Ob and the
+canonical grid O. At every ODE step, per-frame predictions
+are mapped to the canonical grid and fused with the same
+visibility-weighted rule (see Sec. A.3).
+4.4. Optional Test-time refinement
+The frozen generative decoder may only approximately re-
+produce instance-specific appearance and geometry. We
+therefore optionally refine a low-rank Gaussian-decoder
+adapter ∆Dg, together with the canonical latent Z and the
+world-space poses ρ for 100 iterations per object, while keep-
+ing all pretrained parameters fixed (TTR). Using the render-
+ing objective of (5), we optimize these test-time variables by
+rendering each observation as R(Dg(Z; ∆Dg), ρ(k,j)) and
+minimizing
+Lttr =
+nf
+X
+k=1
+nv
+X
+j=1
+L(k,j)
+rend + µ ∥Z −Z0∥2,
+(7)
+where the final term anchors the optimized latent to its initial
+prediction Z0, preserving the prior’s completion of regions
+the observations do not constrain. For dynamic objects, the
+canonical Gaussians are warped by δc→k before rendering
+each frame. The latent anchor and decoder adapter are com-
+plementary: the anchor preserves the predicted latent and
+its completion of unobserved regions, while ∆Dg provides
+instance-specific capacity beyond the frozen decoder’s range.
+We observe that latent-only refinement, which forces appear-
+ance residuals into the globally coupled latent, primarily
+improves observed views, whereas decoder adaptation also
+improves held-out views. Additional details are given in
+Sec. A.7.
+5. Results
+Baselines. We compare against state-of-the-art methods
+covering each of our input settings. Monocular static: We
+6
+
+
+#V
+Method
+GSO-30
+CO3D
+Train
+Test
+Train
+Test
+PSNR ↑co-PSNR ↑
+LPIPS ↓CLIP-I ↑PSNR ↑
+LPIPS ↓
+CLIP-I ↑
+1
+SAM3D [9]
+15.461
+11.860
+0.411
+0.883
+13.531
+0.524
+0.854
+TripoSplat [79]
+20.574
+13.564
+0.360
+0.876
+20.162
+0.517
+0.839
+RecGen [85]
+12.879
+10.651
+0.431
+0.868
+12.282
+0.533
+0.862
+CUPID [15]
+18.958
+13.213
+0.386
+0.881
+18.840
+0.462
+0.871
+Ours w/o TTR
+20.231
+12.280
+0.394
+0.884
+17.813
+0.454
+0.858
+Ours w/ TTR
+24.471
+12.781
+0.379
+0.884
+22.145
+0.436
+0.878
+2
+STREAM3D [90]
+13.734
+12.009
+0.424
+0.868
+11.179
+0.560
+0.851
+MV-SAM3D [27]
+14.190
+12.419
+0.390
+0.879
+12.540
+0.514
+0.870
+RecGen [85]
+12.631
+11.062
+0.418
+0.871
+11.683
+0.523
+0.868
+Ours w/o TTR
+18.994
+14.611
+0.325
+0.899
+16.699
+0.422
+0.874
+Ours w/ TTR
+21.821
+15.993
+0.301
+0.897
+19.026
+0.392
+0.885
+5/4
+STREAM3D [90]
+11.602
+11.026
+0.450
+0.870
+12.484
+0.515
+0.847
+Depth-3DGS [23]
+29.096
+23.126
+0.372
+0.830
+18.411
+0.477
+0.800
+MV-SAM3D [27]
+14.068
+13.217
+0.363
+0.885
+12.162
+0.509
+0.868
+ReconViaGen [3]
+14.796
+13.977
+0.296
+0.908
+12.322
+0.534
+0.826
+Ours w/o TTR
+18.627
+16.242
+0.254
+0.913
+16.038
+0.411
+0.871
+Ours w/ TTR
+21.527
+18.503
+0.228
+0.914
+17.151
+0.377
+0.886
+(a) Static scenes – GSO-30 and CO3D
+Method
+ActionBench
+DAVIS
+Train
+Test
+Train
+Test
+Pseudo-GT tracks
+PSNR ↑co-PSNR ↑
+LPIPS ↓
+CLIP-I ↑
+PSNR ↑CLIP-I ↑δavg ↑Err (px) ↓
+SAM3D [9]
+12.239
+9.900
+0.504
+0.882
+11.542
+0.881
+–
+–
+Any4D [20]
+–
+–
+–
+–
+–
+–
+0.470
+10.19
+Lift4D [36]
+11.273
+8.166
+0.704
+0.783
+12.407
+0.893
+0.408
+7.15
+HiMoR [33]
+19.107
+12.072
+0.702
+0.708
+18.341
+0.770
+0.628
+4.63
+Ours w/o TTR
+11.163
+9.597
+0.499
+0.855
+10.573
+0.869
+0.594
+3.91
+Ours w/ TTR
+12.097
+9.661
+0.502
+0.846
+13.423
+0.899
+0.595
+3.91
+(b) Dynamic scenes – ActionBench and DAVIS
+Table 1. Full benchmarks. Per-dataset image quality metrics
+across methods and, where applicable, number of input views (#V).
+“–” denotes metrics not reported by the corresponding method.
+Baselines, datasets, metrics and geometric backbones used by our
+method are detailed in Sec. 5. TRELLISv2 and Pixal3D predict
+lighting-disentangled materials and are therefore evaluated quali-
+tatively only. Best and second best per (#V, dataset, metric) group
+are shown in bold and underlined, respectively.
+use SAM3D [9] as the geometry predictor and compare
+against SAM3D, RecGen [85], TripoSplat [79], and CU-
+PID [15]. We additionally compare qualitatively with TREL-
+LISv2 [74] and Pixal3D [28], whose lighting-disentangled
+material predictions lack scene illumination and therefore
+do not support comparable photometric re-rendering. Multi-
+view static: We use MV-SAM3D [27] as the geometry back-
+bone (implemented in our framework and parallelized) and
+evaluate with varying numbers of input views. We compare
+against MV-SAM3D, STREAM3D [90], ReconViaGen [3],
+and RecGen [85] (up to two input views). We further include
+Depth-3DGS [23], a per-scene optimization baseline detailed
+in Sec. A.8. Monocular dynamic: We use ActionMesh [60]
+canonical geometry and deformations, and recover its miss-
+ing world-space pose with our pose stage. We compare
+against per-frame SAM3D, Lift4D [36], which combines 3D
+mesh generation with per-scene object optimization, and the
+per-scene optimization baseline HiMoR [33]. Additionally,
+we compare against Any4D [20], which predicts temporal
+point clouds for 3D tracking. We run all baselines on the
+same inputs as our method, including geometric priors where
+supported.
+Input
+SAM3D
+TripoSplat
+CUPID
+Ours w/ TTR
+Figure 5. GenIA with TTR completes the unseen surface with
+colors consistent with the input. A real scene rendered from
+the side opposite the input view. SAM3D completes the object
+with a smooth, synthetic appearance driven by its generative prior.
+TripoSplat and CUPID closely match the observed side but degrade
+on unseen surfaces, with washed-out colors or appearance drift.
+Datasets. Static: GSO-30 [24], a synthetic multi-view
+benchmark with a single object on a white background, and
+selected CO3D [58] scenes, a real multi-view dataset with
+one object; both are also evaluated with a single input view.
+Dynamic: Selected scenes from ActionBench [60], a syn-
+thetic monocular benchmark with a single object on a white
+background, which we re-render with one held-out view per
+timestamp; and DAVIS [54], comprising monocular in-the-
+wild videos with one object per scene (16 frames at stride
+2 over the first 32 frames). Exact scenes used and data
+processing are in Sec. A.12.
+Metrics. We report foreground-masked PSNR on training
+views and LPIPS/CLIP-I on held-out views. Pixel-aligned
+metrics are sensitive to pose errors and penalize plausible
+completions that differ from ground truth, so we addition-
+ally report CLIP-I as a coarse semantic measure, despite
+its limited sensitivity to fine texture and temporal consis-
+tency (Sec. A.13). To reduce pose-induced bias, we refine
+each method’s pose against the inputs while fixing shape
+and appearance; per-scene optimization methods are exempt
+(Sec. A.10). On GSO-30 and ActionBench, co-PSNR fur-
+ther isolates held-out pixels visible in at least one input view.
+For DAVIS, which lacks test views, we follow Lift4D [36]
+by synthesizing rotated novel views and averaging CLIP-I
+against the closest training image. We evaluate tracking
+against CoTracker3 [19] pseudo-ground-truth using δavg,
+reprojection error (Err), and AJ; these scores measure agree-
+ment with CoTracker3 rather than absolute accuracy (see
+Sec. A.11).
+5.1. Analysis
+Across datasets, GenIA aligns the frozen SAM3D model to
+the inputs, improving pose and appearance reconstruction
+(Tab. 1) while remaining competitive on runtime (Fig. 6).
+In the single-view setting, SAM3D, RecGen, and TREL-
+LISv2 can realistically complete unobserved geometry but
+often misalign appearance, especially for symmetric objects.
+Relative to SAM3D, we better resolve these ambiguities and
+improve color and lighting alignment, with gains extend-
+ing to held-out views. Pixal3D, TripoSplat, and CUPID are
+strongly input-aligned and even achieve higher co-PSNR
+than our method on synthetic scenes. However, they more
+7
+
+
+1
+2
+5
+10
+0.80
+0.85
+CLIP-I
+Mono. (1 view)
+1
+2
+5
+Runtime (× SAM3D)
+M.V. (4 views)
+1
+10
+100
+0.8
+0.9
+Dyn. (16 frames)
+Ours w/o TTR
+Ours w/ TTR
+RecGen
+SAM3D
+CUPID
+TripoSplat
+Pixal3D
+TRELLISv2
+Depth-3DGS
+ReconViaGen
+STREAM3D
+MV-SAM3D
+Lift4D
+HiMoR
+Any4D
+Figure 6. Our method adds a small overhead over SAM3D.
+Median runtime versus mean CLIP-I, with runtime given as a mul-
+tiple of SAM3D’s, which takes 25 s on our hardware (a single
+A100-40 GB). The two static panels are scored on CO3D; the dy-
+namic panel is scored on DAVIS. Without TTR, rendering guidance
+is the main overhead: runtime is approximately affine in view
+count, with per-view cost comparable to multi-view baselines. TTR
+adds a largely view-independent cost, while improving CLIP-I. On
+dynamic sequences, GenIA costs 13× SAM3D’s single-image run-
+time including ActionMesh (12× without TTR), versus 160× for
+Lift4D and 250× for HiMoR, and with TTR achieves the highest
+CLIP-I.
+frequently produce incomplete or washed-out occluded ge-
+ometry or textures (see Fig. 5). On held-out views, our
+method achieves superior metrics, particularly on real scenes,
+while qualitatively better preserving backside geometry and
+appearance.
+Similar
+misalignment
+persists
+for
+MV-SAM3D,
+STREAM3D, and RecGen in the multi-view setting, with
+ReconViaGen being the most input-aligned generative
+baseline. Without TTR, GenIA outperforms all baselines,
+including ReconViaGen. Depth-3DGS leads training-view
+PSNR and co-PSNR, but remains incomplete in unobserved
+regions.
+TTR further improves fidelity and perceptual
+quality.
+On dynamic scenes, per-frame SAM3D is temporally
+inconsistent in geometry and appearance and provides no
+tracking correspondences. HiMoR and Any4D reconstruct
+only observed regions. Lift4D, the closest baseline to ours,
+is noisier and less temporally stable. In comparison, our
+method inherits the quality of the injected coarse geometry
+from ActionMesh and results in coherent shape and appear-
+ance. With TTR, GenIA ranks second to HiMoR on DAVIS
+training-view PSNR and δavg, while achieving the lowest
+reprojection error and highest CLIP-I. On ActionBench, Hi-
+MoR leads training-view PSNR and co-PSNR, as expected
+for a per-scene optimizer fitted to the input view, while Ge-
+nIA is on par with per-frame SAM3D and achieves the best
+held-out LPIPS. Per-frame SAM3D has the highest Action-
+Bench CLIP-I, reflecting its insensitivity to pose alignment.
+Our method struggles on ActionBench scenes due to large
+inter-frame motion, where errors in the coarse geometry or
+pose can propagate and substantially degrade reconstruction.
+Peak GPU memory on CO3D (1 input view) is 19.7 GB
+without TTR versus SAM3D’s 18.0 GB; TTR increases it
+SAM3D
++Attn
++RG
++TTR
+GT
+Train
+Test
+Figure 7. Our appearance prediction better aligns with the
+input observations. Incremental appearance ablation on GSO-
+30, following Sec. 5.2. Attention bias injects pose information
+into SAM3D’s pose-blind appearance predictor, helping resolve
+ambiguous appearance assignment on symmetric coarse geometry.
+Rendering guidance further improves color and detail matching,
+while optional TTR provides additional gains, including on held-
+out views. We show one train and one held-out test view, badged
+with PSNR and co-PSNR (↑).
+to 31.8 GB due to back-propagation through the Gaussian
+decoder. Additional results are provided in Sec. A.2.
+5.2. Ablations
+We ablate our contributions cumulatively; Figure 7 shows
+the appearance ablation on a static monocular GSO scene.
+We use ground-truth coarse geometry to isolate the contribu-
+tion of the appearance components. Starting from SAM3D
+appearance prediction (Base), we add visibility attention bias
+(+Attn), rendering guidance (+RG), and test-time refinement
+(+TTR), progressively improving both training- and test-
+view quality. Full ablations for real and synthetic multi-view
+and monocular dynamic settings, together with ablations of
+our pose prediction components, are provided in Sec. A.1.
+6. Conclusion
+We presented GenIA, an inference-time framework that
+aligns a frozen generative 3D prior to its observations. We
+ground translation and scale in depth while retaining the
+prior’s rotation, and align appearance through visibility-
+biased attention, rendering guidance, and cross-observation
+fusion. This improves pose and novel-view quality for static
+monocular and multi-view inputs and, with external dynamic
+geometry, yields temporally coherent reconstructions and
+accurate tracks.
+Limitations and future work. Dynamic geometry cur-
+rently relies on an external predictor; removing this depen-
+dence would enable unified, input-aligned 3D/4D shape pre-
+diction. Unlike pose and appearance, coarse shape is not
+directly grounded in the observed silhouette and depth, as we
+found the geometry prior difficult to steer reliably. Rotation
+remains prior-driven and only weakly corrected by noise-
+sensitive registration, while pose errors from masks, depth,
+and cameras can also degrade the differentiable rendering
+supervision signal.
+8
+
+
+Acknowledgements: The authors affiliated with the Tübin-
+gen AI Center acknowledge the support of the Deutsche
+Forschungsgemeinschaft (DFG, German Research Founda-
+tion) under Germany’s Excellence Strategy (EXC number
+2064/1, project number 390727645). Stefano Esposito ac-
+knowledges travel support from the European Union’s Hori-
+zon 2020 research and innovation program under ELISE
+Grant Agreement No. 951847.
+References
+[1] Paul J. Besl and Neil D. McKay. A Method for Registration
+of 3-D Shapes. IEEE Trans. on Pattern Analysis and Machine
+Intelligence (PAMI), 14(2):239–256, 1992. 5
+[2] Aleksei Bochkovskii, Amaël Delaunoy, Hugo Germain, Mar-
+cel Santos, Yichao Zhou, Stephan R. Richter, and Vladlen
+Koltun. Depth Pro: Sharp Monocular Metric Depth in Less
+Than a Second. In Proc. of the International Conf. on Learn-
+ing Representations (ICLR), 2025. 2
+[3] Jiahao Chang, Chongjie Ye, Yushuang Wu, Yuantao Chen,
+Yidan Zhang, Zhongjin Luo, Chenghong Li, Yihao Zhi, and
+Xiaoguang Han. ReconViaGen: Towards Accurate Multi-
+view 3D Object Reconstruction via Generation. In Proc. of
+the International Conf. on Learning Representations (ICLR),
+2026. 2, 6, 7, 19, 20
+[4] David Charatan, Sizhe Li, Andrea Tagliasacchi, and Vincent
+Sitzmann. pixelSplat: 3D Gaussian Splats from Image Pairs
+for Scalable Generalizable 3D Reconstruction. In Proc. IEEE
+Conf. on Computer Vision and Pattern Recognition (CVPR),
+2024. 2
+[5] Anpei Chen, Haofei Xu, Stefano Esposito, Siyu Tang, and
+Andreas Geiger. LaRa: Efficient Large-Baseline Radiance
+Fields. In Proc. of the European Conf. on Computer Vision
+(ECCV), 2024. 2, 21
+[6] Jianqi Chen, Biao Zhang, Xiangjun Tang, and Peter Wonka.
+V2M4: 4D Mesh Animation Reconstruction from a Single
+Monocular Video. In Proc. of the IEEE International Conf.
+on Computer Vision (ICCV), pages 11643–11653, 2025. 3
+[7] Kaihua Chen, Tarasha Khurana, and Deva Ramanan. Re-
+construct, Inpaint, Test-Time Finetune: Dynamic Novel-view
+Synthesis from Monocular Videos. In Advances in Neural
+Information Processing Systems (NeurIPS), 2025. 3
+[8] Xingyu Chen, Yue Chen, Yuliang Xiu, Andreas Geiger, and
+Anpei Chen. Easi3R: Estimating Disentangled Motion from
+DUSt3R Without Training. In Proc. of the IEEE International
+Conf. on Computer Vision (ICCV), 2025. 3
+[9] Xingyu Chen, Fu-Jen Chu, Pierre Gleize, Kevin J. Liang,
+Alexander Sax, Hao Tang, Weiyao Wang, Michelle Guo,
+Thibaut Hardin, Xiang Li, Aohan Lin, Jia-Wei Liu, Ziqi Ma,
+Anushka Sagar, Bowen Song, Xiaodong Wang, Jianing Yang,
+Bowen Zhang, Piotr Dollár, Georgia Gkioxari, Matt Feiszli,
+and Jitendra Malik. SAM 3D: 3Dfy Anything in Images. In
+Proc. IEEE Conf. on Computer Vision and Pattern Recogni-
+tion (CVPR), pages 7220–7232, 2026. 1, 2, 3, 6, 7, 19, 20,
+21
+[10] Yuedong Chen, Haofei Xu, Chuanxia Zheng, Bohan Zhuang,
+Marc Pollefeys, Andreas Geiger, Tat-Jen Cham, and Jianfei
+Cai. MVSplat: Efficient 3D Gaussian Splatting from Sparse
+Multi-View Images. In Proc. of the European Conf. on Com-
+puter Vision (ECCV), 2024. 2
+[11] Jiemin Fang, Taoran Yi, Xinggang Wang, Lingxi Xie, Xi-
+aopeng Zhang, Wenyu Liu, Matthias Nießner, and Qi Tian.
+Fast Dynamic Radiance Fields with Time-Aware Neural Vox-
+els. In ACM Trans. on Graphics, 2022. 3
+[12] Weilun Feng, Mingqiang Wu, Zhiliang Chen, Chuanguang
+Yang, Haotong Qin, Yuqi Li, Xiaokun Liu, Guoxin Fan,
+Zhulin An, Libo Huang, Yulun Zhang, Michele Magno, and
+Yongjun Xu. Fast-SAM3D: 3Dfy Anything in Images but
+Faster. In Proc. of the International Conf. on Machine Learn-
+ing (ICML), 2026. 3
+[13] Sensen Gao, Zhaoqing Wang, Qihang Cao, Dongdong Yu,
+Changhu Wang, and Jia-Wang Bian. PixWorld: Unifying 3D
+Scene Generation and Reconstruction in Pixel Space. arXiv
+preprint arXiv:2607.05373, 2026. 2
+[14] Yicong Hong, Kai Zhang, Jiuxiang Gu, Sai Bi, Yang Zhou,
+Difan Liu, Feng Liu, Kalyan Sunkavalli, Trung Bui, and
+Hao Tan.
+LRM: Large Reconstruction Model for Single
+Image to 3D. In Proc. of the International Conf. on Learning
+Representations (ICLR), 2024. 2
+[15] Binbin Huang, Haobin Duan, Yiqun Zhao, Zibo Zhao, Yi Ma,
+and Shenghua Gao. CUPID: Generative 3D Reconstruction
+via Joint Object and Pose Modeling. In Proc. IEEE Conf. on
+Computer Vision and Pattern Recognition (CVPR), 2026. 1,
+2, 6, 7, 19, 20
+[16] Lihan Jiang, Yucheng Mao, Linning Xu, Tao Lu, Kerui Ren,
+Yichen Jin, Xudong Xu, Mulin Yu, Jiangmiao Pang, Feng
+Zhao, Dahua Lin, and Bo Dai. AnySplat: Feed-forward 3D
+Gaussian Splatting from Unconstrained Views. ACM Trans.
+on Graphics, 44(6):1–16, 2025. 2
+[17] Yanqin Jiang, Li Zhang, Jin Gao, Weiming Hu, and Yao Yao.
+Consistent4D: Consistent 360° Dynamic Object Generation
+from Monocular Video. In Proc. of the International Conf. on
+Learning Representations (ICLR), pages 51844–51861, 2024.
+3
+[18] Damjan Kalajdzievski.
+A Rank Stabilization Scaling
+Factor for Fine-Tuning with LoRA.
+arXiv preprint
+arXiv:2312.03732, 2023. 17
+[19] Nikita Karaev, Yuri Makarov, Jianyuan Wang, Natalia
+Neverova, Andrea Vedaldi, and Christian Rupprecht. Co-
+Tracker3: Simpler and Better Point Tracking by Pseudo-
+Labelling Real Videos. In Proc. of the IEEE International
+Conf. on Computer Vision (ICCV), pages 6013–6022, 2025.
+7, 19
+[20] Jay Karhade, Nikhil Keetha, Yuchen Zhang, Tanisha Gupta,
+Akash Sharma, Sebastian Scherer, and Deva Ramanan.
+Any4D: Unified Feed-Forward Metric 4D Reconstruction.
+In Proc. IEEE Conf. on Computer Vision and Pattern Recog-
+nition (CVPR), 2026. 3, 6, 7, 20, 21
+[21] Bingxin Ke, Kevin Qu, Tianfu Wang, Nando Metzger,
+Shengyu Huang, Bo Li, Anton Obukhov, and Konrad
+Schindler. Marigold: Affordable Adaptation of Diffusion-
+Based Image Generators for Image Analysis. IEEE Trans. on
+Pattern Analysis and Machine Intelligence (PAMI), 2025. 2
+[22] Nikhil Keetha, Norman Müller, Johannes Schönberger,
+Lorenzo Porzi, Yuchen Zhang, Tobias Fischer, Arno
+9
+
+
+Knapitsch, Duncan Zauss, Ethan Weber, Nelson Antunes,
+Jonathon Luiten, Manuel Lopez-Antequera, Samuel Rota
+Bulò, Christian Richardt, Deva Ramanan, Sebastian Scherer,
+and Peter Kontschieder.
+MapAnything: Universal Feed-
+Forward Metric 3D Reconstruction. In Proc. of the Inter-
+national Conf. on 3D Vision (3DV), 2026. 2, 4, 22
+[23] Bernhard Kerbl, Georgios Kopanas, Thomas Leimkühler, and
+George Drettakis. 3D Gaussian Splatting for Real-Time Radi-
+ance Field Rendering. ACM Trans. on Graphics, 42(4), 2023.
+2, 6, 7, 18, 19, 20
+[24] Xin Kong, Shikun Liu, Xiaoyang Lyu, Marwan Taher, Xiao-
+juan Qi, and Andrew J. Davison. EscherNet: A Generative
+Model for Scalable View Synthesis. In Proc. IEEE Conf. on
+Computer Vision and Pattern Recognition (CVPR), 2024. 7,
+21
+[25] Jiahui Lei, Yijia Weng, Adam W. Harley, Leonidas Guibas,
+and Kostas Daniilidis. MoSca: Dynamic Gaussian Fusion
+from Casual Videos via 4D Motion Scaffolds. In Proc. IEEE
+Conf. on Computer Vision and Pattern Recognition (CVPR),
+2025. 3
+[26] Vincent Leroy, Yohann Cabon, and Jérôme Revaud. Ground-
+ing Image Matching in 3D with MASt3R. In Proc. of the
+European Conf. on Computer Vision (ECCV), 2024. 2
+[27] Baicheng Li, Dong Wu, Jun Li, Shunkai Zhou, Zecui Zeng,
+Lusong Li, and Hongbin Zha. MV-SAM3D: Adaptive Multi-
+View Fusion for Layout-Aware 3D Generation. arXiv preprint
+arXiv:2603.11633, 2026. 1, 3, 6, 7, 19, 20
+[28] Dong-Yang Li, Wang Zhao, Yuxin Chen, Wenbo Hu, Meng-
+Hao Guo, Fang-Lue Zhang, Ying Shan, and Shi-Min Hu.
+Pixal3D: Pixel-Aligned 3D Generation from Images. In ACM
+Trans. on Graphics, 2026. 2, 6, 7, 19, 20
+[29] Yangguang Li, Zi-Xin Zou, Zexiang Liu, Dehu Wang, Yuan
+Liang, Zhipeng Yu, Xingchao Liu, Yuan-Chen Guo, Ding
+Liang, Wanli Ouyang, and Yan-Pei Cao. TripoSG: High-
+Fidelity 3D Shape Synthesis using Large-Scale Rectified Flow
+Models. IEEE Trans. on Pattern Analysis and Machine Intel-
+ligence (PAMI), 2025. 2
+[30] Zhiqi Li, Yiming Chen, and Peidong Liu. DreamMesh4D:
+Video-to-4D Generation with Sparse-Controlled Gaussian-
+Mesh Hybrid Representation. In Advances in Neural Infor-
+mation Processing Systems (NeurIPS), 2024. 3
+[31] Zhengqi Li, Richard Tucker, Forrester Cole, Qianqian Wang,
+Linyi Jin, Vickie Ye, Angjoo Kanazawa, Aleksander Holynski,
+and Noah Snavely. MegaSaM: Accurate, Fast and Robust
+Structure and Motion from Casual Dynamic Videos. In Proc.
+IEEE Conf. on Computer Vision and Pattern Recognition
+(CVPR), 2025. 3
+[32] Weixin Liang, Lili Yu, Liang Luo, Srinivasan Iyer, Ning
+Dong, Chunting Zhou, Gargi Ghosh, Mike Lewis, Wen-tau
+Yih, Luke Zettlemoyer, and Xi Victoria Lin. Mixture-of-
+Transformers: A Sparse and Scalable Architecture for Multi-
+Modal Foundation Models. Transactions on Machine Learn-
+ing Research, 2025. 3
+[33] Yiming Liang, Tianhan Xu, and Yuta Kikuchi.
+HiMoR:
+Monocular Deformable Gaussian Reconstruction with Hi-
+erarchical Motion Representation. In Proc. IEEE Conf. on
+Computer Vision and Pattern Recognition (CVPR), 2025. 3,
+6, 7, 19, 20, 21
+[34] Chen-Hsuan Lin, Jun Gao, Luming Tang, Towaki Takikawa,
+Xiaohui Zeng, Xun Huang, Karsten Kreis, Sanja Fidler, Ming-
+Yu Liu, and Tsung-Yi Lin. Magic3D: High-Resolution Text-
+to-3D Content Creation. In Proc. IEEE Conf. on Computer
+Vision and Pattern Recognition (CVPR), pages 300–309, 2023.
+2
+[35] Haotong Lin, Sili Chen, Jun Hao Liew, Donny Y. Chen,
+Zhenyu Li, Guang Shi, Jiashi Feng, and Bingyi Kang. Depth
+Anything 3: Recovering the Visual Space from Any Views. In
+Proc. of the International Conf. on Learning Representations
+(ICLR), 2026. 2
+[36] Yehonathan Litman, Xiaoxuan Ma, Manan Shah, Nicolás
+Ugrinovic, Kris Kitani, Fernando De la Torre, and Shubham
+Tulsiani. Lift4D: Harmonizing Single-View 3D Estimation for
+4D Reconstruction In-the-Wild. In ACM Trans. on Graphics,
+2026. 1, 3, 6, 7, 19, 20, 21
+[37] Isabella Liu, Hao Su, and Xiaolong Wang. Dynamic Gaus-
+sians Mesh: Consistent Mesh Reconstruction from Dynamic
+Scenes. In Proc. of the International Conf. on Learning Rep-
+resentations (ICLR), 2025. 3
+[38] Ruoshi Liu, Rundi Wu, Basile Van Hoorick, Pavel Tokmakov,
+Sergey Zakharov, and Carl Vondrick. Zero-1-to-3: Zero-shot
+One Image to 3D Object. In Proc. of the IEEE International
+Conf. on Computer Vision (ICCV), pages 9298–9309, 2023. 2
+[39] Shih-Yang Liu, Chien-Yi Wang, Hongxu Yin, Pavlo
+Molchanov, Yu-Chiang Frank Wang, Kwang-Ting Cheng, and
+Min-Hung Chen. DoRA: Weight-Decomposed Low-Rank
+Adaptation. In Proc. of the International Conf. on Machine
+Learning (ICML), 2024. 17
+[40] Yuan Liu, Cheng Lin, Zijiao Zeng, Xiaoxiao Long, Lingjie
+Liu, Taku Komura, and Wenping Wang. SyncDreamer: Gener-
+ating Multiview-consistent Images from a Single-view Image.
+In Proc. of the International Conf. on Learning Representa-
+tions (ICLR), pages 27676–27697, 2024. 2
+[41] Yifan Liu, Zhiyuan Min, Zhenwei Wang, Junta Wu, Tengfei
+Wang, Yixuan Yuan, Yawei Luo, and Chunchao Guo. World-
+Mirror: Universal 3D World Reconstruction with Any-Prior
+Prompting. In Proc. of the International Conf. on Machine
+Learning (ICML), 2026. 2
+[42] Xiaoxiao Long, Yuan-Chen Guo, Cheng Lin, Yuan Liu,
+Zhiyang Dou, Lingjie Liu, Yuexin Ma, Song-Hai Zhang, Marc
+Habermann, Christian Theobalt, and Wenping Wang. Won-
+der3D: Single Image to 3D using Cross-Domain Diffusion.
+In Proc. IEEE Conf. on Computer Vision and Pattern Recog-
+nition (CVPR), pages 9970–9980, 2024. 2
+[43] Jonathon Luiten, Georgios Kopanas, Bastian Leibe, and Deva
+Ramanan. Dynamic 3D Gaussians: Tracking by Persistent
+Dynamic View Synthesis. In Proc. of the International Conf.
+on 3D Vision (3DV), 2024. 3
+[44] Anagh Malik, Dorian Chan, Xiaoming Zhao, David B. Lin-
+dell, Oncel Tuzel, and Jen-Hao Rick Chang. Velox: Learning
+Representations of 4D Geometry and Appearance. In Proc.
+IEEE Conf. on Computer Vision and Pattern Recognition
+(CVPR), 2026. 3
+[45] Kirill Mazur, Marwan Taher, and Andrew J. Davison. 4d
+primitive-mache: Glueing primitives for persistent 4d scene
+reconstruction. In Proc. IEEE Conf. on Computer Vision and
+Pattern Recognition (CVPR), pages 7372–7381, 2026. 3
+10
+
+
+[46] Lars Mescheder, Wei Dong, Shiwei Li, Xuyang Bai, Marcel
+Santos, Peiyun Hu, Bruno Lecouat, Mingmin Zhen, Amaël
+Delaunoy, Tian Fang, Yanghai Tsin, Stephan R. Richter, and
+Vladlen Koltun. Sharp Monocular View Synthesis in Less
+Than a Second. In Proc. of the International Conf. on Learn-
+ing Representations (ICLR), 2026. 2
+[47] Zhenxing Mi, Yuxin Wang, and Dan Xu. One4D: Unified 4D
+Generation and Reconstruction via Decoupled LoRA Control.
+In Proc. of the European Conf. on Computer Vision (ECCV),
+2026. 3
+[48] Ben Mildenhall, Pratul P. Srinivasan, Matthew Tancik,
+Jonathan T. Barron, Ravi Ramamoorthi, and Ren Ng. NeRF:
+Representing Scenes as Neural Radiance Fields for View Syn-
+thesis. In Proc. of the European Conf. on Computer Vision
+(ECCV), 2020. 2
+[49] Thomas Müller, Alex Evans, Christoph Schied, and Alexan-
+der Keller. Instant Neural Graphics Primitives with a Mul-
+tiresolution Hash Encoding. ACM Trans. on Graphics, 41(4):
+102:1–102:15, 2022. 2
+[50] Maxime Oquab, Timothée Darcet, Théo Moutakanni, Huy Vo,
+Marc Szafraniec, Vasil Khalidov, Pierre Fernandez, Daniel
+Haziza, Francisco Massa, Alaaeldin El-Nouby, Mahmoud
+Assran, Nicolas Ballas, Wojciech Galuba, Russell Howes,
+Po-Yao Huang, Shang-Wen Li, Ishan Misra, Michael Rab-
+bat, Vasu Sharma, Gabriel Synnaeve, Hu Xu, Hervé Jegou,
+Julien Mairal, Patrick Labatut, Armand Joulin, and Piotr Bo-
+janowski. DINOv2: Learning Robust Visual Features without
+Supervision. Transactions on Machine Learning Research,
+2024. 3
+[51] Keunhong Park, Utkarsh Sinha, Jonathan T. Barron, Sofien
+Bouaziz, Dan B. Goldman, Steven M. Seitz, and Ricardo
+Martin-Brualla. Nerfies: Deformable Neural Radiance Fields.
+In Proc. of the IEEE International Conf. on Computer Vision
+(ICCV), 2021. 3
+[52] Keunhong Park, Utkarsh Sinha, Peter Hedman, Jonathan T.
+Barron, Sofien Bouaziz, Dan B. Goldman, Ricardo Martin-
+Brualla, and Steven M. Seitz.
+HyperNeRF: A Higher-
+Dimensional Representation for Topologically Varying Neu-
+ral Radiance Fields. ACM Trans. on Graphics, 40(6), 2021.
+3
+[53] Naama Pearl, Stefano Esposito, Haofei Xu, Amit Peleg, Patri-
+cia Gschossmann, Lorenzo Porzi, Peter Kontschieder, Gerard
+Pons-Moll, and Andreas Geiger. Learn2Splat: Extending
+the Horizon of Learned 3DGS Optimization. arXiv preprint
+arXiv:2605.15760, 2026. 2
+[54] Federico Perazzi, Jordi Pont-Tuset, Brian McWilliams,
+Luc Van Gool, Markus Gross, and Alexander Sorkine-
+Hornung. A Benchmark Dataset and Evaluation Method-
+ology for Video Object Segmentation. In Proc. IEEE Conf.
+on Computer Vision and Pattern Recognition (CVPR), 2016.
+1, 7
+[55] Ben Poole, Ajay Jain, Jonathan T. Barron, and Ben Mildenhall.
+DreamFusion: Text-to-3D using 2D Diffusion. In Proc. of
+the International Conf. on Learning Representations (ICLR),
+2023. 2
+[56] Albert Pumarola, Enric Corona, Gerard Pons-Moll, and
+Francesc Moreno-Noguer. D-NeRF: Neural Radiance Fields
+for Dynamic Scenes. In Proc. IEEE Conf. on Computer Vision
+and Pattern Recognition (CVPR), 2021. 3
+[57] René Ranftl, Katrin Lasinger, David Hafner, Konrad
+Schindler, and Vladlen Koltun. Towards Robust Monocu-
+lar Depth Estimation: Mixing Datasets for Zero-shot Cross-
+dataset Transfer. IEEE Trans. on Pattern Analysis and Ma-
+chine Intelligence (PAMI), 44(3):1623–1637, 2022. 2
+[58] Jeremy Reizenstein, Roman Shapovalov, Philipp Henzler,
+Luca Sbordone, Patrick Labatut, and David Novotny. Com-
+mon Objects in 3D: Large-Scale Learning and Evaluation of
+Real-life 3D Category Reconstruction. In Proc. of the IEEE
+International Conf. on Computer Vision (ICCV), 2021. 7, 21
+[59] Jiawei Ren, Kevin Xie, Ashkan Mirzaei, Hanxue Liang, Xiao-
+hui Zeng, Karsten Kreis, Ziwei Liu, Antonio Torralba, Sanja
+Fidler, Seung Wook Kim, and Huan Ling. L4GM: Large
+4D Gaussian Reconstruction Model. In Advances in Neural
+Information Processing Systems (NeurIPS), 2024. 3
+[60] Remy Sabathier, David Novotny, Niloy Mitra, and Tom Mon-
+nier. ActionMesh: Animated 3D Mesh Generation with Tem-
+poral 3D Diffusion. In Proc. IEEE Conf. on Computer Vision
+and Pattern Recognition (CVPR), 2026. 2, 3, 7, 21
+[61] Dvir Samuel, Yuval Atzmon, Gal Chechik, and Yoni Kas-
+ten. Fast 4D Mesh Generation by Spatio-Temporal Attention
+Chains. arXiv preprint arXiv:2605.19786, 2026. 3
+[62] Lu Sang, Zehranaz Canfes, Dongliang Cao, Riccardo Marin,
+Florian Bernard, and Daniel Cremers.
+TwoSquared: 4D
+Generation from 2D Image Pairs. In Proc. of the International
+Conf. on 3D Vision (3DV), pages 659–669, 2026. 3
+[63] Jiaxiang Tang, Jiawei Ren, Hang Zhou, Ziwei Liu, and Gang
+Zeng. DreamGaussian: Generative Gaussian Splatting for
+Efficient 3D Content Creation. In Proc. of the International
+Conf. on Learning Representations (ICLR), pages 33879–
+33896, 2024. 2
+[64] Narek Tumanyan, Samuel Rota Bulò, Denis Rozumny,
+Lorenzo Porzi,
+Adam W. Harley,
+Tali Dekel,
+Peter
+Kontschieder, and Jonathon Luiten. DRoPS: Dynamic 3D
+Reconstruction of Pre-Scanned Objects.
+arXiv preprint
+arXiv:2603.24770, 2026. 3
+[65] Jianyuan Wang, Minghao Chen, Nikita Karaev, Andrea
+Vedaldi, Christian Rupprecht, and David Novotny. VGGT:
+Visual Geometry Grounded Transformer. In Proc. IEEE Conf.
+on Computer Vision and Pattern Recognition (CVPR), 2025.
+2
+[66] Peng Wang, Lingjie Liu, Yuan Liu, Christian Theobalt, Taku
+Komura, and Wenping Wang. NeuS: Learning Neural Implicit
+Surfaces by Volume Rendering for Multi-view Reconstruc-
+tion. In Advances in Neural Information Processing Systems
+(NeurIPS), 2021. 2
+[67] Qianqian Wang, Vickie Ye, Hang Gao, Weijia Zeng, Jake
+Austin, Zhengqi Li, and Angjoo Kanazawa. Shape of Motion:
+4D Reconstruction from a Single Video. In Proc. of the IEEE
+International Conf. on Computer Vision (ICCV), 2025. 3
+[68] Ruicheng Wang, Sicheng Xu, Cassie Dai, Jianfeng Xiang,
+Yu Deng, Xin Tong, and Jiaolong Yang. MoGe: Unlocking
+Accurate Monocular Geometry Estimation for Open-Domain
+Images with Optimal Training Supervision. In Proc. IEEE
+Conf. on Computer Vision and Pattern Recognition (CVPR),
+pages 5261–5271, 2025. 3
+11
+
+
+[69] Shuzhe Wang, Vincent Leroy, Yohann Cabon, Boris
+Chidlovskii, and Jérôme Revaud. DUSt3R: Geometric 3D
+Vision Made Easy. In Proc. IEEE Conf. on Computer Vision
+and Pattern Recognition (CVPR), 2024. 2
+[70] Yifan Wang, Jianjun Zhou, Haoyi Zhu, Wenzheng Chang,
+Yang Zhou, Zizun Li, Junyi Chen, Jiangmiao Pang, Chunhua
+Shen, and Tong He. π3: Permutation-Equivariant Visual
+Geometry Learning. In Proc. of the International Conf. on
+Learning Representations (ICLR), 2026. 2
+[71] Guanjun Wu, Taoran Yi, Jiemin Fang, Lingxi Xie, Xiaopeng
+Zhang, Wei Wei, Wenyu Liu, Qi Tian, and Xinggang Wang.
+4D Gaussian Splatting for Real-Time Dynamic Scene Ren-
+dering. In Proc. IEEE Conf. on Computer Vision and Pattern
+Recognition (CVPR), pages 20310–20320, 2024. 3
+[72] Junyi Wu, Jiachen Tao, Haoxuan Wang, Gaowen Liu, Ra-
+mana Rao Kompella, and Yan Yan. Orientation-anchored
+Hyper-Gaussian for 4D Reconstruction from Casual Videos.
+In Advances in Neural Information Processing Systems
+(NeurIPS), 2025. 3
+[73] Jianfeng Xiang, Zelong Lv, Sicheng Xu, Yu Deng, Ruicheng
+Wang, Bowen Zhang, Dong Chen, Xin Tong, and Jiaolong
+Yang. Structured 3D Latents for Scalable and Versatile 3D
+Generation. In Proc. IEEE Conf. on Computer Vision and
+Pattern Recognition (CVPR), 2025. 2
+[74] Jianfeng Xiang, Xiaoxue Chen, Sicheng Xu, Ruicheng Wang,
+Zelong Lv, Yu Deng, Hongyuan Zhu, Yue Dong, Hao Zhao,
+Nicholas Jing Yuan, and Jiaolong Yang. Native and Compact
+Structured Latents for 3D Generation. In Proc. IEEE Conf.
+on Computer Vision and Pattern Recognition (CVPR), pages
+14419–14429, 2026. 2, 6, 7, 19, 20
+[75] Yiming Xie, Chun-Han Yao, Vikram Voleti, Huaizu Jiang,
+and Varun Jampani. SV4D: Dynamic 3D Content Generation
+with Multi-Frame and Multi-View Consistency. In Proc. of
+the International Conf. on Learning Representations (ICLR),
+2025. 3
+[76] Haofei Xu, Songyou Peng, Fangjinhua Wang, Hermann Blum,
+Daniel Barath, Andreas Geiger, and Marc Pollefeys. Depth-
+Splat: Connecting Gaussian Splatting and Depth. In Proc.
+IEEE Conf. on Computer Vision and Pattern Recognition
+(CVPR), 2025. 2
+[77] Haofei Xu, Daniel Barath, Andreas Geiger, and Marc Polle-
+feys. ReSplat: Learning Recurrent Gaussian Splatting. In
+Proc. of the European Conf. on Computer Vision (ECCV),
+2026. 2
+[78] Jiale Xu, Weihao Cheng, Yiming Gao, Xintao Wang,
+Shenghua Gao, and Ying Shan.
+InstantMesh:
+Effi-
+cient 3D Mesh Generation from a Single Image with
+Sparse-view Large Reconstruction Models. arXiv preprint
+arXiv:2404.07191, 2024. 2
+[79] Runjie Yan, Yan-Pei Cao, Peng Wang, Ding Liang, and Yuan-
+Chen Guo. Generative 3D Gaussians with Learned Density
+Control. In ACM Trans. on Graphics, 2026. 2, 6, 7, 19, 20
+[80] Lihe Yang, Bingyi Kang, Zilong Huang, Xiaogang Xu, Jiashi
+Feng, and Hengshuang Zhao. Depth Anything: Unleashing
+the Power of Large-Scale Unlabeled Data. In Proc. IEEE
+Conf. on Computer Vision and Pattern Recognition (CVPR),
+2024. 2
+[81] Ziyi Yang, Xinyu Gao, Wen Zhou, Shaohui Jiao, Yuqing
+Zhang, and Xiaogang Jin. Deformable 3D Gaussians for High-
+Fidelity Monocular Dynamic Scene Reconstruction. In Proc.
+IEEE Conf. on Computer Vision and Pattern Recognition
+(CVPR), 2024. 3
+[82] Zeyu Yang, Zijie Pan, Xiatian Zhu, Li Zhang, Jianfeng Feng,
+Yu-Gang Jiang, and Philip H. S. Torr. 4D Gaussian Splatting:
+Modeling Dynamic Scenes with Native 4D Primitives. arXiv
+preprint arXiv:2412.20720, 2024. 3
+[83] Lior Yariv, Jiatao Gu, Yoni Kasten, and Yaron Lipman. Vol-
+ume Rendering of Neural Implicit Surfaces. In Advances in
+Neural Information Processing Systems (NeurIPS), 2021. 2
+[84] Jiraphon Yenphraphai, Ashkan Mirzaei, Jianqi Chen, Jiaxu
+Zou, Sergey Tulyakov, Raymond A. Yeh, Peter Wonka, and
+Chaoyang Wang. ShapeGen4D: Towards High Quality 4D
+Shape Generation from Videos. In Proc. of the International
+Conf. on Learning Representations (ICLR), 2026. 3
+[85] Andrii Zadaianchuk, Leonardo Barcellona, Lennard Schuene-
+mann, Christian Gumbsch, Zehao Wang, Muhammad Zubair
+Irshad, Fabien Despinoy, Rahaf Aljundi, Stratis Gavves, and
+Sergey Zakharov. Reconstruction by Generation: 3D Multi-
+Object Scene Reconstruction from Sparse Observations. In
+Proc. of the European Conf. on Computer Vision (ECCV),
+2026. 1, 3, 6, 7, 19, 20
+[86] Bowen Zhang, Sicheng Xu, Chuxin Wang, Jiaolong Yang,
+Feng Zhao, Dong Chen, and Baining Guo. Gaussian Variation
+Field Diffusion for High-fidelity Video-to-4D Synthesis. In
+Proc. of the IEEE International Conf. on Computer Vision
+(ICCV), pages 12502–12513, 2025. 3
+[87] Chuhan Zhang, Guillaume Le Moing, Skanda Koppula, Igna-
+cio Rocco, Liliane Momeni, Junyu Xie, Shuyang Sun, Rahul
+Sukthankar, Joëlle K. Barral, Raia Hadsell, Zoubin Ghahra-
+mani, Andrew Zisserman, Junlin Zhang, and Mehdi S. M.
+Sajjadi. Efficiently Reconstructing Dynamic Scenes One
+D4RT at a Time. In Proc. IEEE Conf. on Computer Vision
+and Pattern Recognition (CVPR), 2026. 3
+[88] Junyi Zhang, Charles Herrmann, Junhwa Hur, Varun Jampani,
+Trevor Darrell, Forrester Cole, Deqing Sun, and Ming-Hsuan
+Yang. MonST3R: A Simple Approach for Estimating Geom-
+etry in the Presence of Motion. In Proc. of the International
+Conf. on Learning Representations (ICLR), 2025. 3
+[89] Zibo Zhao, Zeqiang Lai, Qingxiang Lin, Yunfei Zhao, Haolin
+Liu, Shuhui Yang, Yifei Feng, Mingxin Yang, Sheng Zhang,
+Xianghui Yang, et al. Hunyuan3D 2.0: Scaling Diffusion
+Models for High Resolution Textured 3D Assets Generation.
+arXiv preprint arXiv:2501.12202, 2025. 2
+[90] Kaichen Zhou, Zeyang Bai, Xinhai Chang, Mengyu Wang,
+Paul Liang, and Fangneng Zhan. Stream3D: Sequential Multi-
+View 3D Generation via Evidential Memory. In Proc. IEEE
+Conf. on Computer Vision and Pattern Recognition (CVPR)
+Workshops, 2026. 3, 7, 19, 20
+12
+
+
+A. Supplementary Material
+A.1. Extended ablations
+We cumulatively ablate the three components of our appear-
+ance stage on top of SAM3D’s appearance prediction (Base):
+visibility attention bias (Attn), rendering guidance (RG), and
+test-time refinement (TTR). Quantitative results are reported
+in Tabs. 3a and 3b, with qualitative comparisons in Figs. 8
+to 11.
+Table 2 reports cumulative pose ablations across static
+and dynamic settings. All dynamic sequences are addition-
+ally evaluated for tracking against CoTracker3 (Sec. A.11).
+Rotation averaging across frames leaves DAVIS essentially
+unchanged and modestly reduces reprojection error and jitter
+on ActionBench. Depth-grounded translation and scale then
+provide the largest gains, reducing reprojection error by 1.4–
+2.8× and relative jitter by 2–4× across the dynamic settings
+while also improving static-view PSNR. ICP registration be-
+haves differently across settings. For static reconstruction, it
+halves Chamfer distance. On deforming geometry, its effect
+is dataset-dependent: on DAVIS it improves masked depth
+but worsens appearance and reprojection error, likely reflect-
+ing noise in the MapAnything depth and pose predictions;
+on ActionBench, where geometry and cameras are more
+reliable, it also improves PSNR.
+A.2. Additional results
+Figures 12 to 15 provide additional qualitative comparisons
+across all benchmarks. Figure 16 shows two representative
+failure cases on dynamic scenes.
+A.3. Dynamic shape injection
+For dynamic objects, we inject a sequence of fixed-topology
+meshes, where each vertex indexes the same point across
+frames (as in ActionMesh and ActionBench), and invert
+each deformed shape independently as described in Sec. 4.1.
+The shared topology provides both the deformation field
+used to animate the canonical reconstruction and the coarse-
+geometry correspondences used to fuse per-frame appear-
+ance.
+We recover a per-vertex rigid deformation directly from
+the mesh sequence. Let V (k)
+n
+denote the position of vertex n
+at frame k, and ¯Vn = V (c)
+n
+its position in the canonical frame
+c. For each canonical vertex n and frame k, we estimate
+a local rotation R(k)
+n
+∈SO(3) by aligning its canonical
+neighborhood K(n), the K = 8 nearest canonical vertices,
+to its deformed counterpart using Kabsch:
+R(k)
+n
+= argmin
+R∈SO(3)
+X
+w∈K(n)
+R( ¯Vw −¯Vn) −(V (k)
+w
+−V (k)
+n
+)
+
+2
+.
+Together with the deformed vertex positions V (k)
+n
+, these ro-
+tations define the deformation field δc→k of Sec. 4.1, which
+maps canonical vertex n to (V (k)
+n
+, R(k)
+n ) and is the identity
+at the canonical frame. We use δ to warp the canonical
+Gaussians, with their centers following the vertex motion
+and their covariances following the local rotations.
+Fixed topology provides correspondences between each
+frame’s voxel grid and the canonical grid. Each per-frame
+voxel is thus associated with a canonical voxel, with the
+correspondence reducing to the identity at the canonical
+frame (Fig. 17).
+Per-frame appearance fusion. At every ODE step, we
+use these correspondences to map each frame’s prediction
+onto the canonical grid, where the per-frame predictions
+are fused. The voxel correspondence can be many-to-one
+when multiple native voxels map to the same canonical cell.
+Collisions within each canonical voxel are masked using
+visibility and then averaged, as in visibility-weighted fusion
+(Sec. 4.3).
+Pose denoising with clean shape latents. When the shape
+latents are injected, we fix the clean shape latent xO
+1 and
+predict the object’s pose. Because SAM3D jointly denoises
+shape and pose, the network expects a shape token at every
+ODE step τ. We fix the target geometry and preserve the
+training-time trajectory using an interpolated intermediate
+shape token xO
+τ = τ xO
+1 +(1−τ) xO
+0 , where xO
+0 ∼N(0, I)
+is fixed.
+A.4. Voxel-to-patch mapping
+For each tokenized conditioning stream, we map a voxel’s
+pixel footprint (Sec. 4.3) through the corresponding crop–
+pad–resize transformation (mask-bounding-box crop for
+cropped streams; pad-to-square for full-image streams) and
+bin it into the 37×37 DINOv2 patch grid. The resulting
+patch set Πi(b) is dilated by one patch to account for projec-
+tion quantization.
+During visibility-weighted fusion (Sec. 4.3), a canonical
+voxel that no voxel of frame b maps to receives no contri-
+bution from that frame; every canonical voxel is reached at
+least by the canonical frame, whose correspondence is the
+identity.
+A.5. Passive-stream compensation
+The visibility attention bias (Sec. 4.3) increases the logits
+of projected patches in the active RGB conditioning groups,
+while softmax is normalized over all conditioning tokens.
+This unintentionally reduces the attention assigned to un-
+modified mask and global tokens.
+We compensate with a per-voxel offset. Let κ denote the
+fraction of active RGB tokens receiving bias α. Assuming
+uniform pre-bias logits within the active tokens, their pooled
+exponentiated mass increases by κeα + 1 −κ. We therefore
+subtract
+β = log(κeα + 1 −κ)
+(8)
+13
+
+
+Table 2. Pose ablations across datasets. Four-step cumulative ablation, with each row adding one component of Sec. 4.2. We evaluate
+dynamic scenes (DAVIS and ActionBench with ActionMesh geometry) and static GSO-30 single- and multi-view settings with injected
+ground-truth geometry. Dynamic settings report reprojection error and relative jitter against the CoTracker3 pseudo-reference (Sec. A.11),
+together with masked depth L1. GSO-30 additionally measures placement of the injected coarse shape against ground truth using Chamfer
+distance. Jit. is relative: 1.0 matches the reference motion, while larger values indicate greater jitter. Rotation averaging is inert on static
+settings by construction, since it averages velocities across frames. ICP registration is most beneficial for static multi-view alignment, where
+it halves Chamfer distance; on DAVIS, it improves depth at the cost of appearance quality.
+Variant
+DAVIS
+ActionBench
+GSO-30
+GSO-30 MV
+PSNR ↑Err ↓Jit. →1 Depth ↓PSNR ↑Err ↓Jit. →1 Depth ↓PSNR ↑
+CD ↓
+PSNR ↑
+CD ↓
+Base
+15.69
+9.46
+8.86
+0.3203
+14.04
+8.69
+5.69
+0.6350
+15.29
+0.0376
+15.70
+0.0372
++ Rotation averaging
+15.69
+9.46
+8.83
+0.3239
+14.06
+8.30
+5.26
+0.6357
+15.29
+0.0376
+15.69
+0.0372
++ Depth-ground (t, s)
+16.44
+3.44
+2.23
+0.2682
+14.91
+5.92
+2.67
+0.6530
+16.12
+0.0375
+17.34
+0.0373
++ ICP registration
+15.85
+3.94
+2.17
+0.2297
+15.32
+5.88
+2.67
+0.6417
+20.90
+0.0205
+25.30
+0.0184
+GSO-30
+CO3D
+Components
+Train
+Test
+Train
+Test
+#V
+Attn
+RG TTR PSNR ↑
+co-PSNR ↑
+LPIPS ↓
+CLIP-I ↑
+PSNR ↑LPIPS ↓
+CLIP-I ↑
+1
+×
+×
+×
+17.833
+15.599
+0.291
+0.891
+13.675
+0.523
+0.867
+✓
+×
+×
+18.810
+16.081
+0.289
+0.891
+14.645
+0.499
+0.864
+×
+✓
+×
+22.907
+19.458
+0.253
+0.897
+16.549
+0.484
+0.859
+✓
+✓
+×
+23.409
+19.808
+0.249
+0.897
+17.813
+0.454
+0.858
+✓
+✓
+✓
+27.328
+21.523
+0.226
+0.901
+22.145
+0.436
+0.878
+5/4
+×
+×
+×
+19.160
+18.972
+0.231
+0.909
+12.651
+0.488
+0.890
+✓
+×
+×
+19.761
+19.588
+0.222
+0.910
+13.497
+0.462
+0.889
+×
+✓
+×
+22.890
+22.350
+0.193
+0.916
+15.149
+0.443
+0.883
+✓
+✓
+×
+23.123
+22.582
+0.187
+0.918
+16.038
+0.411
+0.871
+✓
+✓
+✓
+26.282
+24.950
+0.142
+0.933
+17.151
+0.377
+0.886
+(a) Static scenes – GSO-30 and CO3D
+ActionBench
+DAVIS
+Components
+Train
+Test
+Train
+Test
+Attn
+RG
+TTR
+PSNR ↑co-PSNR ↑
+LPIPS ↓CLIP-I ↑PSNR ↑CLIP-I ↑
+×
+×
+×
+13.925
+13.895
+0.282
+0.877
+9.918
+0.867
+✓
+×
+×
+13.469
+13.292
+0.250
+0.887
+10.014
+0.868
+×
+✓
+×
+16.773
+16.684
+0.185
+0.917
+10.475
+0.866
+✓
+✓
+×
+16.501
+16.387
+0.184
+0.916
+10.573
+0.869
+✓
+✓
+✓
+20.383
+20.284
+0.167
+0.917
+13.423
+0.899
+(b) Dynamic scenes – ActionBench and DAVIS
+Table 3. Appearance ablations. Per-dataset novel-view synthesis
+across the component ladder: the columns toggle Attn (visibility
+attention bias), RG (rendering guidance), and TTR (test-time re-
+finement); ✓/× mark a component on/off and “–” a component
+that does not apply (or a metric not reported). Held-out views re-
+port co-PSNR where the dataset has co-visibility masks, otherwise
+only LPIPS and CLIP-I. All GSO-30 and ActionBench variants
+share ground-truth shape and pose. CO3D uses SAM3D- and MV-
+SAM3D-predicted shape and pose. DAVIS uses the ActionMesh
+backbone. Metrics are averaged across scenes and views (GSO-30,
+CO3D), views and time (ActionBench), or time (DAVIS). Best and
+second best per (#V, dataset, metric) group are shown in bold and
+underlined, respectively.
+from all active RGB logits. Under this approximation, the
+pooled active mass is restored, and hence the baseline atten-
+tion share of mask and global tokens is preserved (Fig. 18).
+Independently of this assumption, the common offset leaves
+within-active ratios unchanged, so visible patches retain their
+exact eα multiplicative boost. In practice, β is computed per
+voxel from the active bias row and folded into the additive
+bias.
+We also evaluate a post-softmax oracle that uses the ac-
+tual attention distribution to restore the baseline mass of each
+active conditioning group individually. Unlike the closed-
+form approximation, this accounts for non-uniform logits.
+On GSO-30 and CO3D, no compensation (OFF), the closed-
+form approximation (APPROX), and the oracle (EXACT) yield
+nearly identical reconstruction metrics, indicating that the
+compensation is primarily a principled correction rather than
+a source of measurable quality gains. We use APPROX be-
+cause it adds essentially no cost, whereas EXACT incurs a
+1.3–1.8× overhead in the appearance block.
+A.6. Rendering loss details
+We detail the terms of the per-observation rendering loss
+(5), used in appearance prediction (Sec. 4.3) and in test-time
+refinement (Sec. 4.4). Here, we drop the observation index b:
+every quantity below belongs to one observation, rendered
+under its fixed pose. Since only the object is rendered, the
+observed image I enters each term as the composite ¯I =
+M ⊙I + (1 −M)η, where the renderer background color
+η is resampled uniformly at each step to prevent the model
+from encoding a fixed background into the appearance. Each
+term is as follows:
+Lrgb = ∥ˆI −¯I∥1,
+Lssim =
+ 1 −SSIM(ˆI, ¯I)
+
+,
+Llpips = LPIPS(ˆI, ¯I),
+Ldepth = ∥M ⊙( ˆD −D)∥1
+∥M∥1
+.
+(9)
+Lrgb is evaluated over an image pyramid at scales (1, 1
+2, 1
+4)
+with weights (0.5, 0.3, 0.2), while Llpips is computed on the
+object’s bounding-box crop. Ldepth is the object-masked
+mean absolute error in z-depth.
+Gradient
+masking. Generated
+Gaussians
+are
+semi-
+transparent; therefore, primitives decoded from voxels that
+14
+
+
+1 view (0)
+5 views (0–4)
+Views
+Base
++Attn
++RG
++TTR
+Base
++Attn
++RG
++TTR
+GT
+Backpack
+0
+1
+2
+3
+4
+Train
+Test
+Turtle
+0
+1
+2
+3
+4
+Train
+Test
+School Bus 2
+0
+1
+2
+3
+4
+Train
+Test
+Chicken
+0
+1
+2
+3
+4
+Train
+Test
+Sorter
+0
+1
+2
+3
+4
+Train
+Test
+Figure 8. Qualitative appearance ablation on GSO-30 with ground-truth geometry. Every column is our method on the GT-voxelized
+mesh (shared GT shape and pose), so geometry is fixed and only appearance differs. Cumulative ladder, where each column adds one
+component to the column on its left. The label names only what that step adds: Base (SAM3D appearance prediction + observation fusion)
+→+Attn (visibility attention bias) →+RG (rendering guidance) →+TTR (test-time refinement). Each scene spans two subrows: rendered
+from the first input (train) view and from a held-out novel (test) view, each against its GT. Each render is badged (bottom-right) with its
+per-scene appearance score: PSNR (↑) on the train views and co-visible PSNR (co-PSNR, ↑; Sec. 5) on the test views.
+are not directly observed still contribute marginally to the
+rendered image. Consequently, the loss produces gradients
+for regions of the object that it cannot directly constrain. Left
+unchecked, these push the unseen surface away from the gen-
+erative prior, producing holes and floaters in novel views.
+We apply a per-Gaussian stop-gradient: Gaussians occluded
+in one observation are detached before rendering that obser-
+vation, so the rendering gradient flows only through directly
+observed geometry.
+Opacity anchor. During test-time refinement, the adapted
+decoder may reduce the opacity of occluded Gaussians to
+15
+
+
+Sequence
+Base
++Attn
++RG
++TTR
+GT
+Scene 1
+0
+4
+7
+11
+15
+Train
+Test
+Scene 2
+0
+4
+7
+11
+15
+Train
+Test
+Scene 3
+0
+4
+7
+11
+15
+Train
+Test
+Scene 4
+0
+4
+7
+11
+15
+Train
+Test
+Scene 5
+0
+4
+7
+11
+15
+Train
+Test
+Figure 9. Qualitative appearance ablation on ActionBench with ground-truth geometry. Every column is our method on the per-frame
+GT mesh (shared GT shape and pose), so only appearance differs. Cumulative ladder, where each column adds one component to the
+column on its left. The label names only what that step adds: Base (SAM3D appearance prediction + observation fusion) →+Attn (visibility
+attention bias) →+RG (rendering guidance) →+TTR (test-time refinement). Each scene spans two subrows: rendered from the input (train)
+view and from the held-out (test) view, each against its GT. Each render is badged (bottom-right) with its per-scene appearance score: PSNR
+(↑) on the train views and co-visible PSNR (co-PSNR, ↑; Sec. 5) on the test views.
+lower the reconstruction error, effectively hollowing out
+unseen surfaces. We therefore introduce an opacity anchor
+that penalizes deviations from the initial opacity values. We
+find that this simple constraint is sufficient to preserve solid
+object geometry in novel views. The anchor is one-sided,
+penalizing only opacity drops below the initial value σ0
+j over
+the set O of Gaussians occluded in every observation,
+Lop = ωop
+1
+|O|
+X
+j∈O
+max
+ 0, σ0
+j −σj
+2,
+ωop = 0.1.
+(10)
+A.7. Test-time refinement details
+Test-time refinement (Sec. 4.4) optimizes the canonical la-
+tent Z, Gaussian-decoder adapter ∆Dg, and pose ρ for 100
+iterations per object using AdamW with PyTorch-default β,
+16
+
+
+1 view (0)
+4 views (0–3)
+Views
+Base
++Attn
++RG
++TTR
+Base
++Attn
++RG
++TTR
+GT
+Scene 1
+0
+1
+2
+3
+Train
+Test
+Scene 2
+0
+1
+2
+3
+Train
+Test
+Scene 3
+0
+1
+2
+3
+Train
+Test
+Scene 4
+0
+1
+2
+3
+Train
+Test
+Figure 10. Qualitative appearance ablation on CO3D with SAM3D geometry. Every column is our method on predicted shape and pose
+(CO3D has no ground-truth mesh); SAM3D geometry from 1 input view and MV-SAM3D geometry from 4 input views. Only appearance
+differs. Cumulative ladder, where each column adds one component to the column on its left. The label names only what that step adds:
+Base (SAM3D appearance prediction + observation fusion) →+Attn (visibility attention bias) →+RG (rendering guidance) →+TTR
+(test-time refinement). Each scene spans two subrows: the reconstruction rendered from the first input (train) view and from a held-out
+target (test) view, each against its GT. Each render is badged (bottom-right) with its per-scene appearance score: PSNR (↑) on the train
+views and CLIP-I (↑) on the test views.
+ϵ, and weight decay. Each iteration renders one randomly
+sampled observation (a stochastic estimate of the sum over
+observations in (7)), and objects in multi-object scenes are
+refined sequentially. Learning rates are linearly warmed up
+for 10 iterations and then fixed at 10−4 for Z, 10−3 for ∆Dg,
+and 10−2/10−3 for pose rotation/translation. Scale is not
+refined.
+∆Dg is a rank-4 DoRA [39] adapter applied to every
+linear layer of the Gaussian decoder, with α = 0.5 and
+rank-stabilized scaling α/√r [18]. Its second factor is zero-
+initialized, so refinement starts exactly from the unadapted
+decoder prediction.
+The latent anchor in (7) is an MSE to the initial latent
+Z0 with µ = 0.01. The rendering objective follows (5) with
+the same weights. Visibility for its stop-gradient mask and
+opacity anchor is determined by a depth test against rendered
+expected depth with relative behind-surface tolerance 0.02.
+All remaining parameters, including the SAM3D model
+and mesh decoder, remain frozen. The in-loop Gaussian-
+decoder forward uses bfloat16 autocast to reduce mem-
+ory.
+17
+
+
+Sequence
+Base
++Attn
++RG
++TTR
+GT
+Horsejump-High
+0
+5
+10
+15
+Train
+Test
+N.A.
+Hike
+0
+5
+10
+15
+Train
+Test
+N.A.
+Horsejump-Low
+0
+5
+10
+15
+Train
+Test
+N.A.
+Figure 11. Qualitative appearance ablation on DAVIS with ActionMesh geometry. Every column is GenIA on the same ActionMesh-
+predicted temporal coarse shape, so only appearance differs. Cumulative ladder, where each column adds one component to the column on
+its left. The label names only what that step adds: Base (SAM3D appearance prediction + observation fusion) →+Attn (visibility attention
+bias) →+RG (rendering guidance) →+TTR (test-time refinement). Each scene spans two subrows: the reconstruction rendered from the
+input (train) view against its GT (the input frame foreground-composited on white via the DAVIS annotation mask), and a synthesized novel
+view at the same timestamp (test). Each render is badged with per-scene PSNR (↑) on train views and CLIP-I (↑) on test views.
+A.8. Depth-3DGS baseline
+Depth-3DGS is a prior-free, per-scene 3DGS [23] baseline
+using the same cameras and depth as GenIA. We initialize
+up to 100k Gaussians by unprojecting foreground depth
+pixels into a common frame. We optimize the standard
+3DGS photometric loss (L1 and SSIM with weight 0.2) over
+the masked foreground, together with an inverse-depth L1
+loss weighted by 10−2. Each scene is optimized for 1000
+iterations, with adaptive density control rescaled from the
+standard 30k-iteration schedule and opacity resets disabled.
+We use degree-0 spherical harmonics for view-independent
+color.
+A.9. ICP registration
+The ICP registration step of Sec. 4.2 aligns the coarse shape
+to the metric input pointmap using one similarity transform
+per object, which is composed with the pose of every frame.
+This absorbs systematic alignment error while preserving
+per-frame motion. We match observed pointmap samples
+to points rendered from the coarse shape rather than using
+a pixel-aligned loss, which under small misregistration can
+compare unrelated surfaces. Matching from observed to
+rendered points also naturally handles occlusion, since un-
+observed parts of the object are not required to explain any
+measurements. Let P be the observed foreground pointmap
+and ˆP(ρ) the surface unprojected from the depth rendered
+under the current pose. We minimize the one-directional
+nearest-neighbor objective
+Lreg(ρ) =
+1
+|P|
+X
+p∈P
+min
+q∈ˆ
+P(ρ)
+∥p −q∥2
+(11)
+by gradient descent over the similarity transform.
+A.10. Pose refinement for baselines
+Pose misregistration can dominate pixel-aligned object re-
+construction metrics. We therefore report pose-refined re-
+sults, keeping shape and appearance fixed while optimizing
+only rotation, translation, and scale against the input ob-
+servations. For pose-predicting methods (e.g. SAM3D and
+MV-SAM3D), refinement starts from the predicted pose. For
+18
+
+
+1 view (0)
+2 views (0–1)
+5 views (0–4)
+Views
+SAM3D [9]
+TripoSplat [79]
+TRELLISv2 [74]
+Pixal3D [28]
+RecGen [85]
+CUPID [15]
+Ours
+SAM3D
+w/o TTR
+Ours
+SAM3D
+w/ TTR
+MV-SAM3D [27]
+RecGen [85]
+Ours
+MV-SAM3D
+w/o TTR
+Ours
+MV-SAM3D
+w/ TTR
+MV-SAM3D [27] Depth-3DGS [23] STREAM3D [90] ReconViaGen [3]
+Ours
+MV-SAM3D
+w/o TTR
+Ours
+MV-SAM3D
+w/ TTR
+GT
+Backpack
+0
+1
+2
+3
+4
+Train
+Test
+Turtle
+0
+1
+2
+3
+4
+Train
+Test
+School Bus 2
+0
+1
+2
+3
+4
+Train
+Test
+Chicken
+0
+1
+2
+3
+4
+Train
+Test
+Sorter
+0
+1
+2
+3
+4
+Train
+Test
+Figure 12. Qualitative comparison on GSO-30. Each render is badged (bottom-right) with its per-scene PSNR (↑) on the train views and
+CLIP-I (↑) on the test views.
+Sequence
+SAM3D [9]
+Lift4D [36]
+HiMoR [33]
+Ours
+ActionMesh
+w/o TTR
+Ours
+ActionMesh
+w/ TTR
+GT
+Scene 1
+0
+4
+7
+11
+15
+Train
+Test
+Scene 2
+0
+4
+7
+11
+15
+Train
+Test
+Scene 3
+0
+4
+7
+11
+15
+Train
+Test
+Scene 4
+0
+4
+7
+11
+15
+Train
+Test
+Figure 13. Qualitative comparison on ActionBench. Each render is badged (bottom-right) with its per-scene PSNR (↑) on the train views
+and CLIP-I (↑) on the test views.
+methods without pose prediction, such as TripoSplat and
+TRELLISv2, we initialize translation and scale as in Ge-
+nIA, obtain rotation by rendering-based search, and apply
+the same refinement. This isolates reconstruction quality
+from pose-estimation error while giving each method its best
+alignment to the inputs. Methods that reconstruct directly
+in the input camera frames are exempt, as they are already
+aligned.
+A.11. Pseudo-ground-truth 2D tracking
+We use the off-the-shelf point tracker CoTracker3 [19] as a
+pseudo-reference. For each sequence, we place a uniform
+grid of queries on the first-frame object mask and track them
+throughout the clip. To reduce tracker errors, we retain
+only cycle-consistent queries whose backward track returns
+within 0.3 pixels of their starting point. This removes 40–
+60% of queries and more than halves the reference error on
+19
+
+
+1 view (0)
+2 views (0–1)
+4 views (0–3)
+Views
+SAM3D [9]
+TripoSplat [79]
+TRELLISv2 [74]
+Pixal3D [28]
+RecGen [85]
+CUPID [15]
+Ours
+SAM3D
+w/o TTR
+Ours
+SAM3D
+w/ TTR
+MV-SAM3D [27]
+RecGen [85]
+Ours
+MV-SAM3D
+w/o TTR
+Ours
+MV-SAM3D
+w/ TTR
+MV-SAM3D [27] Depth-3DGS [23] STREAM3D [90] ReconViaGen [3]
+Ours
+MV-SAM3D
+w/o TTR
+Ours
+MV-SAM3D
+w/ TTR
+GT
+Scene 1
+0
+1
+2
+3
+Train
+Test
+Scene 2
+0
+1
+2
+3
+Train
+Test
+Scene 3
+0
+1
+2
+3
+Train
+Test
+Scene 4
+0
+1
+2
+3
+Train
+Test
+Figure 14. Qualitative comparison on CO3D. Novel-view synthesis on 4 held-out CO3D (LaRa) scenes, reconstructed from 1, 2 and 4
+input views. We compare each setting’s baselines (SAM3D, TripoSplat, TRELLISv2, Pixal3D, RecGen, and CUPID at 1 view; MV-SAM3D
+and RecGen at 2 views; MV-SAM3D, Depth-3DGS, STREAM3D, and ReconViaGen at 4 views) against our method on that setting’s
+geometry backbone (SAM3D at 1 view, MV-SAM3D at 2 and 4 views). RecGen’s released checkpoint takes at most two views, so we
+show it at its maximum, in the 2-view group. TRELLISv2 and Pixal3D are qualitative-only baselines: they predict mesh materials without
+environment lighting, so their renders show unshaded base color (Sec. 5). Each scene spans two subrows: the reconstruction rendered
+from the first input (train) view and from the held-out target (test) view, each against its GT. Each render is badged (bottom-right) with its
+per-scene PSNR (↑) on the train views and CLIP-I (↑) on the test views.
+Sequence
+SAM3D [9]
+Lift4D [36]
+HiMoR [33]
+Any4D [20]
+Ours
+ActionMesh
+w/o TTR
+Ours
+ActionMesh
+w/ TTR
+GT
+Horsejump-High
+0
+5
+10
+15
+Train
+Test
+N.A.
+Hike
+0
+5
+10
+15
+Train
+Test
+N.A.
+Horsejump-Low
+0
+5
+10
+15
+Train
+Test
+N.A.
+Figure 15. Qualitative comparison on DAVIS. Each scene spans two subrows. The train subrow re-renders the input viewpoint, against
+the input frame as GT. DAVIS is monocular and has no second camera, so the test subrow is instead a synthesized novel view of the same
+timestamp. Each reconstruction is badged (bottom-right) with its per-scene PSNR (↑).
+annotated sequences.
+For reconstruction-based methods, each query is matched
+to the reconstructed surface point whose projection is nearest
+in the first frame and propagated through the recovered pose
+and deformation, with visibility determined by geometric
+self-occlusion. The initial query-to-surface distance bounds
+the attainable tracking error, remaining below one pixel for
+every method on both datasets. Since the same CoTracker3
+20
+
+
+Sequence
+SAM3D [9]
+Lift4D [36]
+HiMoR [33]
+Any4D [20]
+Ours
+ActionMesh
+w/o TTR
+Ours
+ActionMesh
+w/ TTR
+GT
+ActionBench
+0
+4
+7
+11
+15
+Train
+Test
+DAVIS
+0
+5
+10
+15
+Train
+Test
+N.A.
+Figure 16. Failure cases. Dynamic geometry currently relies on an external predictor (ActionMesh) rather than being directly grounded in
+the observations. Rotation stays prior-driven, corrected only by noise-sensitive ICP registration. Both failure modes surface on dynamic
+scenes below: incorrect world-space placement from registration, non-rigid deformation errors inherited from ActionMesh, or a combination
+of the two, can strongly impact the final reconstruction quality. Each render is badged with per-scene PSNR (↑) on train views and CLIP-I
+(↑) on test views (DAVIS shows a synthesized novel view in place of a held-out test view; its GT test tile is left blank).
+Canon.
+Frame 1
+Frame 6
+Frame 11
+Frame 16
+View 1
+View 2
+View 3
+Figure 17. Per-frame to canonical voxel correspondence on Ac-
+tionBench (scene 000-003). Each frame’s mesh is voxelized in
+its own bounding box (its native per-frame grid); every voxel is
+matched to a canonical voxel through the shared fixed topology
+(Sec. A.3) and colored by that canonical voxel’s position, so a cor-
+rect correspondence keeps each body part a constant color through-
+out the sequence. In this example, columns show the canonical
+frame c=5 and frames 1, 6, 11, 16; rows show three orbit view-
+points.
+tracks are used for every method, tracking measures the
+temporal consistency of the recovered 4D reconstruction.
+Beyond the DAVIS δavg and reprojection error reported
+in Tab. 1b, the reference’s occlusion labels yield an average
+Jaccard of 0.42 for HiMoR against 0.37 for GenIA (with or
+without test-time refinement) and 0.27 for Lift4D; Any4D
+exports no point visibility, so AJ is unavailable for it. On
+ActionBench the same protocol places Any4D closest to
+CoTracker3 (δavg=0.71), ahead of HiMoR (0.65) and GenIA
+(0.50, with or without test-time refinement). These metrics
+measure agreement with CoTracker3 rather than absolute
+tracking accuracy and should therefore be interpreted as a
+coarse relative comparison, with which a pure point tracker
+like Any4D naturally agrees most closely.
+A.12. Datasets and scenes
+GSO-30.
+We use the 30 EscherNet [24] objects
+(alarm,
+backpack,
+bell,
+blocks,
+chicken,
+cream, elephant, grandfather, grandmother,
+hat, leather, lion, lunch_bag, mario, oil,
+school_bus1, school_bus2, shoe, shoe1, shoe2,
+shoe3,
+soap,
+sofa,
+sorter,
+sorting_board,
+stucking_cups,
+teapot,
+toaster,
+train,
+turtle), each rendered from 25 views at 5122. Views
+0–9 are input candidates (the first #V are used; view 0 for
+monocular input), while views 10–24 are held out.
+CO3D.
+We
+evaluate
+ten
+CO3Dv2
+[58]
+se-
+quences
+(34_1479_4753,
+50_2928_8645,
+123_14363_28981,
+167_18184_34441,
+189_20393_38136,
+247_26441_50907,
+247_26469_51778,
+374_42274_84517,
+391_47032_93657,
+415_57121_110109)
+fol-
+lowing LaRa [5]. Camera poses are clustered into four
+groups; one view per cluster forms the input set (the first
+#V are used), and four further views, chosen greedily to
+maximize angular separation from the input views and from
+each other, are held out for testing. Foreground masks are
+provided by CO3D.
+ActionBench.
+We
+use
+six
+ActionBench
+[60]
+scenes (000-001_09, 000-004_28, 000-004_59,
+000-007_17,
+000-007_84,
+000-008_95),
+re-
+rendered from the source Sketchfab animations with known
+cameras. We render 16 keyframes from a fixed input camera
+and export the deformed mesh per frame; an additional
+upper-hemisphere camera at each timestamp provides the
+held-out view.
+DAVIS.
+We
+use
+ten
+sequences
+(bear,
+blackswan,
+camel,
+car-roundabout,
+cows,
+hike,
+horsejump-high,
+horsejump-low,
+mallard-water,
+rhino),
+sampling 16 frames at
+21
+
+
+CroppedImg
+(active, α = +5)
+baseline
+off
+approx
+exact
+FullImg
+(active, α = +5)
+CroppedMask
+(passive)
+FullMask
+(passive)
+0
+25
+50
+75
+100
+125
+Patch index (each band = one row of the 37 × 37 grid)
+0.000
+0.001
+0.002
+0.003
+0.004
+0.005
+0.006
+Mean attention (across queries)
+Stage 2: before bias
+CroppedImg, 4 rows at footprint (shaded = visible, +α)
+baseline
+0
+25
+50
+75
+100
+125
+Patch index (each band = one row of the 37 × 37 grid)
+0.000
+0.001
+0.002
+0.003
+0.004
+0.005
+0.006
+Mean attention (across queries)
+Stage 2: after bias (+α = 5)
+visible →× exp(α) over invisible; modes diﬀer by Z only
+baseline
+off
+approx
+exact
+CroppedImg
+(active)
+FullImg
+(active)
+CroppedMask
+FullMask
+0.0
+0.2
+0.4
+0.6
+Aggregate post-softmax share
+Stage 2: per-stream aggregate share
+98 visible patches; passive mask streams lose mass under off
+baseline
+off
+approx
+exact
+10−5
+10−4
+10−3
+attention weight (log scale)
+10−5
+10−4
+10−3
+10−2
+attention weight (log scale)
+10−5
+10−4
+attention weight (log scale)
+10−5
+10−4
+attention weight (log scale)
+Stage 2 (appearance): boost bias toward each voxel’s visible patches
+α > 0 on 4 DINOv2 streams; passive streams compensated
+Figure 18. Simulated effect of passive-stream compensation for visibility-biased attention. We visualize four simulated DINOv2 37×37
+streams. Visibility bias (α > 0) boosts projected patches in the active RGB streams (CroppedImg, FullImg), which in turn suppresses the
+passive mask streams (CroppedMask, FullMask) through softmax normalization. Without compensation (OFF), passive-stream attention
+decreases; the closed-form approximation (APPROX) nearly restores its unbiased level and closely matches the post-softmax oracle (EXACT).
+stride 2 from the first 32. DAVIS annotations provide object
+masks.
+GSO-30 and ActionBench use ground-truth depth and
+camera poses; CO3D and DAVIS use MapAnything [22]
+predictions from the input observations.
+A.13. Metric reliability
+Overall, the quantitative rankings broadly agree with the
+qualitative comparisons (Figs. 12 to 15), but each metric
+has limitations. PSNR remains sensitive to small residual
+misalignments after pose refinement, so we interpret it to-
+gether with LPIPS, which is more tolerant to local shifts,
+and co-PSNR, which evaluates only regions constrained by
+an input view. CLIP-I varies over a relatively narrow range
+(0.71–0.91 in Tab. 1) and is comparatively tolerant to pose
+because each image is cropped to its own object bounding
+box. On ActionBench, per-frame SAM3D leads CLIP-I
+(Tab. 1b), whereas our reconstruction inherits ActionMesh
+deformation and placement errors. With ground-truth ge-
+ometry, the same appearance stage reaches 0.92 (Tab. 3b)
+22
+
+
+versus 0.86, indicating that geometry quality strongly affects
+the score. TTR can further reduce CLIP-I when it fits the
+input view to geometry that is inaccurate from the held-out
+viewpoint. On DAVIS, CLIP-I compares each synthesized
+novel view with its corresponding input frame, measuring
+appearance consistency under viewpoint change rather than
+absolute reconstruction accuracy.
+23

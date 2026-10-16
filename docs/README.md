@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-10-15</span>
+      <span class="dpr-home-dashboard-kicker">2026-10-16</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 33 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 25 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>18</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>10</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>15</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-10-15 22:37:03 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-16 22:12:00 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,9 +69,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日精选 33 篇论文，覆盖 18 篇精读与 15 篇速读。</p>
-<p>最值得关注的是语义不确定性驱动的开放词汇 3D 建图，以及适应多地形的四足机器人节能步态。</p>
-<p>建议先读两篇 9 分精读，了解机器人建图与运动控制的最新探索。</p>
+<p>今日推荐覆盖25篇论文，精读10篇、速读15篇，聚焦具身智能与三维重建。</p>
+<p>最值得关注的是结合运动与重力的3D重建，以及测试时输入对齐的生成式重建；速读中，户外轮足机器人感知与导航基准也获高分。</p>
+<p>普通读者可先读《Motion- and Gravity-Aware Feedforward 3D Reconstruction》，再按兴趣了解生成式重建或机器人应用。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -80,12 +80,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">18 篇</strong>
+    <strong class="dpr-home-dashboard-count">10 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="ActiveLang: Active Open-Vocabulary 3D Mapping with Semantic-Uncertainty-Guided Exploration">ActiveLang: Active Open-Vocabulary 3D Mapping with Semantic-Uncertainty-Guided Exploration</span></li><li><span class="dpr-home-dashboard-paper-title" title="Energy-Efficient Gait Adaptation via Hierarchical Reinforcement Learning for Quadrupedal Locomotion Across Diverse Terrains">Energy-Efficient Gait Adaptation via Hierarchical Reinforcement Learning for Quadrupedal Locomotion Across Diverse Terrains</span></li><li><span class="dpr-home-dashboard-paper-title" title="RobotWorld: Benchmarking Multimodal Agents for Robot Use Across Diverse Tasks and Embodiments">RobotWorld: Benchmarking Multimodal Agents for Robot Use Across Diverse Tasks and Embodiments</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Motion- and Gravity-Aware Feedforward 3D Reconstruction">Motion- and Gravity-Aware Feedforward 3D Reconstruction</span></li><li><span class="dpr-home-dashboard-paper-title" title="GenIA: Generative Reconstruction with Test-Time Input Alignment">GenIA: Generative Reconstruction with Test-Time Input Alignment</span></li><li><span class="dpr-home-dashboard-paper-title" title="Learning to See through Action: Predictive Curiosity for Robots">Learning to See through Action: Predictive Curiosity for Robots</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>11</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>4</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>3</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -96,9 +96,9 @@
     <strong class="dpr-home-dashboard-count">15 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="COOL: Curiosity-Driven Object Ownership Learning for Personalized Robotic Assistance">COOL: Curiosity-Driven Object Ownership Learning for Personalized Robotic Assistance</span></li><li><span class="dpr-home-dashboard-paper-title" title="ΔWAM: Distilling Action Tangent Fields into World Action Models">ΔWAM: Distilling Action Tangent Fields into World Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="PointVGGT: Zero-Shot Multiview RGB-D Point Cloud Registration with Visual Geometry Foundation Priors">PointVGGT: Zero-Shot Multiview RGB-D Point Cloud Registration with Visual Geometry Foundation Priors</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="LynxScenes: A Large-Scale Real-World Benchmark for Outdoor Wheel-Legged Robot Perception, Navigation, Imagination and Reconstruction">LynxScenes: A Large-Scale Real-World Benchmark for Outdoor Wheel-Legged Robot Perception, Navigation, Imagination and Reconstruction</span></li><li><span class="dpr-home-dashboard-paper-title" title="SpatialHarness: Test-Time Spatial Scaffolding for Fine Robotic Manipulation">SpatialHarness: Test-Time Spatial Scaffolding for Fine Robotic Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="What Should Embodied Agents Remember? Benchmarking and Evaluating Memory Modality for Embodied Agents">What Should Embodied Agents Remember? Benchmarking and Evaluating Memory Modality for Embodied Agents</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>4</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>4</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>3</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>4</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>3</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>1</strong></span></div>
 </section>
 </div>
 
