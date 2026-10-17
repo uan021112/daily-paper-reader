@@ -48,7 +48,7 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-10-16</span>
+      <span class="dpr-home-dashboard-kicker">2026-10-17</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
     <strong class="dpr-home-dashboard-count">共 25 篇</strong>
@@ -58,7 +58,7 @@
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>10</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>15</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-10-16 22:12:00 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-17 21:24:42 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,9 +69,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日推荐覆盖25篇论文，精读10篇、速读15篇，聚焦具身智能与三维重建。</p>
-<p>最值得关注的是结合运动与重力的3D重建，以及测试时输入对齐的生成式重建；速读中，户外轮足机器人感知与导航基准也获高分。</p>
-<p>普通读者可先读《Motion- and Gravity-Aware Feedforward 3D Reconstruction》，再按兴趣了解生成式重建或机器人应用。</p>
+<p>今日精选 25 篇论文：精读 10 篇、速读 15 篇，聚焦 3D 重建与具身智能。</p>
+<p>最值得关注的是 UniForge3D 的联合 3D 重建与生成，以及 Thinker-WM 的多模态世界模型，两者均获 9.0 分。</p>
+<p>建议先读这两篇高分精读，再按兴趣浏览几何视觉与城市场景重建方向的速读论文。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -83,9 +83,9 @@
     <strong class="dpr-home-dashboard-count">10 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Motion- and Gravity-Aware Feedforward 3D Reconstruction">Motion- and Gravity-Aware Feedforward 3D Reconstruction</span></li><li><span class="dpr-home-dashboard-paper-title" title="GenIA: Generative Reconstruction with Test-Time Input Alignment">GenIA: Generative Reconstruction with Test-Time Input Alignment</span></li><li><span class="dpr-home-dashboard-paper-title" title="Learning to See through Action: Predictive Curiosity for Robots">Learning to See through Action: Predictive Curiosity for Robots</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="UniForge3D: Joint 3D Reconstruction and Generation in a Shared Anchor-Guided Space">UniForge3D: Joint 3D Reconstruction and Generation in a Shared Anchor-Guided Space</span></li><li><span class="dpr-home-dashboard-paper-title" title="Thinker-WM: A Unified World Model with Shared Multimodal Representations for Embodied Intelligence">Thinker-WM: A Unified World Model with Shared Multimodal Representations for Embodied Intelligence</span></li><li><span class="dpr-home-dashboard-paper-title" title="$S^3$-Nav: Structured Spatial-Semantic Decision Making for Language-Guided Robot Navigation">$S^3$-Nav: Structured Spatial-Semantic Decision Making for Language-Guided Robot Navigation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>3</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>7</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -96,9 +96,9 @@
     <strong class="dpr-home-dashboard-count">15 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="LynxScenes: A Large-Scale Real-World Benchmark for Outdoor Wheel-Legged Robot Perception, Navigation, Imagination and Reconstruction">LynxScenes: A Large-Scale Real-World Benchmark for Outdoor Wheel-Legged Robot Perception, Navigation, Imagination and Reconstruction</span></li><li><span class="dpr-home-dashboard-paper-title" title="SpatialHarness: Test-Time Spatial Scaffolding for Fine Robotic Manipulation">SpatialHarness: Test-Time Spatial Scaffolding for Fine Robotic Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="What Should Embodied Agents Remember? Benchmarking and Evaluating Memory Modality for Embodied Agents">What Should Embodied Agents Remember? Benchmarking and Evaluating Memory Modality for Embodied Agents</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Align-VAE: Aligning Attention and Geometry in VecSet VAEs for 3D Reconstruction">Align-VAE: Aligning Attention and Geometry in VecSet VAEs for 3D Reconstruction</span></li><li><span class="dpr-home-dashboard-paper-title" title="GeoBridge: Evolving Transferable Decoder Topologies for Geometric Vision">GeoBridge: Evolving Transferable Decoder Topologies for Geometric Vision</span></li><li><span class="dpr-home-dashboard-paper-title" title="3D Gaussian Splatting for Fine-grained Urban Scene Reconstruction via Semantic-guided Density Control and Loss Design">3D Gaussian Splatting for Fine-grained Urban Scene Reconstruction via Semantic-guided Density Control and Loss Design</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>4</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>3</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">surf-recon <strong>5</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>4</strong></span><span class="dpr-home-dashboard-tag">embodied-ai <strong>2</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span></div>
 </section>
 </div>
 

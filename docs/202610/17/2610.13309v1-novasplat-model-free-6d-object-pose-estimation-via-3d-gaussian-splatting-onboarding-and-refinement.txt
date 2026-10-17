@@ -1,0 +1,2177 @@
+NovaSplat: Model-Free 6D Object Pose Estimation via 3D Gaussian Splatting
+Onboarding and Refinement
+Georgios Floros
+Evangelos Sartinas
+Orestis Vangelis
+Maria Pateraki
+National Technical University of Athens
+{gfloros, vsartinas, orestisvaggelis, mpateraki}@mail.ntua.gr
+Abstract
+6D pose estimation of novel objects without CAD models
+remains an open challenge: model-free methods must build
+the object representation from scratch during onboarding
+and have long trailed their model-based counterparts. We
+present NovaSplat, a model-free pipeline that closes this
+gap. From a short smartphone video captured at onboard-
+ing, we train a 3D Gaussian Splatting (3DGS) model that
+serves both as a template source for detection and coarse
+pose estimation and as a differentiable backbone for pose
+refinement. Our refiner optimizes the object-to-camera pose
+with combined photometric and geometric losses under a
+continuous rotation parametrization free of gradient singu-
+larities. On a household-object benchmark, NovaSplat sur-
+passes all model-based methods. On a challenging indus-
+trial benchmark with textureless and specular surfaces, it
+outperforms all model-free competitors while substantially
+narrowing the gap to model-based ones.
+We further in-
+troduce NovaSplat-Lite, an inference variant that is 3.1×
+faster at negligible accuracy cost. Code will be made avail-
+able at https://github.com/POSE-Lab/novasplat.
+1. Introduction
+6D object pose estimation, recovering the full position and
+orientation of an object relative to a camera, is a core capa-
+bility for robotic manipulation, augmented reality, and in-
+dustrial inspection. The highest-performing methods rely
+on a 3D CAD model of the object: they render templates at
+many viewpoints and extract geometric point clouds, which
+are then matched against the query image using powerful
+frozen foundation models [5, 35].
+In practice, however,
+CAD models are rarely available outside controlled envi-
+ronments, making these approaches impractical for real-
+world deployment. This motivates the model-free setting:
+given only a short video of a novel object captured during
+an onboarding phase, estimate its 6D pose in new scenes
+HOPEv2
+IndustryShapes
+0.0
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+APMSSD / ARMSSD
+NovaSplat (Ours)
+Model-Based Baselines
+Model-Free Baselines
+GigaPose
+OPFormer
+GenFlow
+Co-op (CNOS)
+Co-op (MUSE)
+NovaSplat
+GFreeDet2
+NeMO
+OPFormer
+FoundPose
+FreeZe
+FoundationPose
+NovaSplat
+FoundationPose
+Figure 1. APMSSD (HOPEv2) and ARMSSD (IndustryShapes, av-
+eraged over Classic and Extended splits) for model-free (blue) and
+model-based (orange) methods. The shaded region marks the gap
+between the best model-free baseline and the best model-based
+method. NovaSplat (green) surpasses all model-based methods
+on HOPEv2, effectively closing the gap on that benchmark. In
+IndustryShapes NovaSplat sits within the gap, outperforming all
+model-free competitors while narrowing the distance to model-
+based methods.
+without any 3D model.
+Model-free methods face a fundamental reconstruction
+problem. Where model-based methods receive the object
+geometry by definition, model-free methods must recover
+it from video, a noisier and less complete substitute that
+degrades every downstream stage, from template rendering
+to correspondence matching. As illustrated in Figure 1, this
+has historically resulted in a substantial performance gap
+between the two paradigms, limiting the practical utility of
+model-free approaches.
+We propose NovaSplat, a complete model-free pipeline
+that closes this gap and in some cases reverses it. During
+onboarding, we reconstruct a dense 3D representation of the
+object from video and train a 3D Gaussian Splatting (3DGS)
+model. This representation serves two roles simultaneously:
+rendering high-quality templates for object detection and
+arXiv:2610.13309v1  [cs.CV]  9 Oct 2026
+
+
+coarse pose estimation and acting as a differentiable back-
+bone for gradient-based pose refinement. Our 3DGS refiner
+freezes the learned scene representation and directly opti-
+mizes the object-to-camera pose by jointly minimizing ap-
+pearance and geometric losses, using a continuous rotation
+parameterization that avoids singularities. This joint opti-
+mization proves considerably more robust than geometry-
+only refinement under the noisy reconstructions typical of
+video-based onboarding.
+We make the following contributions:
+• A complete model-free onboarding pipeline that produces
+a high-quality 3DGS object representation from a short
+video, enabling model-based pose estimation methods to
+operate without a CAD model.
+• A novel 3DGS-based pose refiner that jointly optimizes
+appearance and geometry, advancing model-free pose re-
+finement.
+• State-of-the-art results on two benchmarks spanning
+household and industrial objects, demonstrating that
+model-free methods can match and exceed model-based
+performance without CAD models.
+2. Related Work
+2.1. Taxonomy of 6D Object Pose Estimation
+Existing 6D object pose estimation methods can be broadly
+categorized by the level of prior object knowledge they re-
+quire. Instance-based methods [15, 43, 47] leverage 3D
+object models during training to achieve high accuracy but
+are restricted to previously seen objects.
+Novel object
+methods [4, 5, 11, 18, 21, 23, 25, 29, 32, 35, 49, 55, 56]
+generalize to unseen objects and can be further divided
+into category-based [46, 50] and unseen object approaches.
+Within the unseen object paradigm, model-based meth-
+ods [5, 28, 29, 32, 35, 44] require a CAD model at inference
+time, exploiting geometric priors from rendered templates
+and 3D point clouds, while model-free methods build an
+object representation from a short video sequence during an
+onboarding phase, without any 3D model. This work fo-
+cuses on the model-free unseen object setting.
+2.2. Model-Based Novel Object Methods
+Several recent methods follow a correspondence-based
+pipeline over CAD-rendered templates.
+FoundPose [35]
+matches DINOv2 [34] descriptors between the query and
+rendered templates but relies solely on visual features.
+FreeZe [5] and FreeZeV2 [6] extend to depth input by
+fusing visual and geometric (GeDi [39]) features for 3D-
+3D correspondence matching and refine the final pose
+using the Iterative Closest Point (ICP) algorithm, rank-
+ing among the top BOP methods.
+We build directly on
+FreeZeV2 as our coarse pose estimator.
+GigaPose [32]
+is fast and supports both model-based and model-free set-
+tings on single RGB frames, though lacking depth lim-
+its its performance on small or occluded objects.
+Gen-
+Flow [28] and its successor Co-op [29] refine poses via
+optical flow and semi-dense correspondences, respectively,
+the latter using a CroCo-based [53] ViT with a differen-
+tiable PnP layer. Pos3R [9] likewise matches over CAD-
+rendered templates, employing MASt3R [22], a 3D re-
+construction foundation model, to establish dense corre-
+spondences, select the best template by feature similarity,
+and recover pose via PnP-RANSAC, with optional refine-
+ment via render-and-compare. WALDO [36] extends the
+detect-segment-hypothesize-refine pipeline with dynamic
+non-uniform sampling, multi-hypothesis inference, and it-
+erative refinement to exhibit robustness under occlusions.
+All these methods require a 3D CAD model at inference
+time. NovaSplat operates without one at any stage, replaces
+ICP with a differentiable 3DGS-based refiner, and surpasses
+those of them evaluated on HOPEv2 (Table 1).
+2.3. Model-Free Novel Object Methods
+Model-free methods can be organized into three categories.
+Visual localization approaches [11, 44] apply Structure-
+from-Motion (SfM) during onboarding to build a sparse 3D
+point cloud, recovering pose via 2D-3D correspondences.
+They struggle, however, with low-texture objects and large
+viewpoint changes. Template-based methods [25] use view-
+point retrieval over posed reference images for a coarse hy-
+pothesis before refinement but are sensitive to detection and
+bounding box quality. Few-shot methods operate from only
+one or a handful of RGB or RGB-D images: [18] generate
+a geometry-aware encoding from a few RGB views, [24]
+compress a single RGB-D reference into a pose embedding
+via latent diffusion, and [21] combine 2D-3D alignment
+with render-and-compare refinement from a single RGB-D
+anchor. Despite their practical appeal, these methods rely
+on strong assumptions, such as symmetry priors or scale
+constraints, to compensate for limited onboarding data, re-
+stricting generalization across object geometries.
+2.4. Neural Rendering for Object Pose Estimation
+Neural rendering approaches encode objects into differ-
+entiable implicit representations for CAD-free novel-view
+synthesis. Early NeRF-based methods such as LatentFu-
+sion [38] and NeRF-Pose [23] use latent voxel grids and
+radiance fields, respectively. BundleSDF [55] builds a Neu-
+ral Object Field on-the-fly from an RGB-D stream, concur-
+rently optimizing pose and a 3D representation. Founda-
+tionPose [56] extends this into a unified foundation model
+supporting both model-based and model-free setups via
+large-scale synthetic training.
+More recently, 3D Gaus-
+sian Splatting (3DGS) [19] has largely displaced NeRF-
+based representations owing to superior rendering qual-
+ity and real-time speed. GS-Pose [3], iG-6DoF [4], and
+
+
+O N B O A R D I N G
+SfM
+3DGS
+MVS
+Onboarding
+Video
+Camera Poses &
+Sparse Point Cloud
+3DGS
+Representation
+Template Images
+3D Mesh
+Template Point Cloud
+I N F E R E N C E
+CNOS
+CPE
+3DGS
+Refiner
+Query Image
+Detection &
+Segmentation
+Coarse Pose
+Final 6D Pose
+Onboarding
+Inference
+3DGS Refinement
+Assets reused at inference
+Figure 2. NovaSplat pipeline. During onboarding (top), a short smartphone video is processed through SfM, 3DGS training, and MVS to
+produce a 3DGS representation and a 3D mesh. Template images {Ii
+templ}
+Ntempl
+i=1
+are rendered from the 3DGS model at icosphere-sampled
+viewpoints, and a template point cloud T is sampled from the mesh via Poisson disk sampling. During inference (bottom), a query image is
+processed by a modified CNOS module to detect the object and produce a segmentation mask Mseg. A FreeZe-based Coarse Pose Estimator
+(CPE) uses {Ii
+templ}
+Ntempl
+i=1
+and T for joint visual and geometric feature matching to produce Pcoarse. Our 3DGS-based refiner then optimizes
+Pcoarse via a photometric loss Lphoto and a geometric Chamfer loss Lgeo to yield the final 6D pose. Dashed arrows indicate onboarding assets
+reused at inference.
+6DOPE-GS [17] all leverage 3DGS for render-and-compare
+refinement or online tracking but evaluate primarily on
+simpler benchmarks (Linemod [13], HO3D [10], YCBI-
+nEOAT [54]) without testing on challenging multi-object
+scenes such as HOPEv2. The work that is most closely re-
+lated to ours is GFreeDet2 [49], which combines a 3DGS
+onboarding pipeline with template-based coarse pose esti-
+mation but relies exclusively on visual features, lacking the
+geometric integration we show is critical for accurate pose
+estimation on challenging objects.
+3. Method
+3.1. Overview
+Our pipeline consists of two stages: onboarding and infer-
+ence (Figure 2).
+During onboarding (Section 3.2), the goal is to build
+an object representation from a short video of the object
+captured from multiple viewpoints with a handheld device
+such as a smartphone. Given the video frames and corre-
+sponding object masks, we run a classical 3D reconstruc-
+tion pipeline comprising SfM, Multi-View Stereo (MVS),
+and 3DGS training to produce a 3D mesh and an optimized
+3DGS object representation.
+During inference, given an RGB-D query image con-
+taining instances of onboarded objects, the goal is to de-
+tect each object and estimate its 6D pose. We first run a
+modified CNOS [31] detection and segmentation module
+(Section 3.3) to localize each object and produce its seg-
+mentation mask. We then employ the coarse pose estima-
+tion module of FreeZeV2 [5, 6] (Section 3.4), adapted to
+use templates rendered from the 3DGS representation and a
+3D point cloud sampled from the mesh model, to obtain an
+initial 6D pose estimate. Finally, each coarse pose is passed
+to our 3DGS-based hybrid refiner (Section 3.5), which pro-
+duces the final 6D pose. Implementation details of the on-
+boarding and inference stages are provided in Section 4.3.
+3.2. Onboarding
+We assume access to a set of RGB video frames depicting
+the object from all viewpoints, along with corresponding
+object segmentation masks. When masks are unavailable,
+
+
+they can be obtained automatically using an off-the-shelf
+video segmentation model such as SAM3 [7].
+Structure-from-Motion. The raw frames are passed to a
+SfM pipeline [37, 41] to estimate camera poses and a sparse
+3D point cloud. The object masks are then applied to isolate
+the object point cloud from the background.
+3D Gaussian Splatting.
+The masked frames, camera
+poses, and object point cloud are used to train a 3DGS
+model [19]. The 3DGS representation consists of a set of
+3D Gaussians, each parameterized by its mean, covariance,
+opacity, and view-dependent color encoded as Spherical
+Harmonics (SH) coefficients. The model is optimized by
+differentiably rendering the Gaussians onto the image plane
+and minimizing the photometric error against the masked
+training frames.
+Multi-View Stereo.
+The SfM point cloud is often too
+sparse to initialize stereo depth estimation reliably, particu-
+larly over untextured object regions where few or no feature
+correspondences can be established. Since 3DGS densifica-
+tion fills in these regions during optimization, we exploit
+the Gaussian centers as a semi-dense point cloud. Equipped
+with camera visibility information, this denser prior serves
+as input to our MVS pipeline. We run PatchMatchStereo [1]
+to estimate per-view depth maps from neighboring views,
+which are then fused into a dense point cloud. From this
+point cloud we recover a 3D mesh by following [16], which
+discretizes space via Delaunay tetrahedralization and for-
+mulates surface extraction as a graph optimization problem
+that incorporates visibility constraints.
+Outputs. At the end of onboarding we have two assets: a
+3DGS representation from which novel views of the object
+can be rendered, and a 3D mesh that captures the object ge-
+ometry. From the 3DGS representation, we render Ntempl
+template images {Ii
+templ}Ntempl
+i=1
+by sampling camera poses on
+an icosphere centered at the object. From the mesh, we sam-
+ple Npts 3D points via Poisson disk sampling [2], forming
+the template point cloud T . Both {Ii
+templ}Ntempl
+i=1
+and T are
+passed to the downstream inference stage (see Figure 2).
+3.3. Detection and Segmentation
+We follow the three-stage propose-then-match workflow of
+CNOS [31]1, extending it in three respects. First, we re-
+place SAM [20] / FastSAM [58] with YOLO-E [45] as the
+proposal model. Second, we replace DINOv2 [34] with DI-
+NOv3 ViT-L/16 [42] as the feature extractor. Third, rather
+than using CAD-rendered templates or masked frames from
+the onboarding video as done by other model-free methods,
+we use our rendered templates {Ii
+templ}Ntempl
+i=1
+(Section 3.2).
+1https://github.com/Vision-Kek/cnos25
+3.4. Coarse Pose Estimation
+We build our coarse pose estimation module on the work-
+flow of FreeZeV2 [6], adapting it to our model-free set-
+ting. Visual features are extracted from {Ii
+templ}Ntempl
+i=1
+us-
+ing a frozen DINOv3 encoder, while geometric features are
+extracted from T (Section 3.2) using a frozen GeDi en-
+coder [39]. Both feature types are extracted on the template
+and query sides, then fused into a unified per-point descrip-
+tor that encodes appearance and geometry jointly. Match-
+ing these descriptors yields a set of 3D-3D correspondences,
+which are passed to a RANSAC framework to produce the
+coarse pose Pcoarse.
+Compared to the original FreeZe pipeline, we relo-
+cate the symmetry-aware augmentation from the refinement
+stage to the coarse pose estimation stage. At this stage the
+full set of Ntempl views is available, providing substantially
+more viewpoint variation for the augmentation to exploit
+than the single rendered view used during refinement.
+3.5. 3DGS-Based Pose Refinement
+The coarse pose Pcoarse is further refined in the final stage
+of our pipeline through a hybrid optimization scheme that
+jointly considers appearance and geometric cues. The back-
+bone of this optimization is the differentiable 3DGS rep-
+resentation learned during onboarding. During refinement,
+the Gaussian parameters are frozen, and only the object-to-
+camera pose is optimized.
+We parameterize the rotational component using the con-
+tinuous 6D representation of Zhou et al. [59], which is de-
+fined over SO(3) without singularities or discontinuities,
+allowing gradients to flow freely throughout the optimiza-
+tion. The translational component t is parameterized as a
+standard 3D vector. Both are initialized from Pcoarse.
+At each iteration, we render an RGB image Irend and a bi-
+nary mask Mrend obtained by thresholding the alpha channel
+at τα.
+Photometric Loss. Following GS-Pose [3], we define the
+photometric loss as the sum of the image structural similar-
+ity (SSIM) [51] and the multi-scale SSIM (MS-SSIM) [52],
+computed over the region defined by Mrend the following:
+Lphoto = (1 −SSIM) + (1 −MS-SSIM).
+(1)
+We use 3 scales for MS-SSIM rather than the standard 5, as
+the latter requires a minimum image resolution that small
+rendered objects often fail to satisfy.
+Geometric Loss. We compute a bidirectional Chamfer dis-
+tance between the template point cloud T (Section 3.2) and
+a query point cloud Q. Q is backprojected from the depth
+channel of the query image, retaining only points that fall
+within the segmentation mask Mseg and whose depth lies
+within a range drange of the transformed T . This filtering ex-
+cludes table surfaces, neighboring objects, and background
+
+
+clutter from the query point cloud. The geometric loss is:
+Lgeo =
+1
+|T |
+X
+t∈T
+min
+q∈Q ∥t−q∥2 + 1
+|Q|
+X
+q∈Q
+min
+t∈T ∥q−t∥2. (2)
+Total Loss. The two losses are combined as:
+L = (1 −wgeo) · Lphoto + wgeo · Lgeo,
+(3)
+where wgeo is the geometric loss weight.
+Optimization.
+We use separate Adam optimizers for ro-
+tational and translational components, as we found that a
+shared learning rate was too restrictive for the translation
+parameters when tuned appropriately for rotation. The two
+optimizers alternate every Nalt iterations. Per-iteration cor-
+rections are clamped to an angular threshold αthresh for rota-
+tion and tthresh for translation to prevent large updates from
+destabilizing the optimization. We retain the pose with the
+lowest total loss over Nref iterations and apply early stop-
+ping if no improvement occurs for Nhalt iterations.
+4. Experiments
+4.1. Datasets
+We evaluate NovaSplat on two complementary benchmarks
+spanning household and industrial objects.
+HOPEv2 [48] is the BOP version of NVIDIA’s Household
+Objects for Pose Estimation dataset, comprising 28 toy gro-
+cery objects across 50 cluttered scenes from 10 household
+and office environments. For the BOP Challenge 2024 [33],
+the dataset was extended with multi-view test images cap-
+tured by a moving camera and provides a standardized
+leaderboard for direct comparison with both model-free and
+model-based methods under identical conditions. We note
+that we encountered some inconsistencies in this dataset,
+which are detailed in Sec. G.
+IndustryShapes [40] is an RGB-D benchmark designed
+for industrial robotics, with two splits: classic and extended.
+It features five object categories with properties that are par-
+ticularly challenging for pose estimation: textureless sur-
+faces, specular reflections, thin geometries, and small scale.
+Scenes are captured in realistic industrial assembly settings
+with multiple instances per object and inter-object occlu-
+sions. The extended split provides onboarding sequences,
+directly matching our model-free paradigm.
+Scope of Evaluation.
+Several concurrent 3DGS-based
+pose estimation methods [3, 4] report results on Linemod
+(LM) [13]. We deliberately exclude it for three reasons.
+First and foremost, LM provides no onboarding videos,
+which are a fundamental requirement of our model-free set-
+ting and cannot be substituted by the reference images the
+dataset supplies. Second, its capture protocol covers only
+Method
+CAD
+AP ↑
+APMSSD ↑
+APMSPD ↑
+GigaPose [32]
+✓
+0.167
+0.046
+0.288
+OPFormer* [30]
+✓
+0.351
+0.272
+0.431
+GenFlow [28]
+✓
+0.411
+0.346
+0.475
+Co-op (CNOS) [29]
+✓
+0.477
+0.405
+0.549
+Co-op (MUSE) [29]
+✓
+0.514
+0.435
+0.593
+NeMO [18]
+✗
+0.302
+0.291
+0.312
+OPFormer* [30]
+✗
+0.335
+0.243
+0.427
+GFreeDet2 [49]
+✗
+0.452
+0.365
+0.538
+NovaSplat
+✗
+0.529
+0.509
+0.548
+NovaSplat-Lite
+✗
+0.528
+0.509
+0.547
+Table 1. Quantitative results on HOPEv2. Model-based meth-
+ods use CAD models at test time. Model-free methods use only
+onboarding videos. Best model-based and model-free results ap-
+pear in bold. *Results taken from the BOP leaderboard. [30]
+reports slightly higher numbers that do not affect the ranking.
+NovaSplat-Lite is our fast inference variant (Sec. 4.3). It uses the
+same onboarding and object representation and differs only in in-
+ference cost.
+a hemisphere around each object, precluding the full 360°
+reconstruction that NovaSplat relies on.
+Third, state-of-
+the-art methods [27] already exceed 95% on LM, leaving
+little headroom to meaningfully differentiate approaches.
+Among the BOP-H3 benchmarks, only HOPEv2 supplies
+test-set depth (HOT3D and HANDAL are RGB-only), and
+IndustryShapes is the only other BOP-format dataset we
+are aware of that provides both onboarding sequences and
+depth, making the two the appropriate testbeds here.
+4.2. Evaluation Metrics
+For each of the benchmarks, we follow the proposed eval-
+uation protocol to ensure fair comparison with the re-
+ported baselines. In particular, for HOPEv2, we adopt the
+BOP detection evaluation protocol [33], computing Aver-
+age Precision (AP or mAP) for the Maximum Symmetry-
+aware Surface Distance (MSSD) APMSSD and the Maximum
+Symmetry-aware Projection Distance (MSPD) APMSPD.
+For IndustryShapes, we adopt the BOP localization pro-
+tocol, computing the Average Recall (AR) for MSSD
+(ARMSSD), for MSPD (ARMSPD) and for the Visible Sur-
+face Discrepancy (VSD) ARVSD. The overall accuracy is
+measured for both datasets as an average over the different
+metrics. We refer to Sec. 3.4 of [33] for details.
+4.3. Implementation Details
+Onboarding. Onboarding videos contain ∼400 images per
+object, captured while moving the camera around the ob-
+ject, covering the full 360° azimuth and −70° to +68° el-
+evation (upright and inverted captures). The median angu-
+
+
+Original
+NovaSplat (Ours)
+GFreeDet2 [49]
+OPFormer [30]
+NeMO [18]
+Figure 3. Qualitative comparison on the HOPEv2 dataset. NovaSplat robustly estimates poses in cluttered scenes with heavy occlusions,
+outperforming competing model-free methods. Bounding cuboids highlight the predicted 6D poses. Additional qualitative comparisons
+are provided in Sec. H.
+lar distance from a test view to its nearest onboarding view
+is 3.3°. We use the camera and object poses provided by
+the datasets to place all onboarding cameras into a common
+reference frame and triangulate masked object points into
+a sparse point cloud. Poses can equivalently be estimated
+via SfM: on both a textured HOPEv2 object and the most
+textureless, specular IndustryShapes object, all onboarding
+frames register into a single model, with median camera-
+pose errors of 1.1 mm and 9.5 mm, respectively. We train a
+3DGS model with gsplat [57] and recover a mesh via Open-
+MVS [8], rendering templates at 480 × 480 pixels. Video
+frames have a native resolution of 1920 × 1440 and are left
+unresized throughout SfM and 3DGS training.
+Inference. We adapt FreeZe’s coarse pose estimation mod-
+ule for our template-based setting and optimize the pose
+during refinement for at most Nref iterations with early stop-
+ping, as described in Sec. 3.5.
+Timing.
+Onboarding is a one-time cost per object, com-
+pleting in 7.8 minutes and producing the 3DGS repre-
+sentation, mesh, templates, and features required at infer-
+ence time.
+Per-image inference totals 56.1 s, dominated
+by coarse pose estimation (18.6 s) and 3DGS-based refine-
+ment (35.4 s). To reduce this cost, we additionally provide
+NovaSplat-Lite, an inference-only variant that replaces the
+Open3D point-cloud conversions in the coarse stage with
+native PyTorch operations and a single-scale local refer-
+ence frame and shortens the refinement budget with ear-
+lier stopping. Onboarding and the learned representation
+are unchanged. NovaSplat-Lite runs at 18.0 s per image,
+a 3.1× speed-up, at a cost of 0.001 AP on the HOPEv2
+test set (0.529 vs. 0.528, Table 1). Unless stated other-
+wise, all reported results use the full configuration.
+All
+timings were measured on a workstation with an Intel(R)
+Core(TM) i7-14700K processor (28 cores) and a single
+NVIDIA RTX4090 GPU.
+Memory. Onboarding peaks at approximately 18 GB CPU
+and 7.6 GB GPU memory.
+Inference peaks at approxi-
+mately 6.5 GB CPU and 6 GB GPU memory.
+Sec. A, B provide (a) hyperparameters for 3DGS train-
+ing and mesh recovery, (b) refiner settings and thresholds
+for both variants, (c) per-stage timing breakdown for both
+variants, (d) full NovaSplat-Lite details and (e) CPU/GPU
+memory profiles for onboarding and inference.
+4.4. Main Results
+We evaluate NovaSplat against state-of-the-art baselines
+in both the model-based and model-free settings.
+For
+HOPEv2, baselines are selected from the BOP challenge
+leaderboard2 among entries with an accompanying publica-
+tion, ensuring a fair comparison under identical evaluation
+conditions since all results are obtained through the BOP
+evaluation server. For IndustryShapes, we compare against
+all methods reporting results on this dataset in the literature.
+HOPEv2 Results. Table 1 reports results on HOPEv2,
+a challenging benchmark featuring cluttered scenes with
+heavy occlusion and multiple instances of each object, all
+with annotated per-instance poses. A central contribution
+of NovaSplat is closing the gap between model-based and
+model-free pose estimation, demonstrated clearly here. No-
+vaSplat surpasses every model-free competitor on all three
+metrics and, crucially, also outperforms all model-based
+methods on AP and APMSSD despite having no access to
+2https : / / bop . felk . cvut . cz / leaderboards /
+modelfree-pose-detection-unseen-bop24/hopev2/
+
+
+IndustryShapes Classic
+IndustryShapes Extended
+Method
+CAD
+ARMSPD ↑ARMSSD ↑
+ARVSD ↑
+AR ↑
+ARMSPD ↑
+ARMSSD ↑
+ARVSD ↑
+AR ↑
+FreeZe [5]
+✓
+0.66
+0.72
+0.54
+0.64
+0.75
+0.67
+0.42
+0.61
+FoundPose [35]
+✓
+0.31
+0.39
+0.22
+0.30
+0.41
+0.25
+0.18
+0.28
+FoundationPose [56]
+✓
+0.73
+0.74
+0.53
+0.67
+0.83
+0.74
+0.50
+0.69
+OnePose [44]
+✗
+0.08
+0.08
+0.06
+0.07
+0.04
+0.01
+0.01
+0.02
+OnePose++ [11]
+✗
+0.12
+0.16
+0.12
+0.14
+0.26
+0.19
+0.14
+0.20
+FoundationPose [56]
+✗
+0.26
+0.31
+0.18
+0.25
+0.40
+0.37
+0.22
+0.33
+NovaSplat
+✗
+0.33
+0.51
+0.26
+0.36
+0.48
+0.47
+0.25
+0.40
+Table 2. Quantitative results on the IndustryShapes dataset, classic and extended splits. Methods are grouped by category, with model-
+based methods listed first and model-free methods listed below. Top-performing model-based and model-free scores are in bold.
+CAD models. Among model-free methods, NovaSplat out-
+performs the strongest competitor, GFreeDet2, by 17.0% on
+AP (0.529 vs. 0.452) and by 39.5% on APMSSD (0.509 vs.
+0.365) and leads OPFormer (0.509 vs. 0.243) and NeMO
+(0.509 vs. 0.291) by similarly large margins.
+Against
+model-based methods, NovaSplat achieves gains of 2.9%
+on AP and 17.0% on APMSSD over Co-op (MUSE), the best
+CAD-model-assisted baseline, and outperforms GenFlow
+(APMSSD: 0.509 vs. 0.346) and GigaPose (0.509 vs. 0.046)
+by substantial margins.
+The sole exception is APMSPD,
+where Co-op (MUSE) leads by 8.2% (0.593 vs. 0.548),
+while NovaSplat remains competitive with Co-op (CNOS)
+(0.549 vs. 0.548). Additional per-object quantitative break-
+downs as well as qualitative results are provided in Sec. F.
+The distinction between APMSSD and APMSPD is mean-
+ingful here: as noted by Hodaˇn et al. [14], MSSD measures
+3D surface distance and is most relevant for robotic ma-
+nipulation, whereas MSPD measures 2D projection error
+and is more relevant for AR. Since our target application
+is manipulation, APMSSD is our primary metric, and No-
+vaSplat’s lead here, over both model-free and model-based
+methods, is the most consequential result in the table. We
+attribute this to NovaSplat’s end-to-end geometric ground-
+ing: GeDi descriptors drive the coarse stage and Lgeo con-
+strains refinement, an integration absent in all competing
+model-free methods that rely on appearance cues, which ex-
+plains the disproportionately large gains on APMSSD relative
+to APMSPD.
+Figure 11 corroborates these findings: GFreeDet2 as-
+signs multiple hypotheses per instance, OPFormer shows
+systematic scale errors, and NeMO misses many instances,
+whereas NovaSplat produces accurate and complete esti-
+mates whose residual errors trace to upstream detection
+rather than to pose estimation. Sec. F expands on these fail-
+ure modes.
+IndustryShapes Results. Table 2 evaluates NovaSplat
+on a qualitatively different challenge. Unlike HOPEv2’s
+textured household objects, IndustryShapes consists of
+texture-less, black industrial parts with specular surfaces,
+thin geometry, and small scale, conditions that stress-
+test both 3D reconstruction quality and appearance-based
+matching.
+Despite this domain shift, NovaSplat consis-
+tently surpasses all three model-free baselines, Foundation-
+Pose [56], OnePose [44], and OnePose++ [11], on both
+splits, demonstrating generalization across object domains.
+OnePose and OnePose++ rely on SfM-based 2D-3D corre-
+spondence matching (Sec. 2.3) and are especially hindered
+by IndustryShapes’ texture-less, specular surfaces, reaching
+only 0.07/0.02 and 0.14/0.20 AR on the classic/extended
+splits, respectively. NovaSplat improves over model-free
+FoundationPose by 44.0% and 21.2% on overall AR for
+the classic and extended splits, with the largest margin on
+ARMSSD (+64.5% on classic).
+Model-based methods, however, retain a clear advantage
+here, with FoundationPose [56] achieving AR scores of 0.67
+and 0.69 on the classic and extended splits, respectively,
+compared to NovaSplat’s 0.36 and 0.40. That said, the gap
+narrows considerably on ARMSSD: model-free Foundation-
+Pose trails the best model-based result by 0.43 on the clas-
+sic split, whereas NovaSplat reduces this gap to 0.23, nearly
+halving it. The same trend holds on the extended split (gap
+reduced from 0.37 to 0.27). This is consistent with our find-
+ings on HOPEv2 and reinforces that NovaSplat’s geometric
+grounding is the key driver of progress, as ARMSSD is the
+metric most sensitive to 3D accuracy.
+The overall performance gap relative to model-based
+methods on this dataset is larger than on HOPEv2, and we
+attribute this to the fundamental difficulty of the objects’
+nature. Texture-less, uniformly black surfaces with specu-
+lar highlights provide little signal for appearance-based fea-
+ture matching and yield degraded 3D reconstructions that
+fail to capture fine geometric detail. This explanation is
+further supported by the qualitative results reported in the
+appendix. Improving NovaSplat’s robustness to such ob-
+jects, for instance, through geometry-only reconstruction
+pipelines, is a natural direction for future work.
+
+
+Configuration
+AP ↑
+APMSSD ↑APMSPD ↑
+CPE
+0.724
+0.703
+0.744
++ ICP
+0.471
+0.384
+0.557
+CPE + 3DGS (only Lphoto) 0.724
+0.706
+0.743
+CPE + 3DGS (only Lgeo)
+0.666
+0.651
+0.682
+CPE + 3DGS (full L)
+0.736
+0.718
+0.754
+Table 3. Ablation study on the HOPEv2 validation set. We evalu-
+ate the effect of the refinement module and its loss components.
+4.5. Ablation Study
+Table 3 isolates the contribution of each component of our
+refinement module on the HOPEv2 validation set.
+The
+coarse pose estimation (CPE) stage alone achieves a strong
+baseline of 0.724 AP and 0.703 APMSSD. Refining this ini-
+tialization with standard Iterative Closest Point (ICP), as
+employed by FreeZe [5], severely degrades performance
+across all metrics: APMSSD drops by 45.4% (0.703 to 0.384)
+and AP by 34.9% (0.724 to 0.471). This highlights the un-
+reliability of zero-shot geometry extracted from monocular
+video for standard point-to-point registration: the resulting
+point clouds are too noisy for ICP, which is highly suscep-
+tible to local minima under such conditions.
+Our 3DGS-based refinement takes a fundamentally dif-
+ferent approach by directly optimizing the pose against the
+captured scene rather than relying on point cloud alignment.
+Using only the photometric loss Lphoto yields a marginal im-
+provement over CPE (APMSSD: 0.703 to 0.706), as texture
+ambiguities can still trap the optimizer in poor local min-
+ima. Isolating the geometric term, CPE + 3DGS (only Lgeo)
+degrades performance below CPE (APMSSD: 0.703 to 0.651;
+AP: 0.724 to 0.666), mirroring the ICP result: without the
+complementary photometric signal to anchor it, geometric
+alignment alone inherits the same sensitivity to noisy zero-
+shot geometry. Introducing the full dual loss, combining
+photometric and geometric (depth) terms, effectively con-
+strains the optimization and outperforms both individual
+components, achieving the best performance across all met-
+rics (APMSSD: 0.718, AP: 0.736). The qualitative improve-
+ment is illustrated in Figure 4, where the Ketchup and Mus-
+tard objects show a clear correction of misaligned coarse
+estimates after refinement. Together, these results validate
+our design choice to use the 3DGS representation not only
+for template rendering but also as a differentiable backbone
+for pose refinement.
+Onboarding View Density.
+Since pose accuracy is fun-
+damentally bounded by the quality of the onboarding re-
+construction, we additionally study how the number of on-
+boarding views affects downstream accuracy by varying the
+fraction of video frames used for SfM and 3DGS training.
+As detailed in Sec. D, accuracy is essentially unaffected
+(a) Before refinement
+(b) After refinement
+Figure 4. Effect of pose refinement on HOPEv2. The improve-
+ment is most pronounced on the Ketchup and Mustard objects
+(center), where the initial coarse estimates 4a are visibly mis-
+aligned, and refinement 4b brings the projected bounding boxes
+into close agreement with the observed geometry.
+down to 25% of the original views, degrades moderately
+at 5%, and collapses at the extreme 1% ratio, where insuf-
+ficient view coverage prevents SfM and 3DGS from recov-
+ering a faithful object reconstruction. This confirms that
+onboarding reconstruction quality is directly predictive of
+final pose accuracy.
+3DGS Training Budget.
+We further study how the on-
+boarding reconstruction budget affects downstream accu-
+racy by varying the 3DGS training iterations. As detailed
+in Sec. D, accuracy improves steadily up to 5k iterations,
+reaching a plateau beyond that. We retain 14k as the setting
+under which all results were produced. 5k is the recom-
+mended setting under the BOP onboarding budget.
+5. Conclusions
+We presented NovaSplat, a model-free pipeline for 6D ob-
+ject pose estimation that replaces the CAD model require-
+ment with a compact onboarding procedure: SfM and MVS
+recover object geometry from a short smartphone video,
+which is then used to train a 3D Gaussian Splatting rep-
+resentation for both template rendering and differentiable
+pose refinement. NovaSplat is, to our knowledge, the first
+model-free method to surpass model-based competitors on
+a BOP benchmark, exceeding the best model-based baseline
+on HOPEv2 by 2.9% on AP and 17.0% on APMSSD, and out-
+performs the best model-free competitor on IndustryShapes
+while narrowing the gap to model-based methods. We ad-
+ditionally provide NovaSplat-Lite, an inference variant that
+is 3.1× faster at a cost of 0.001 AP, bringing the pipeline
+within the reach of practical deployment.
+Our primary limitation is sensitivity to object appear-
+ance:
+on IndustryShapes, textureless, specular surfaces
+degrade both reconstruction quality and feature matching,
+leaving a gap to model-based methods.
+Future work
+includes improving robustness to such objects, explor-
+ing our refiner as a tracker, and replacing our separate
+MVS meshing step with direct mesh extraction from
+3DGS, as in recent approaches like MeshSplatting [12].
+
+
+References
+[1] Michael Bleyer, Christoph Rhemann, and Carsten Rother.
+PatchMatch Stereo-Stereo Matching with Slanted Sup-
+port Windows.
+In British Machine Vision Conference
+(BMVC’11), pages 14.1–14.11, 2011. 4
+[2] Robert Bridson. Fast Poisson disk sampling in arbitrary di-
+mensions. In Special Interest Group on Graphics and Inter-
+active Techniques, pages 22–es, 2007. 4
+[3] Dingding Cai, Janne Heikkil¨a, and Esa Rahtu.
+GS-Pose:
+Generalizable Segmentation-Based 6D Object Pose Estima-
+tion with 3D Gaussian Splatting. In International Confer-
+ence on 3D Vision (3DV), pages 1001–1011, 2025. 2, 4, 5
+[4] Tuo Cao, Fei Luo, Jiongming Qin, Yu Jiang, Yusen Wang,
+and Chunxia Xiao. iG-6DoF: Model-Free 6DoF Pose Esti-
+mation for Unseen Object via Iterative 3D Gaussian Splat-
+ting. In IEEE Conference on Computer Vision and Pattern
+Recognition (CVPR’25), pages 6436–6446, 2025. 2, 5
+[5] Andrea Caraffa, Davide Boscaini, Amir Hamza, and Fabio
+Poiesi. FreeZe: Training-Free Zero-Shot 6D Pose Estimation
+with Geometric and Vision Foundation Models. In European
+Conference on Computer Vision (ECCV’24), pages 414–431,
+2024. 1, 2, 3, 7, 8
+[6] Andrea Caraffa, Davide Boscaini, and Fabio Poiesi. Accu-
+rate and efficient zero-shot 6D pose estimation with frozen
+foundation models, 2025. 2, 3, 4, 21, 22
+[7] Nicolas Carion, Laura Gustafson, Yuan-Ting Hu, Shoub-
+hik Debnath, Ronghang Hu, Didac Suris, Chaitanya Ryali,
+Kalyan Vasudev Alwala, Haitham Khedr, Andrew Huang,
+et al. Sam 3: Segment anything with concepts, 2025. 4
+[8] Dan Cernea. OpenMVS: Multi-view stereo reconstruction
+library. https://cdcseacave.github.io, 2020. 6, 12
+[9] Weijian Deng, Dylan Campbell, Chunyi Sun, Jiahao Zhang,
+Shubham Kanitkar, Matthew E. Shaffer, and Stephen Gould.
+Pos3R: 6D Pose Estimation for Unseen Objects Made Easy.
+In IEEE Conference on Computer Vision and Pattern Recog-
+nition (CVPR’25), pages 16818–16828, 2025. 2
+[10] Shreyas Hampali, Mahdi Rad, Markus Oberweger, and Vin-
+cent Lepetit. HOnnotate: A Method for 3D Annotation of
+Hand and Object Poses. In IEEE Conference on Computer
+Vision and Pattern Recognition (CVPR’20), pages 3193–
+3203, 2020. 3
+[11] Xingyi He, Jiaming Sun, Yuang Wang, Di Huang, Hujun
+Bao, and Xiaowei Zhou. OnePose++: Keypoint-Free One-
+Shot Object Pose Estimation without CAD Models. In Neu-
+ral Information Processing Systems, pages 35103–35115,
+2022. 2, 7
+[12] Jan Held, Sanghyun Son, Renaud Vandeghen, Daniel Re-
+bain, Matheus Gadelha, Yi Zhou, Anthony Cioppa, Ming C.
+Lin, Marc Van Droogenbroeck, and Andrea Tagliasac-
+chi. MeshSplatting: Differentiable Rendering with Opaque
+Meshes. In IEEE Conference on Computer Vision and Pat-
+tern Recognition (CVPR’26), pages 7320–7329, 2026. 8
+[13] Stefan Hinterstoisser, Vincent Lepetit, Slobodan Ilic, Ste-
+fan Holzer, Gary Bradski, Kurt Konolige, and Nassir Navab.
+Model Based Training, Detection and Pose Estimation of
+Texture-Less 3D Objects in Heavily Cluttered Scenes.
+In
+Asian Conference on Computer Vision, pages 548–562,
+2012. 3, 5
+[14] Tom´aˇs Hodaˇn, Martin Sundermeyer, Bertram Drost, Yann
+Labb´e, Eric Brachmann, Frank Michel, Carsten Rother, and
+Jiˇr´ı Matas. BOP Challenge 2020 on 6D Object Localiza-
+tion.
+In European Conference on Computer Vision Work-
+shops (ECCVW’20), pages 577–594, 2020. 7
+[15] Tom´aˇs Hodaˇn, D´aniel Bar´ath, and Jiˇr´ı Matas. EPOS: Es-
+timating 6D Pose of Objects With Symmetries.
+In IEEE
+Conference on Computer Vision and Pattern Recognition
+(CVPR’20), pages 11700–11709, 2020. 2
+[16] Michal Jancosek and Tomas Pajdla.
+Exploiting Visibility
+Information in Surface Reconstruction to Preserve Weakly
+Supported Surfaces. International Scholarly Research No-
+tices, 2014(1):1–20, 2014. 4
+[17] Yufeng Jin, Vignesh Prasad, Snehal Jauhri, Mathias Franz-
+ius, and Georgia Chalvatzaki. 6DOPE-GS: Online 6D Ob-
+ject Pose Estimation using Gaussian Splatting.
+In Inter-
+national Conference on Computer Vision (ICCV’25), pages
+8032–8043, 2025. 3
+[18] Sebastian Jung, Leonard Kl¨upfel, Rudolph Triebel, and
+Maximilian Durner.
+Finding NeMO: A Geometry-Aware
+Representation of Template Views for Few-Shot Perception.
+In International Conference on 3D Vision (3DV), 2026. 2, 5,
+6, 20
+[19] Bernhard Kerbl, Georgios Kopanas, Thomas Leimk¨uhler,
+and George Drettakis. 3D Gaussian Splatting for Real-Time
+Radiance Field Rendering. ACM Transactions on Graphics,
+42(4):139:1–139:14, 2023. 2, 4
+[20] Alexander Kirillov, Eric Mintun, Nikhila Ravi, Hanzi Mao,
+Chloe Rolland, Laura Gustafson, Tete Xiao, Spencer White-
+head, Alexander C. Berg, Wan-Yen Lo, Piotr Doll´ar, and
+Ross Girshick. Segment Anything. In International Con-
+ference on Computer Vision (ICCV’23), pages 3992–4003,
+2023. 4
+[21] Taeyeop Lee, Bowen Wen, Minjun Kang, Gyuree Kang,
+In So Kweon, and Kuk-Jin Yoon. Any6D: Model-free 6D
+Pose Estimation of Novel Objects. In IEEE Conference on
+Computer Vision and Pattern Recognition (CVPR’25), pages
+11633–11643, 2025. 2
+[22] Vincent Leroy, Yohann Cabon, and Jerome Revaud. Ground-
+ing Image Matching in 3D with MASt3R. In European Con-
+ference on Computer Vision (ECCV’24), pages 71–91, 2024.
+2
+[23] Fu Li, Shishir Reddy Vutukur, Hao Yu, Ivan Shugurov, Ben-
+jamin Busam, Shaowu Yang, and Slobodan Ilic. NeRF-Pose:
+A First-Reconstruct-Then-Regress Approach for Weakly-
+supervised 6D Object Pose Estimation.
+In IEEE Interna-
+tional Conference on Computer Vision Workshops (ICCV
+Workshops) (ICCVW’23), pages 2115–2125, 2023. 2
+[24] Mengya Liu, Siyuan Li, Ajad Chhatkuli, Prune Truong,
+Luc Van Gool, and Federico Tombari.
+One2Any: One-
+Reference 6D Pose Estimation for Any Object.
+In IEEE
+Conference on Computer Vision and Pattern Recognition
+(CVPR’25), pages 6457–6467, 2025. 2
+
+
+[25] Yuan Liu, Yilin Wen, Sida Peng, Cheng Lin, Xiaoxiao
+Long, Taku Komura, and Wenping Wang.
+Gen6D: Gen-
+eralizable Model-Free 6-DoF Object Pose Estimation from
+RGB Images. In European Conference on Computer Vision
+(ECCV’22), pages 298–315, 2022. 2
+[26] Ilya Loshchilov and Frank Hutter. Decoupled Weight De-
+cay Regularization. In International Conference on Learning
+Representation, 2019. 12
+[27] Jilan Mei, Junbo Li, and Cai Meng. GS2Pose: Two-stage 6D
+Object Pose Estimation Guided by Gaussian Splatting, 2024.
+5
+[28] Sungphill Moon, Hyeontae Son, Dongcheol Hur, and Sang-
+wook Kim. GenFlow: Generalizable Recurrent Flow for 6D
+Pose Refinement of Novel Objects. In IEEE Conference on
+Computer Vision and Pattern Recognition (CVPR’24), pages
+10039–10049, 2024. 2, 5
+[29] Sungphill Moon, Hyeontae Son, Dongcheol Hur, and Sang-
+wook Kim.
+Co-op: Correspondence-based Novel Object
+Pose Estimation. In IEEE Conference on Computer Vision
+and Pattern Recognition (CVPR’25), pages 11622–11632,
+2025. 2, 5
+[30] Artem Moroz,
+V´ıt Zeman,
+Martin Mikˇs´ık,
+Elizaveta
+Isianova, Miroslav David, Pavel Burget, and Varun Burde.
+OPFormer: Object Pose Estimation Leveraging Foundation
+Model with Geometric Encoding. In IEEE/CVF Winter Con-
+ference on Applications of Computer Vision (WACV), pages
+6621–6632, 2026. 5, 6, 20
+[31] Van Nguyen Nguyen, Thibault Groueix, Georgy Ponimatkin,
+Vincent Lepetit, and Tomas Hodan. CNOS: A Strong Base-
+line for CAD-based Novel Object Segmentation. In IEEE
+International Conference on Computer Vision Workshops
+(ICCV Workshops) (ICCVW’23), pages 2126–2132, 2023. 3,
+4
+[32] Van Nguyen Nguyen, Thibault Groueix, Mathieu Salzmann,
+and Vincent Lepetit.
+GigaPose: Fast and Robust Novel
+Object Pose Estimation via One Correspondence. In IEEE
+Conference on Computer Vision and Pattern Recognition
+(CVPR’24), pages 9903–9913, 2024. 2, 5
+[33] Van Nguyen Nguyen, Stephen Tyree, Andrew Guo, Med-
+eric Fourmy, Anas Gouda, Taeyeop Lee, Sungphill Moon,
+Hyeontae Son, Lukas Ranftl, Jonathan Tremblay, et al. BOP
+challenge 2024 on model-based and model-free 6D object
+pose estimation. In Proceedings of the IEEE/CVF Confer-
+ence on Computer Vision and Pattern Recognition Work-
+shops (CVPRW’25), 2025. 5
+[34] Maxime Oquab, Timoth´ee Darcet, Th´eo Moutakanni, Huy
+Vo, Marc Szafraniec, Vasil Khalidov, Pierre Fernandez,
+Daniel Haziza, Francisco Massa, Alaaeldin El-Nouby, Mah-
+moud Assran, Nicolas Ballas, Wojciech Galuba, Russell
+Howes, Po-Yao Huang, Shang-Wen Li, Ishan Misra, Michael
+Rabbat, Vasu Sharma, Gabriel Synnaeve, Hu Xu, Herv´e Je-
+gou, Julien Mairal, Patrick Labatut, Armand Joulin, and Pi-
+otr Bojanowski. DINOv2: Learning Robust Visual Features
+without Supervision. Transactions on Machine Learning Re-
+search, 2024. 2, 4
+[35] Evin Pınar ¨Ornek, Yann Labb´e, Bugra Tekin, Lingni Ma,
+Cem Keskin, Christian Forster, and Tomas Hodan. Found-
+Pose:
+Unseen Object Pose Estimation with Foundation
+Features.
+In European Conference on Computer Vision
+(ECCV’24), pages 163–182, 2024. 1, 2, 7
+[36] Sajjad Pakdamansavoji, Yintao Ma, Amir Rasouli, and Tong-
+tong Cao. WALDO: Where Unseen Model-based 6D Pose
+Estimation Meets Occlusion.
+In IEEE/CVF Winter Con-
+ference on Applications of Computer Vision (WACV), pages
+4067–4076, 2026. 2
+[37] Linfei Pan, D´aniel Bar´ath, Marc Pollefeys, and Johannes L.
+Sch¨onberger.
+Global Structure-from-Motion Revisited.
+In European Conference on Computer Vision (ECCV’24),
+pages 58–77, 2024. 4, 15
+[38] Keunhong Park, Arsalan Mousavian, Yu Xiang, and Dieter
+Fox. LatentFusion: End-to-End Differentiable Reconstruc-
+tion and Rendering for Unseen Object Pose Estimation. In
+IEEE Conference on Computer Vision and Pattern Recogni-
+tion (CVPR’20), pages 10707–10716, 2020. 2
+[39] Fabio Poiesi and Davide Boscaini.
+Learning General and
+Distinctive 3D Local Deep Descriptors for Point Cloud Reg-
+istration. IEEE Transactions on Pattern Analysis and Ma-
+chine Intelligence, 45(3):3979–3985, 2023. 2, 4
+[40] Panagiotis Sapoutzoglou, Orestis Vaggelis, Athina Zacharia,
+Evangelos Sartinas, and Maria Pateraki.
+IndustryShapes:
+An RGB-D Benchmark Dataset for 6D Object Pose Esti-
+mation of Industrial Assembly Components and Tools. In
+IEEE International Conference on Robotics and Automation
+(ICRA’26), 2026. 5
+[41] Johannes
+Lutz
+Sch¨onberger
+and
+Jan-Michael
+Frahm.
+Structure-from-Motion Revisited. In IEEE Conference on
+Computer Vision and Pattern Recognition (CVPR’16), 2016.
+4, 15
+[42] Oriane Sim´eoni, Huy V Vo, Maximilian Seitzer, Federico
+Baldassarre, Maxime Oquab, Cijo Jose, Vasil Khalidov,
+Marc Szafraniec, Seungeun Yi, Micha¨el Ramamonjisoa,
+et al. DINOv3, 2025. 4
+[43] Yongzhi Su, Mahdi Saleh, Torben Fetzer, Jason Rambach,
+Nassir Navab, Benjamin Busam, Didier Stricker, and Fed-
+erico Tombari. ZebraPose: Coarse to Fine Surface Encoding
+for 6DoF Object Pose Estimation. In IEEE Conference on
+Computer Vision and Pattern Recognition (CVPR’22), pages
+6728–6738, 2022. 2
+[44] Jiaming Sun,
+Zihao Wang,
+Siyu Zhang,
+Xingyi He,
+Hongcheng Zhao, Guofeng Zhang, and Xiaowei Zhou.
+OnePose: One-Shot Object Pose Estimation without CAD
+Models. In IEEE Conference on Computer Vision and Pat-
+tern Recognition (CVPR’22), pages 6815–6824, 2022. 2, 7
+[45] Yong Sun, Jianzhong Wang, Yu You, Zibo Yu, Shaobo Bian,
+Endi Wang, and Weichao Wu. YOLO-E: a lightweight object
+detection algorithm for military targets. Signal, Image and
+Video Processing, 19(3):241, 2025. 4
+[46] Meng Tian, Marcelo H. Ang, and Gim Hee Lee.
+Shape
+Prior Deformation for Categorical 6D Object Pose and Size
+Estimation.
+In European Conference on Computer Vision
+(ECCV’20), pages 530–546, 2020. 2
+[47] Jonathan Tremblay, Thang To, Balakumar Sundaralingam,
+Yu Xiang, Dieter Fox, and Stan Birchfield. Deep Object Pose
+Estimation for Semantic Robotic Grasping of Household Ob-
+jects. In Proceedings of The 2nd Conference on Robot Learn-
+ing, pages 306–316, 2018. 2
+
+
+[48] Stephen Tyree, Jonathan Tremblay, Thang To, Jia Cheng,
+Terry Mosier, Jeffrey Smith, and Stan Birchfield. 6-DoF Pose
+Estimation of Household Objects for Robotic Manipulation:
+An Accessible Dataset and Benchmark. In IROS’22, Intelli-
+gent Robots and Systems, pages 13081–13088, 2022. 5
+[49] Gu Wang, Xingyu Liu, Jingyi Tang, Chengxi Li, Yingyue
+Li, Ziqin Huang, and Xiangyang Ji. GFreeDet2: Exploiting
+Gaussian Splatting and Foundation Models for RGB-based
+Model-free 2D and 6D Detection of Unseen Objects.
+In
+IEEE International Conference on Robotics and Automation
+(ICRA’26), 2026. 2, 3, 5, 6, 20
+[50] He Wang, Srinath Sridhar, Jingwei Huang, Julien Valentin,
+Shuran Song, and Leonidas J. Guibas.
+Normalized Ob-
+ject Coordinate Space for Category-Level 6D Object Pose
+and Size Estimation. In IEEE Conference on Computer Vi-
+sion and Pattern Recognition (CVPR’19), pages 2637–2646,
+2019. 2
+[51] Zhou Wang, A.C. Bovik, H.R. Sheikh, and E.P. Simoncelli.
+Image quality assessment: from error visibility to structural
+similarity. Transactions on Image Processing, 13(4):600–
+612, 2004. 4
+[52] Z. Wang, E.P. Simoncelli, and A.C. Bovik. Multiscale struc-
+tural similarity for image quality assessment. In The Thrity-
+Seventh Asilomar Conference on Signals, Systems & Com-
+puters, 2003, pages 1398–1402 Vol.2, 2023. 4
+[53] Philippe Weinzaepfel,
+Thomas Lucas,
+Vincent Leroy,
+Yohann Cabon, Vaibhav Arora, Romain Br´egier, Gabriela
+Csurka, Leonid Antsfeld, Boris Chidlovskii, and J´erˆome Re-
+vaud.
+CroCo v2: Improved Cross-view Completion Pre-
+training for Stereo Matching and Optical Flow.
+In Inter-
+national Conference on Computer Vision (ICCV’23), pages
+17923–17934, 2023. 2
+[54] Bowen Wen,
+Chaitanya Mitash,
+Baozhang Ren,
+and
+Kostas E. Bekris.
+se(3)-TrackNet: Data-driven 6D Pose
+Tracking by Calibrating Image Residuals in Synthetic Do-
+mains. In IROS’20, Intelligent Robots and Systems, pages
+10367–10373, 2020. 3
+[55] Bowen Wen, Jonathan Tremblay, Valts Blukis, Stephen
+Tyree, Thomas M¨uller, Alex Evans, Dieter Fox, Jan Kautz,
+and Stan Birchfield.
+BundleSDF: Neural 6-DoF Track-
+ing and 3D Reconstruction of Unknown Objects. In IEEE
+Conference on Computer Vision and Pattern Recognition
+(CVPR’23), pages 606–617, 2023. 2
+[56] Bowen Wen, Wei Yang, Jan Kautz, and Stan Birchfield.
+FoundationPose: Unified 6D Pose Estimation and Tracking
+of Novel Objects. In IEEE Conference on Computer Vision
+and Pattern Recognition (CVPR’24), pages 17868–17878,
+2024. 2, 7
+[57] Vickie Ye, Ruilong Li, Justin Kerr, Matias Turkulainen,
+Brent Yi, Zhuoyang Pan, Otto Seiskari, Jianbo Ye, Jeffrey
+Hu, Matthew Tancik, and Angjoo Kanazawa.
+gsplat: An
+open-source library for Gaussian splatting. Journal of Ma-
+chine Learning Research, 26(34):1–17, 2025. 6, 12
+[58] Xu Zhao, Wenchao Ding, Yongqi An, Yinglong Du, Tao Yu,
+Min Li, Ming Tang, and Jinqiao Wang. Fast segment any-
+thing, 2023. 4
+[59] Yi Zhou, Connelly Barnes, Jingwan Lu, Jimei Yang, and Hao
+Li. On the Continuity of Rotation Representations in Neu-
+ral Networks. In IEEE Conference on Computer Vision and
+Pattern Recognition (CVPR’19), pages 5738–5746, 2019. 4
+
+
+Appendix
+A. Full Implementation Details
+We specify two inference configurations.
+NovaSplat is
+the full configuration and produces all results reported in
+the main paper unless stated otherwise. NovaSplat-Lite is
+an inference-only variant that streamlines coarse pose es-
+timation and photometric refinement for a 3.1× speed-up
+(Sec. B). The two share the same onboarding, the same
+learned object representation, and the same detection mod-
+ule and differ only in the settings listed in Table 4.
+Onboarding.
+We use the gsplat library [57] to train the
+splat for 14k iterations, allowing densification for the first
+7k iterations and have the depth loss enabled. Our MVS
+pipeline is based on OpenMVS [8]. We render Ntempl =
+336 templates at 480 × 480 pixels and sample Npts = 5k
+points for T . Onboarding frames are native 1920×1440 and
+are left unresized throughout SfM and 3DGS training. The
+480 × 480 figure is the rendered template resolution only.
+Onboarding is identical for both configurations. Section C
+studies the effect of the 14k budget.
+Coarse pose estimation.
+We adapt FreeZe’s coarse pose
+estimation module to our template-based setting, and omit
+its point filtering and PCA dimensionality reduction, as we
+found them to have no effect on system performance. No-
+vaSplat computes the GeDi local reference frame at two
+scales. NovaSplat-Lite uses a single scale (rlrf = 0.15).
+NovaSplat-Lite additionally replaces the Open3D point-
+cloud conversions preceding descriptor extraction with na-
+tive PyTorch operations (Sec. B.4). This is an implementa-
+tion change only and leaves the descriptor formulation and
+its numeric parameters unchanged.
+Refinement.
+In the refiner, the alpha channel is thresh-
+olded at τα = 0.001, and the point cloud is filtered using
+a distance threshold of drange = 30 mm. Pose optimization
+uses two interleaved AdamW [26] optimizers with learn-
+ing rates of 0.01 for rotation and 5.0 for translation. Ro-
+tation and translation updates alternate every Nalt = 10
+steps. Per-iteration corrections are clamped to αthresh = 10◦
+for rotation and tthresh = ±10 mm for lateral translation.
+The geometric loss weight is set to wgeo = 0.001, reflect-
+ing the scale difference between the SSIM-based Lphoto and
+the Chamfer-based Lgeo. NovaSplat runs the optimizer for
+at most Nref = 200 iterations with early stopping after
+Nhalt = 30 iterations without improvement. NovaSplat-Lite
+reduces these to Nref = 20 and Nhalt = 3. All other refiner
+settings are shared.
+Parameter
+NovaSplat
+-Lite
+Onboard
+3DGS iterations
+14k (densify <7k)
+Depth loss
+enabled
+Ntempl
+336
+Template resolution
+480 × 480
+Npts
+5k
+Detect
+Proposal model
+YOLO-E
+Feature extractor
+DINOv3 ViT-L/16
+Templates
+ours (rendered)
+CPE
+Geometric encoder
+GeDi (frozen)
+LRF scales
+2
+1
+Point-cloud ops
+Open3D
+PyTorch
+Refinement
+Nref
+200
+20
+Nhalt
+30
+3
+Nalt
+10
+LR (rot./transl.)
+0.01 / 5.0 (AdamW)
+αthresh / tthresh
+10◦/ ±10 mm
+τα / drange
+0.001 / 30 mm
+wgeo / MS-SSIM scales
+0.001 / 3
+Table 4. Implementation settings for both configurations. Entries
+spanning both columns are identical. Bold entries mark where
+NovaSplat-Lite differs.
+B. Runtime Analysis
+B.1. Measurement Protocol
+All timings are measured on a workstation with an Intel(R)
+Core(TM) i7-14700K processor (28 cores) and a single
+NVIDIA RTX 4090 GPU. Inference timings are reported
+on the HOPEv2 validation set, which comprises 457 images
+containing 9,873 annotated object instances, an average of
+21.6 instances per image. Onboarding timings are per ob-
+ject and are a one-time cost. We report wall-clock time with
+all model weights already resident in GPU memory, exclud-
+ing dataset I/O and one-time process startup.
+Because HOPEv2 images are densely populated, the per-
+image figure aggregates 21.6 instance-level pose estimates
+on average. We therefore report both per-image and per-
+instance timings, as the latter is the quantity that scales with
+scene complexity in a deployment setting.
+B.2. Per-Stage Breakdown
+Table 5 reports the per-stage runtime of the full pipeline.
+Onboarding is unaffected by the inference-side optimiza-
+tions described in Sec. B.4 and is therefore reported once.
+For inference, we report both configurations: NovaSplat,
+which produces all results in the main paper unless stated
+otherwise, and NovaSplat-Lite, the streamlined variant.
+
+
+Onboarding (per object, one-time)
+SfM
+10.4 s
+MVS
+77.7 s
+3DGS training (14k iterations)
+326.7 s
+Poisson subsampling
+11.5 s
+Template rendering
+14.5 s
+Feature extraction
+27.4 s
+Total
+468.2 s
+Inference (per image)
+NovaSplat
+-Lite
+Speed-up
+Detection & segmentation
+2.1 s
+1.2 s
+1.8×
+Coarse pose estimation
+18.6 s
+9.8 s
+1.9×
+3DGS refinement
+35.4 s
+7.0 s
+5.1×
+Total
+56.1 s
+18.0 s
+3.1×
+Per object instance
+2.60 s
+0.83 s
+3.1×
+Table 5. Per-stage runtime breakdown. Onboarding is a one-time
+per-object cost and is identical for both configurations. NovaSplat-
+Lite streamlines coarse pose estimation and 3DGS refinement
+(Sec. B.4) for a 3.1× end-to-end speed-up. Per-instance figures
+divide the per-image total by the 21.6 object instances per image
+on the HOPEv2 validation set. Detection and segmentation is an
+off-the-shelf component that we do not modify, and the two figures
+are drawn from separate profiling runs. The difference between
+them is not attributable to the optimizations described here, which
+affect only coarse pose estimation and refinement.
+B.3. Where Coarse Pose Estimation Spends Its Time
+Coarse pose estimation is the dominant inference stage in
+NovaSplat-Lite, accounting for 9.8 s of the 18.0 s per-image
+budget. Table 6 decomposes it into its constituent opera-
+tions.
+The decomposition makes the cost structure unambigu-
+ous. GeDi descriptor extraction alone accounts for 91.0%
+of coarse pose estimation and 49.3% of total per-image in-
+ference time.
+The geometric verification machinery that
+follows it, similarity computation, correspondence match-
+ing, RANSAC, and hypothesis scoring, together consumes
+0.45 s per image, or 4.6% of the stage.
+B.4. Optimizations
+The optimizations behind NovaSplat-Lite target both dom-
+inant inference stages: coarse pose estimation and photo-
+metric refinement.
+Coarse pose estimation.
+Profiling revealed that descrip-
+tor extraction was dominated not by descriptor computa-
+tion itself but by data marshalling. The full configuration
+converts point clouds to Open3D structures for filtering,
+voxel downsampling, and radius-neighbor queries, incur-
+ring two GPU→CPU→Open3D round-trips per object in-
+stance. NovaSplat-Lite replaces these conversions with na-
+CPE sub-step
+Total
+s/image
+%
+Point-cloud preparation
+79.6 s
+0.174
+1.8
+GeDi descriptor extraction
+4058.3 s
+8.880
+91.0
+Visual–geometric fusion
+114.9 s
+0.251
+2.6
+Feature similarity
+94.2 s
+0.206
+2.1
+Correspondence matching
+8.7 s
+0.019
+0.2
+RANSAC
+19.7 s
+0.043
+0.4
+Hypothesis scoring
+82.7 s
+0.181
+1.9
+Total
+4459.2 s
+9.758
+100.0
+Table 6.
+Sub-step breakdown of coarse pose estimation for
+NovaSplat-Lite, aggregated over the 457 images and 9,873 object
+instances of the HOPEv2 validation set. Geometric descriptor ex-
+traction dominates, consuming 91% of the CPE budget and 49%
+of total inference time. Every remaining sub-step costs under 0.3 s
+per image.
+tive PyTorch operations that keep the point cloud resident
+on the GPU throughout: non-finite filtering, a scatter-mean
+voxel downsampling, and a vectorized radius-neighbor con-
+struction. It further reduces cost by computing the local ref-
+erence frame at a single scale (rlrf = 0.15) rather than two.
+Together these changes reduce coarse pose estimation from
+18.6 s to 9.8 s per image, a 1.9× speed-up, without altering
+the descriptor formulation.
+Photometric refinement. NovaSplat-Lite reduces the pose
+optimization budget from Nref = 200 to Nref = 20 max-
+imum iterations and tightens the early-stopping patience
+from Nhalt = 30 to Nhalt = 3. The photometric objec-
+tive converges quickly from a well-initialized coarse pose:
+the dominant pose correction is captured within the first few
+iterations, and the long tail of the full schedule contributes
+minor improvements. This reduces refinement from 35.4 s
+to 7.0 s per image, a 5.1× speed-up, and is the single largest
+contributor to the end-to-end gain.
+Accuracy cost. The combined effect is a 3.1× end-to-end
+speed-up, from 56.1 s to 18.0 s per image (2.60 s to 0.83 s
+per object instance), at a cost of 0.001 AP on the HOPEv2
+test set (0.529 vs. 0.528, Table 1 of the main paper). We
+note that refinement is batchable across object instances, so
+the per-image figure is a conservative upper bound for the
+static-scene pick-and-place scenarios NovaSplat targets.
+B.5. Memory Profile
+We continuously monitored host (RAM) and GPU mem-
+ory utilization across the full HOPEv2 validation processing
+timeline, for both the onboarding and the inference stage.
+Figure 5 shows the resulting traces.
+Because the 3DGS
+training budget is the dominant onboarding cost (Sec. C),
+we profile both the 14k-iteration default and the reduced
+5k-iteration setting.
+Onboarding. For most of its duration onboarding is inex-
+
+
+Figure 5. Host and GPU memory utilization over the full HOPEv2
+validation timeline. Top: 14k 3DGS iterations (default). Bottom:
+5k iterations. Onboarding covers all 28 HOPEv2 objects sequen-
+tially. Inference covers all 457 validation images. Reducing the
+3DGS budget shortens onboarding from 235 to 140 minutes while
+leaving the memory envelope essentially unchanged.
+pensive, holding a sustained working set of 3.0–4.2 GB host
+and 1.6–3.1 GB device memory. The 18.0 GB host peak is
+a narrow transient occurring in the final minutes of each ob-
+ject’s onboarding, during geometry extraction and feature
+export, and is not representative of the stage as a whole. De-
+vice memory rises in discrete steps that track the pipeline’s
+stage transitions, reaching 7.6 GB at the end.
+Inference. Device memory rises to 6.0 GB within the first
+minutes and holds a flat plateau there for the entire run, re-
+flecting the fixed cost of the resident detection, descriptor,
+and 3DGS models. Host memory shows a transient 8.0 GB
+peak shortly after start-up, then a working set that oscillates
+between 3.5 and 6.8 GB before decaying to 2.1–3.0 GB over
+the second half of the run.
+Effect of the 3DGS budget. Memory consumption is es-
+sentially invariant to the 3DGS training budget: reducing
+from 14k to 5k iterations changes the onboarding peak by
+0.4 GB host and 0.1 GB device, while shortening the on-
+boarding pass over all 28 objects from 235 to 140 minutes.
+The reduced budget studied in Sec. C therefore costs noth-
+ing in memory terms.
+Taken together, a sustained device footprint of 6.0 GB
+places NovaSplat within reach of 8 GB-class consumer
+GPUs, and the host requirement is modest except for a brief
+onboarding transient. The method can be deployed on stan-
+dard consumer-grade hardware without out-of-memory is-
+sues.
+Iterations
+Time
+AP ↑
+APMSSD ↑
+APMSPD ↑
+500
+153 s
+0.655
+0.632
+0.678
+1k
+165 s
+0.706
+0.684
+0.728
+5k
+258 s
+0.741
+0.722
+0.761
+14k
+468 s
+0.736
+0.718
+0.754
+Table 7. Effect of the 3DGS training budget on downstream pose
+accuracy (HOPEv2 validation set). “Time” is the full per-object
+onboarding cost.
+Ratio
+AP ↑
+APMSSD ↑
+APMSPD ↑
+100% (baseline)
+0.736
+0.718
+0.754
+25%
+0.738
+0.722
+0.754
+5%
+0.655
+0.635
+0.674
+1%
+0.212
+0.203
+0.221
+Table 8. Effect of onboarding view sampling ratio on pose accu-
+racy, evaluated on the HOPEv2 validation set. Accuracy is stable
+down to 25% of the original views, degrades moderately at 5%,
+and collapses at 1%.
+C. Onboarding Reconstruction Budget
+Sec. B shows that onboarding costs 468.2 s per object,
+of which 3DGS training accounts for 326.7 s, or 70%.
+We therefore study how the 3DGS training budget trades
+against downstream pose accuracy, re-running onboarding
+at iteration counts from 500 to our 14k default and re-
+evaluating the full pipeline on the HOPEv2 validation set.
+Table 7 reports the result.
+Accuracy improves steadily up to 5k iterations and then
+plateaus.
+Relative to the 14k default, the 5k setting is
+marginally better on all three metrics (AP 0.741 vs. 0.736;
+APMSSD 0.722 vs. 0.718; APMSPD 0.761 vs. 0.754), dif-
+ferences of under one percent that we regard as within run-
+to-run variation rather than a genuine gain from training
+less. Below 5k the picture changes sharply: 1k loses 4.1%
+AP relative to the default and 500 iterations loses 11.0%,
+as the reconstruction is no longer faithful enough to support
+template matching and photometric refinement.
+The practical consequence is that the onboarding budget
+can be cut substantially at no measurable accuracy cost. At
+5k iterations the estimated per-object onboarding time falls
+to 258 s, bringing it within the BOP protocol’s five-minute
+per-object budget, against 468.2 s at the 14k default.
+D. Effect of Onboarding View Density
+To assess how the number of onboarding views affects
+downstream pose accuracy, we re-run onboarding while
+randomly subsampling the input video frames prior to SfM
+and 3DGS training, testing sampling ratios of 100% (base-
+line), 25%, 5%, and 1% of the original frame count, and
+
+
+100%
+25%
+5%
+1%
+Figure 6. Qualitative comparison of rendered templates under different onboarding sampling ratios on the HOPEv2 dataset. The rendering
+fidelity degrades significantly at extreme sampling ratios (1%), resulting in artifacts and loss of detail, while 25% maintains comparable
+quality to the baseline.
+re-evaluate the full NovaSplat pipeline on the HOPEv2 val-
+idation set. Table 8 reports the resulting accuracy, and Fig-
+ure 6 shows the corresponding rendered templates.
+At 25% of the original views, accuracy matches or
+marginally exceeds the 100% baseline (AP: 0.738 vs. 0.736;
+APMSSD: 0.722 vs. 0.718), indicating that our onboarding
+videos, captured densely for convenience, contain substan-
+tial redundancy and that a much sparser capture would suf-
+fice without harming reconstruction quality. Reducing fur-
+ther to 5% causes a moderate drop (AP: 0.655, a 10.9%
+relative decrease), as the sparser point cloud and viewpoint
+coverage begin to degrade the 3DGS reconstruction. At the
+extreme 1% ratio, accuracy collapses (AP: 0.212), consis-
+tent with the qualitative degradation visible in Figure 6: the
+rendered templates exhibit severe artifacts and loss of detail,
+reflecting insufficient multi-view coverage for both SfM tri-
+angulation and 3DGS optimization to converge to a faithful
+reconstruction. These results confirm that final pose accu-
+racy is directly tied to onboarding reconstruction quality,
+which in turn depends on having sufficient view coverage,
+while also showing that NovaSplat is robust to substantial
+frame subsampling before quality begins to degrade.
+E. Onboarding Poses from Structure-from-
+Motion
+The onboarding protocol of BOP-H3 supplies camera poses
+together with the onboarding videos, and all results in the
+main paper are produced with those poses. This raises a
+fair question about how much of our performance depends
+on having them. This section shows that the poses can be
+recovered from the onboarding video alone and that this re-
+mains true for the textureless, specular objects the method
+targets, the case in which SfM is most often expected to fail.
+E.1. Protocol
+We discard the provided poses entirely and re-estimate the
+onboarding trajectory from the RGB frames with COLMAP
+features and matches [41] followed by the GLOMAP global
+mapper [37]. Every onboarding frame is used (no temporal
+subsampling), images are not masked to the object, loop
+detection is disabled, and the camera model is PINHOLE
+with the intrinsics shipped with each dataset, held fixed (no
+intrinsic refinement).
+We run this on two objects chosen to bracket the diffi-
+culty range of the benchmark: obj 000001 of HOPEv2,
+a textured grocery item, and obj 000005 of Indus-
+tryShapes, the most textureless and specular object in that
+dataset.
+The estimated trajectory lives in an arbitrary gauge (the
+global mapper fixes the world frame and the overall scale),
+so it cannot be compared to the reference poses directly.
+We recover the similarity transform between the two sets
+of camera centers in closed form with the Umeyama algo-
+rithm, apply it to the estimated poses, and report the follow-
+ing:
+• Absolute rotation error: the geodesic angle between the
+reference camera orientation and the aligned estimate.
+• Absolute position error: the Euclidean distance between
+the reference and aligned camera centers, in millimeters.
+• Relative rotation error: the same angle computed on the
+relative pose between consecutive frames. This quantity
+is invariant to the alignment and measures the local multi-
+view consistency on which the MVS and 3DGS stages
+
+
+HOPEv2
+IndustryShapes
+obj 000001
+obj 000005
+Onboarding frames
+178
+522
+Frames registered
+178 (100%)
+522 (100%)
+Reconstructed sub-models
+1
+1
+Mean reprojection error (px)
+0.50
+0.67
+Sparse 3D points
+78,973
+5,802
+per registered image
+444
+11
+inside object bbox
+—
+1,117 (19.3%)
+within bbox +25 mm
+—
+1,481 (25.5%)
+Feature extraction (s)
+10.6
+15.1
+Matching (s)
+85.6
+7.5
+Global mapping (s)
+84.7
+29.3
+Total (s)
+181.0
+51.9
+Table 9. SfM reconstruction of the onboarding sequences, with no
+ground-truth poses used. Both objects register fully into a single
+model. The textureless object yields a sparse cloud two orders of
+magnitude thinner, 80% of which lie off the object.
+actually depend.
+E.2. Reconstruction
+Table 9 reports the reconstruction itself, before any compar-
+ison to ground truth. Both sequences register completely:
+every selected frame is placed into a single model, with no
+sub-model fragmentation and sub-pixel mean reprojection
+error. Registration is therefore not the failure mode on tex-
+tureless objects.
+What changes dramatically is the density of the sparse
+point cloud. The IndustryShapes reconstruction recovers
+5,802 points from 522 images (11 points per image) against
+78,973 points from 178 images (444 points per image) on
+HOPEv2, a fortyfold drop in points yield per frame, which
+is precisely the signature of a surface that offers no repeat-
+able features.
+To locate those points, we transform the sparse cloud into
+the object frame with the similarity transform of Sec. E.1
+and test each point against the object’s bounding box. Only
+1,117 of the 5,802 points (19.3%) fall inside it, and 1,481
+(25.5%) fall within a 25 mm dilation of it. 80% of the re-
+construction is the surrounding scene.
+This is the mechanism that makes the onboarding stage
+robust here, and it is worth stating explicitly: the camera
+trajectory is not recovered from the object. Onboarding se-
+quences image the object together with its supporting sur-
+face, the calibration target, and the surrounding workspace,
+and those features (not the object’s own appearance) con-
+strain the poses. The object’s geometry is then recovered
+by the MVS and 3DGS stages, which are driven by the es-
+timated cameras rather than by sparse keypoints on the ob-
+ject. A textureless object, consequently, yields a thin, sparse
+HOPEv2
+IndustryShapes
+obj 000001
+obj 000005
+Frames compared
+178
+482
+Mean viewing distance (mm)
+—
+447
+Absolute rotation error (◦)
+median
+0.32
+1.36
+mean
+0.38
+1.37
+p95
+0.89
+2.23
+max
+1.25
+3.77
+Absolute position error (mm)
+median
+1.09
+9.47
+mean
+1.37
+9.14
+p95
+3.22
+14.70
+max
+4.66
+22.88
+Relative rotation error, consecutive frames (◦)
+median
+0.07
+0.19
+p95
+0.31
+1.06
+Relative direction error, consecutive frames (◦)
+median
+0.61
+13.95
+Table 10.
+Estimated versus provided onboarding poses, after
+similarity alignment of the camera centers. Absolute errors are
+alignment-dependent. The relative rotation error is not and mea-
+sures the local consistency that the MVS and 3DGS stages rely on.
+cloud without yielding a poor camera trajectory.
+E.3. Pose Accuracy
+Table 10 compares the estimated trajectories against the
+poses provided with the datasets. Ground truth is available
+for 482 of the 522 registered frames, and the comparison is
+restricted to those.
+On the textured object the agreement is close to the an-
+notation noise floor: 0.32◦and 1.09 mm median error. On
+the textureless object, the error grows to 1.36◦and 9.47 mm
+at a mean viewing distance of 447 mm. It is roughly 4×
+worse in rotation and 9× worse in position, and it is con-
+sistent with the limitation stated in the main paper. What
+matters is the form the degradation takes:
+• No frame fails. The maximum position error over 482
+frames is 22.9 mm, and the maximum rotation error is
+3.77◦. There is no heavy tail and no diverging segment.
+• No drift.
+Figures 8 and 7 show the error varying
+smoothly along the sequence and returning to its base-
+line, rather than accumulating, the signature of a globally
+consistent reconstruction rather than a drifting one.
+• Local consistency is preserved. The frame-to-frame rel-
+ative rotation error stays at 0.19◦(median), an order of
+magnitude below the absolute error. Neighboring views,
+which is what MVS matching and 3DGS training con-
+sume, remain mutually consistent even where the trajec-
+tory as a whole is slightly deformed.
+
+
+(a) HOPEv2 obj 000001 (textured).
+(b) IndustryShapes obj 000005 (textureless, specular).
+Figure 7. Onboarding camera trajectories, shown as orthographic
+projections onto the three coordinate planes (millimeters). The
+estimated trajectory (orange) is the structure-from-motion recon-
+struction after similarity alignment; the reference (blue) is the tra-
+jectory provided with the dataset. The two overlap throughout both
+sequences, including on the textureless object, where the sparse
+point cloud is forty times thinner per frame.
+The relative direction error is the one statistic that is
+much larger on IndustryShapes (13.95◦vs 0.61◦median).
+This is an artifact of sampling density rather than of ac-
+curacy: the IndustryShapes sequence covers a single slow
+orbit in 522 frames, so the baseline between consecutive
+cameras is very short and the direction of a near-zero dis-
+placement is poorly conditioned. The HOPEv2 sequence
+covers a much wider trajectory in 178 frames. The quan-
+tity is reported for completeness and should not be read as
+a reconstruction failure.
+E.4. Discussion
+For context, the tightest BOP MSSD threshold is 5% of
+the object diameter.
+The diameter of obj 000005 is
+∼314 mm, so the median onboarding position error of
+9.47 mm is 3.0% of the diameter and the 95th percentile is
+4.7%. Two practical consequences follow. First, the method
+does not depend on dataset-supplied onboarding poses and
+(a) HOPEv2 obj 000001: median 0.32◦/ 1.09 mm.
+(b) IndustryShapes obj 000005: median 1.36◦/ 9.47 mm.
+Figure 8. Absolute rotation and position error per frame, after
+similarity alignment. Note the difference in vertical scale between
+the two objects. On both sequences the error is bounded and oscil-
+lates about a stable baseline rather than accumulating along the tra-
+jectory, indicating a globally consistent reconstruction. No frame
+fails to register on either object.
+can be deployed on a video captured in the wild. Second,
+the requirement it does impose is on the scene, not on the
+object: onboarding should be captured with the object in a
+feature-bearing environment. This is already what the BOP
+onboarding protocol prescribes, and it is a far weaker re-
+quirement than demanding texture on the object itself.
+F. Per-Object Quantitative Results
+This section reports per-object quantitative results that com-
+plement the aggregate results presented in the main paper.
+For HOPEv2, Table 11 reports the per-object metrics
+of NovaSplat on the validation set. We use the validation
+set for this per-object analysis because ground-truth anno-
+tations are available for this split.
+As reported in Table 11, Object 23 yields the lowest
+pose estimation performance across the dataset.
+We fo-
+cus our failure analysis specifically on this object because
+it serves as the clearest example of the fundamental diffi-
+culty in resolving pose ambiguities from visual or geomet-
+ric cues. Object 23 exhibits near-perfect physical symmetry
+
+
+Object
+AP ↑
+APMSSD ↑
+APMSPD ↑
+Obj 01
+0.77
+0.71
+0.84
+Obj 02
+0.83
+0.75
+0.92
+Obj 03
+0.83
+0.76
+0.91
+Obj 04
+0.48
+0.38
+0.58
+Obj 05
+0.75
+0.69
+0.80
+Obj 06
+0.65
+0.60
+0.69
+Obj 07
+0.46
+0.42
+0.50
+Obj 08
+0.53
+0.52
+0.55
+Obj 09
+0.75
+0.67
+0.84
+Obj 10
+0.58
+0.49
+0.66
+Obj 11
+0.93
+0.87
+0.98
+Obj 12
+0.55
+0.48
+0.63
+Obj 13
+0.87
+0.81
+0.94
+Obj 14
+0.88
+0.80
+0.95
+Obj 15
+0.56
+0.51
+0.61
+Obj 16
+0.75
+0.67
+0.82
+Obj 17
+0.57
+0.51
+0.62
+Obj 18
+0.83
+0.75
+0.91
+Obj 19
+0.89
+0.81
+0.97
+Obj 20
+0.68
+0.58
+0.78
+Obj 21
+0.69
+0.63
+0.75
+Obj 22
+0.76
+0.65
+0.86
+Obj 23
+0.42
+0.37
+0.47
+Obj 24
+0.70
+0.61
+0.79
+Obj 25
+0.55
+0.47
+0.64
+Obj 26
+0.78
+0.68
+0.88
+Obj 27
+0.67
+0.57
+0.77
+Obj 28
+0.77
+0.65
+0.88
+Table 11. Per-object Average Precision (AP) of NovaSplat on the
+HOPEv2 validation set, along with the MSSD and MSPD compo-
+nents.
+along its major axes, with only minor variations distinguish-
+ing its canonical orientation. For any visual pose estimation
+method, capturing these minor geometric or textural varia-
+tions presents a significant challenge. During the rendering
+and refinement process, NovaSplat can occasionally con-
+verge to a local minimum that corresponds to a symmetric
+counterpart of the true pose.
+Figure 9 illustrates an example where NovaSplat pre-
+dicts a pose that is flipped by approximately 180 degrees
+relative to the ground-truth annotation. While the predicted
+overlay tightly matches the visible object boundaries and
+appears visually correct, the underlying rotation matrix in-
+curs a large angular error. This highlights a common failure
+mode in nearly symmetric objects, demonstrating the ex-
+treme difficulty of visually resolving poses when only mi-
+nor asymmetric variations exist.
+Original
+Ground Truth
+NovaSplat (Ours)
+Figure 9. Impact of object symmetry on NovaSplat performance
+(HOPEv2, Object 23). Across three diverse viewpoints, the ob-
+ject’s near-symmetry causes NovaSplat to predict an inverted pose
+(∼180 degrees error).
+G. HOPEv2 Onboarding Data Inconsistencies
+The HOPEv2 dataset contains object instances whose phys-
+ical configuration differs between the onboarding and query
+images. In particular, articulated or loosely attached com-
+ponents are not always in the same relative pose across the
+two splits. Figure 10 shows an example in which the cap
+orientation relative to the printed label differs between the
+images from the onboarding and validation sets. In the on-
+boarding image, the cap is rotated sideways, whereas in the
+image from the validation set, it is aligned above the label.
+This inconsistency creates a mismatch between the ob-
+ject geometry reconstructed from the onboarding sequence
+and the object in the query images. For methods that build
+an explicit 3D reference representation from the onboarding
+data, such as 3DGS-based refinement approaches, this mis-
+match can affect pose refinement. The rendered reference
+model may contain local geometric structures whose rela-
+tive arrangement does not correspond to the query obser-
+vation, causing the refinement objective to optimize against
+inconsistent geometry.
+Methods that rely primarily on global learned features or
+2D image-space cues may be less affected by these local
+3D discrepancies. Consequently, results on such instances
+should be interpreted with care, as the object in the query
+images may not exactly match the onboarding-derived ref-
+
+
+Figure 10. Example of a geometric inconsistency in HOPEv2.
+Left: onboarding image. Right: image from validation set. The
+cap orientation relative to the printed label differs between the two
+splits, resulting in a mismatch between the onboarding-derived
+reference geometry and the validation observation.
+erence geometry.
+H. Qualitative Comparisons
+Figure 11 shows additional qualitative comparisons on the
+HOPEv2 test set, complementing the results presented in
+the main paper. The examples include challenging scenes
+with multiple objects, partial occlusions, clutter, and visu-
+ally similar packaging, where accurate 6D pose estimation
+requires both reliable object localization and precise pose
+refinement.
+Across these examples, NovaSplat produces predictions
+that are better aligned with the visible object extent and ori-
+entation than the competing model-free baselines. By op-
+timizing the pose against the reconstructed 3D representa-
+tion, NovaSplat yields tighter alignment between the pro-
+jected object geometry and the image evidence.
+The comparison also highlights common failure modes
+of the baseline methods. GFreeDet, OPFormer, and NeMO-
+Pose can produce plausible detections, but their predicted
+poses are often less consistent with the object boundaries,
+especially under occlusion or when only a limited portion
+of the object is visible. In cluttered scenes, these methods
+may also exhibit larger orientation errors or less stable box
+projections. In contrast, NovaSplat maintains more geomet-
+rically consistent predictions, suggesting that the 3DGS-
+based reference representation provides useful constraints
+during refinement.
+Like all evaluated methods, NovaSplat may occasionally
+produce false positive predictions. These predictions are
+primarily inherited from misdetections made by the initial
+object detection. Our method attempts to align these er-
+roneous proposals, ultimately preserving them in the final
+scene prediction. While NovaSplat mitigates many of the
+failure modes seen in competing methods, explicitly filter-
+ing out these inherited misdetections remains an interesting
+direction for future work.
+Furthermore, Figures 12 and 13 present the qualita-
+tive results on the IndustryShapes Classic and Extended
+datasets, respectively.
+These visualizations demonstrate
+that our model-free NovaSplat robustly handles challeng-
+ing, textureless industrial parts, achieving highly accurate
+pose alignments that are competitive with state-of-the-art
+model-based methods, even under extreme viewpoint vari-
+ations.
+
+
+Original
+NovaSplat (Ours)
+GFreeDet2 [49]
+OPFormer [30]
+NeMO [18]
+Figure 11. Qualitative comparison on the HOPEv2 dataset. Bounding boxes highlight the predicted 6D poses.
+
+
+Original
+Ground Truth
+NovaSplat (Ours)
+FreeZe [6]
+Figure 12. Qualitative comparison on the IndustryShapes Classic dataset. Bounding boxes highlight the predicted 6D poses.
+
+
+Original
+Ground Truth
+NovaSplat (Ours)
+FreeZe [6]
+Figure 13. Qualitative comparison on the IndustryShapes Extended dataset. Bounding boxes highlight the predicted 6D poses.
