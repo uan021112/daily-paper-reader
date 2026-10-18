@@ -1,0 +1,3807 @@
+Preprint
+GLOD-LVSM: LEARNING GEOMETRY-GROUNDED
+CONTINUOUS-LOD SCENE REPRESENTATIONS FOR
+LARGE VIEW SYNTHESIS MODELS
+Weikai Lin1,2
+Nicholas Milef2
+Carl S Marshall2
+Grant Kaijuin Yang2
+Todd Keeler2
+Yuhao Zhu1
+1University of Rochester
+2Reality Labs, Meta
+Ref. RGB
+Ref-Token Depth Head
+Ref-Token Depth Head
+Emergent
+Depth
+Anchors Geometry Pred.
+Anchors Geometry Pred.
+Multi-view Point Cloud +
+Anchors
+Project Anchors to Image
+Emergent 
+3D Scene Anchors
+Project Anchors to Image
+Projected Anchors &
+Density
+Dense
+Sparse
+Dense
+Sparse
+Projected Anchors
+↑
+Fig. 1: GLOD-LVSM learns a compact, geometry-grounded scene representation (anchors) for novel
+view synthesis. Left: View-synthesis supervision and compression alone yield emergent depth and
+self-organized, surface-aligned scene anchors whose density adapts to local texture complexity. Right:
+GLOD-LVSM achieves the best quality–scene-token trade-off across reference-view counts.
+ABSTRACT
+Large view synthesis models (LVSMs) reconstruct scenes from sparse views and
+render novel views quickly, but they incur unnecessary storage and rendering
+costs due to token redundancy. We present GLOD-LVSM, a compact, geometry-
+grounded scene representation for LVSMs with continuous levels of detail. First,
+instead of learning a fixed set of scene anchor initializations, GLOD-LVSM learns
+a continuous field that initializes a flexible number of anchors to match the desired
+budget. A condenser then aggregates scene information into these anchors, with
+both the field and condenser trained end-to-end. Second, the condenser infers
+reference-token and anchor geometry to guide compression through geometry-
+grounded attention, improving rendering quality and enabling frustum culling
+during decoding. Compared with existing LVSM scene-compression baselines,
+GLOD-LVSM achieves the best trade-off between rendering quality and scene
+token count. Compared with the uncompressed base model, GLOD-LVSM reduces
+the scene-token count by 33.4% and accelerates rendering by 1.23× with no quality
+loss. Under a relaxed quality-loss budget, the reduction increases to 85.5%, with
+3.00× rendering speedup. Further analysis reveals that view-synthesis supervision
+yields emergent scene depth and self-organized anchors that align with surfaces
+and adapt their density to local texture complexity. Beyond rendering, we further
+show that our scene representation also supports scene-semantic understanding,
+highlighting its potential for broader downstream tasks.
+1
+arXiv:2610.20254v1  [cs.CV]  14 Oct 2026
+
+
+Preprint
+1
+INTRODUCTION
+Large view synthesis models (LVSMs) learn a reconstruction prior for novel view synthesis (NVS) (Jin
+et al., 2025; Kim et al., 2026; Szymanowicz et al., 2026), reducing scene reconstruction to a single
+feed-forward pass and enabling high-quality rendering from sparse reference views. Recent high-
+quality LVSMs commonly adopt a highway representation, where each reference-image patch is
+directly mapped to a scene token (Szymanowicz et al., 2026; Kim et al., 2026). While this design
+preserves detailed appearance information, the resulting scene-token count grows with the number of
+reference views, increasing both storage and decoding costs. This tight coupling between image and
+scene-representation sizes becomes a bottleneck with more reference views.
+In addition to scaling poorly with reference view count, highway representations allocate scene
+capacity inefficiently in two ways. First, overlapping 3D regions observed from different views are
+stored as separate tokens rather than consolidated. Second, every image patch receives the same
+one-token capacity regardless of texture complexity. An ideal LVSM representation should therefore
+(1) support flexible scene-token count independent of the input-view count, (2) consolidate multi-view
+observations into a unified, scene-centric 3D representation, and (3) allocate capacity adaptively
+to scene complexity. Thus, we propose GLOD-LVSM, which provides two key features: (1) a
+geometry-grounded scene representation that supports (2) continuous level-of-detail. We refer to
+scene tokens in GLOD-LVSM as anchors to emphasize their scene-centric 3D nature.
+Different storage and rendering budgets require different scene-token numbers, which correspond to
+different levels of scene detail. To support arbitrary scene-token counts and thus continuous levels of
+detail (CLoD), we first design an anchor initialization scheme that can generate a flexible number
+of tokens. Specifically, we introduce a CLoD scene-anchor initialization that parameterizes anchor
+initialization as a continuous field (Sec. 3.2). Sampling this field at different densities generates
+different numbers of anchors. This decouples the scene-token count from the reference-view count
+and allows our model to operate under different storage and rendering budgets.
+A compact scene representation should consolidate multi-view observations and allocate capacity
+where it is most useful. To achieve this, we (1) use unified, scene-centric 3D anchors to consolidate
+redundant multi-view tokens, and (2) learn the spatial allocation of these anchors end-to-end. Specifi-
+cally, we use an end-to-end learned, geometry-grounded condenser that aggregates reference-view
+tokens into 3D anchors (Sec. 3.3). The condenser predicts geometry for both views and anchors
+and uses their geometric relationships to guide cross-attention. The resulting anchors have 3D posi-
+tions, which further enable target-view frustum culling to reduce decoding cost (Sec. 3.4). Both the
+geometry and scene-complexity-aware anchor allocation emerge from the NVS objective (Sec. 4.6).
+We evaluate GLOD-LVSM across datasets, reference-view counts and scene-token budgets. Quan-
+titatively, GLOD-LVSM consistently achieves the best quality–token-count trade-off among the
+baselines. Qualitatively, the learned anchors emerge near scene surfaces and allocate higher density
+to regions with richer texture, suggesting that NVS supervision and compression alone can induce
+a geometry- and complexity-aware efficient scene representation. Beyond rendering, we further
+evaluate the learned representation on scene-semantic understanding, demonstrating its potential as a
+3D scene representation for broader downstream tasks. Our contributions are threefold:
+• Continuous-LoD scene representation. We introduce a scene-conditioned continuous query
+field that enables flexible scene anchor budgets independent of the reference-view count.
+• Geometry-grounded scene condensation. We learn scene-centric 3D anchors end-to-end,
+enabling efficient multi-view consolidation and scene-adaptive capacity allocation.
+• Efficient and generalizable scene anchors. GLOD-LVSM achieves the best quality–scene-
+token trade-off for rendering and supports scene semantic understanding.
+2
+RELATED WORK
+2.1
+NOVEL VIEW SYNTHESIS
+Novel view synthesis (NVS) is a widely studied problem and can be broadly categorized into per-
+scene optimization methods and feed-forward generalizable methods. NeRF (Mildenhall et al., 2020)
+2
+
+
+Preprint
+and 3D Gaussian Splatting (3DGS) (Kerbl et al., 2023) achieve photorealistic novel-view synthesis
+by optimizing a radiance field or a set of Gaussian primitives for each scene. However, they typically
+require time-consuming per-scene optimization and dense image capture to achieve high rendering
+quality. In contrast, generalizable NVS methods (Sajjadi et al., 2022; Chen et al., 2024; Xu et al.,
+2025), including recent Transformer-based approaches such as LVSMs (Jin et al., 2025; Kim et al.,
+2026; Sun et al., 2026; Szymanowicz et al., 2026), learn reconstruction priors from large datasets
+and can reconstruct unseen scenes from sparse input views in a single feed-forward pass, avoiding
+costly dense image capture and per-scene optimization. Our work builds on Transformer-based
+generalizable NVS and focuses on learning a compact, geometry-grounded scene representation that
+reduces redundancy among scene tokens, thereby lowering storage and rendering costs.
+2.2
+COMPACT SCENE REPRESENTATION
+Compact scene representations have been widely studied for efficient NVS. For example, 3DGS
+methods prune or compress Gaussian primitives to reduce representation size while preserving visual
+quality (Fan et al., 2024; Fang & Wang, 2024; Lin et al., 2025). Some methods further support
+multiple or continuous levels of detail (CLoD), allowing representation complexity to adapt to runtime
+rendering budgets (Milef et al., 2025; Cheng et al., 2026). Compact scene-token representations have
+also been explored for LVSMs. LVSM-ED (Jin et al., 2025) uses a fixed latent bottleneck and cannot
+support flexible compression rates. CLiFT (Wang et al., 2025) uses K-means to select representative
+reference-view tokens, relying on handcrafted clustering that may be suboptimal. Our work also
+targets compact scene representations for LVSMs. Unlike prior methods, we support CLoD and learn
+scene anchors end-to-end, enabling flexible compression with less handcrafted design.
+3
+GLOD-LVSM: GEOMETRY-GROUNDED CLOD SCENE REPRESENTATION
+Fig. 2 illustrates GLOD-LVSM. Given V reference images and their camera parameters, GLOD-
+LVSM constructs a compact scene representation with a chosen budget of K anchors. A highway
+scene encoder first extracts reference-view tokens (Sec. 3.1). Our anchor initializer then generates
+K anchors from a continuous field (Sec. 3.2). These anchors are passed to our condenser, which
+produces scene-centric 3D anchors (Sec. 3.3). The anchors will be used to render the RGB images
+given the target views (Sec. 3.4). We train GLOD-LVSM end-to-end using the NVS loss (Sec. 3.5).
+3.1
+HIGHWAY SCENE ENCODER
+We use the encoder from LagerNVS (Szymanowicz et al., 2026). The inputs are X = {(Iv, Pv)}V
+v=1,
+where Iv is the v-th reference image and Pv is its camera parameters. The encoder patchifies each
+reference image, embeds each patch as a token, embeds Pv into a camera token tcam
+v
+, and appends
+four register tokens treg
+1:4 to each view (Darcet et al., 2024). For each view, input token sequence
+Tin
+v = [tcam
+v
+, treg
+1:4, PatchEmbed(Iv)]. The resulting tokens are jointly encoded across all V views:
+H = Encoder({Tin
+v }V
+v=1),
+Z = HpatchW ∈RN×D.
+(1)
+Here, W linearly maps the encoded patch tokens to a defined D-dimensional space, and N is the total
+number of input patches across all views. We refer to the output Z as reference-view tokens and retain
+the encoded register and camera tokens for anchor initialization (Sec. 3.2). This one-patch-one-token
+highway design causes storage and decoding costs to grow with reference-view count.
+3.2
+CONTEXTUALIZED CONTINUOUS FIELD FOR ANCHOR INITIALIZATION
+Given reference-view tokens Z, our condenser compresses them into scene anchors. The first
+challenge is anchor initialization. Fixed learned vectors (Jin et al., 2025) support only a predefined
+anchor count. Clustering-based initialization (Wang et al., 2025) supports variable counts, but relies
+on handcrafted clustering that may be suboptimal and remains image-centric rather than scene-
+centric. We instead learn a scene-conditioned continuous initialization field end-to-end with minimal
+handcrafted design (Fig. 2(a)). Sampling the field at different densities yields different anchor budgets,
+enabling continuous levels of detail under varying storage and rendering constraints.
+3
+
+
+Preprint
+V Reference views 
+& Camera Poses
+Scene reconstruction (Offline, One-time Cost)
+Target-view rendering
+Scene
+encoder
+Ref-view tokens
+× L
+Register 
++ camera
+tokens
+K × D
+Geometric
+Condensation
+Rendered 
+Target Views
+Decoder
+Register/Cam. 
+(V x 5 × D) Concat across 
+V views
+Frustum 
+Culling
+Mean  
+pool
+view contexts
+(V x D)
+Per-view
+init.
+× V
+Register tokens
+Condenser
+Scene Anchors
+Target Poses Ray Maps
+(a) Contextualized anchors init. Per-view 
+context cᵥ
+View tokens
+(b) Geometry-grounded bidirectional condensation
+MLP
+MLP 
+Field
+…
+…
+Kᵥ Anchor 
+Initializations
+Depth
+head
+G
+eo. Pred.
+G
+eo. Cross Att.
+View Geo.
+View tokens
+MLP
+MLP
+Cross Att.
+with
+Geo. RoPE
+Anchor tokens
+Δᵥ = Kcanonical / Kᵥ
+Kᵥ Box-filtered PEs
+Cross 
+Att.
+WSUM Anchor Geo.
+Agg. Weights
+Self Att.
+Kcanonical Kᵥ: Per-view budget
+Anchor tokens
+0
+Fig. 2: Overview of GLOD-LVSM. A highway encoder extracts reference-view tokens and per-view
+context. (a) A scene-conditioned field uses box-filtered positional encodings to initialize the chosen
+number of anchors. (b) The condenser predicts geometry for both reference-view tokens and anchors
+and uses geometry-grounded bidirectional attention to condense reference-view tokens into anchors.
+The same scene anchors are reused to render different target views.
+Continuous field parameterization.
+Given a total anchor budget K, we distribute K evenly
+across the V reference views, assigning Kv anchors to view v. For each view, our goal is to learn
+a D-dimensional continuous field that maps query indices i ∈{0, . . . , Kv −1} to Kv vectors in
+the D-dimensional anchor space, with D set to the highway model’s scene-token dimension. We
+parameterize this continuous field as an MLP conditioned jointly on the anchor indices and the current
+scene/view context. Specifically, each anchor index i is mapped to a continuous coordinate uv,i and
+encoded with our anti-aliased positional encoding ¯γ(uv,i) (Eqn. 3). To condition the field on the
+current input, we mean-pool the encoded registers and camera tokens (Sec. 3.1) of view v and map
+them through MLPcontext to obtain a view- and scene-specific context vector cv. ¯γ(uv,i) and cv are
+then concatenated and passed to MLPfield to produce the D-dimensional anchor initialization av,i:
+av,i = MLPfield ([¯γ(uv,i), cv]) ,
+cv = MLPcontext
+ MeanPool([Hreg
+v,1:4, Hcam
+v
+])
+
+.
+(2)
+Finally, we concatenate the initializations from all views to obtain K = P
+v Kv anchor initializations
+and feed them to the condenser. The field is optimized end-to-end through the NVS objective.
+Anti-Aliased Positional Encoding Across Anchor Budgets.
+To sample the same continuous field
+at different anchor budgets, we map each discrete query index i to a continuous coordinate uv,i
+in a fixed canonical domain [0, Kcanonical], where Kcanonical = 2000. For each view with budget
+Kv, we divide the domain into Kv intervals. Changing Kv therefore changes the sampling density
+while preserving coverage of the domain. To help the field capture high-frequency variation, we
+follow NeRF-style positional encoding (PE) (Mildenhall et al., 2020) and encode each coordinate
+as γ(u) =
+1
+√
+F [cos(2πfu), sin(2πfu)] ∈R2F . Here, f = (f0, . . . , fF −1) is logarithmically spaced
+between fmin = 1/20000 and fmax = 0.5. We set F = D/2, where D is the dimension of anchor
+space. At small budgets, sparse sampling can alias the high-frequency components of PE. We
+therefore integrate PE over the sampling interval, analogous to box filtering (Barron et al., 2021):
+¯γv,i =
+1
+∆v
+Z
+Iv,i
+γ(u) du,
+Iv,i = [uv,i, uv,i + ∆v],
+uv,i = i∆v,
+∆v = Kcanonical
+Kv
+.
+(3)
+As the anchor budget decreases, the intervals become wider and more strongly attenuate high-
+frequency components. The sine and cosine integrals have closed-form solutions, given in Supple-
+4
+
+
+Preprint
+mentary A.1. The resulting ¯γ(uv,i) ∈RD provides a D-dimensional encoding of each anchor index
+whose frequency content reflects the anchor budget, with lower budgets inducing stronger attenuation.
+3.3
+GEOMETRY-GROUNDED BIDIRECTIONAL CONDENSATION
+As illustrated in Fig. 2(b), our condenser maps K initialized anchors and N reference-view tokens
+Z to K compact scene anchors. It uses L = 8 bidirectional Transformer blocks (Szymanowicz
+et al., 2026), where the two streams attend to each other. Content-only attention can mix spatially
+unrelated information because it lacks 3D awareness. We therefore predict geometry for both streams
+(Sec. 3.3.1) and use it to modulate the bidirectional cross-attention (Sec. 3.3.2). In the condenser, we
+retain the reference-view register and camera tokens and add four anchor registers. These tokens also
+participate in attention, but with no geometry modulation.
+3.3.1
+PREDICTING VIEW AND ANCHOR GEOMETRY
+View Geometry.
+We predict geometry for each reference-view token directly from its feature.
+Following RayRoPE (Wu et al., 2026), a linear depth head maps token zj to a log-depth center µj
+and an uncertainty scale σj. Using the known camera parameters, we back-project the four corners of
+the corresponding image patch at depth dj = eµj to obtain its spatial span in 3D space pj,1:4. We
+also use the unit center-ray direction vj to encode its viewing direction. Together, {pj,1:4, vj, σj}
+describes the spatial support and viewing direction of reference-view token j. The geometry is
+recomputed from the updated reference-view features at every condenser layer.
+Anchor Geometry.
+Rather than directly regressing unconstrained 3D coordinates for each anchor,
+we derive its geometry by aggregating the geometry of the reference-view tokens. This introduces a
+useful prior: it constrains anchors to the convex hull of the observed geometry rather than allowing
+unconstrained 3D positions. Specifically, we use a lightweight single-head cross-attention to compute
+aggregation weights βij between anchor i and reference-view token j:
+βij = softmaxj
+ 
+ˆq⊤
+i ˆkj
+√
+64
+!
+,
+pA
+i =
+X
+j
+βij ¯pj,
+vA
+i =
+X
+j
+βijvj,
+(4)
+where ˆqi and ˆkj are 64-dimensional query and key projections, and ¯pj = 1
+4
+P4
+c=1 pj,c is the center of
+the back-projected view-token patch. The same weights aggregate both position and viewing direction,
+giving each anchor a 3D position pA
+i and a viewing-direction descriptor vA
+i . βij is normalized over
+the reference-view tokens. Importantly, we use the anchor geometry predicted at the final condenser
+block as the anchor’s final geometry for subsequent rendering.
+3.3.2
+GEOMETRY-GROUNDED BIDIRECTIONAL ATTENTION
+After geometry prediction, each condenser block first applies self-attention to the anchor stream,
+followed by bidirectional cross-attention between anchors and reference-view tokens and MLPs. We
+inject the inferred geometry into this cross-attention using geometry-dependent RoPE.
+We define the geometric descriptors for the two token streams as follows. A reference-view token
+j corresponds to an image patch and is represented by its four back-projected patch corners pj,1:4,
+viewing direction vj, and depth uncertainty σj. An anchor i, in contrast, has a single 3D position pA
+i
+and viewing-direction descriptor vA
+i . To match the geometric layout of the reference-view tokens, we
+repeat pA
+i four times for each anchor. Following RayRoPE (Wu et al., 2026), we represent a 3D point
+using π(p), which first transforms the point into the reference camera frame to obtain (X, Y, Z), then
+computes π(p) = (X/r, Y/r, 1/|Z|) with r =
+√
+X2 + Y 2 + Z2. The four points therefore provide
+12 coordinates. Appending the 3D viewing-direction descriptor gives a 15-dimensional geometric
+descriptor for both reference-view tokens and anchors:
+gR
+j = [π(pj,1), . . . , π(pj,4), vj],
+gA
+i = [π(pA
+i ), . . . , π(pA
+i ), vA
+i ] ∈R15.
+(5)
+For reference-view token geometry gR
+j , we use RayRoPE’s expected RoPE as encoding to account
+for the predicted depth uncertainty σj (Sec. 3.3.1). For anchor geometry gA
+i , we use standard RoPE
+5
+
+
+Preprint
+encoding (Su et al., 2024). The encodings are then used to rotate the query, key, value, and output
+features in the bidirectional cross-attention, following the rotation mechanism in RayRoPE.
+A key challenge is choosing the RoPE coordinate frame. When an anchor interacts with tokens from a
+reference view, we express RoPE in that view’s frame for both cross-attention directions. This avoids
+dependence on the arbitrary world coordinate system, similar to conventional graphics pipelines that
+transform scene geometry into camera space before rasterization (Akenine-Möller et al., 2016).
+3.4
+RUNTIME CULLING AND RENDERING
+Culling.
+After scene reconstruction, the same set of anchors can be reused across different target
+views. We use the anchor geometry from the final condenser layer as the geometry of each anchor.
+Given a target camera Pt, we project each anchor position pA
+i into the target camera frame and obtain
+its normalized image coordinate (ut
+i, vt
+i) and camera-space depth zt
+i. We retain anchors that lie in front
+of the camera and inside a slightly padded image region, Kt = {i : zt
+i > 0, (ut
+i, vt
+i) ∈[−δ, 1 + δ]2},
+with δ = 0.1. The padding retains anchors close to the image boundary. Only anchors in Kt are
+passed to the decoder, reducing the number of scene tokens processed for each target view.
+Novel-View Rendering.
+We use the bidirectional decoder of LagerNVS (Szymanowicz et al., 2026),
+modified with our geometry-grounded RoPE for anchor–target-token cross-attention (Sec. 3.3.2). The
+target camera is converted into a ray map and patch-embedded into target tokens, which predict their
+view geometry with a linear head (as for reference-view tokens) and interact with anchors through
+bidirectional cross-attention. Anchors use the fixed geometry from the final condenser layer. The
+target camera frame is used as the RoPE coordinate frame. Finally, a linear projection maps target
+tokens to RGB patches, which form the rendered image ˆIt.
+3.5
+TRAINING
+We freeze the pretrained scene encoder and jointly optimize the continuous query field, condenser,
+and decoder. The decoder is supervised by the LagerNVS rendering loss Lrender (Szymanowicz et al.,
+2026). We additionally regularize the predicted depth uncertainty σℓ
+j of reference-view token j at
+condenser layer ℓ(Sec. 3.3.1) to encourage sharp, localized geometry:
+L = Lrender + λσLdecay,
+Ldecay =
+1
+LN
+L−1
+X
+ℓ=0
+N
+X
+j=1
+|σℓ
+j|,
+λσ = 10−3.
+(6)
+We first train without culling, then enable culling and perform culling-aware fine-tuning. During
+training, we sample 1–10 reference views and uniformly sample the anchor budget from 256 to the
+corresponding highway-token count N. No explicit depth or anchor-position supervision is used.
+4
+EVALUATION
+4.1
+EXPERIMENTAL SETUP
+Datasets.
+We evaluate on RealEstate10K (Zhou et al., 2018) and DL3DV (Ling et al., 2024) at
+resolutions of 256 × 256 and 256 × 448, respectively. We study varying-reference-view settings from
+2 to 10 views. Since the official protocols cover only 2 views for RealEstate10K and 2/4/6 views for
+DL3DV, we construct the higher-view settings using the method described in Supplementary A.2.
+Training.
+We fine-tune the pretrained general LagerNVS checkpoint (Szymanowicz et al., 2026)
+on each dataset using its 1–10-view training protocol, obtaining LAGERNVS-FT, which is our
+base model. We initialize our decoder from LAGERNVS-FT and train the condenser and decoder,
+followed by culling-aware fine-tuning. See Supplementary A.3 for training details.
+Baselines.
+We compare against two groups of baselines:
+• System-level baselines.
+We compare GLOD-LVSM against CLIFT (Wang et al., 2025),
+LVSM (Jin et al., 2025), MVSPLAT (Chen et al., 2024), and DEPTHSPLAT (Xu et al., 2025).
+6
+
+
+Preprint
+2 4 6
+10
+20
+30
+RealEstate10K
+14.7 dB
+2 4 6
+10
+15
+25
+DL3DV
+10.4 dB
+PSNR (dB) ↑
+Reference views
+LagerNVS-FT
+CLiFT
+LVSM
+MVSplat
+DepthSplat
+Fig. 3: PSNR across datasets and view counts.
+Shaded bands show 95% CI.
+0
+6k
+12k
+24
+28
+32
+RealEstate10K
+6.9 dB
+0
+8k
+16k
+20
+24
+28
+DL3DV
+4.2 dB
+PSNR (dB) ↑
+Scene tokens
+Ours
+CLiFT
+2 views
+4 views
+6 views
+10 views
+Fig. 4: PSNR vs. scene-token counts. Shaded
+bands show 95% CI.
+• Condenser baselines. Alternative condensers using the same base model and training schedule:
+– RANDOM PRUNING: randomly selects scene tokens to match the desired budget.
+– K-MEANS PRUNING: sets the number of clusters to the desired token budget, clusters the
+reference-view token features, and retains only the token closest to each cluster centroid.
+– LEARNED PRUNING: uses a trained token pruner to select 90% of the token budget, then fills
+the remaining 10% through feature-diversity-based sampling (Takezoe et al., 2026).
+– CLIFT-STYLE: uses a K-means-based Transformer condenser adapted from CLIFT (Wang
+et al., 2025), with the number of blocks increased to eight to match our condenser.
+Metrics.
+We report novel-view PSNR, SSIM (Wang et al., 2004), and LPIPS (Zhang et al., 2018)
+under different reference view counts and scene token budgets. For all quality metrics, we report the
+mean and 95% confidence intervals (CIs) from 2,000 scene-level resamples with replacement.
+4.2
+COMPARING AGAINST OTHER SYSTEMS
+Our base model is strong.
+To show that we build on a strong highway backbone, we first compare
+our base model, LAGERNVS-FT, against other systems. Fig. 3 shows the results, where filled markers
+denote view counts seen during training and hollow markers denote unseen counts. LAGERNVS-FT
+consistently achieves substantially higher PSNR than all compared systems1; SSIM and LPIPS show
+similar trends (Supplementary Fig. S4). It also improves as more reference views are provided. 2
+GLOD-LVSM achieves the best quality–token trade-offs.
+We compare the quality–scene-token
+trade-off with CLIFT because all other systems do not support flexible scene-token counts. Fig. 4
+shows the results for different reference views. GLOD-LVSM achieves a better PSNR–token-
+count trade-off than CLIFT. The advantage comes from both our strong base model and our better
+condenser design. SSIM and LPIPS show similar trends (see Supplementary Fig. S3).
+4.3
+COMPARING AGAINST DIFFERENT CONDENSER DESIGNS
+To isolate the effect of the strong base model, we conduct controlled experiments using the same base
+model and training schedule across different condenser designs. Because the baseline condensers
+do not produce geometry-grounded tokens, applying frustum-culling is not straightforward. For a
+fair comparison, we disable culling for all methods and report the compressed scene-token count.
+Fig. 5 compares quality–token trade-offs with 2 and 6 reference views on both datasets; 4- and
+10-view results are shown in Fig. 1. Our condenser achieves a better PSNR–token-count trade-off
+across datasets and reference-view counts. SSIM and LPIPS show similar trends (see Supplementary
+Figs. S5–S8). We also visualize novel-view predictions from all condensers in Fig. 6, which visually
+confirms our method’s quality advantage. More visualizations across scenes, reference-view counts,
+and compression rates are provided in Supplementary Figs. S13–S25.
+1LVSM is evaluated only on RealEstate10K because no official DL3DV checkpoint is available.
+2DL3DV results in Fig. 3 are not directly comparable across reference-view counts because the official target
+set is defined as the complement of the reference views and therefore changes slightly with view count.
+7
+
+
+Preprint
+800
+1.6k
+2.4k
+Scene tokens
+24.0
+25.5
+27.0
+28.5
+30.0
+PSNR (dB) ↑
+RE10K / 2 views
+Better
+2.5k
+5k
+7.5k
+Scene tokens
+28
+30
+32
+34
+RE10K / 6 views
+Better
+400
+800
+1.2k
+1.6k
+Scene tokens
+18.0
+19.5
+21.0
+22.5
+DL3DV / 2 views
+Better
+1.5k
+3k
+4.5k
+Scene tokens
+22
+24
+26
+28
+DL3DV / 6 views
+Better
+Ours
+Random pruning
+K-means pruning
+Learned pruning
+CLiFT-style
+Fig. 5: Comparison of condenser quality–token trade-offs using the same base model.
+Left:
+RealEstate10K with 2 and 6 reference views. Right: DL3DV with 2 and 6 reference views. The
+x-axis denotes the pre-culling scene-token count. Shaded bands indicate 95% confidence intervals.
+Ground Truth
+Ours
+CLiFT-style
+Learned pruning
+K-means pruning
+Random pruning
+PSNR (dB)
+23.79 dB
+21.93 dB
+21.16 dB
+21.76 dB
+21.00 dB
+PSNR (dB)
+20.53 dB
+19.13 dB
+18.91 dB
+18.84 dB
+18.71 dB
+PSNR (dB)
+24.50 dB
+22.14 dB
+20.92 dB
+22.13 dB
+21.61 dB
+PSNR (dB)
+24.98 dB
+22.66 dB
+20.46 dB
+20.93 dB
+20.83 dB
+Fig. 6: Visualization of novel-view predictions from different condensers using two reference views
+at the same budget of 311 scene tokens (80% reduction), shown on four DL3DV scenes.
+4.4
+TOKEN REDUCTION & RENDERING SPEEDUP OVER THE BASE MODEL
+We now evaluate the token reduction and rendering speedup against the base model. Efficiency
+gains must be considered in the context of rendering quality. Using LAGERNVS-FT as the quality
+reference, we measure scene-token reduction under PSNR losses of X ∈{2, 1, 0.5, 0} dB. Fig. 7
+shows the results. On 10-view RealEstate10K, GLOD-LVSM reduces the scene-token count by
+85.5% at a 2 dB quality loss. Even with no quality loss (0 dB), it still reduces the token count by 33.4%,
+which we attribute to the more effective geometry-grounded representation. The corresponding
+rendering speedups are 3.00× and 1.23× over LAGERNVS-FT, respectively. With culling, the
+estimated speedups further increase to 3.20× and 1.55×. More speed results and evaluation details
+are provided in Supplementary Fig. S1 and Supplementary A.5.
+4.5
+SCALING QUALITY WITH VIEWS AND BEYOND THE HIGHWAY TOKEN COUNT
+We now highlight two properties of GLOD-LVSM. First, unlike highway designs whose scene tokens
+grow with reference-view count, GLOD-LVSM can exploit more views at a fixed scene-token budget.
+Fig. 8 shows that, at a fixed token budget, GLOD-LVSM generally improves with more views. For
+example, on RealEstate10K with a 2048-token budget, 10 views outperform 2 views by 2.8 dB. In
+contrast, a 10-view highway model requires over 13K tokens. At small capacity, such as 512 tokens,
+gains saturate/degrade beyond 6 views. See Supplementary Fig. S9 for more results.
+Second, because GLOD-LVSM learns a continuous anchor-initialization field (Sec. 3.2), it can sample
+more anchors (K) than the original highway representation tokens (N), which baseline condensers
+cannot support. Fig. 9 reports the PSNR gain relative to GLOD-LVSM at the uncompressed budget.
+Although GLOD-LVSM exceeds the base-model quality at the same token budget, its quality
+continues to improve for K > N. See Supplementary Fig. S10 for more results.
+8
+
+
+Preprint
+2
+4
+6
+10
+Reference views
+25
+50
+75
+100
+Token reduction (%)
+2 dB
+1 dB
+0.5 dB
+0 dB
+RE10K
+DL3DV
+Fig. 7:
+Scene-token
+reductions at different
+PSNR loss budgets.
+2
+4
+6
+8
+10
+30.0
+31.5
+33.0
+PSNR (dB) ↑
+Reference views
+Scene tokens
+512
+1k
+2k
+Fig. 8: Scaling quality
+with reference views
+on RealEstate10K.
+100
+125
+150
+Budget K/N (%)
+0.00
+0.04
+0.08
+PSNR gain (dB) ↑
+2 views
+6 views
+4 views
+10 views
+Fig. 9: Scaling beyond
+the base-model token
+budget on DL3DV.
+1k
+3k
+4.5k
+Decoder tokens
+22
+24
+26
+28
+PSNR (dB) ↑
+Better
+Ours
+w/o PE.
+w/o Geo.
+Ours + culling
+w/o Box.
+w/o Context.
+w. K-means-Init.
+Fig. 10: DL3DV abla-
+tion studies using 6 ref-
+erence views.
+4.6
+EMERGENT GEOMETRY AND ANCHOR ALLOCATION
+To understand GLOD-LVSM, we visualize its representation using four reference views with 2048
+scene anchors (Fig. 1). Without explicit geometry supervision, consistent scene depth emerges across
+reference views, while the learned anchors concentrate near scene surfaces. Projecting the anchors
+back onto the reference images further reveals scene-adaptive allocation: anchors are denser in texture-
+rich regions and sparser in textureless regions. These results show that the NVS loss can induce an
+efficient geometry- and texture-aware scene representation. More visualizations are in Supplementary
+Figs. S26–S31. We process raw depth before point-cloud visualization; see Supplementary A.4.
+4.7
+ABLATION STUDIES
+Fig. 10 compares quality–decoder-token trade-offs for our ablations on 6-view DL3DV. OURS de-
+notes GLOD-LVSM without culling. OURS + CULLING enables our frustum-culling (Sec. 3.4).
+W/O GEO. removes geometry-dependent RoPE (Sec. 3.3.2) from both the condenser and decoder.
+W/O BOX. removes anti-aliasing from the positional encoding (Eqn. 3). W/O PE. removes posi-
+tional encoding and instead feeds normalized anchor indices to the field MLP. W/O CONTEXT.3
+removes scene- and view-specific conditioning from the anchor initialization field (Eqn. 2).
+W. K-MEANS INIT. replaces our end-to-end learned anchor initialization field (Sec. 3.2) with K-
+means centroids of the reference-view tokens (Wang et al., 2025). The results show that each
+component contributes to the quality–token trade-off of GLOD-LVSM. Results with other reference-
+view counts show similar trends and are provided in Supplementary Figs. S11–S12.
+4.8
+GLOD-LVSM SUPPORTS SCENE SEMANTIC UNDERSTANDING
+We further examine whether the learned anchors capture scene semantics beyond rendering. We
+use VLM-generated annotations for RealEstate10K (He et al., 2025; Li et al., 2023) to categorize
+scenes into eight semantic classes. For each scene, GLOD-LVSM compresses 10 reference views
+into 1,024 anchors, which are mean-pooled into a single 768-dimensional scene vector. We train only
+a linear probe on this vector for scene classification and achieve 80.40%/91.73% top-1/top-2 accuracy.
+This result shows that learned anchors already contain scene semantics. See Supplementary A.6 for
+evaluation protocol and Supplementary Fig. S2 for the confusion matrix.
+5
+CONCLUSION
+We propose GLOD-LVSM, a compact, geometry-grounded LVSM representation with continuous
+levels of detail. GLOD-LVSM achieves a strong quality–token trade-off through two key designs:
+(1) an end-to-end learned continuous field with minimal handcrafted design, and (2) a condenser that
+consolidates multi-view observations into scene-centric, geometry-grounded anchors. Trained with
+the NVS objective, GLOD-LVSM learns geometry- and texture-aware anchor allocation. We further
+show its utility on scene semantic understanding, highlighting the potential beyond rendering.
+3Removing the context vector makes the per-view initialization identical across views. We therefore replace
+the per-view fields with a single global initialization field and set Kcanonical = 20,000.
+9
+
+
+Preprint
+REFERENCES
+T. Akenine-Möller, E. Haines, and N. Hoffman. Real-Time Rendering. CRC Press, 2016. ISBN
+9781498785631. URL https://books.google.com/books?id=Xcb1CwAAQBAJ.
+Jonathan T Barron, Ben Mildenhall, Matthew Tancik, Peter Hedman, Ricardo Martin-Brualla, and
+Pratul P Srinivasan. Mip-nerf: A multiscale representation for anti-aliasing neural radiance fields.
+In 2021 IEEE/CVF International Conference on Computer Vision (ICCV), pp. 5835–5844. IEEE,
+2021.
+Yuedong Chen, Haofei Xu, Chuanxia Zheng, Bohan Zhuang, Marc Pollefeys, Andreas Geiger, Tat-Jen
+Cham, and Jianfei Cai. Mvsplat: Efficient 3d gaussian splatting from sparse multi-view images. In
+European conference on computer vision, pp. 370–386. Springer, 2024.
+Zhigang Cheng, Mingchao Sun, Liu Yu, Zengye Ge, Luyang Tang, Mu Xu, Yangyan Li, and Peng
+Pan. Clod-gs: Continuous level-of-detail via 3d gaussian splatting. In International Conference on
+Learning Representations, volume 2026, pp. 89275–89299, 2026.
+Timothée Darcet, Maxime Oquab, Julien Mairal, and Piotr Bojanowski. Vision transformers need
+registers. In International conference on learning representations, volume 2024, pp. 2632–2652,
+2024.
+Zhiwen Fan, Kevin Wang, Kairun Wen, Zehao Zhu, Dejia Xu, and Zhangyang Wang. Lightgaussian:
+Unbounded 3d gaussian compression with 15x reduction and 200+ fps. Advances in neural
+information processing systems, 37:140138–140158, 2024.
+Guangchi Fang and Bing Wang. Mini-splatting: Representing scenes with a constrained number of
+gaussians. In European conference on computer vision, pp. 165–181. Springer, 2024.
+Hao He, Yinghao Xu, Yuwei Guo, Gordon Wetzstein, Bo Dai, Hongsheng Li, and Ceyuan Yang.
+Cameractrl: Enabling camera control for video diffusion models. In International Conference on
+Learning Representations, volume 2025, pp. 100433–100464, 2025.
+Haian Jin, Hanwen Jiang, Hao Tan, Kai Zhang, Sai Bi, Tianyuan Zhang, Fujun Luan, Noah Snavely,
+and Zexiang Xu. Lvsm: A large view synthesis model with minimal 3d inductive bias. In
+The Thirteenth International Conference on Learning Representations, 2025. URL https:
+//openreview.net/forum?id=QQBPWtvtcn.
+Bernhard Kerbl, Georgios Kopanas, Thomas Leimkühler, George Drettakis, et al. 3d gaussian
+splatting for real-time radiance field rendering. ACM Trans. Graph., 42(4):139–1, 2023.
+Evan Kim, Hyunwoo Ryu, Thomas W Mitchel, and Vincent Sitzmann. Scaling view synthesis
+transformers. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pp. 28893–28902, 2026.
+Johannes Kopf, Michael F Cohen, Dani Lischinski, and Matt Uyttendaele. Joint bilateral upsampling.
+ACM Transactions on Graphics (ToG), 26(3):96–es, 2007.
+Dongxu Li, Junnan Li, Hung Le, Guangsen Wang, Silvio Savarese, and Steven C.H. Hoi. LAVIS:
+A one-stop library for language-vision intelligence. In Proceedings of the 61st Annual Meeting
+of the Association for Computational Linguistics (Volume 3: System Demonstrations), pp. 31–
+41, Toronto, Canada, July 2023. Association for Computational Linguistics.
+URL https:
+//aclanthology.org/2023.acl-demo.3.
+Weikai Lin, Yu Feng, and Yuhao Zhu. Metasapiens: Real-time neural rendering with efficiency-
+aware pruning and accelerated foveated rendering. In Proceedings of the 30th ACM International
+Conference on Architectural Support for Programming Languages and Operating Systems, Volume
+1, pp. 669–682, 2025.
+Lu Ling, Yichen Sheng, Zhi Tu, Wentian Zhao, Cheng Xin, Kun Wan, Lantao Yu, Qianyu Guo,
+Zixun Yu, Yawen Lu, et al. Dl3dv-10k: A large-scale scene dataset for deep learning-based 3d
+vision. In 2024 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), pp.
+22160–22169. IEEE, 2024.
+10
+
+
+Preprint
+Ben Mildenhall, Pratul P. Srinivasan, Matthew Tancik, Jonathan T. Barron, Ravi Ramamoorthi, and
+Ren Ng. Nerf: Representing scenes as neural radiance fields for view synthesis. In ECCV, 2020.
+Nicholas Milef, Dario Seyb, Todd Keeler, Thu Nguyen-Phuoc, A Božiˇc, Sushant Kondguli, and
+Carl Marshall. Learning fast 3d gaussian splatting rendering using continuous level of detail. In
+Computer Graphics Forum, volume 44, pp. e70069. Wiley Online Library, 2025.
+Mehdi SM Sajjadi, Henning Meyer, Etienne Pot, Urs Bergmann, Klaus Greff, Noha Radwan, Suhani
+Vora, Mario Luˇci´c, Daniel Duckworth, Alexey Dosovitskiy, et al. Scene representation transformer:
+Geometry-free novel view synthesis through set-latent scene representations. In 2022 IEEE/CVF
+Conference on Computer Vision and Pattern Recognition (CVPR), pp. 6219–6228. IEEE, 2022.
+Jianlin Su, Murtadha Ahmed, Yu Lu, Shengfeng Pan, Wen Bo, and Yunfeng Liu. Roformer: Enhanced
+transformer with rotary position embedding. Neurocomputing, 568:127063, 2024.
+Cheng Sun, Jaesung Choe, Min-Hung Chen, Ryo Hachiuma, and Yu-Chiang Frank Wang. Dvsm:
+Decoder-only view synthesis model done right. arXiv preprint arXiv:2605.29891, 2026.
+Stanislaw Szymanowicz, Minghao Chen, Jianyuan Wang, Christian Rupprecht, and Andrea Vedaldi.
+Lagernvs: Latent geometry for fully neural real-time novel view synthesis. In Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern Recognition, 2026.
+Rinyoichi Takezoe, Yaqian Li, Zi-Hao Bo, Anzhou Hou, Mo Guang, and Kaiwen Long. Learnpruner:
+Rethinking attention-based token pruning in vision language models. In International Conference
+on Learning Representations, volume 2026, pp. 66381–66400, 2026.
+Zhengqing Wang, Yuefan Wu, Jiacheng Chen, Fuyang Zhang, and Yasutaka Furukawa. Clift:
+Compressive light-field tokens for compute efficient and adaptive neural rendering. Advances in
+Neural Information Processing Systems, 38:8759–8787, 2025.
+Zhou Wang, Alan C Bovik, Hamid R Sheikh, and Eero P Simoncelli. Image quality assessment: from
+error visibility to structural similarity. IEEE transactions on image processing, 13(4):600–612,
+2004.
+Yu Wu, Minsik Jeon, Jen-Hao Rick Chang, Oncel Tuzel, and Shubham Tulsiani. Rayrope: Projective
+ray positional encoding for multi-view attention. In European Conference on Computer Vision
+(ECCV), 2026.
+Haofei Xu, Songyou Peng, Fangjinhua Wang, Hermann Blum, Daniel Barath, Andreas Geiger,
+and Marc Pollefeys. Depthsplat: Connecting gaussian splatting and depth. In 2025 IEEE/CVF
+Conference on Computer Vision and Pattern Recognition (CVPR), pp. 16453–16463. IEEE, 2025.
+Richard Zhang, Phillip Isola, Alexei A Efros, Eli Shechtman, and Oliver Wang. The unreasonable
+effectiveness of deep features as a perceptual metric. In 2018 IEEE/CVF conference on computer
+vision and pattern recognition, pp. 586–595. IEEE, 2018.
+Tinghui Zhou, Richard Tucker, John Flynn, Graham Fyffe, and Noah Snavely. Stereo magnification:
+Learning view synthesis using multiplane images. In SIGGRAPH, 2018.
+11
+
+
+Preprint
+GLOD-LVSM: Supplementary Material
+A
+IMPLEMENTATION AND EVALUATION DETAILS
+A.1
+CLOSED-FORM BOX-FILTERED FREQUENCY-BAND ENCODING
+For query i in view v, let a = uv,i, b = uv,i + ∆v, and ∆v = b −a. A normalized box filter averages
+each sinusoidal component over this interval. Using the antiderivatives of cosine and sine, we obtain
+¯Cj =
+1
+∆v
+Z b
+a
+cos(2πfju) du =
+sin(2πfju)
+2πfj∆v
+b
+a
+= sin(2πfjb) −sin(2πfja)
+2πfj∆v
+,
+¯Sj =
+1
+∆v
+Z b
+a
+sin(2πfju) du =
+
+−cos(2πfju)
+2πfj∆v
+b
+a
+= cos(2πfja) −cos(2πfjb)
+2πfj∆v
+.
+(S1)
+Concatenating these coefficients and dividing by
+√
+F gives ¯γv,i.
+A.2
+REFERENCE-VIEW SELECTION BEYOND OFFICIAL SETTINGS
+RealEstate10K.
+When we require more reference views beyond the official dataset settings, we
+retain the official reference views and incrementally add frames using farthest-point sampling in the
+temporal domain, which reduces redundancy among selected views. Let R denote the current set of
+selected reference-frame indices and C the candidate frames from the source video, which exclude
+the target views and the selected reference views. At each step, we select
+f ∗= arg max
+f∈C\R min
+r∈R |f −r|,
+This process is repeated until the desired number of reference views is reached.
+DL3DV.
+We use the frame indices provided by LagerNVS (Szymanowicz et al., 2026) to define
+each 50-frame window. Within each 50-frame window, we first use temporal farthest-point sampling
+to meet the desired number of reference views beyond the official setting. We then use the remaining
+frames in the window as target views, so V reference views leave 50 −V target views.
+Fig. S9 instead uses a fixed target set across all reference-view counts for DL3DV. Under the original
+DL3DV protocol, the target set is defined as the complement of the reference views and therefore
+changes with view count. To enable direct quality comparison when scaling views, we use the same
+40 targets per scene from the 10-view setting for all DL3DV results in this figure. This set is a subset
+of the original targets at every reference-view count.
+A.3
+TRAINING DETAILS
+We follow the 1–10-view training recipe of the LagerNVS general model (Szymanowicz et al., 2026),
+with a few modifications.
+LagerNVS fine-tuning.
+We fine-tune LagerNVS for 100K iterations with a 1.2K-step warmup,
+using learning rates of 10−4 on RealEstate10K and 10−5 on DL3DV. We follow its dynamic batching
+strategy with a base batch size of 128, which decreases the batch size for larger reference-view counts.
+GLOD-LVSM training.
+We train GLOD-LVSM for 50K iterations with a 1K-step warmup, using
+a learning rate of 10−4 and a base batch size of 64. For the culling-aware model, we further fine-tune
+for 25K iterations with a 1K-step warmup, using a learning rate of 10−5 and the same base batch size.
+12
+
+
+Preprint
+Base
+0
+0.5
+1
+2
+Allowed PSNR loss (dB)
+0
+40
+80
+120
+160
+Rendering FPS
+41.5
+51.1
+1.23x
+64.2
+1.55x
+74.3
+1.79x
+91.5
+2.20x
+97.2
+2.34x
+107.3
+2.58x
+124.6
+3.00x
+132.8
+3.20x
+RealEstate10K (256 x 256)
+Base
+0
+0.5
+1
+2
+Allowed PSNR loss (dB)
+50.3
+52.8
+1.05x
+65.4
+1.30x
+73.7
+1.47x
+80.7
+1.60x
+82.7
+1.64x
+93.3
+1.85x
+100.6
+2.00x
+110.3
+2.19x
+DL3DV (256 x 448)
+LagerNVS-FT
+Ours (no culling)
+Ours + culling (estimated)
+Fig. S1: Rendering FPS at 10 reference views on an A100 80GB with BF16. Left: RealEstate10K;
+right: DL3DV. Annotations show FPS and speedup over LAGERNVS-FT. For OURS + CULLING,
+FPS is estimated by measuring rendering speed at the average post-culling decoder-token count over
+the test set.
+A.4
+DEPTH DENOISING FOR POINT-CLOUD VISUALIZATION
+To visualize the noisy predicted reference-view depth as a point cloud, we apply a 3 × 3 median filter
+to the patch-level depth and upsample it to image resolution using joint bilateral upsampling (Kopf
+et al., 2007) guided by the corresponding RGB image. We then back-project the filtered depth
+using the camera intrinsics, transform the points into a shared scene coordinate system using the
+camera poses, and color them with RGB values. This post-processing is used only for point-cloud
+visualization; the displayed depth maps are raw predictions, and the model geometry, anchors, and
+rendering remain unchanged.
+A.5
+RENDERING-SPEED EVALUATION
+We report results for GLOD-LVSM both with and without culling in Fig. S1. We evaluate rendering
+speed on an NVIDIA A100 80GB GPU using BF16 with a batch size of 1 and 1 target view. For the
+baseline and our no-culling model, we directly benchmark rendering latency at fixed scene-token
+counts. For the culling-enabled model, the effective decoder-token count varies across scenes and
+target poses. We therefore estimate its speed by measuring rendering speed at the average post-culling
+decoder-token count over the test set. The estimated rendering latency includes the measured culling
+overhead.
+A.6
+SCENE SEMANTIC UNDERSTANDING EVALUATION PROTOCOLS
+We first test scene-semantic understanding using VLM-generated annotations for RealEstate10K (He
+et al., 2025; Li et al., 2023) to categorize scenes into eight semantic classes: living room, bedroom,
+kitchen, bathroom, dining room, hallway, staircase, and outdoor. Each scene receives one class
+derived from its caption. We filter out scenes that belong to multiple classes or do not belong to any
+of the predefined classes. This results in 40,857 training scenes and 4,606 validation scenes. We train
+for 500 epochs with a learning rate of 3 × 10−2, batch size 256, and weight decay 10−4. We use
+cosine annealing to decay the learning rate to zero over training.
+B
+MORE RESULTS
+Our Base Model is Strong
+We provide more results for Sec. 4.2, including PSNR, SSIM, and
+LPIPS comparisons with 2–16 reference views on both datasets (Fig. S4).
+13
+
+
+Preprint
+Living room
+Bedroom
+Kitchen
+Bathroom
+Dining room
+Hallway
+Staircase
+Outdoor
+Predicted class
+Living room
+Bedroom
+Kitchen
+Bathroom
+Dining room
+Hallway
+Staircase
+Outdoor
+Ground truth class
+77%
+8%
+4%
+1%
+4%
+2%
+1%
+2%
+12% 81%
+0%
+3%
+0%
+2%
+0%
+0%
+5%
+1%
+83%
+2%
+5%
+2%
+0%
+0%
+2%
+5%
+3%
+87%
+0%
+3%
+0%
+0%
+15%
+1%
+8%
+1%
+69%
+2%
+1%
+3%
+12%
+6%
+5%
+9%
+3%
+59%
+5%
+1%
+6%
+2%
+2%
+1%
+1%
+4%
+78%
+5%
+2%
+1%
+0%
+1%
+1%
+0%
+1%
+93%
+Fig. S2: Row-normalized confusion (%) for our scene classification. Top-1/2 accuracy: 80.40/91.73%
+on 4,606 validation scenes.
+GLOD-LVSM Achieves the Best Quality–Token-Count Trade-offs
+We provide more results
+for Sec. 4.2, including PSNR, SSIM, and LPIPS versus scene-token counts for GLOD-LVSM and
+CLIFT with 2, 4, 6, and 10 reference views on both datasets (Fig. S3).
+Comparing against Different Condenser Designs
+We provide more results for Sec. 4.3, including
+PSNR, SSIM, and LPIPS comparisons across condenser designs with 2, 4, 6, and 10 reference views
+on both datasets (Figs. S5–S8). All methods use the same base model with culling disabled.
+Scene-Token Reductions & Rendering Speedup at Fixed Quality Target.
+We provide more
+results for Sec. 4.4, including rendering FPS and speedups at 0, 0.5, 1, and 2 dB quality-loss budgets
+on both datasets with 10 reference views (Fig. S1). The evaluation protocol is described in A.5.
+Scaling Quality with Reference Views and Token Budget
+We provide more results for Sec. 4.5,
+including PSNR, SSIM, and LPIPS on both datasets for increasing reference-view counts at fixed
+budgets of 512, 1,024, and 2,048 tokens (Fig. S9) and increasing anchor budgets from 100% to 150%
+of the input token count (Fig. S10). Culling is disabled in both experiments. For DL3DV with two
+reference views, the 2,048-anchor setting exceeds the corresponding highway token count of 1554.
+This is enabled by our continuous anchor field (Sec. 3.2), which can sample an arbitrary number of
+anchors beyond the input token count.
+Ablation Studies
+We provide more results for Sec. 4.7, including PSNR, SSIM, and LPIPS for the
+same component ablations with 2, 4, 6, and 10 reference views on DL3DV (Figs. S11–S12).
+GLOD-LVSM as a General Scene Representation
+We provide scene-classification confusion
+matrix (Fig. S2) for Sec. 4.8. The downstream evaluation protocols are given in A.6.
+Visual Comparison across Different Condensers.
+We provide more results for Sec. 4.3, including
+34 selected novel-view examples with 2 and 10 reference views at 0%, 20%, 40%, 60%, and 80%
+token reduction on both datasets (Figs. S13–S25). For compact figure files, we JPEG-compress the
+full images at quality 88 without chroma subsampling (4:4:4), while keeping the zoom-in crops
+losslessly encoded.
+Qualitative Analysis of Emergent Geometry and Anchor Allocation
+We provide more results
+for Sec. 4.6, including emergent depth, point-cloud, 3D anchors, and projected-anchor visualizations
+for 12 RealEstate10K scenes and 15 DL3DV scenes using four reference views and 2,048 anchors
+(Figs. S26–S31).
+14
+
+
+Preprint
+0
+4k
+8k
+12k
+Scene tokens
+24
+28
+32
+PSNR (dB) ↑
+0
+4k
+8k
+12k
+Scene tokens
+0.78
+0.84
+0.90
+0.96
+SSIM ↑
+0
+4k
+8k
+12k
+Scene tokens
+0.05
+0.10
+0.15
+0.20
+LPIPS ↓
+0
+5k
+10k
+15k
+Scene tokens
+20
+24
+28
+PSNR (dB) ↑
+0
+5k
+10k
+15k
+Scene tokens
+0.60
+0.75
+SSIM ↑
+0
+5k
+10k
+15k
+Scene tokens
+0.1
+0.2
+0.3
+0.4
+LPIPS ↓
+RealEstate10K
+DL3DV
+Ours
+CLiFT
+2 views
+4 views
+6 views
+10 views
+Fig. S3: System-level quality versus scene tokens. Top: RealEstate10K; bottom: DL3DV. Columns
+show PSNR, SSIM, and LPIPS. Colors distinguish reference-view counts; solid lines denote GLOD-
+LVSM and dashed lines denote official CLiFT. Shaded bands show 95% CIs.
+2
+4
+6
+10
+16
+Reference views
+20
+25
+30
+35
+PSNR (dB) ↑
+2
+4
+6
+10
+16
+Reference views
+0.7
+0.8
+0.9
+SSIM ↑
+2
+4
+6
+10
+16
+Reference views
+0.08
+0.16
+0.24
+LPIPS ↓
+2
+4
+6
+10
+16
+Reference views
+16
+20
+24
+28
+PSNR (dB) ↑
+2
+4
+6
+10
+16
+Reference views
+0.45
+0.60
+0.75
+0.90
+SSIM ↑
+2
+4
+6
+10
+16
+Reference views
+0.15
+0.30
+0.45
+LPIPS ↓
+RealEstate10K
+DL3DV
+LagerNVS FT
+CLiFT
+LVSM
+MVSplat
+DepthSplat
+Fig. S4: Base-model comparison without our condenser. Top: RealEstate10K; bottom: DL3DV.
+Columns show PSNR, SSIM, and LPIPS. Shaded bands show 95% CIs. No official DL3DV check-
+point is available for LVSM.
+15
+
+
+Preprint
+800
+1.6k
+2.4k
+Scene tokens
+24
+26
+28
+30
+PSNR (dB) ↑
+Better
+800
+1.6k
+2.4k
+Scene tokens
+0.80
+0.84
+0.88
+0.92
+SSIM ↑
+Better
+800
+1.6k
+2.4k
+Scene tokens
+0.08
+0.12
+0.16
+0.20
+LPIPS ↓
+Better
+400
+800
+1.2k
+1.6k
+Scene tokens
+18.0
+19.5
+21.0
+22.5
+PSNR (dB) ↑
+Better
+400
+800
+1.2k
+1.6k
+Scene tokens
+0.54
+0.60
+0.66
+0.72
+SSIM ↑
+Better
+400
+800
+1.2k
+1.6k
+Scene tokens
+0.24
+0.32
+0.40
+LPIPS ↓
+Better
+RealEstate10K
+DL3DV
+Ours
+Random pruning
+K-means pruning
+Learned pruning
+CLiFT-style
+Fig. S5: Condenser quality–token trade-offs with 2 reference views and culling disabled. Top:
+RealEstate10K; bottom: DL3DV. Columns show PSNR, SSIM, and LPIPS. Shaded bands show 95%
+CIs.
+1.5k
+3k
+4.5k
+Scene tokens
+26
+28
+30
+32
+PSNR (dB) ↑
+Better
+1.5k
+3k
+4.5k
+Scene tokens
+0.84
+0.88
+0.92
+SSIM ↑
+Better
+1.5k
+3k
+4.5k
+Scene tokens
+0.08
+0.12
+0.16
+LPIPS ↓
+Better
+800
+1.6k
+2.4k
+3.2k
+Scene tokens
+20
+22
+24
+26
+PSNR (dB) ↑
+Better
+800
+1.6k
+2.4k
+3.2k
+Scene tokens
+0.64
+0.72
+0.80
+SSIM ↑
+Better
+800
+1.6k
+2.4k
+3.2k
+Scene tokens
+0.16
+0.24
+0.32
+LPIPS ↓
+Better
+RealEstate10K
+DL3DV
+Ours
+Random pruning
+K-means pruning
+Learned pruning
+CLiFT-style
+Fig. S6: Condenser quality–token trade-offs with 4 reference views and culling disabled. Top:
+RealEstate10K; bottom: DL3DV. Columns show PSNR, SSIM, and LPIPS. Shaded bands show 95%
+CIs.
+16
+
+
+Preprint
+2.5k
+5k
+7.5k
+Scene tokens
+28
+30
+32
+34
+PSNR (dB) ↑
+Better
+2.5k
+5k
+7.5k
+Scene tokens
+0.84
+0.87
+0.90
+0.93
+SSIM ↑
+Better
+2.5k
+5k
+7.5k
+Scene tokens
+0.06
+0.09
+0.12
+0.15
+LPIPS ↓
+Better
+1.5k
+3k
+4.5k
+Scene tokens
+22
+24
+26
+28
+PSNR (dB) ↑
+Better
+1.5k
+3k
+4.5k
+Scene tokens
+0.64
+0.72
+0.80
+SSIM ↑
+Better
+1.5k
+3k
+4.5k
+Scene tokens
+0.12
+0.18
+0.24
+0.30
+LPIPS ↓
+Better
+RealEstate10K
+DL3DV
+Ours
+Random pruning
+K-means pruning
+Learned pruning
+CLiFT-style
+Fig. S7: Condenser quality–token trade-offs with 6 reference views and culling disabled. Top:
+RealEstate10K; bottom: DL3DV. Columns show PSNR, SSIM, and LPIPS. Shaded bands show 95%
+CIs.
+4k
+8k
+12k
+Scene tokens
+28
+30
+32
+34
+PSNR (dB) ↑
+Better
+4k
+8k
+12k
+Scene tokens
+0.875
+0.900
+0.925
+0.950
+SSIM ↑
+Better
+4k
+8k
+12k
+Scene tokens
+0.050
+0.075
+0.100
+0.125
+LPIPS ↓
+Better
+2k
+4k
+6k
+8k
+Scene tokens
+22
+24
+26
+28
+PSNR (dB) ↑
+Better
+2k
+4k
+6k
+8k
+Scene tokens
+0.66
+0.72
+0.78
+0.84
+SSIM ↑
+Better
+2k
+4k
+6k
+8k
+Scene tokens
+0.12
+0.18
+0.24
+LPIPS ↓
+Better
+RealEstate10K
+DL3DV
+Ours
+Random pruning
+K-means pruning
+Learned pruning
+CLiFT-style
+Fig. S8: Condenser quality–token trade-offs with 10 reference views and culling disabled. Top:
+RealEstate10K; bottom: DL3DV. Columns show PSNR, SSIM, and LPIPS. Shaded bands show 95%
+CIs.
+17
+
+
+Preprint
+2
+4
+6
+8
+10
+Reference views
+30.0
+31.5
+33.0
+PSNR (dB) ↑
+2
+4
+6
+8
+10
+Reference views
+0.885
+0.900
+0.915
+0.930
+SSIM ↑
+2
+4
+6
+8
+10
+Reference views
+0.075
+0.090
+0.105
+0.120
+LPIPS ↓
+2
+4
+6
+8
+10
+Reference views
+22
+24
+26
+PSNR (dB) ↑
+2
+4
+6
+8
+10
+Reference views
+0.70
+0.75
+0.80
+0.85
+SSIM ↑
+2
+4
+6
+8
+10
+Reference views
+0.16
+0.20
+0.24
+0.28
+LPIPS ↓
+RealEstate10K
+DL3DV
+512 tokens
+1,024 tokens
+2,048 tokens
+Fig. S9: Fixed-budget view scaling with culling disabled. Top: RealEstate10K; bottom: DL3DV.
+Columns show PSNR, SSIM, and LPIPS. Shaded bands show 95% scene-bootstrap CIs.a
+aUnder the original DL3DV protocol, the target set is the complement of the reference views and therefore
+changes with view count. To make scaling directly comparable, all DL3DV results in this figure use the same 40
+targets per scene from the 10-view setting, a subset of the original target set at every reference-view count.
+100
+125
+150
+Budget K/N (%)
+0.00
+0.02
+0.04
+ΔPSNR (dB) ↑
+100
+125
+150
+Budget K/N (%)
+0.0000
+0.0002
+0.0004
+0.0006
+ΔSSIM ↑
+100
+125
+150
+Budget K/N (%)
+-0.00075
+-0.00050
+-0.00025
+0.00000
+ΔLPIPS ↓
+100
+125
+150
+Budget K/N (%)
+0.00
+0.04
+0.08
+ΔPSNR (dB) ↑
+100
+125
+150
+Budget K/N (%)
+0.000
+0.001
+0.002
+0.003
+ΔSSIM ↑
+100
+125
+150
+Budget K/N (%)
+-0.0024
+-0.0016
+-0.0008
+0.0000
+ΔLPIPS ↓
+RealEstate10K
+DL3DV
+2 views
+4 views
+6 views
+10 views
+Fig. S10: Paired changes relative to K = N with culling disabled. Top: RealEstate10K; bottom:
+DL3DV. Columns show ∆PSNR, ∆SSIM, and ∆LPIPS. Shaded bands show paired 95% scene-
+bootstrap intervals. Negative ∆LPIPS indicates improvement.
+18
+
+
+Preprint
+400
+800
+1.2k
+1.6k
+Decoder tokens
+19.5
+21.0
+22.5
+PSNR (dB) ↑
+Better
+400
+800
+1.2k
+1.6k
+Decoder tokens
+0.54
+0.60
+0.66
+0.72
+SSIM ↑
+Better
+400
+800
+1.2k
+1.6k
+Decoder tokens
+0.24
+0.30
+0.36
+0.42
+LPIPS ↓
+Better
+800
+1.6k
+2.4k
+3.2k
+Decoder tokens
+22
+24
+26
+PSNR (dB) ↑
+Better
+800
+1.6k
+2.4k
+3.2k
+Decoder tokens
+0.64
+0.72
+0.80
+SSIM ↑
+Better
+800
+1.6k
+2.4k
+3.2k
+Decoder tokens
+0.18
+0.24
+0.30
+LPIPS ↓
+Better
+DL3DV / 2 views
+DL3DV / 4 views
+Ours
+w/o Box.
+w/o PE.
+w/o Context.
+w/o Geo.
+Ours + culling
+w. K-means-Init.
+Fig. S11: DL3DV ablations with 2 reference views (top) and 4 reference views (bottom). Columns
+show PSNR, SSIM, and LPIPS. Shaded bands show 95% scene-bootstrap CIs.
+1.5k
+3k
+4.5k
+Decoder tokens
+22
+24
+26
+28
+PSNR (dB) ↑
+Better
+1.5k
+3k
+4.5k
+Decoder tokens
+0.64
+0.72
+0.80
+SSIM ↑
+Better
+1.5k
+3k
+4.5k
+Decoder tokens
+0.12
+0.18
+0.24
+0.30
+LPIPS ↓
+Better
+2k
+4k
+6k
+8k
+Decoder tokens
+22
+24
+26
+28
+PSNR (dB) ↑
+Better
+2k
+4k
+6k
+8k
+Decoder tokens
+0.64
+0.72
+0.80
+0.88
+SSIM ↑
+Better
+2k
+4k
+6k
+8k
+Decoder tokens
+0.12
+0.18
+0.24
+LPIPS ↓
+Better
+DL3DV / 6 views
+DL3DV / 10 views
+Ours
+w/o Box.
+w/o PE.
+w/o Context.
+w/o Geo.
+Ours + culling
+w. K-means-Init.
+Fig. S12: DL3DV ablations with 6 reference views (top) and 10 reference views (bottom). Columns
+show PSNR, SSIM, and LPIPS. Shaded bands show 95% scene-bootstrap CIs.
+19
+
+
+Preprint
+Compression
+rate
+Ground Truth
+Ours
+CLiFT-style
+Learned pruning
+K-means
+Random pruning
+0%
+scene tokens
+= 1,554
+PSNR (dB)
+25.95 (+0.21)
+25.75 (+0.01)
+25.75 (+0.02)
+25.71 (-0.03)
+25.74 (baseline)
+20%
+scene tokens
+= 1,243
+PSNR (dB)
+25.85 (+0.71)
+25.46 (+0.32)
+25.08 (-0.06)
+25.15 (+0.00)
+25.14 (baseline)
+40%
+scene tokens
+= 932
+PSNR (dB)
+25.65 (+1.38)
+24.91 (+0.64)
+24.26 (-0.01)
+24.56 (+0.29)
+24.27 (baseline)
+60%
+scene tokens
+= 622
+PSNR (dB)
+25.20 (+2.00)
+24.15 (+0.95)
+22.75 (-0.44)
+23.56 (+0.37)
+23.19 (baseline)
+80%
+scene tokens
+= 311
+PSNR (dB)
+23.79 (+2.79)
+21.93 (+0.93)
+21.16 (+0.15)
+21.76 (+0.75)
+21.00 (baseline)
+0%
+scene tokens
+= 1,554
+PSNR (dB)
+19.77 (+0.08)
+19.76 (+0.07)
+19.74 (+0.05)
+19.74 (+0.05)
+19.69 (baseline)
+20%
+scene tokens
+= 1,243
+PSNR (dB)
+19.74 (+0.09)
+19.68 (+0.03)
+19.62 (-0.03)
+19.64 (-0.01)
+19.65 (baseline)
+40%
+scene tokens
+= 932
+PSNR (dB)
+19.69 (+0.21)
+19.46 (-0.01)
+19.44 (-0.04)
+19.44 (-0.03)
+19.47 (baseline)
+60%
+scene tokens
+= 622
+PSNR (dB)
+19.65 (+0.61)
+19.29 (+0.24)
+18.92 (-0.12)
+19.54 (+0.50)
+19.04 (baseline)
+80%
+scene tokens
+= 311
+PSNR (dB)
+19.35 (+1.38)
+18.83 (+0.86)
+17.98 (+0.01)
+18.45 (+0.48)
+17.97 (baseline)
+0%
+scene tokens
+= 1,554
+PSNR (dB)
+21.88 (+0.51)
+21.46 (+0.10)
+21.39 (+0.02)
+21.40 (+0.04)
+21.37 (baseline)
+20%
+scene tokens
+= 1,243
+PSNR (dB)
+21.87 (+0.96)
+21.16 (+0.25)
+20.98 (+0.07)
+21.10 (+0.19)
+20.91 (baseline)
+40%
+scene tokens
+= 932
+PSNR (dB)
+21.56 (+0.97)
+20.88 (+0.30)
+20.42 (-0.16)
+20.71 (+0.13)
+20.58 (baseline)
+60%
+scene tokens
+= 622
+PSNR (dB)
+21.28 (+1.54)
+20.16 (+0.42)
+19.74 (-0.00)
+20.07 (+0.33)
+19.74 (baseline)
+80%
+scene tokens
+= 311
+PSNR (dB)
+20.53 (+1.82)
+19.13 (+0.43)
+18.91 (+0.20)
+18.84 (+0.14)
+18.71 (baseline)
+Fig. S13: Visual comparison of different condensers on DL3DV.
+20
+
+
+Preprint
+Compression
+rate
+Ground Truth
+Ours
+CLiFT-style
+Learned pruning
+K-means
+Random pruning
+0%
+scene tokens
+= 1,554
+PSNR (dB)
+28.03 (+0.34)
+27.87 (+0.18)
+27.80 (+0.12)
+27.55 (-0.14)
+27.69 (baseline)
+20%
+scene tokens
+= 1,243
+PSNR (dB)
+27.88 (+1.21)
+27.58 (+0.91)
+26.84 (+0.17)
+26.82 (+0.15)
+26.67 (baseline)
+40%
+scene tokens
+= 932
+PSNR (dB)
+27.65 (+2.19)
+26.52 (+1.06)
+25.41 (-0.05)
+25.51 (+0.05)
+25.46 (baseline)
+60%
+scene tokens
+= 622
+PSNR (dB)
+27.03 (+3.35)
+24.73 (+1.05)
+23.57 (-0.11)
+23.83 (+0.15)
+23.68 (baseline)
+80%
+scene tokens
+= 311
+PSNR (dB)
+24.50 (+2.89)
+22.14 (+0.53)
+20.92 (-0.69)
+22.13 (+0.52)
+21.61 (baseline)
+0%
+scene tokens
+= 1,554
+PSNR (dB)
+29.15 (+2.31)
+27.54 (+0.70)
+27.25 (+0.41)
+27.03 (+0.19)
+26.84 (baseline)
+20%
+scene tokens
+= 1,243
+PSNR (dB)
+28.92 (+2.68)
+27.06 (+0.81)
+26.22 (-0.02)
+26.05 (-0.19)
+26.24 (baseline)
+40%
+scene tokens
+= 932
+PSNR (dB)
+28.37 (+3.29)
+26.54 (+1.46)
+24.83 (-0.25)
+25.34 (+0.26)
+25.08 (baseline)
+60%
+scene tokens
+= 622
+PSNR (dB)
+27.19 (+3.91)
+24.56 (+1.28)
+22.60 (-0.67)
+23.68 (+0.40)
+23.27 (baseline)
+80%
+scene tokens
+= 311
+PSNR (dB)
+24.98 (+4.15)
+22.66 (+1.83)
+20.46 (-0.37)
+20.93 (+0.09)
+20.83 (baseline)
+0%
+scene tokens
+= 1,554
+PSNR (dB)
+27.24 (+0.20)
+27.10 (+0.06)
+27.05 (+0.01)
+27.10 (+0.06)
+27.04 (baseline)
+20%
+scene tokens
+= 1,243
+PSNR (dB)
+27.25 (+0.78)
+26.64 (+0.17)
+26.61 (+0.14)
+26.61 (+0.14)
+26.46 (baseline)
+40%
+scene tokens
+= 932
+PSNR (dB)
+26.98 (+1.11)
+26.61 (+0.74)
+26.20 (+0.33)
+25.98 (+0.12)
+25.87 (baseline)
+60%
+scene tokens
+= 622
+PSNR (dB)
+26.83 (+2.10)
+25.79 (+1.05)
+25.08 (+0.34)
+24.88 (+0.15)
+24.74 (baseline)
+80%
+scene tokens
+= 311
+PSNR (dB)
+25.58 (+3.14)
+23.67 (+1.23)
+23.05 (+0.61)
+22.98 (+0.54)
+22.44 (baseline)
+Fig. S14: Visual comparison of different condensers on DL3DV.
+21
+
+
+Preprint
+Compression
+rate
+Ground Truth
+Ours
+CLiFT-style
+Learned pruning
+K-means
+Random pruning
+0%
+scene tokens
+= 1,554
+PSNR (dB)
+20.64 (+0.26)
+20.35 (-0.02)
+20.24 (-0.14)
+20.37 (+0.00)
+20.37 (baseline)
+20%
+scene tokens
+= 1,243
+PSNR (dB)
+20.61 (+0.52)
+20.15 (+0.06)
+20.25 (+0.16)
+19.95 (-0.14)
+20.09 (baseline)
+40%
+scene tokens
+= 932
+PSNR (dB)
+20.45 (+0.91)
+19.71 (+0.17)
+19.85 (+0.31)
+19.68 (+0.14)
+19.54 (baseline)
+60%
+scene tokens
+= 622
+PSNR (dB)
+20.16 (+1.30)
+19.34 (+0.48)
+19.19 (+0.33)
+19.23 (+0.38)
+18.86 (baseline)
+80%
+scene tokens
+= 311
+PSNR (dB)
+19.37 (+1.39)
+18.79 (+0.81)
+18.08 (+0.10)
+18.14 (+0.16)
+17.98 (baseline)
+0%
+scene tokens
+= 1,554
+PSNR (dB)
+29.02 (+0.49)
+28.68 (+0.16)
+28.92 (+0.39)
+28.83 (+0.30)
+28.53 (baseline)
+20%
+scene tokens
+= 1,243
+PSNR (dB)
+28.94 (+0.94)
+28.32 (+0.31)
+28.39 (+0.38)
+28.04 (+0.03)
+28.01 (baseline)
+40%
+scene tokens
+= 932
+PSNR (dB)
+28.47 (+1.72)
+27.52 (+0.77)
+27.84 (+1.09)
+27.40 (+0.65)
+26.75 (baseline)
+60%
+scene tokens
+= 622
+PSNR (dB)
+27.78 (+2.04)
+26.52 (+0.78)
+25.95 (+0.22)
+26.12 (+0.39)
+25.73 (baseline)
+80%
+scene tokens
+= 311
+PSNR (dB)
+26.45 (+3.17)
+25.00 (+1.72)
+23.50 (+0.22)
+24.29 (+1.01)
+23.28 (baseline)
+0%
+scene tokens
+= 1,554
+PSNR (dB)
+24.83 (+0.86)
+23.92 (-0.05)
+23.90 (-0.07)
+23.89 (-0.07)
+23.97 (baseline)
+20%
+scene tokens
+= 1,243
+PSNR (dB)
+24.75 (+1.27)
+23.69 (+0.21)
+23.13 (-0.36)
+23.34 (-0.14)
+23.49 (baseline)
+40%
+scene tokens
+= 932
+PSNR (dB)
+24.51 (+1.97)
+23.26 (+0.71)
+22.24 (-0.30)
+22.75 (+0.21)
+22.54 (baseline)
+60%
+scene tokens
+= 622
+PSNR (dB)
+23.77 (+2.38)
+22.20 (+0.81)
+21.13 (-0.26)
+21.61 (+0.22)
+21.39 (baseline)
+80%
+scene tokens
+= 311
+PSNR (dB)
+22.32 (+2.83)
+20.33 (+0.84)
+19.14 (-0.35)
+19.57 (+0.08)
+19.49 (baseline)
+Fig. S15: Visual comparison of different condensers on DL3DV.
+22
+
+
+Preprint
+Compression
+rate
+Ground Truth
+Ours
+CLiFT-style
+Learned pruning
+K-means
+Random pruning
+0%
+scene tokens
+= 1,554
+PSNR (dB)
+31.11 (+2.36)
+29.05 (+0.30)
+28.54 (-0.21)
+28.69 (-0.06)
+28.75 (baseline)
+20%
+scene tokens
+= 1,243
+PSNR (dB)
+31.04 (+3.07)
+28.55 (+0.57)
+28.60 (+0.63)
+28.33 (+0.36)
+27.97 (baseline)
+40%
+scene tokens
+= 932
+PSNR (dB)
+30.85 (+2.95)
+28.07 (+0.17)
+28.72 (+0.81)
+27.93 (+0.03)
+27.90 (baseline)
+60%
+scene tokens
+= 622
+PSNR (dB)
+30.71 (+4.06)
+26.48 (-0.18)
+26.78 (+0.13)
+26.95 (+0.29)
+26.66 (baseline)
+80%
+scene tokens
+= 311
+PSNR (dB)
+29.29 (+4.52)
+26.04 (+1.26)
+24.94 (+0.17)
+24.89 (+0.12)
+24.78 (baseline)
+0%
+scene tokens
+= 1,554
+PSNR (dB)
+25.45 (+0.57)
+24.85 (-0.03)
+24.99 (+0.10)
+24.84 (-0.04)
+24.88 (baseline)
+20%
+scene tokens
+= 1,243
+PSNR (dB)
+25.44 (+0.75)
+24.84 (+0.15)
+25.01 (+0.32)
+24.60 (-0.09)
+24.69 (baseline)
+40%
+scene tokens
+= 932
+PSNR (dB)
+25.29 (+1.08)
+24.62 (+0.42)
+24.36 (+0.15)
+24.38 (+0.18)
+24.20 (baseline)
+60%
+scene tokens
+= 622
+PSNR (dB)
+24.89 (+1.33)
+24.32 (+0.76)
+23.53 (-0.03)
+23.94 (+0.38)
+23.56 (baseline)
+80%
+scene tokens
+= 311
+PSNR (dB)
+24.27 (+2.57)
+22.72 (+1.02)
+21.51 (-0.18)
+22.26 (+0.56)
+21.70 (baseline)
+0%
+scene tokens
+= 1,554
+PSNR (dB)
+21.60 (+0.06)
+21.37 (-0.17)
+21.47 (-0.06)
+21.54 (-0.00)
+21.54 (baseline)
+20%
+scene tokens
+= 1,243
+PSNR (dB)
+21.54 (+0.31)
+21.14 (-0.08)
+21.36 (+0.14)
+21.22 (-0.01)
+21.23 (baseline)
+40%
+scene tokens
+= 932
+PSNR (dB)
+21.51 (+0.73)
+21.16 (+0.38)
+20.87 (+0.09)
+21.02 (+0.24)
+20.78 (baseline)
+60%
+scene tokens
+= 622
+PSNR (dB)
+21.19 (+0.91)
+20.57 (+0.29)
+20.44 (+0.15)
+20.63 (+0.35)
+20.28 (baseline)
+80%
+scene tokens
+= 311
+PSNR (dB)
+20.65 (+1.67)
+19.67 (+0.70)
+18.82 (-0.16)
+18.63 (-0.35)
+18.98 (baseline)
+Fig. S16: Visual comparison of different condensers on DL3DV.
+23
+
+
+Preprint
+Compression
+rate
+Ground Truth
+Ours
+CLiFT-style
+Learned pruning
+K-means
+Random pruning
+0%
+scene tokens
+= 7,770
+PSNR (dB)
+25.49 (+0.40)
+25.09 (+0.01)
+25.05 (-0.03)
+25.20 (+0.12)
+25.08 (baseline)
+20%
+scene tokens
+= 6,216
+PSNR (dB)
+25.34 (+0.55)
+24.83 (+0.04)
+24.81 (+0.02)
+24.88 (+0.09)
+24.79 (baseline)
+40%
+scene tokens
+= 4,662
+PSNR (dB)
+25.16 (+1.04)
+24.50 (+0.39)
+24.38 (+0.27)
+24.40 (+0.28)
+24.12 (baseline)
+60%
+scene tokens
+= 3,108
+PSNR (dB)
+24.82 (+1.25)
+23.78 (+0.21)
+23.61 (+0.05)
+23.97 (+0.41)
+23.57 (baseline)
+80%
+scene tokens
+= 1,554
+PSNR (dB)
+24.05 (+1.57)
+22.98 (+0.51)
+22.21 (-0.27)
+22.61 (+0.14)
+22.47 (baseline)
+0%
+scene tokens
+= 7,770
+PSNR (dB)
+24.86 (+0.13)
+24.67 (-0.05)
+24.51 (-0.21)
+24.64 (-0.09)
+24.73 (baseline)
+20%
+scene tokens
+= 6,216
+PSNR (dB)
+24.87 (+0.51)
+24.21 (-0.15)
+24.16 (-0.20)
+24.35 (-0.02)
+24.36 (baseline)
+40%
+scene tokens
+= 4,662
+PSNR (dB)
+24.61 (+0.82)
+23.91 (+0.12)
+23.36 (-0.43)
+23.85 (+0.06)
+23.79 (baseline)
+60%
+scene tokens
+= 3,108
+PSNR (dB)
+24.24 (+1.31)
+23.34 (+0.42)
+22.42 (-0.50)
+23.09 (+0.17)
+22.92 (baseline)
+80%
+scene tokens
+= 1,554
+PSNR (dB)
+23.14 (+1.57)
+22.09 (+0.53)
+20.49 (-1.08)
+21.98 (+0.41)
+21.57 (baseline)
+0%
+scene tokens
+= 7,770
+PSNR (dB)
+26.94 (+2.34)
+24.69 (+0.09)
+24.80 (+0.20)
+24.80 (+0.20)
+24.60 (baseline)
+20%
+scene tokens
+= 6,216
+PSNR (dB)
+26.90 (+2.42)
+24.60 (+0.13)
+24.79 (+0.31)
+24.92 (+0.44)
+24.48 (baseline)
+40%
+scene tokens
+= 4,662
+PSNR (dB)
+26.71 (+2.48)
+24.79 (+0.56)
+24.84 (+0.61)
+24.59 (+0.36)
+24.23 (baseline)
+60%
+scene tokens
+= 3,108
+PSNR (dB)
+26.20 (+1.99)
+24.40 (+0.19)
+24.38 (+0.17)
+24.38 (+0.17)
+24.21 (baseline)
+80%
+scene tokens
+= 1,554
+PSNR (dB)
+25.62 (+1.78)
+24.37 (+0.53)
+23.40 (-0.45)
+23.81 (-0.04)
+23.85 (baseline)
+Fig. S17: Visual comparison of different condensers on DL3DV.
+24
+
+
+Preprint
+Compression
+rate
+Ground Truth
+Ours
+CLiFT-style
+Learned pruning
+K-means
+Random pruning
+0%
+scene tokens
+= 7,770
+PSNR (dB)
+26.08 (+0.40)
+25.65 (-0.03)
+25.61 (-0.07)
+25.71 (+0.03)
+25.68 (baseline)
+20%
+scene tokens
+= 6,216
+PSNR (dB)
+25.90 (+0.35)
+25.35 (-0.20)
+25.62 (+0.06)
+25.50 (-0.05)
+25.55 (baseline)
+40%
+scene tokens
+= 4,662
+PSNR (dB)
+25.73 (+0.60)
+24.91 (-0.22)
+24.73 (-0.41)
+24.99 (-0.14)
+25.13 (baseline)
+60%
+scene tokens
+= 3,108
+PSNR (dB)
+25.53 (+0.99)
+24.68 (+0.14)
+23.68 (-0.86)
+24.38 (-0.16)
+24.54 (baseline)
+80%
+scene tokens
+= 1,554
+PSNR (dB)
+24.48 (+1.36)
+23.70 (+0.58)
+22.15 (-0.97)
+23.43 (+0.31)
+23.12 (baseline)
+0%
+scene tokens
+= 7,770
+PSNR (dB)
+29.26 (+0.69)
+28.78 (+0.21)
+28.73 (+0.16)
+28.48 (-0.09)
+28.57 (baseline)
+20%
+scene tokens
+= 6,216
+PSNR (dB)
+29.13 (+1.25)
+28.37 (+0.50)
+28.13 (+0.25)
+27.77 (-0.11)
+27.88 (baseline)
+40%
+scene tokens
+= 4,662
+PSNR (dB)
+28.87 (+1.45)
+27.93 (+0.51)
+27.23 (-0.20)
+27.05 (-0.38)
+27.43 (baseline)
+60%
+scene tokens
+= 3,108
+PSNR (dB)
+28.39 (+2.14)
+26.53 (+0.28)
+26.14 (-0.11)
+26.39 (+0.14)
+26.25 (baseline)
+80%
+scene tokens
+= 1,554
+PSNR (dB)
+26.82 (+1.82)
+24.82 (-0.19)
+24.40 (-0.60)
+24.79 (-0.22)
+25.01 (baseline)
+0%
+scene tokens
+= 7,770
+PSNR (dB)
+33.10 (+0.40)
+32.95 (+0.25)
+32.80 (+0.10)
+32.62 (-0.08)
+32.70 (baseline)
+20%
+scene tokens
+= 6,216
+PSNR (dB)
+32.86 (+0.85)
+32.51 (+0.50)
+32.16 (+0.15)
+32.29 (+0.28)
+32.01 (baseline)
+40%
+scene tokens
+= 4,662
+PSNR (dB)
+32.53 (+0.79)
+31.93 (+0.19)
+31.59 (-0.15)
+31.86 (+0.12)
+31.74 (baseline)
+60%
+scene tokens
+= 3,108
+PSNR (dB)
+32.30 (+1.51)
+31.06 (+0.27)
+30.10 (-0.69)
+31.22 (+0.43)
+30.79 (baseline)
+80%
+scene tokens
+= 1,554
+PSNR (dB)
+31.29 (+2.01)
+30.16 (+0.88)
+28.39 (-0.89)
+29.59 (+0.31)
+29.28 (baseline)
+Fig. S18: Visual comparison of different condensers on DL3DV.
+25
+
+
+Preprint
+Compression
+rate
+Ground Truth
+Ours
+CLiFT-style
+Learned pruning
+K-means
+Random pruning
+0%
+scene tokens
+= 7,770
+PSNR (dB)
+28.78 (+5.64)
+23.86 (+0.71)
+23.60 (+0.45)
+23.05 (-0.10)
+23.15 (baseline)
+20%
+scene tokens
+= 6,216
+PSNR (dB)
+28.74 (+6.07)
+23.77 (+1.10)
+24.17 (+1.50)
+22.94 (+0.27)
+22.67 (baseline)
+40%
+scene tokens
+= 4,662
+PSNR (dB)
+28.48 (+6.17)
+24.55 (+2.24)
+23.82 (+1.51)
+22.63 (+0.31)
+22.31 (baseline)
+60%
+scene tokens
+= 3,108
+PSNR (dB)
+28.24 (+6.21)
+22.90 (+0.87)
+22.76 (+0.73)
+22.83 (+0.79)
+22.03 (baseline)
+80%
+scene tokens
+= 1,554
+PSNR (dB)
+27.16 (+5.60)
+22.84 (+1.28)
+21.46 (-0.11)
+22.57 (+1.00)
+21.57 (baseline)
+0%
+scene tokens
+= 7,770
+PSNR (dB)
+27.66 (+1.74)
+25.84 (-0.08)
+25.76 (-0.15)
+26.07 (+0.15)
+25.92 (baseline)
+20%
+scene tokens
+= 6,216
+PSNR (dB)
+27.65 (+1.91)
+25.74 (-0.01)
+24.94 (-0.80)
+25.72 (-0.02)
+25.74 (baseline)
+40%
+scene tokens
+= 4,662
+PSNR (dB)
+27.42 (+2.13)
+25.34 (+0.05)
+24.50 (-0.79)
+25.61 (+0.32)
+25.29 (baseline)
+60%
+scene tokens
+= 3,108
+PSNR (dB)
+27.04 (+2.55)
+24.60 (+0.11)
+23.59 (-0.90)
+24.63 (+0.14)
+24.49 (baseline)
+80%
+scene tokens
+= 1,554
+PSNR (dB)
+25.43 (+2.34)
+23.37 (+0.28)
+22.00 (-1.08)
+23.14 (+0.05)
+23.09 (baseline)
+0%
+scene tokens
+= 7,770
+PSNR (dB)
+27.66 (+0.27)
+27.44 (+0.05)
+27.27 (-0.12)
+27.37 (-0.02)
+27.39 (baseline)
+20%
+scene tokens
+= 6,216
+PSNR (dB)
+27.60 (+1.12)
+27.00 (+0.52)
+26.40 (-0.08)
+26.72 (+0.24)
+26.48 (baseline)
+40%
+scene tokens
+= 4,662
+PSNR (dB)
+27.19 (+1.80)
+26.27 (+0.88)
+25.10 (-0.29)
+26.19 (+0.80)
+25.39 (baseline)
+60%
+scene tokens
+= 3,108
+PSNR (dB)
+26.32 (+1.59)
+25.68 (+0.94)
+24.01 (-0.73)
+25.10 (+0.36)
+24.74 (baseline)
+80%
+scene tokens
+= 1,554
+PSNR (dB)
+25.26 (+2.31)
+23.96 (+1.02)
+22.08 (-0.87)
+23.51 (+0.56)
+22.95 (baseline)
+Fig. S19: Visual comparison of different condensers on DL3DV.
+26
+
+
+Preprint
+Compression
+rate
+Ground Truth
+Ours
+CLiFT-style
+Learned pruning
+K-means
+Random pruning
+0%
+scene tokens
+= 7,770
+PSNR (dB)
+26.58 (+0.55)
+26.07 (+0.04)
+26.08 (+0.06)
+26.11 (+0.08)
+26.03 (baseline)
+20%
+scene tokens
+= 6,216
+PSNR (dB)
+26.52 (+0.72)
+26.00 (+0.19)
+25.69 (-0.11)
+25.86 (+0.05)
+25.81 (baseline)
+40%
+scene tokens
+= 4,662
+PSNR (dB)
+26.32 (+0.92)
+25.70 (+0.30)
+25.12 (-0.28)
+25.38 (-0.02)
+25.40 (baseline)
+60%
+scene tokens
+= 3,108
+PSNR (dB)
+26.01 (+1.04)
+25.15 (+0.17)
+24.47 (-0.50)
+25.21 (+0.24)
+24.98 (baseline)
+80%
+scene tokens
+= 1,554
+PSNR (dB)
+25.32 (+1.10)
+24.00 (-0.21)
+23.09 (-1.12)
+24.20 (-0.01)
+24.21 (baseline)
+0%
+scene tokens
+= 7,770
+PSNR (dB)
+27.91 (+2.02)
+25.63 (-0.25)
+25.85 (-0.04)
+25.58 (-0.30)
+25.89 (baseline)
+20%
+scene tokens
+= 6,216
+PSNR (dB)
+27.77 (+2.18)
+25.34 (-0.26)
+25.70 (+0.10)
+25.28 (-0.32)
+25.60 (baseline)
+40%
+scene tokens
+= 4,662
+PSNR (dB)
+27.70 (+2.52)
+24.99 (-0.19)
+25.09 (-0.09)
+24.90 (-0.28)
+25.18 (baseline)
+60%
+scene tokens
+= 3,108
+PSNR (dB)
+27.22 (+2.44)
+24.27 (-0.50)
+24.19 (-0.58)
+24.76 (-0.01)
+24.77 (baseline)
+80%
+scene tokens
+= 1,554
+PSNR (dB)
+25.87 (+2.35)
+23.47 (-0.06)
+22.64 (-0.89)
+23.25 (-0.28)
+23.53 (baseline)
+0%
+scene tokens
+= 7,770
+PSNR (dB)
+27.72 (+0.18)
+27.69 (+0.15)
+27.47 (-0.07)
+27.62 (+0.08)
+27.54 (baseline)
+20%
+scene tokens
+= 6,216
+PSNR (dB)
+27.67 (+0.67)
+27.34 (+0.34)
+26.70 (-0.29)
+27.23 (+0.24)
+26.99 (baseline)
+40%
+scene tokens
+= 4,662
+PSNR (dB)
+27.33 (+0.93)
+26.88 (+0.47)
+26.01 (-0.40)
+26.69 (+0.28)
+26.41 (baseline)
+60%
+scene tokens
+= 3,108
+PSNR (dB)
+26.81 (+1.12)
+25.90 (+0.21)
+25.13 (-0.56)
+26.09 (+0.40)
+25.69 (baseline)
+80%
+scene tokens
+= 1,554
+PSNR (dB)
+25.84 (+1.83)
+25.09 (+1.08)
+23.22 (-0.79)
+24.81 (+0.80)
+24.01 (baseline)
+Fig. S20: Visual comparison of different condensers on DL3DV.
+27
+
+
+Preprint
+Compression
+rate
+Ground Truth
+Ours
+CLiFT-style
+Learned pruning
+K-means
+Random pruning
+0%
+scene tokens
+= 2,738
+PSNR (dB)
+38.33 (+0.70)
+37.76 (+0.13)
+37.74 (+0.12)
+37.75 (+0.13)
+37.63 (baseline)
+20%
+scene tokens
+= 2,190
+PSNR (dB)
+38.28 (+1.52)
+37.07 (+0.31)
+37.60 (+0.84)
+37.08 (+0.32)
+36.76 (baseline)
+40%
+scene tokens
+= 1,643
+PSNR (dB)
+38.00 (+2.28)
+36.67 (+0.96)
+37.34 (+1.63)
+35.78 (+0.07)
+35.71 (baseline)
+60%
+scene tokens
+= 1,095
+PSNR (dB)
+37.49 (+4.29)
+35.44 (+2.24)
+35.13 (+1.93)
+34.02 (+0.82)
+33.20 (baseline)
+80%
+scene tokens
+= 548
+PSNR (dB)
+35.74 (+5.86)
+32.14 (+2.26)
+30.46 (+0.58)
+29.54 (-0.34)
+29.88 (baseline)
+0%
+scene tokens
+= 2,738
+PSNR (dB)
+31.83 (+0.26)
+31.43 (-0.14)
+31.63 (+0.07)
+31.42 (-0.15)
+31.57 (baseline)
+20%
+scene tokens
+= 2,190
+PSNR (dB)
+31.68 (+0.47)
+31.26 (+0.05)
+31.15 (-0.07)
+30.97 (-0.24)
+31.22 (baseline)
+40%
+scene tokens
+= 1,643
+PSNR (dB)
+31.67 (+1.25)
+30.97 (+0.54)
+30.30 (-0.13)
+30.48 (+0.06)
+30.42 (baseline)
+60%
+scene tokens
+= 1,095
+PSNR (dB)
+31.33 (+2.00)
+30.23 (+0.91)
+29.27 (-0.06)
+29.59 (+0.26)
+29.33 (baseline)
+80%
+scene tokens
+= 548
+PSNR (dB)
+30.09 (+3.07)
+28.54 (+1.51)
+26.69 (-0.34)
+27.24 (+0.22)
+27.03 (baseline)
+Fig. S21: Visual comparison of different condensers on RealEstate10K.
+28
+
+
+Preprint
+Compression
+rate
+Ground Truth
+Ours
+CLiFT-style
+Learned pruning
+K-means
+Random pruning
+0%
+scene tokens
+= 2,738
+PSNR (dB)
+35.10 (+1.53)
+33.58 (+0.01)
+33.53 (-0.04)
+33.78 (+0.21)
+33.58 (baseline)
+20%
+scene tokens
+= 2,190
+PSNR (dB)
+34.95 (+2.32)
+33.07 (+0.43)
+33.07 (+0.44)
+32.72 (+0.08)
+32.63 (baseline)
+40%
+scene tokens
+= 1,643
+PSNR (dB)
+34.62 (+2.83)
+32.40 (+0.61)
+31.69 (-0.10)
+31.20 (-0.58)
+31.78 (baseline)
+60%
+scene tokens
+= 1,095
+PSNR (dB)
+33.87 (+3.65)
+31.41 (+1.18)
+29.56 (-0.67)
+29.90 (-0.33)
+30.23 (baseline)
+80%
+scene tokens
+= 548
+PSNR (dB)
+31.23 (+3.64)
+28.78 (+1.19)
+25.62 (-1.96)
+26.68 (-0.90)
+27.58 (baseline)
+0%
+scene tokens
+= 2,738
+PSNR (dB)
+32.44 (+0.12)
+32.26 (-0.07)
+32.24 (-0.08)
+32.32 (-0.00)
+32.32 (baseline)
+20%
+scene tokens
+= 2,190
+PSNR (dB)
+32.40 (+0.66)
+32.02 (+0.28)
+32.30 (+0.55)
+31.88 (+0.13)
+31.74 (baseline)
+40%
+scene tokens
+= 1,643
+PSNR (dB)
+32.31 (+1.32)
+31.73 (+0.74)
+31.85 (+0.86)
+31.16 (+0.17)
+30.99 (baseline)
+60%
+scene tokens
+= 1,095
+PSNR (dB)
+31.93 (+1.97)
+30.76 (+0.81)
+30.86 (+0.90)
+29.66 (-0.29)
+29.95 (baseline)
+80%
+scene tokens
+= 548
+PSNR (dB)
+30.69 (+3.04)
+28.94 (+1.28)
+28.63 (+0.98)
+27.43 (-0.23)
+27.66 (baseline)
+Fig. S22: Visual comparison of different condensers on RealEstate10K.
+29
+
+
+Preprint
+Compression
+rate
+Ground Truth
+Ours
+CLiFT-style
+Learned pruning
+K-means
+Random pruning
+0%
+scene tokens
+= 2,738
+PSNR (dB)
+28.90 (+0.23)
+28.75 (+0.08)
+28.61 (-0.06)
+28.72 (+0.05)
+28.67 (baseline)
+20%
+scene tokens
+= 2,190
+PSNR (dB)
+28.88 (+0.45)
+28.47 (+0.04)
+28.63 (+0.21)
+28.60 (+0.17)
+28.43 (baseline)
+40%
+scene tokens
+= 1,643
+PSNR (dB)
+28.78 (+0.88)
+28.31 (+0.42)
+28.38 (+0.49)
+28.08 (+0.19)
+27.89 (baseline)
+60%
+scene tokens
+= 1,095
+PSNR (dB)
+28.76 (+1.48)
+27.91 (+0.63)
+27.47 (+0.20)
+27.37 (+0.09)
+27.27 (baseline)
+80%
+scene tokens
+= 548
+PSNR (dB)
+28.02 (+1.82)
+27.00 (+0.79)
+25.81 (-0.40)
+26.14 (-0.07)
+26.21 (baseline)
+0%
+scene tokens
+= 13,690
+PSNR (dB)
+31.66 (+0.96)
+30.64 (-0.06)
+30.87 (+0.17)
+30.71 (+0.01)
+30.70 (baseline)
+20%
+scene tokens
+= 10,952
+PSNR (dB)
+31.61 (+1.05)
+30.63 (+0.07)
+30.47 (-0.09)
+30.58 (+0.02)
+30.56 (baseline)
+40%
+scene tokens
+= 8,214
+PSNR (dB)
+31.52 (+1.13)
+30.47 (+0.08)
+30.48 (+0.09)
+30.51 (+0.12)
+30.39 (baseline)
+60%
+scene tokens
+= 5,476
+PSNR (dB)
+31.35 (+1.48)
+30.60 (+0.73)
+30.76 (+0.89)
+30.10 (+0.22)
+29.87 (baseline)
+80%
+scene tokens
+= 2,738
+PSNR (dB)
+30.99 (+1.51)
+30.05 (+0.56)
+30.45 (+0.96)
+29.53 (+0.05)
+29.49 (baseline)
+Fig. S23: Visual comparison of different condensers on RealEstate10K.
+30
+
+
+Preprint
+Compression
+rate
+Ground Truth
+Ours
+CLiFT-style
+Learned pruning
+K-means
+Random pruning
+0%
+scene tokens
+= 13,690
+PSNR (dB)
+34.74 (+0.85)
+34.20 (+0.31)
+34.24 (+0.35)
+34.16 (+0.27)
+33.89 (baseline)
+20%
+scene tokens
+= 10,952
+PSNR (dB)
+34.60 (+0.99)
+33.77 (+0.16)
+34.37 (+0.77)
+33.33 (-0.28)
+33.61 (baseline)
+40%
+scene tokens
+= 8,214
+PSNR (dB)
+34.47 (+1.41)
+33.59 (+0.53)
+34.08 (+1.02)
+33.03 (-0.04)
+33.07 (baseline)
+60%
+scene tokens
+= 5,476
+PSNR (dB)
+34.20 (+2.24)
+32.48 (+0.51)
+32.37 (+0.40)
+32.01 (+0.04)
+31.97 (baseline)
+80%
+scene tokens
+= 2,738
+PSNR (dB)
+33.39 (+3.07)
+31.46 (+1.14)
+30.00 (-0.32)
+29.80 (-0.52)
+30.32 (baseline)
+0%
+scene tokens
+= 13,690
+PSNR (dB)
+32.41 (+0.20)
+32.29 (+0.08)
+32.21 (-0.00)
+32.35 (+0.14)
+32.21 (baseline)
+20%
+scene tokens
+= 10,952
+PSNR (dB)
+32.35 (+0.45)
+32.25 (+0.36)
+32.17 (+0.27)
+31.94 (+0.05)
+31.90 (baseline)
+40%
+scene tokens
+= 8,214
+PSNR (dB)
+32.26 (+0.83)
+31.54 (+0.11)
+31.87 (+0.44)
+31.61 (+0.18)
+31.43 (baseline)
+60%
+scene tokens
+= 5,476
+PSNR (dB)
+31.53 (+1.21)
+31.33 (+1.02)
+31.42 (+1.11)
+30.65 (+0.34)
+30.32 (baseline)
+80%
+scene tokens
+= 2,738
+PSNR (dB)
+30.69 (+2.89)
+29.66 (+1.86)
+29.90 (+2.11)
+28.58 (+0.79)
+27.79 (baseline)
+Fig. S24: Visual comparison of different condensers on RealEstate10K.
+31
+
+
+Preprint
+Compression
+rate
+Ground Truth
+Ours
+CLiFT-style
+Learned pruning
+K-means
+Random pruning
+0%
+scene tokens
+= 13,690
+PSNR (dB)
+32.05 (+0.62)
+31.63 (+0.20)
+31.52 (+0.09)
+31.46 (+0.03)
+31.43 (baseline)
+20%
+scene tokens
+= 10,952
+PSNR (dB)
+32.06 (+0.88)
+31.59 (+0.42)
+31.61 (+0.44)
+31.14 (-0.03)
+31.17 (baseline)
+40%
+scene tokens
+= 8,214
+PSNR (dB)
+31.89 (+0.95)
+31.29 (+0.35)
+31.39 (+0.45)
+31.06 (+0.12)
+30.94 (baseline)
+60%
+scene tokens
+= 5,476
+PSNR (dB)
+31.73 (+1.16)
+31.06 (+0.49)
+30.36 (-0.20)
+30.21 (-0.36)
+30.56 (baseline)
+80%
+scene tokens
+= 2,738
+PSNR (dB)
+30.97 (+2.11)
+29.02 (+0.16)
+28.02 (-0.84)
+28.92 (+0.06)
+28.86 (baseline)
+0%
+scene tokens
+= 13,690
+PSNR (dB)
+25.86 (+0.59)
+25.17 (-0.11)
+25.46 (+0.19)
+25.36 (+0.09)
+25.27 (baseline)
+20%
+scene tokens
+= 10,952
+PSNR (dB)
+25.85 (+0.64)
+25.11 (-0.09)
+25.14 (-0.06)
+25.38 (+0.17)
+25.21 (baseline)
+40%
+scene tokens
+= 8,214
+PSNR (dB)
+25.67 (+0.66)
+24.99 (-0.02)
+24.78 (-0.23)
+25.01 (-0.00)
+25.01 (baseline)
+60%
+scene tokens
+= 5,476
+PSNR (dB)
+25.67 (+1.04)
+24.59 (-0.04)
+24.01 (-0.61)
+24.71 (+0.09)
+24.62 (baseline)
+80%
+scene tokens
+= 2,738
+PSNR (dB)
+25.07 (+1.28)
+24.21 (+0.41)
+22.41 (-1.38)
+23.96 (+0.17)
+23.79 (baseline)
+Fig. S25: Visual comparison of different condensers on RealEstate10K.
+32
+
+
+Preprint
+Ref. RGB
+Emergent Depth
+Multi-view Point Cloud + Anchors
+Projected Anchors & Density
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Fig. S26: Emergent geometry and geometry- and scene-complexity-aware anchor placement on
+RealEstate10K.
+33
+
+
+Preprint
+Ref. RGB
+Emergent Depth
+Multi-view Point Cloud + Anchors
+Projected Anchors & Density
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Fig. S27: Emergent geometry and geometry- and scene-complexity-aware anchor placement on
+RealEstate10K.
+34
+
+
+Preprint
+Ref. RGB
+Emergent Depth
+Multi-view Point Cloud + Anchors
+Projected Anchors & Density
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Fig. S28: Emergent geometry and geometry- and scene-complexity-aware anchor placement on
+RealEstate10K.
+35
+
+
+Preprint
+Ref. RGB
+Emergent Depth
+Multi-view Point Cloud + Anchors
+Projected Anchors & Density
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Fig. S29: Emergent geometry and geometry- and scene-complexity-aware anchor placement on
+DL3DV.
+36
+
+
+Preprint
+Ref. RGB
+Emergent Depth
+Multi-view Point Cloud + Anchors
+Projected Anchors & Density
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Fig. S30: Emergent geometry and geometry- and scene-complexity-aware anchor placement on
+DL3DV.
+37
+
+
+Preprint
+Ref. RGB
+Emergent Depth
+Multi-view Point Cloud + Anchors
+Projected Anchors & Density
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Dense
+Sparse
+Ref-Token Depth Head
+Anchors Geometry Pred.
+Project Anchors to Image
+Fig. S31: Emergent geometry and geometry- and scene-complexity-aware anchor placement on
+DL3DV.
+38

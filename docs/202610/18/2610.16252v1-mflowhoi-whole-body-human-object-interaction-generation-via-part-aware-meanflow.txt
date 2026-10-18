@@ -1,0 +1,955 @@
+MFlowHOI: Whole-Body Human-Object Interaction Generation
+via Part-Aware MeanFlow
+Qiang He1,2, Yonghao Zhang1,2, Yinda Zhang3, Chenyu Meng1,2, Liufei Ouyang1,2,
+Haoxiang Hu1,2, Cangjun Gao1,2, Xiaoming Deng1,2, Cuixia Ma1,2, Hongan Wang1,2
+1Institute of Software, Chinese Academy of Sciences
+2University of Chinese Academy of Sciences
+3Google
+Abstract
+Whole-body human–object interaction (HOI) generation re-
+quires coordinating body and finger motion, object trajecto-
+ries, and time-varying contacts. Existing methods typically
+rely on iterative diffusion or test-time optimization, result-
+ing in high inference costs. Direct one-step generation is
+highly desired in downstream applications due to efficient
+inference. However, it is challenging because these HOI com-
+ponents differ substantially in structure and scale. We present
+MFlowHOI, an efficient one-step framework for whole-body
+HOI generation. A Contact-Aware Multipart RVQVAE or-
+ganizes body, hand, object, and contact signals into a struc-
+tured latent space, with a shared decoder preserving their
+global coordination. An ST-DiT then models temporal and
+cross-part dependencies in this space and generates a com-
+plete interaction in a single MeanFlow evaluation. Predicted
+object-local contact correspondences further enable geomet-
+ric refinement and interaction-preserving transfer to photore-
+alistic 3D Gaussian avatars with different body proportions.
+Experiments demonstrate that MFlowHOI outperforms exist-
+ing base generators in motion quality and text alignment while
+substantially reducing inference time.
+Introduction
+Human–object interaction (HOI) generation supports appli-
+cations in virtual reality, character animation, embodied sim-
+ulation, and robotics. It requires the body, articulated hands,
+and object to move coherently while maintaining plausible
+spatial relations over time. This is particularly challenging for
+dexterous interactions: small relative-pose errors can cause
+unreachable grasps, floating contacts, or severe penetration
+despite otherwise natural motion.
+Existing methods capture complementary aspects of HOI.
+Hand–object approaches model articulated hands and local
+contact geometry
+(Christen et al. 2022; Liu et al. 2023;
+Cha et al. 2024; Liu and Yi 2024), but omit the full-body
+motions to drive the hands. Whole-body methods coordi-
+nate human and object trajectories (Ghosh et al. 2023; Li,
+Wu, and Liu 2023; Li et al. 2024a; Peng et al. 2025), yet
+often use simplified hand representations. Recent methods
+jointly model body and finger motion (Zhang et al. 2025;
+Ron et al. 2025; Pi et al. 2026; Pratikaki et al. 2026), but
+typically rely on iterative diffusion, geometric guidance, or
+test-time optimization to maintain contact (Li et al. 2024a;
+Peng et al. 2025; Zhang et al. 2025; Karunratanakul et al.
+Figure 1: MFlowHOI jointly generates body and finger mo-
+tions, object trajectories, and contacts in a single transport
+pass, enabling refinement and retargeting to 3D Gaussian
+avatars with diverse body proportions.
+2024; Ron et al. 2025; Pi et al. 2026). Although high-quality
+results can be achieved, their high inference cost limits inter-
+active use. Recently, MeanFlow (Geng et al. 2025a) enables
+one-step generation by learning an interval-averaged veloc-
+ity field and has shown promising results in human motion
+synthesis (Yang et al. 2025; Geng et al. 2025b). However,
+it is nontrivial to apply it to HOI because body motion,
+finger articulation, object trajectories, and sparse contacts
+between human and objects have different structures and
+scales. Directly encoding them jointly can suppress subtle
+hand and contact dynamics, whereas modeling them inde-
+pendently weakens the quality of interaction coordination.
+In our experiments, we find that directly applying one-step
+MeanFlow to existing HOI representations leads to degraded
+motion and unstable contact.
+In this paper, we propose MFlowHOI, a one-step frame-
+arXiv:2610.16252v1  [cs.CV]  12 Oct 2026
+
+
+work for contact-aware whole-body HOI generation. Its
+Contact-Aware Multipart RVQ-VAE decomposes an inter-
+action into functional body parts, object motion, contact
+probabilities, and object-local contact positions. Stream-
+specific temporal encoders capture fine-grained dynamics,
+while a shared decoder preserves global coordination, form-
+ing a structured time–part latent space. In this latent space,
+a conditional Spatio-Temporal Diffusion Transformer (ST-
+DiT) learns the MeanFlow velocity field. It models temporal
+dependencies within each stream and cross-part interactions
+among the body, hands, object, and contacts. A single evalua-
+tion generates a complete interaction latent, which is decoded
+into whole-body and finger motion, object trajectories, and
+contact cues. The resulting contact correspondences also en-
+able geometric refinement and interaction-preserving trans-
+fer to photorealistic 3D Gaussian avatars with different body
+proportions. Experiments on GRAB demonstrate improved
+distributional quality and text–motion alignment with sub-
+stantially faster inference than existing HOI generators. Ab-
+lations confirm the importance of the multipart latent space
+and its temporal and cross-part modeling.
+The main contribution of our method can be summarized
+as follows. 1) We present a new one-step framework that
+jointly generates coordinated whole-body and finger motion,
+object trajectories, and time-varying contact cues with a sin-
+gle network. 2) To enable stable conditional MeanFlow gen-
+eration, we design a temporal multipart–based HOI latent
+representation to model temporal dependencies between dif-
+ferent body parts andobjects, andintroduce aspatio-temporal
+diffusion transformer to balance heterogeneous HOI compo-
+nents. 3) We predict contact correspondences between ob-
+ject and body parts that support geometric refinement and
+interaction-preserving transfer to photorealistic 3D Gaussian
+avatars with different body proportions.
+Related Work
+Efficient and Controllable Motion Generation.
+Human
+motion generation has been extensively studied under various
+conditions, including text, music, action labels, keyframes,
+and joint trajectories. Diffusion-based methods have shown
+strong generative performance: MDM (Tevet et al. 2023)
+introduced a general framework for text- and action-
+conditioned motion generation, while OmniControl (Xie
+et al. 2024) and TLControl (Wan et al. 2024) extended dif-
+fusion models with fine-grained spatial and trajectory con-
+straints. DNO (Karunratanakul et al. 2024). Further treats a
+pretrained diffusion model as a motion prior and optimizes
+its initial noise to satisfy test-time objectives. Despite their
+flexibility, these approaches require iterative denoising or
+additional optimization during inference. Flow-based mod-
+els offer a more efficient alternative: Motion Flow Match-
+ing (Hu et al. 2023) generates motion through continuous-
+time transport, and FlowMotion (Cuba, do Carmo Melí-
+cio, and Gois 2025) improves temporal coherence using
+target-predictive conditional flow matching. Recently, Flow-
+erDance (Yang et al. 2025) and ARMFlow (Geng et al.
+2025b) explored MeanFlow (Geng et al. 2025a) for one-
+step dance and human-reaction generation. However, effi-
+cient one-step generation remains underexplored for human–
+object interactions, where human motion must be coordi-
+nated with object motion and time-varying contact.
+Hand–Object Interaction Generation.
+Hand–object in-
+teraction generation focuses on synthesizing plausible hand
+poses or motion with respect to an object. Early studies com-
+monly generate static grasps using object geometry, contact
+maps, or interaction priors. Recent methods extend this set-
+ting to dynamic interactions: ContactGen (Liu et al. 2023)
+represents contacts through object-surface locations, hand
+parts, and contact directions; D-Grasp (Christen et al. 2022)
+uses physics-based control to synthesize dynamic grasping
+behaviors; Text2HOI (Cha et al. 2024) predicts a contact map
+before generating hand–object motion; and GeneOH (Liu
+and Yi 2024) Diffusion adopts a contact-centric represen-
+tation for interaction denoising. In addition, several recent
+studies seek up better cross-modality consistency (Li et al.
+2025; Huang et al. 2025; Christen et al. 2024) , geometric or
+physical compliance (Zhang et al. 2021; Taheri et al. 2024;
+Zhang et al. 2024; Zheng et al. 2023a) and interaction re-
+covering (Zhou et al. 2022). These methods capture detailed
+hand articulation and local contact geometry, but generally
+do not model the complete human kinematic chain. Conse-
+quently, a locally plausible hand pose or trajectory does not
+necessarily correspond to natural and reachable motion of
+the arms, torso, and root.
+Human–Object Interaction Generation.
+Human–object
+interaction generation studies the coupled motion of a person
+and a movable object. Recently, many works focus on full-
+body generation (Taheri et al. 2022; Wu et al. 2022, 2024;
+Li et al. 2024b; Kwon, Chen, and Joo 2026) and physically
+plausible interactions (Braun et al. 2024; Di et al. 2026). Fur-
+thermore, IMoS (Ghosh et al. 2023) generates intent-driven
+full-body interactions with objects, while OMOMO (Li, Wu,
+and Liu 2023) predicts hand locations from a given object
+trajectory and uses them to condition body-motion synthesis.
+CHOIS (Li et al. 2024a) jointly generates human and object
+motion from language, initial states, and sparse object way-
+points, using sampling-time guidance to improve contacts.
+HOI-Diff (Peng et al. 2025) employs separate human and
+object diffusion branches together with affordance modeling
+and classifier guidance. These methods primarily represent
+the body and object while omitting fully articulated finger
+motion. More recent approaches model finer hand articula-
+tion: DiffGrasp (Zhang et al. 2025) generates body and hand
+motion conditioned on an object trajectory and applies recon-
+struction guidance during diffusion sampling; HOIDiNi (Ron
+et al. 2025) and CoDA (Pi et al. 2026) coordinate body, hand,
+and object generation through staged diffusion or noise op-
+timization; and Dex2HOI (Pratikaki et al. 2026) avoids ex-
+ternal noise optimization but retains iterative diffusion sam-
+pling. Therefore, simultaneously modeling body motion, ar-
+ticulated hands, object motion, and temporal contact remains
+challenging, particularly under efficient inference.
+Method
+Given the initial poses of a human and an object, the object
+geometry, and a textual instruction, our goal is to generate
+a complete 3D human–object interaction (HOI) sequence,
+
+
+Figure 2: MFlowHOI encodes part-level motion, object motion, object-body part contacts, and contact states into a structured
+latent. Conditional MeanFlow transports noise to a complete HOI latent in one ST-DiT transport evaluation; the frozen decoder
+recovers motion for direct use, optional refinement, or 3DGS avatar deployment.
+including whole-body human motion, articulated finger mo-
+tion, and object motion over time. As shown in Figure 2,
+MFlowHOI consists of three main modules. In HOI Latent
+Representation, we design a contact-aware multipart RVQ-
+VAE to encode multipart human motion, object motion, and
+contact information into a temporal multipart-based HOI la-
+tent representation. In Conditional MeanFlow, we employ
+an ST-DiT with spatial–temporal and cross-part attention to
+generate the HOI latent sequence in a single transport eval-
+uation, conditioned on the textual instruction, initial poses,
+and object geometry. In Realistic Rendering, we develop a
+pose-driven 3D Gaussian Splatting framework to produce
+high-fidelity renderings of the generated 3D HOI sequences.
+Data Representation
+Human and Object Motion Representation.
+Following
+DiffGrasp (Zhang et al. 2025), we use SMPL-X to rep-
+resent human motion. A human motion sequence is de-
+noted by H ∈RT ×Dh, where each state is represented as
+H(t) = {r(t), ∆d(t), θ(t)}. Here, r(t) ∈R6 is the global root
+orientation, θ(t) ∈R52×6 contains the local rotations of 52
+full-body joints, and ∆d(t) is the root translation relative to
+the previous frame. The initial translation d(1) ∈R3 is repre-
+sented separately. Similarly, an object motion sequence is de-
+noted by O ∈RT ×Do, where O(t) = {R(t), ∆o(t)}. Here,
+R(t) ∈R6 is the global rotation and ∆o(t) is the translation
+relative to the previous frame. The initial object translation
+o(1) ∈R3 is represented separately. The human and object
+shapes are represented by the SMPL-X shape parameters β
+and the BPS descriptor B ∈RK×3, respectively. Overall,
+the human and object representations are (H, d(1), β) and
+(O, o(1), B), respectively.
+Interaction Representation.
+Following HOIDiNi and
+CoDA (Ron et al. 2025; Pi et al. 2026), we represent
+human–object interactions using human-centric contact cues
+expressed in the object coordinate frame. Denote M =
+{mi}N
+i=1 to be a set of predefined body markers. At frame
+t, each marker mi is associated with a contact probabil-
+ity γ(t)
+i
+∈[0, 1] to indicate whether the marker is in con-
+tact with the object, and an object-relative contact position
+p(t)
+i
+∈R3 to specify the contact position in object coor-
+dinate frame. The frame-level interaction is represented as
+I(t) = {γ(t)
+i , p(t)
+i )}N
+i=1, and the interaction sequence is de-
+noted by I = {I(t)}T
+t=1.
+Text Description.
+Following IMoS (Ghosh et al. 2023) and
+Text2HOI (Cha et al. 2024), we describe each interaction
+using the template “A person ⟨action⟩the ⟨object⟩.”
+HOI Latent Representation
+We design a multipart residual vector-quantized variational
+autoencoder (RVQ-VAE) (Lee et al. 2022) to learn compact
+discrete representations of human–object interactions. The
+human motion, object motion, and interaction cues are sepa-
+rately encoded and quantized, and then jointly reconstructed
+by a shared decoder.
+Multipart Encoding.
+We divide the human motion H
+into semantic streams Sh of eight typical body parts, cor-
+responding to the root, head, left and right hands, left and
+
+
+right legs, and left and right feet. The object motion O
+forms an additional stream, while the interaction repre-
+sentation I is separated into a contact-probability stream
+Γ = {γ(t)
+i }T,N
+t=1,i=1 and an object-relative contact-position
+stream P = {p(t)
+i }T,N
+t=1,i=1. The complete stream set is
+S = Sh ∪{O, Γ, P}. For each stream s ∈S, a stream-
+specific temporal encoder maps its input Xs to a continuous
+latent sequence Zs = Es(Xs) ∈RT ′×d, where T ′ is the
+downsampled sequence length and d is the latent dimension.
+Residual Vector Quantization.
+Each latent vector z(τ)
+s
+is quantized using an L-level residual codebook Es =
+{Es,l}L
+l=1. The quantized vector is obtained by replacing z(τ)
+s
+with the sum of its selected code entries:
+bz(τ)
+s
+= Qs
+
+z(τ)
+s
+
+=
+L
+X
+l=1
+es,l,kl,
+es,l,kl ∈Es,l.
+(1)
+Applying the quantizer over time produces the discrete latent
+sequence bZs.
+Conditional Joint Decoding.
+We encode the initial
+human–object state as cinit = Einit(H(1), O(1), d(1), o(1))
+and the human and object shapes as cshape = Eshape(β, B).
+All quantized streams are concatenated as bZ = L
+s∈S bZs and
+jointly decoded by ( bH, bO, bI) = D(bZ, cinit, cshape), where
+⊕denotes feature-wise concatenation. The shared decoder
+captures cross-stream dependencies and jointly reconstructs
+coherent human motion, object motion, and interaction cues.
+Codec Training.
+We train the codec using
+LRVQ =
+X
+s∈S
+λsLs
+rec + λcodeLcode + λcommitLcommit,
+where Ls
+rec is the Smooth L1 loss for continuous streams and
+binary cross-entropy for the contact-state stream, Lcode up-
+dates the codebook embeddings toward the encoder outputs,
+and Lcommit encourages the encoder outputs to remain close
+to their residual-quantized representations.
+Conditional MeanFlow in the HOI Latent Space
+After training the Contact-Aware Multipart RVQ-VAE, we
+freeze its encoders and decoder. Instead of generating dis-
+crete RVQ indices, we model the continuous pre-quantization
+latents z0 = Stacks∈S[Zs] ∈RT ′×|S|×d, which form a
+structured time–part token grid. Given a textual instruc-
+tion y, we construct the complete generation condition as
+c = Fcond(cinit, cshape, Etext(y)), where Etext is a frozen
+CLIP text encoder. Thus, c jointly specifies the initial human–
+object state, human and object shapes, and textual instruction.
+Conditional MeanFlow Objective.
+Given a clean latent
+z0 and Gaussian noise ϵ ∼N(0, I), we construct the linear
+path zt = (1 −t)z0 + tϵ,vgt = ϵ −z0.
+For an interval [r, t], where 0 ≤r ≤t ≤1, MeanFlow
+models the average velocity
+u(zt, r, t | c) =
+1
+t −r
+Z t
+r
+v(zτ, τ | c) dτ
+(2)
+Unlike an instantaneous velocity field, u directly transports
+between interval endpoints and therefore permits a full-
+interval update. The average velocity satisfies the MeanFlow
+identity
+u + (t −r)du
+dt = v,
+du
+dt = ∂zu v + ∂tu.
+(3)
+We parameterize it as buθ = ST-DiTθ(zt, r, t, c). Its total
+derivative is efficiently evaluated using the Jacobian–vector
+product ˙buθ = JVP(z,r,t)[buθ; (vgt, 0, 1)]. We then construct
+the detached target utgt = sg[vgt −(t −r) ˙buθ], where sg[·]
+denotes stop-gradient. This construction avoids higher-order
+backpropagation. To balance heterogeneous motion and con-
+tact streams, we define ℓs = ∥buθ,s −utgt,s∥2
+2 for each s ∈S
+and minimize
+LMF = E
+"
+1
+|S|
+X
+s∈S
+sg
+
+(ℓs + δ)−α
+ℓs
+#
+.
+(4)
+We use δ = 10−3 and α = 0.5. During training, we sample
+and sort two time values to ensure r ≤t, and set r = t for half
+of each batch to stabilize the instantaneous-flow boundary.
+Spatio-Temporal Attention Modeling.
+ST-DiT operates
+on the T ′×|S| time–part token grid. Temporal attention mod-
+els the trajectory of each human, object, and contact stream,
+while cross-part attention coordinates all streams at each
+latent time step. Together, they jointly capture whole-body
+dynamics, articulated hand motion, object motion, contact
+probabilities, and object-local contact positions. Temporal,
+part, and modality embeddings preserve the grid structure.
+The condition c is injected through part-specific adaptive
+normalization, allowing each stream to selectively access the
+textual instruction, initial human–object state, and shape in-
+formation. In particular, the contact streams provide explicit
+interaction cues that connect human and object motion.
+One-Step HOI Generation.
+At inference time, we sam-
+ple ϵ ∼N(0, I) and perform a single ST-DiT evaluation
+over the full interval: bz0 = ϵ −buθ(ϵ, 0, 1, c). We unpack
+the generated time–part grid as {eZs}s∈S = Unstack(bz0)
+and reconstruct the complete interaction using the frozen de-
+coder: (H, O, bI) = D(L
+s∈S eZs, cinit, cshape). Finally, we
+restore the prescribed initial poses and integrate the human
+and object translation increments from d(1) and o(1). The
+base model therefore generates a complete HOI sequence
+with one ST-DiT transport evaluation, without iterative inte-
+gration or projection onto the residual codebooks.
+Optional Contact-Guided Refinement
+Our base model directly generates the final sequence with-
+out post-processing. Nevertheless, its predicted interaction
+representation establishes explicit correspondences between
+human markers and object-local contact points, enabling two
+optional refinement strategies. Their computational costs are
+not included in the reported one-step generation latency.
+Object-Only Refinement.
+We fix the generated human
+motion and object rotation, and optimize only the object
+
+
+translation. Confident object-body part contacts are projected
+onto the object surface and transformed into world coordi-
+nates. We then estimate bounded, temporally smooth trans-
+lation offsets that robustly reduce their discrepancies from
+the corresponding human markers. The initial object state is
+preserved, and MeanFlow is not rerun.
+Upper-Body Noise Optimization.
+Alternatively, we fix
+the object trajectory and predicted contact targets, and adapt
+Diffusion Noise Optimization (DNO) to our differentiable
+one-step generator. The input noise is optimized using con-
+tact, penetration, motion smoothness, and scene-consistency
+objectives. An output projection preserves the human root
+and lower body, as well as the object trajectory and con-
+tact predictions, such that only the torso, arms, and articu-
+lated hands can change. Each optimization iteration requires
+only one ST-DiT evaluation and one frozen decoder pass.
+Full objectives and implementation details for optimization
+strategies are provided in the supplementary material.
+Pose-Driven 3DGS Realistic Rendering
+To deploy the generated HOI sequences on photorealistic
+avatars, we develop an interaction-preserving pose-driven 3D
+Gaussian Splatting (3DGS) framework. Directly transferring
+generated joint rotations to an avatar with different body pro-
+portions changes the global wrist positions, potentially caus-
+ing grasp failure and hand–object penetration. As illustrated
+in Figure 3, we address these issues through coarse-to-fine
+pose adaptation while keeping the generated root and object
+trajectories fixed. Let bx0 denote the generated human pose
+sequence after initial retargeting to the target avatar, and let
+τ contain the source arm-joint targets and fixed object tra-
+jectory. We define an arm-alignment objective for restoring
+reachability and a penetration objective over Gaussians of
+the hand part:
+Garms(bx0, τ) =
+X
+t
+Jtar
+t,arm(bx0) −Jsrc
+t,arm(τ)
+2
+2 ,
+Gpene(bx0, τ) =
+X
+t
+X
+g∈H
+
+−SDFOt(τ)
+ µg,t(bx0)
+2
++ ,
+(5)
+where H denotes the set of Gaussians of the hand part, and
+µg,t is the posed mean of Gaussian g. Since the 3DGS pose-
+driving function is differentiable, both objectives can be di-
+rectly backpropagated to bx0. As shown in Figure 3, we apply
+the two objectives sequentially. First, optimize the upper-
+body pose using Garms to restore reachability across different
+body shapes. Starting from the arm-aligned result, then opti-
+mize the articulated hand pose using Gpene to suppress local
+hand–object penetration. Root motion, lower-body pose, and
+generated object trajectory remain fixed in both stages.
+Experiments
+Evaluations
+Dataset.
+We evaluate on GRAB (Taheri et al. 2020), which
+contains full-body interaction sequences captured from 10
+subjects interacting with 51 rigid objects. Following prior
+work (Pi et al. 2026; Ghosh et al. 2023), we use subjects S1–
+S9 for training and S10 for evaluation. For the cross-shape
+Figure 3: Direct pose transfer across different body shapes
+may cause grasp failure. Our coarse arm retargeting first
+restores reachability, after which fine hand-Gaussian SDF
+optimization suppresses local hand–object penetration while
+preserving the generated object trajectory.
+deployment study, we apply the generated interactions to
+drivable 3DGS avatars with AvatarReX (Zheng et al. 2023b).
+Evaluation metrics.
+Following CoDA (Pi et al. 2026), we
+use its released text–motion evaluator to assess generation
+quality. Fr’echet Inception Distance (FID) measures the dis-
+tributional gap between generated and real motion features,
+R-Precision (R@3) evaluates text–motion alignment via Top-
+3 retrieval accuracy, and Diversity quantifies motion-feature
+variation relative to the ground-truth (GT) value. For physi-
+cal quality, foot skating (FS) measures horizontal foot-sliding
+velocity in m/s, while interpenetration volume (IV) and depth
+(ID) measure body–object overlap in cm3 and the maximum
+penetration depth in mm, respectively. Contact ratio (CR)
+denotes the proportion of body vertices within 5 mm of the
+object surface. We also report the average warm inference
+latency per sample (Time) in seconds.
+Baselines.
+We compare with Dex2HOI (Pratikaki et al.
+2026),
+an
+interaction-
+representation
+baseline;
+Diff-
+Grasp (Zhang et al. 2025), adapted from object-conditioned
+diffusion to text-to-HOI; HOIDiNi (Ron et al. 2025), which
+jointly models human, object, and interaction states; and
+CoDA (Pi et al. 2026), which uses staged generation and
+DNO. We report both unrefined and guided/optimized vari-
+ants when available. To isolate the effect of the transport rep-
+resentation, we additionally train one-step MeanFlow models
+in the Dex2HOI and HOIDiNi state spaces. Implementation
+details are provided in the Supplementary Material.
+Qualitative Comparison.
+Table 1 compares generation
+quality, interaction geometry, and runtime on GRAB. With-
+out test-time optimization, MFlowHOI achieves the best FID
+(2.57) and R@3 (0.45) among the evaluated non-reference
+base generators, while requiring only 0.0142 seconds per se-
+quence. Similar to HOIDiNi without DNO, the direct model
+has a relatively low CR, indicating that semantic motion
+generation alone does not guarantee exact surface contact.
+Unlike Dex2HOI, however, MFlowHOI explicitly models
+bidirectional human–object contact relations, which provide
+actionable constraints for subsequent object- or body-side
+correction. We therefore use the base model to prioritize
+efficient and semantically faithful generation, while treat-
+ing geometric refinement as an optional stage. Existing re-
+
+
+Method
+FID↓R@3↑Div.→
+IV↓
+ID↓CR↑Time↓
+GT
+0.00
+0.55
+13.24 3.97 3.49 0.64
+–
+Dex2HOI
+3.44
+0.30
+10.15 5.14 1.97 0.33
+0.19
+DiffGrasp-U
+5.15
+0.27
+10.62 5.93 5.29 0.38
+1.63
+DiffGrasp-G
+4.26
+0.31
+10.70 5.96 5.75 0.40 363.47
+HOIDiNi
+5.81
+0.34
+11.47 4.14 1.21 0.06
+0.19
+HOIDiNi(DNO)
+5.42
+0.25
+11.55 4.79 4.47 0.64 379.50
+CoDA (DNO)
+7.52
+0.41
+9.77 4.82 5.20 0.57 872.95
+MFlowHOI
+2.57
+0.45
+11.25 3.58 1.45 0.09
+0.01
++ Obj. Ref.
+2.22
+0.42
+11.23 4.58 5.21 0.53
+1.82
++ UB-DNO
+7.25
+0.35
+9.56 5.92 6.68 0.69
+16.54
+Table 1: Comparison on GRAB. U and G denote unguided
+and guided generation, respectively; Obj. Ref. denotes object
+refinement, and UB-DNO denotes upper-body DNO.
+Method
+FID↓R@3↑
+Div.
+FS↓
+CR↑
+Dex2HOI space
+7.2769 0.3359
+9.8175 1.0859 0.0815
+HOIDiNi space
+13.1630 0.2109
+9.2114 3.4212 0.0300
+MFlowHOI w/o ST Attn.
+3.1960 0.3828 11.9047 0.1021 0.0524
+MFlowHOI
+2.5732 0.4531 11.2474 0.0929 0.0930
+Table 2: One-step MeanFlow results using different transport
+representations. All variants perform one full-interval trans-
+port evaluation without DNO. FS denotes foot skating.
+finement mechanisms improve contact-related metrics but
+require expensive iterative inference: DiffGrasp with recon-
+struction guidance takes 363.47 seconds, while the DNO
+variants of HOIDiNi and CoDA require 379.50 and 872.95
+seconds, respectively. In contrast, our predicted contact re-
+lations enable lightweight bidirectional refinement. Object
+refinement increases CR from 0.0930 to 0.5323 in 1.8167
+seconds, while 20-step upper-body DNO reaches 0.6936 in
+16.5422 seconds. The latter degrades FID and penetration
+metrics, confirming that stronger contact does not necessar-
+ily imply better overall generation quality. These variants
+provide complementary operating points: direct generation
+prioritizes quality and efficiency, object refinement provides
+balanced contact correction, and upper-body DNO targets
+contact-critical applications.
+Figure 4 further illustrates these semantic and geometric
+differences. MFlowHOI preserves action-defining spatial re-
+Method
+R-MPJPE↓FID↓CP-F1↑
+CR↑
+GT
+0.0 0.000
+– 0.6387
+Holistic (w/o Int.)
+139.4 3.830
+– 0.1409
+Part-wise (w/o Int.)
+47.3 0.190
+– 0.2852
+Ours (Part-wise; w Int.)
+33.5 0.133
+0.956 0.1345
+Ours + Obj. Ref.
+33.5 0.065
+0.956 0.6432
+Table 3: Latent reconstruction results. R-MPJPE measures
+root-relative joint reconstruction error, while CP-F1 evalu-
+ates reconstructed contact probabilities γ.
+Figure 4: Qualitative comparison results. Columns show two
+prompts, and rows compare different methods using matched
+frames and hand–object close-ups.
+lations, such as raising the flute toward the mouth with a coor-
+dinated two-handed configuration and positioning the camera
+near eye level. Competing methods may generate plausible
+gross body motion while placing the object away from these
+action-specific target regions. The close-ups also show tem-
+porally coordinated hand–object configurations across the
+selected frames, rather than contact that occurs only at iso-
+lated instants. These observations are consistent with the
+improved text–motion alignment in Table 1, while the re-
+maining small contact gaps in the direct outputs motivate the
+optional geometric refinement.
+Ablation Study
+Structured HOI Representation.
+As shown in Table 3,
+part-wise encoding reduces R-MPJPE from 139.4 to 47.3 mm
+and FID from 3.830 to 0.190 compared with holistic en-
+coding. Separating body, hand, and object signals prevents
+large-scale body motion from dominating finer interaction
+dynamics. Adding explicit interaction states further reduces
+R-MPJPE to 33.5 mm and FID to 0.133, while achieving a C-
+F1 of 0.956. Object refinement improves CR from 0.1345 to
+0.6432 and FID from 0.133 to 0.065 without affecting human
+motion. This indicates that the predicted interaction states
+provide actionable geometric correspondences for correcting
+object placement. Figure 5 shows that our codec preserves
+object placement, hand configurations, and their temporal
+evolution across different objects and interaction patterns.
+This confirms the structured representation captures coordi-
+
+
+Objective evaluation
+Perceptual study
+Method
+OBJ-CLIP↑LMD-B↓LMD-H↓Realism↑App.-H↑App.-O↑Mot.-H↑Mot.-O↑
+Animate Anyone
+0.6693
+13.98
+39.33
+1.46
+2.03
+1.24
+2.37
+1.25
+Ours (3DGS)
+0.8067
+11.05
+21.87
+4.35
+4.51
+4.49
+4.70
+4.53
+Table 4: Comparison with Animate Anyone. OBJ-CLIP measures object appearance similarity; LMD-B/H are body/hand
+landmark errors in pixels. Perceptual scores are averaged over 16 participants on a 1–5 scale and assess overall realism,
+appearance consistency (App.), and motion smoothness (Mot.) for the human (H) and object (O). Each method uses its
+respective 2D or 3D assets.
+Figure 5: Reconstruction results. Panels (a)–(d) compare
+ground truth with reconstructed frames and hand–object
+close-ups; panel (e) compares the interaction sequences.
+nated human–object motion rather than only body poses.
+Structured Latent Space for One-step Generation.
+As
+reported in Table 2, directly applying MeanFlow in the
+Dex2HOI and HOIDiNi spaces yields FIDs of 7.2769 and
+13.1630, respectively, with severe foot skating. In contrast,
+our structured latent space without ST attention reduces FID
+to 3.1960 and FS to 0.1021. These results show compress-
+ing heterogeneous HOI signals into balanced latent streams
+provides a better-conditioned space for one-step transport.
+Spatiotemporal Interaction Modeling.
+ST-DiT further
+reduces FID from 3.1960 to 2.5732 and FS from 0.1021
+to 0.0929, while improving R@3 from 0.3828 to 0.4531 and
+CR from 0.0524 to 0.0930. By modeling temporal depen-
+dencies within each stream and interactions across streams,
+ST-DiT improves semantic alignment, motion quality, and
+physical plausibility.
+Photorealistic 3DGS Deployment
+We compare our 3DGS-based rendering pipeline with the 2D
+pose-driven Animate Anyone (Hu 2024) under their respec-
+tive asset regimes. As reported in Table 4, our approach im-
+proves OBJ-CLIP from 0.6693 to 0.8067 and reduces body
+and hand landmark errors from 13.98 to 11.05 and from
+39.33 to 21.87, respectively. It also achieves higher percep-
+tual scores across all evaluation criteria, with particularly
+large gains in realism (4.35 vs. 1.46), object appearance con-
+sistency (4.49 vs. 1.24), and object motion smoothness (4.53
+vs. 1.25). The qualitative comparisons in Figure 6 further
+show that our explicit 3D representation better preserves
+object identity, temporal coherence, and hand–object align-
+ment. Additional results evaluating cross-shape interaction
+preservation are provided in the supplementary material.
+Figure 6: Qualitative comparison of Animate Anyone (first
+and third columns) and our 3DGS pipeline (second and fourth
+columns) at two matched instants under their respective as-
+set regimes. Ours better preserves object identity, temporal
+coherence, and hand–object alignment.
+Conclusion and Limitations
+We presented MFlowHOI, a one-step framework for whole-
+body HOI generation. Its contact-aware multipart codec bal-
+ances body, hand, object, and contact signals while preserv-
+ing global coordination. Operating on the resulting time–part
+latent grid, ST-DiT generates complete interactions with a
+single MeanFlow evaluation. Experiments demonstrate im-
+proved distributional quality and text alignment compared
+with other generators, at substantially lower latency. Pre-
+dicted object-local contacts further facilitate efficient geo-
+metric correction and avatar deployment. Although promis-
+ing results were achieved, our evaluation is limited to inter-
+actions with a single rigid object. Extending the method to
+articulated/deformable objects remains future work.
+
+
+References
+Braun, J.; Christen, S.; Kocabas, M.; Aksan, E.; and Hilliges,
+O. 2024. Physically plausible full-body hand-object inter-
+action synthesis. In 2024 International Conference on 3D
+Vision (3DV), 464–473. IEEE.
+Cha, J.; Kim, J.; Yoon, J. S.; and Baek, S. 2024. Text2hoi:
+Text-guided 3d motion generation for hand-object interac-
+tion. In Proceedings of the IEEE/CVF Conference on Com-
+puter Vision and Pattern Recognition, 1577–1585.
+Christen, S.; Hampali, S.; Sener, F.; Remelli, E.; Hodan, T.;
+Sauser, E.; Ma, S.; and Tekin, B. 2024. Diffh2o: Diffusion-
+based synthesis of hand-object interactions from textual de-
+scriptions. In SIGGRAPH Asia 2024 Conference Papers,
+1–11.
+Christen, S.; Kocabas, M.; Aksan, E.; Hwangbo, J.; Song, J.;
+and Hilliges, O. 2022. D-grasp: Physically plausible dynamic
+grasp synthesis for hand-object interactions. In Proceedings
+of the IEEE/CVF Conference on Computer Vision and Pat-
+tern Recognition, 20577–20586.
+Cuba, M. C.; do Carmo Melício, V.; and Gois, J. P. 2025.
+FlowMotion: Target-predictive conditional flow matching for
+Jitter-Reduced text-driven human motion generation. Com-
+puters & Graphics, 104374.
+Di, Y.; Li, Y.; Wang, Y.; Liu, M.; Gao, S.; and Ji, X. 2026.
+PAMotion: Physics-Aware Motion Generation for Full-Body
+Interaction with Multiple Objects. In Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, 30661–30674.
+Geng, Z.; Deng, M.; Bai, X.; Kolter, J. Z.; and He, K. 2025a.
+Mean Flows for One-step Generative Modeling.
+In The
+Thirty-ninth Annual Conference on Neural Information Pro-
+cessing Systems.
+Geng, Z.; Hayder, Z.; Liu, W.; Wang, H.; and Mian, A. 2025b.
+ARMFlow: AutoRegressive MeanFlow for Online 3D Hu-
+man Reaction Generation. arXiv preprint arXiv:2512.16234.
+Ghosh, A.; Dabral, R.; Golyanik, V.; Theobalt, C.; and
+Slusallek, P. 2023.
+IMoS: Intent-Driven Full-Body Mo-
+tion Synthesis for Human-Object Interactions. In Computer
+Graphics Forum, volume 42, 1–12. Blackwell-Wiley.
+Hu, L. 2024. Animate anyone: Consistent and controllable
+image-to-video synthesis for character animation. In Pro-
+ceedings of the IEEE/CVF conference on computer vision
+and pattern recognition, 8153–8163.
+Hu, V. T.; Yin, W.; Ma, P.; Chen, Y.; Fernando, B.; Asano,
+Y. M.; Gavves, E.; Mettes, P.; Ommer, B.; and Snoek, C. G.
+2023. Motion flow matching for human motion synthesis
+and editing. arXiv preprint arXiv:2312.08895.
+Huang, M.; Chu, F.-J.; Tekin, B.; Liang, K. J.; Ma, H.; Wang,
+W.; Chen, X.; Gleize, P.; Xue, H.; Lyu, S.; et al. 2025. Hoigpt:
+Learning long-sequence hand-object interaction with lan-
+guage models. In Proceedings of the Computer Vision and
+Pattern Recognition Conference, 7136–7146.
+Karunratanakul, K.; Preechakul, K.; Aksan, E.; Beeler, T.;
+Suwajanakorn, S.; and Tang, S. 2024. Optimizing diffusion
+noise can serve as universal motion priors. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, 1334–1345.
+Kwon, P.; Chen, C.; and Joo, H. 2026. Graspdiffusion: Syn-
+thesizing realistic whole-body hand-object interaction. In
+2026 IEEE/CVF Winter Conference on Applications of Com-
+puter Vision (WACV), 2392–2403. IEEE.
+Lee, D.; Kim, C.; Kim, S.; Cho, M.; and Han, W.-S. 2022.
+Autoregressive image generation using residual quantization.
+In Proceedings of the IEEE/CVF conference on computer
+vision and pattern recognition, 11523–11532.
+Li, J.; Clegg, A.; Mottaghi, R.; Wu, J.; Puig, X.; and Liu, C. K.
+2024a. Controllable Human-Object Interaction Synthesis. In
+European Conference on Computer Vision, 54–72.
+Li, J.; Wu, J.; and Liu, C. K. 2023. Object motion guided
+human motion synthesis. ACM Transactions on Graphics
+(TOG), 42(6): 1–11.
+Li, M.; Christen, S.; Wan, C.; Cai, Y.; Liao, R.; Sigal, L.;
+and Ma, S. 2025. LatentHOI: On the Generalizable Hand
+Object Motion Generation with Latent Hand Diffusion. In
+Proceedings of the Computer Vision and Pattern Recognition
+Conference, 17416–17425.
+Li, Q.; Wang, J.; Loy, C. C.; and Dai, B. 2024b. Task-oriented
+human-object interactions generation with implicit neural
+representations. In Proceedings of the IEEE/CVF Winter
+Conference on Applications of Computer Vision, 3035–3044.
+Liu, S.; Zhou, Y.; Yang, J.; Gupta, S.; and Wang, S. 2023.
+Contactgen: Generative contact modeling for grasp genera-
+tion. In Proceedings of the IEEE/CVF International Confer-
+ence on Computer Vision, 20609–20620.
+Liu, X.; and Yi, L. 2024. GeneOH Diffusion: Towards Gen-
+eralizable Hand-Object Interaction Denoising via Denoising
+Diffusion. In International Conference on Learning Repre-
+sentations.
+Peng, X.; Xie, Y.; Wu, Z.; Jampani, V.; Sun, D.; and Jiang,
+H. 2025.
+Hoi-diff: Text-driven synthesis of 3d human-
+object interactions using diffusion models. In Proceedings
+of the Computer Vision and Pattern Recognition Conference,
+2878–2888.
+Pi, H.; Cen, Z.; Dou, Z.; and Komura, T. 2026. Coda: Coordi-
+nated diffusion noise optimization for whole-body manipu-
+lation of articulated objects. Advances in Neural Information
+Processing Systems, 38: 31758–31780.
+Pratikaki, C.; Ruiz-Ponce, P.; Deng, J.; Zafeiriou, S.; and
+Potamias, R. A. 2026.
+Dex2HOI: Dexterous Biman-
+ual Two-Object Interaction Generation.
+arXiv preprint
+arXiv:2605.30444.
+Ron, R.; Tevet, G.; Sawdayee, H.; and Bermano, A. H. 2025.
+Hoidini: Human-object interaction through diffusion noise
+optimization. arXiv preprint arXiv:2506.15625.
+Taheri, O.; Choutas, V.; Black, M. J.; and Tzionas, D.
+2022.
+GOAL: Generating 4D Whole-Body Motion for
+Hand-Object Grasping. In 2022 IEEE/CVF Conference on
+Computer Vision and Pattern Recognition (CVPR), 13253–
+13263. IEEE.
+Taheri, O.; Ghorbani, N.; Black, M. J.; and Tzionas, D. 2020.
+GRAB: A dataset of whole-body human grasping of ob-
+jects. In European conference on computer vision, 581–600.
+Springer.
+
+
+Taheri, O.; Zhou, Y.; Tzionas, D.; Zhou, Y.; Ceylan, D.; Pirk,
+S.; and Black, M. J. 2024. Grip: Generating interaction poses
+using spatial cues and latent consistency. In 2024 Interna-
+tional Conference on 3D Vision (3DV), 933–943. IEEE.
+Tevet, G.; Raab, S.; Gordon, B.; Shafir, Y.; Cohen-Or, D.;
+and Bermano, A. H. 2023. Human Motion Diffusion Model.
+In The Eleventh International Conference on Learning Rep-
+resentations.
+Wan, W.; Dou, Z.; Komura, T.; Wang, W.; Jayaraman, D.;
+and Liu, L. 2024. Tlcontrol: Trajectory and language control
+for human motion synthesis. In European Conference on
+Computer Vision, 37–54. Springer.
+Wu, Y.; Wang, J.; Zhang, Y.; Zhang, S.; Hilliges, O.; Yu, F.;
+and Tang, S. 2022. SAGA: Stochastic Whole-Body Grasping
+with Contact. In European Conference on Computer Vision,
+257–274.
+Wu, Z.; Li, J.; Xu, P.; and Liu, C. K. 2024. Human-object
+interaction from human-level instructions. arXiv preprint
+arXiv:2406.17840.
+Xie, Y.; Jampani, V.; Zhong, L.; Sun, D.; and Jiang, H. 2024.
+Omnicontrol: Control any joint at any time for human mo-
+tion generation. In International Conference on Learning
+Representations, volume 2024, 28176–28194.
+Yang, K.; Tang, X.; Peng, Z.; Zhang, X.; Wang, P.; He,
+J.; and Liu, H. 2025.
+FlowerDance: MeanFlow for Effi-
+cient and Refined 3D Dance Generation.
+arXiv preprint
+arXiv:2511.21029.
+Zhang, H.; Christen, S.; Fan, Z.; Zheng, L.; Hwangbo, J.;
+Song, J.; and Hilliges, O. 2024. Artigrasp: Physically plausi-
+ble synthesis of bi-manual dexterous grasping and articula-
+tion. In 2024 International Conference on 3D Vision (3DV),
+235–246. IEEE.
+Zhang, H.; Ye, Y.; Shiratori, T.; and Komura, T. 2021. Manip-
+net: neural manipulation synthesis with a hand-object spatial
+representation. ACM Transactions on Graphics (ToG), 40(4):
+1–14.
+Zhang, Y.; He, Q.; Wan, Y.; Zhang, Y.; Deng, X.; Ma, C.; and
+Wang, H. 2025. Diffgrasp: Whole-body grasping synthesis
+guided by object motion using a diffusion model. In Pro-
+ceedings of the AAAI Conference on Artificial Intelligence,
+volume 39, 10320–10328.
+Zheng, J.; Zheng, Q.; Fang, L.; Liu, Y.; and Yi, L. 2023a.
+Cams: Canonicalized manipulation spaces for category-level
+functional hand-object manipulation synthesis. In Proceed-
+ings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition, 585–594.
+Zheng, Z.; Zhao, X.; Zhang, H.; Liu, B.; and Liu, Y. 2023b.
+Avatarrex: Real-time expressive full-body avatars.
+ACM
+Transactions on Graphics (TOG), 42(4): 1–19.
+Zhou, K.; Bhatnagar, B. L.; Lenssen, J. E.; and Pons-Moll, G.
+2022. Toch: Spatio-temporal object-to-hand correspondence
+for motion refinement. In European Conference on Computer
+Vision, 1–19. Springer.
