@@ -48,7 +48,7 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-10-18</span>
+      <span class="dpr-home-dashboard-kicker">2026-10-19</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
     <strong class="dpr-home-dashboard-count">共 25 篇</strong>
@@ -58,7 +58,7 @@
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>10</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>15</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-10-18 22:04:04 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-19 23:33:21 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,9 +69,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今天共筛选 25 篇论文，精读 10 篇、速读 15 篇，聚焦 3D 重建、动态理解与人机交互。</p>
-<p>最值得关注的是视角覆盖对前馈式 3D 重建的影响，以及 FlowVLA 如何借助 3D 流学习理解世界动态。</p>
-<p>建议先读这两篇高分精读，再按兴趣延伸到人体—物体交互生成或触觉传感。</p>
+<p>今日精选 25 篇机器人与具身智能论文，涵盖精读 10 篇、速读 15 篇。</p>
+<p>最值得关注的是面向任务的零样本 6DoF 抓取，以及 GPT-6-Astra 是否具备具身智能的探讨。</p>
+<p>建议先读《TGrasp6D》了解抓取方法，再看 GPT-6-Astra 论文，关注具身智能的评估依据。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -83,9 +83,9 @@
     <strong class="dpr-home-dashboard-count">10 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Sharper Frames, Worse Rooms: Viewpoint Coverage Dominates Image Quality in Feed-Forward 3D Reconstruction">Sharper Frames, Worse Rooms: Viewpoint Coverage Dominates Image Quality in Feed-Forward 3D Reconstruction</span></li><li><span class="dpr-home-dashboard-paper-title" title="FlowVLA: Enabling World Dynamics Understanding through Pluggable 3D Flow Learning">FlowVLA: Enabling World Dynamics Understanding through Pluggable 3D Flow Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="Holi-Spatial 360: Generative Reconstruction from Sparse Panoramas for Spatial Rendering and Intelligence">Holi-Spatial 360: Generative Reconstruction from Sparse Panoramas for Spatial Rendering and Intelligence</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="TGrasp6D: Task-Informed Vision-Language Priors and Pose Refinement enable Zero-Shot Task-Oriented 6DoF Grasping">TGrasp6D: Task-Informed Vision-Language Priors and Pose Refinement enable Zero-Shot Task-Oriented 6DoF Grasping</span></li><li><span class="dpr-home-dashboard-paper-title" title="Has GPT-6-Astra Achieved Embodied Intelligence?">Has GPT-6-Astra Achieved Embodied Intelligence?</span></li><li><span class="dpr-home-dashboard-paper-title" title="VLA-Fabric: Learning Interaction for Composable Multi-Arm VLA Agents">VLA-Fabric: Learning Interaction for Composable Multi-Arm VLA Agents</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>7</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>5</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>3</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -96,9 +96,9 @@
     <strong class="dpr-home-dashboard-count">15 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="MFlowHOI: Whole-Body Human-Object Interaction Generation via Part-Aware MeanFlow">MFlowHOI: Whole-Body Human-Object Interaction Generation via Part-Aware MeanFlow</span></li><li><span class="dpr-home-dashboard-paper-title" title="DeTac: Dual-branch Decoupling of Texture and Force Signals in Vision-Based Tactile Sensors">DeTac: Dual-branch Decoupling of Texture and Force Signals in Vision-Based Tactile Sensors</span></li><li><span class="dpr-home-dashboard-paper-title" title="Gaussian Splatting for Real-Time Scene Reconstruction: Methods, Systems, and Trade-offs">Gaussian Splatting for Real-Time Scene Reconstruction: Methods, Systems, and Trade-offs</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="SpaceCache: Intermediate Feature Reuse for Efficient Semantic Segmentation on Point Cloud Streams">SpaceCache: Intermediate Feature Reuse for Efficient Semantic Segmentation on Point Cloud Streams</span></li><li><span class="dpr-home-dashboard-paper-title" title="CoDA: Co-Evolution of Data Engines and Action Policies">CoDA: Co-Evolution of Data Engines and Action Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="Scaling Online Exploration for Robot Agents">Scaling Online Exploration for Robot Agents</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>3</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>3</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>4</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span></div>
 </section>
 </div>
 
