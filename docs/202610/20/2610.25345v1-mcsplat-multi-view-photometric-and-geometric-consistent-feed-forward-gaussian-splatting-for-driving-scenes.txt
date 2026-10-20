@@ -1,0 +1,1826 @@
+MCSplat: Multi-View Photometric and Geometric
+Consistent Feed-Forward Gaussian Splatting for
+Driving Scenes
+Yifei Wang1,2∗, Wei Tian3,#, Wenhua Bao2, Jia Zhou3,
+Hanshi Wang4, Fudong Ge4, Jianhua Wu3, Shuai Yuan5, Zhipeng Zhang5,
+Xingliang Liu2,†, Xianming Zeng2,†, Jianyun Xu2,†, Bingzhao Gao1,3,#
+1Shanghai Research Institute for Intelligent Autonomous Systems, Tongji University
+2Zaofu Intelligent Technology Co., Ltd.
+3College of Automotive and Energy Engineering, Tongji University
+4Institute of Automation, Chinese Academy of Sciences, 5SAI, Shanghai Jiao Tong University
+https://yfwang0824.github.io/mcsplat-project/
+PSNR: 27.53 dB
+PSNR: 28.16 dB
+(a) Geometry-Appearance Ambiguity
+2
+1
+3
+2
+1
+3
+Similar Reconstruction Results (PSNR) ≠ Similar Gaussian Geometry
+(b) Geometric Under-Constraint
+2
+2
+1
+UniSplat
+1
+Ours
+3
+3
+UniSplat
+Ours
+UniSplat
+Ours
+UniSplat (ICLR2026)
+Ours
+Figure 1: As shown by the comparison with UniSplat [1], comparable PSNR can still correspond
+to fundamentally different Gaussian representations. MCSplat addresses (a) cross-view geometry-
+appearance ambiguity and (b) local geometric supervision unreliability by combining multi-view
+photometric canonicalization with uncertainty-aware geometric self-supervision, producing cleaner
+Gaussian geometry and more consistent structures in cross-camera overlap regions.
+Abstract
+Driving-scene reconstruction via feed-forward Gaussian splatting from sparse
+multi-view images remains challenging due to two factors. First, cross-camera
+photometric inconsistency, caused by variations in exposure, ISP, and illumination,
+can be incorrectly absorbed into Gaussian geometry. Second, unreliable local
+geometric supervision arises from normal-based constraints near depth disconti-
+nuities. To address these issues, we present MCSplat, a multi-view consistent
+feed-forward Gaussian splatting framework for driving scenes. MCSplat constructs
+a canonical appearance space from depth-guided multi-camera correspondences to
+∗Work done during an internship at Zaofu Intelligent Technology Co., Ltd.
+†Project leaders of Zaofu Intelligent Technology Co., Ltd.
+#Corresponding authors: Wei Tian (tian_wei@tongji.edu.cn) and Bingzhao Gao (gaobz@tongji.edu.cn).
+40th Conference on Neural Information Processing Systems (NeurIPS 2026).
+arXiv:2610.25345v1  [cs.CV]  18 Oct 2026
+
+
+decouple geometry learning from camera-specific appearance. A multi-scale Bilat-
+eral Grid Transformer restores raw camera appearance from canonical renderings,
+enabling photometric supervision without contaminating Gaussian geometry. To
+improve local geometric reliability, we estimate Fisher-information-based uncer-
+tainty from photometric sensitivity and use it to adaptively weight surface-oriented
+self-supervision. Extensive experiments demonstrate improved reconstruction
+quality and generalization across driving datasets. Geometry-oriented evaluations
+further reveal enhanced cross-view depth consistency and local surface-normal
+agreement, while qualitative results show fewer geometric artifacts and more
+coherent structures across overlapping views.
+1
+Introduction
+Neural rendering methods such as 3D Gaussian Splatting (3DGS) [2] have enabled high-quality 3D
+reconstruction and novel view synthesis, making urban driving scene reconstruction as a cornerstone
+of closed-loop autonomous driving simulation [3] and long-horizon planning [4]. Since per-scene
+optimization remains computationally expensive, recent generalizable splatting frameworks [5, 1, 6]
+directly predict Gaussian primitives from multi-frame images. Leveraging Geometry Foundation
+Models (GFMs) [7, 8, 9, 10], they use dense depth predictions as priors for Gaussian means, along
+with a Gaussian head to predict rotation, scale, opacity, color, and motion. Despite improved efficiency
+and generalization, they still inherit two key challenges from 3DGS optimization:
+Cross-view geometry-appearance ambiguity: Ideally, multi-view supervision should attribute cross-
+view image differences to the underlying 3D structure rather than camera-dependent photometric
+effects. In real-world driving scenarios, however, photometric consistency is difficult to guarantee
+across views and time due to camera-dependent exposure, color response, automatic image signal
+processing (ISP), and changing illumination. As illustrated in Fig. 1 (a), inconsistent appearance
+in cross-camera overlap regions can cause the same structure, such as the roof, to be explained as
+separate surfaces, producing floating Gaussians and degraded geometry [11].
+Local geometric supervision unreliability: Driving scenes provide dense observations along the
+ego trajectory but sparse off-trajectory views. Even with GFM-predicted depths as Gaussian means,
+rotation, scale, opacity, and color remain weakly constrained by RGB and depth losses, allowing
+multiple Gaussian configurations to fit training views while differing in off-trajectory renderings.
+As illustrated in Fig. 1 (b), this can lead to geometrically incorrect yet view-consistent Gaussian
+representations, making cross-lane novel view synthesis challenging. Geometric self-supervision
+can alleviate this ambiguity by aligning Gaussian orientations with local surface normals. However,
+surface normals are typically derived from local finite differences of depth or Gaussian centers, which
+become unreliable near depth discontinuities and may introduce inaccurate supervision [12].
+Existing methods attempt to mitigate the geometry-appearance ambiguity using appearance embed-
+dings, global color transforms, explicit ISP parameters, or bilateral-grid-based local color trans-
+forms [11, 13, 14, 15, 16, 17]. However, most of these methods rely on per-scene optimization,
+which incurs high computational cost and limits cross-scene generalization. Recent feed-forward
+bilateral-grid methods reduce the need for scene-specific optimization by assuming sufficient overlap
+between reference and target views [18], making them less suitable for surround-view driving systems
+where inter-camera overlap is inherently limited.
+Beyond photometric variation, the under-constrained nature of geometric reconstruction is typically
+addressed by introducing additional supervisory signals. Existing methods employ semantic, flow, or
+normal priors to constrain geometry [19, 20, 21]. However, these priors rely on strong teacher models
+and are costly to scale to feed-forward reconstruction, as they require additional data preparation,
+storage, and training overhead. Self-supervised geometric constraints reduce the reliance on extra
+priors but remain unreliable near depth discontinuities or when depth estimates from foundation
+models are inaccurate [12].
+In this work, we propose to enhance the GFM-based feed-forward Gaussian reconstruction for
+driving scenes by combining geometry–appearance decoupling with uncertainty-aware geometric
+self-supervision. To mitigate the geometry–appearance ambiguity, we provide appearance-consistent
+inputs to the feed-forward Gaussian model, thereby reducing the impact of cross-view and cross-time
+photometric discrepancies on Gaussian prediction. A lightweight transformer predicts multi-scale 3D
+2
+
+
+bilateral grids to map rendered images back to the original GT appearance, enabling photometric
+supervision while preserving view-specific imaging effects. To handle local geometric supervision
+unreliability, we use Fisher information with respect to the photometric loss to quantify geometric
+uncertainty and construct an uncertainty-aware self-supervised geometric loss.
+Our contributions are summarized as follows. First, we propose MCSplat, a GFM-compatible
+geometry–appearance decoupling framework that builds a canonical appearance space and recovers
+camera-specific appearance with a multi-scale Bilateral Grid Transformer, reducing cross-view
+geometry–appearance ambiguity. Second, we introduce Fisher information-guided geometric self-
+supervision that estimates geometric uncertainty from photometric sensitivity and adaptively weights
+surface regularization, alleviating unreliable local supervision. Third, our method achieves state-
+of-the-art results on the Waymo benchmark, including an appearance-challenging subset, while
+producing more geometrically consistent novel-view reconstructions.
+2
+Related Works
+Neural Scene Reconstruction for Driving Scenes.
+NeRF [22] enables high-quality novel view
+synthesis but is inefficient for rendering, while 3DGS [2] uses explicit learnable Gaussians for
+real-time rendering, making it suitable for dynamic driving scenes. Many driving-scene methods
+adopt per-scene optimization with priors, including LiDAR [23], semantics [24], optical flow [20],
+human models [25], scene flow [26], and multi-scale voxels [21]. However, scene-specific retraining
+limits scalability and cross-scene generalization. Feed-forward methods instead directly regress
+Gaussian representations from images. STORM [27] predict pixel-aligned Gaussian motion. Driving-
+Forward [28] and DrivingScene [29] infer Gaussian primitives from surround-view inputs. Recent
+GFM-based methods, including DGGT [5], StreetForward [6], UniSplat [1], and ReconDrive [30],
+leverage GFMs [7, 8, 9, 10] to constrain Gaussian positions and decode Gaussian attributes. Despite
+improved efficiency and generalization, these methods remain vulnerable to geometry–appearance am-
+biguity under cross-camera photometric inconsistency. Additionally, they are prone to geometrically
+under-constrained reconstruction due to unreliable geometric supervision.
+Appearance Harmonization in Neural Scene Representations.
+Cross-camera photometric in-
+consistency is inevitable in real world and induces geometry–appearance ambiguity. NeRF in the
+Wild [11] and WildGaussians [13] model imaging variation with appearance branches or observation-
+dependent embeddings. STORM [31] learns coarse global affine transforms for feed-forward re-
+construction. PPISP [15] explicitly parameterizes ISP factors such as exposure, vignetting, and
+camera response functions. However, these methods mainly rely on global or per-scene optimiza-
+tion, making them less suitable for handling local and cross-camera discrepancies. Thus, refined
+photometric operation has been employed in recent methods. Bilateral-grid [32] provides spatially
+varying photometric transforms. BilaRF [16] uses bilateral-space affine transforms for pixel-wise
+color adjustment. CHROMA [18] explores feed-forward bilateral-grid prediction for multi-view
+harmonization. However, these methods require substantial overlap between reference and target
+views, limiting their applicability to surround-view driving scenes with small inter-camera overlap.
+Uncertainty Quantification in Neural Scene Reconstruction.
+Uncertainty estimation measures
+reconstruction reliability in challenging regions such as occlusion boundaries, weak textures, and
+dynamic objects [33, 34, 35]. Fisher information [36] provides a parameter-sensitivity-based un-
+certainty measure and has been used for active view selection, pruning, and robust reconstruction.
+FisherRF [33] uses expected information gain for active view selection. PUP-3DGS [37] adopts
+sensitivity scores for Gaussian pruning. OUGS [38] propagates Gaussian-parameter uncertainty to
+pixel space for object-aware view selection. However, uncertainty has primarily been explored in
+the context of per-scene optimization, with its role in feed-forward reconstruction remaining limited.
+In contrast, we compute geometry uncertainty from the photometric loss within a feed-forward
+framework, and leverage it for adaptive geometric self-supervision.
+3
+Methodology
+We propose MCSplat, a framework for feed-forward reconstruction of multi-view driving scenes
+by integrating geometry–appearance decoupling with uncertainty-aware geometric self-supervision,
+3
+
+
+(a) Canonical Appearance Construction
+Geometric
+Foundation
+Model
+DPT-style 
+Gaussian Head
+GFM-based FeedForward GS Pipeline
+Pixel-level
+Uncertainty Map
+Sky Cylinder Modeling 
+Lidar/Dense Depth-Guided Correspondence
+Photometrically 
+Inconsistent Images
+Aligned Frame
+Reference frame
+,
+Rasterizer
+GT raw Img ȥq
+Transformer Encoder
+Transformer Decoder
+ϓϮ
+ύ푟ϡϢ, Ϙ푟ϡϢ
+× N
+× N
+Image Encoder
+Self Attention
+Cross Attention
+Residual token
+Image token
+(b) Multiscale 3D Bilateral Grid Pediction 
+Bilateral Grid Head
+(c) Uncertainty-Aware Geometric Self-Supervision
+Fisher
+Information
+Matrix
+Before:
+After:
+Before:
+After:
+Before:
+After:
+Input
+Loss
+Camera Topology-Aware Color Transform.
+Rasterizer
+Supervision
+Appearance
+Recovery
+ℒ֕֡
+սխ֑֩
+ℒձ։՝֩
+ℒյխ֑֭֕ե
+Photometrically Consistent Images
+Canonical 
+Img ȥɇ
+풄ȷɄ
+Figure 2: Overview of MCSplat. (a) Depth-guided canonical appearance construction aligns in-
+consistent multi-view images. (b) A multi-scale bilateral-grid transformer restores camera-specific
+appearance from canonical renderings. (c) Fisher information-based uncertainty guides geometric
+self-supervision in under-constrained regions.
+shown in Fig. 2. Its goal is to predict reliable 3D Gaussian primitives from multi-view images,
+enabling novel-view synthesis for closed-loop autonomous driving simulation.
+In our framework, given photometrically inconsistent multi-view images, we first construct a canoni-
+cal appearance space using depth-guided correspondences, and learn Gaussian primitives within this
+normalized domain. To recover the original, camera-specific appearance, a lightweight transformer
+predicts multi-scale 3D bilateral grids and applies them to rendered images in a coarse-to-fine manner.
+We further estimate pixel-wise geometric uncertainty based on photometric-loss sensitivity, and use it
+to adaptively weight geometric self-supervision in weakly constrained regions.
+3.1
+Robust Canonical Appearance Construction
+To reduce geometry–appearance ambiguity at the input stage, we construct a canonical appearance
+space using depth-guided correspondences. Given a multi-view camera set V, reference cameras
+Vref ⊂V are selected according to rig topology and inter-camera overlap. Reference views define
+the canonical appearance space with identity transforms, while non-reference views are aligned to
+adjacent reference anchors. For example, in the five-camera Waymo benchmark layout shown in
+Fig. 2 (a), we use Vref = {Front, SideLeft, SideRight}. Consequently, the two remaining cameras,
+FrontLeft and FrontRight are each anchored by two neighboring references.
+For each pixel pi in a reference camera view r ∈Vref with a valid depth Dr(pi), we back-project it to
+3D coordinates and then reproject it into a new pixel ˜pi in a target camera view t, where t is selected
+from the non-reference camera set V \ Vref. For sky regions without reliable depth, we establish
+correspondences by intersecting each reference-camera ray with a distant ego-centered sky cylinder.
+The resulting 3D intersection point is then projected into the target camera, yielding a sky-region
+matched pixel.
+Given correspondences between r and t, we estimate a per-channel diagonal affine transform At→r
+(with parameters ac, bc for image channel Ic) from target to reference appearance:
+Ic
+r(pi) ≈acIc
+t (˜pi) + bc,
+c ∈{R, G, B},
+(1)
+by solving the optimization problem with hyperparameters λa, λb:
+min
+{ac,bc}
+X
+i
+ρ(acIc
+t (˜pi) + bc −Ic
+r(pi)) + λa
+X
+c
+(ac −1)2 + λb
+X
+c
+b2
+c.
+(2)
+4
+
+
+Here, ρ(·) is a robust penalty, and the identity prior makes the transform fall back to no correction
+when correspondences are sparse or unreliable. We additionally use a shared-gain fallback for
+chromatically degenerate samples, a few IRLS reweighting steps, and residual-based inlier refitting
+when enough inliers are available.
+For target cameras with two adjacent references, to avoid biased single-reference alignment and
+discontinuous hard switching, we interpolate target-to-reference transforms along the horizontal
+image axis. Given a horizontal image coordinate u ∈[0, W −1] and the ratio α(u) = u/(W −1),
+for a target camera t with adjacent references r1 and r2, the spatially varying affine field is
+At(u) = (1 −α(u)) At→r1 + α(u) At→r2.
+(3)
+Sky and non-sky regions share the same interpolation form but use separately estimated affine
+transforms, accounting for their distinct color statistics.
+3.2
+Multi-Scale Bilateral Grid Transformer for Appearance Recovery
+Given the canonical render ˆIcan
+q
+, we recover the original camera-specific appearance Iq without
+re-entangling photometric variation with geometry. For each query view, we predict multi-scale
+bilateral transforms and apply them to ˆIcan
+q
+in a coarse-to-fine manner, enabling compact modeling
+of global exposure shifts, color biases, and spatially varying local corrections.
+3D bilateral-grid parameterization.
+At a given scale m, the appearance transform is represented
+by a 3D bilateral grid
+B(m)
+q
+∈R12×Lm×Hm×Wm,
+(4)
+where Hm, Wm are spatial resolutions and Lm is the guidance resolution. Each grid cell stores a
+flattened 3 × 4 affine color transform. For a pixel p, we slice the grid using its normalized coordinates
+(x(m)
+p
+, y(m)
+p
+) and grayscale guidance γp = gray(ˆIcan
+q
+(p)):
+θ(m)
+q,p = S
+
+B(m)
+q
+, x(m)
+p
+, y(m)
+p
+, γp
+
+,
+(5)
+where θ(m)
+q,p is a 3 × 4 affine color transform and reshaped into an affine pair (A(m)
+q,p , b(m)
+q,p ). The
+multi-scale transforms are composed in homogeneous coordinates as
+Tq,p = T(M)
+q,p · · · T(1)
+q,p,
+T(m)
+q,p =
+
+A(m)
+q,p
+b(m)
+q,p
+0⊤
+1
+
+,
+m ∈{1, · · · , M},
+(6)
+and the recovered image is obtained by
+[ˆIq(p), 1]⊤= Tq,p[ˆIcan
+q
+(p), 1]⊤.
+(7)
+Here, grids from coarse scales capture global shifts while fine grids refine local photometric variations.
+Residual-token bilateral grid transformer decoder.
+As illustrated in Fig. 2 (b), we predict
+bilateral grids using a lightweight transformer decoder built on multi-scale token interactions. For a
+view q, a frozen image encoder extracts patch tokens P can
+q
+, P raw
+q
+∈RP ×D from the canonicalized
+and raw images, respectively. At each scale m, we pool them to the target grid resolution:
+Q(m)
+q
+= Pool
+ P can
+q
+; Hm, Wm
+
+,
+R(m)
+q
+= Pool
+ P raw
+q
+−P can
+q
+; Hm, Wm
+
+.
+(8)
+Here, Q(m)
+q
+serves as canonical-domain query tokens, while R(m)
+q
+provides residual key–value tokens.
+Compared with raw tokens, residual tokens better isolate the photometric transform to be recovered
+and reduce content redundancy in cross-attention.
+For each scale, with the learned 2D positional embedding Em, self-attention SAm captures spatial
+dependencies in the canonical token grid, followed by cross-attention CAm that injects residual
+appearance cues:
+Q(m,1)
+q
+= SAm
+
+Q(m)
+q
++ Em
+
+,
+Q(m,2)
+q
+= CAm
+
+Q(m,1)
+q
+, R(m)
+q
++ Em
+
+.
+(9)
+The refined tokens are passed into a feedforward network and mapped to bilateral-grid coefficients
+through a scale-specific head:
+B(m)
+q
+= Headm
+
+FFNm
+
+Q(m,2)
+q
+
+∈R12×Lm×Hm×Wm.
+(10)
+This design captures transforms from global shifts to fine local corrections, while residual cross-
+attention focuses the prediction on raw-to-canonical appearance differences.
+5
+
+
+3.3
+Uncertainty-Aware Geometric Self-Supervision
+Fisher information-based geometry uncertainty.
+For each Gaussian gi, we estimate its geometric
+uncertainty by evaluating the sensitivity of the photometric loss to its center µi ∈R3. Over the
+current training views Vcur, we adopt a smooth Charbonnier photometric loss:
+Lphoto =
+X
+q∈Vcur
+X
+p
+r
+ˆI can
+q
+(p) −I can
+q
+(p)
+2
++ ϵ2.
+(11)
+Here, p indexes valid pixels in view q. ϵ > 0 is a small constant that ensures differentiability and
+numerical stability.
+We estimate a scalar translational Fisher-information score for each Gaussian using the squared
+photometric-loss gradient norm:
+F xyz
+i,q
+=
+
+∂Lphoto,q
+∂µi
+
+2
+2
+,
+¯F xyz
+i
+=
+1
+|Vcur|
+X
+q∈Vcur
+F xyz
+i,q .
+(12)
+Intuitively, a large score indicates that small perturbations of the Gaussian center lead to strong
+photometric changes, implying that its position is well constrained by image evidence. Conversely, a
+small score indicates weak sensitivity and thus high geometric uncertainty.
+Why Gaussian-center Fisher information?
+We use photometric-loss sensitivity to Gaussian
+centers (x, y, z) as a geometric uncertainty cue, as it more directly reflects positional constraints than
+color or scale sensitivity. As shown in Fig. 3, the center-based uncertainty map better captures object
+boundaries and fine structures (e.g., the white truck boundary and jeep grille), whereas color- and
+scale-based maps are less discriminative. This motivates its use for adaptive geometric supervision.
+We normalize the center-based Fisher scores within each mini-batch and convert them into uncertainty
+weights:
+˜F xyz
+i
+=
+¯F xyz
+i
+maxj ¯F xyz
+j
++ ε,
+wi = exp
+
+−γ ˜F xyz
+i
+
+,
+(13)
+where γ > 0 controls the sharpness of the weighting. Since wi decreases monotonically with
+Fisher information, Gaussians that are weakly constrained by photometric supervision receive larger
+geometric regularization weights, while confident Gaussians are regularized less aggressively. In
+practice, this score is computed online within each training step and detached before weighting the
+geometric regularizers; implementation details are provided in Sec. A.2.
+Notably, this uncertainty measure is derived entirely from the model’s own photometric sensitiv-
+ity, without relying on external depth confidence or heuristic visibility priors, making it naturally
+compatible with feed-forward reconstruction.
+Uncertainty-guided surface regularization.
+We apply the uncertainty weights to surface-oriented
+geometric self-supervision on non-sky Gaussians. Given the predicted Gaussian set, we use the
+pixel-aligned Gaussian centers {µi} as a 3D point field and estimate local surface normals nsurf
+i
+by
+finite differences over neighboring centers.
+For a Gaussian gi, we define its normal ngs
+i as the principal axis with the smallest scale si,k:
+k⋆
+i = arg
+min
+k∈{1,2,3} si,k,
+ngs
+i = Riek⋆
+i ,
+(14)
+where Ri is the rotation matrix and ek⋆
+i is the canonical basis vector of the thinnest axis. We then
+define the uncertainty-weighted orientation loss:
+ℓorient
+i
+= 1 −
+
+nsurf
+i
+, ngs
+i
+ ,
+Lorient =
+P
+i wi ℓorient
+i
+P
+i wi
+.
+(15)
+The above absolute inner product removes normal sign ambiguity and encourages the thinnest
+Gaussian axis to align with the local surface normal nsurf
+i
+.
+To further encourage surface-like Gaussians, we penalize the thinnest scale si,k⋆
+i in loss term:
+ℓflat
+i
+= si,k⋆
+i ,
+Lflat =
+P
+i wi ℓflat
+i
+P
+i wi
+.
+(16)
+6
+
+
+RGB
+Uncertainty (x, y, z)
+Uncertainty (scale)
+Uncertainty (color)
+Figure 3: Visualization of photometric-loss uncertainty maps for Gaussian color, scale, and center
+parameters. The center-based map captures local structure around the white truck boundary and the
+jeep grille more distinctly than the scale map and the color map.
+The final uncertainty-aware geometric self-supervision loss is defined as
+Lunc
+geo = λorientLorient + λflatLflat.
+(17)
+with hyperparameter weights λorient, λflat.
+3.4
+Training Objective
+We optimize the model in two stages. In Stage 1, the GFM backbone is frozen, while the sparse 3D
+convolution module and Gaussian head are trained in the canonical appearance space. The objective
+is compactly written as
+Lstage1 = Lcan + Laux,
+(18)
+where Lcan supervises canonical rendering with MSE and LPIPS losses, and Laux includes dynamic-
+region and scale-alignment losses. In Stage 2, most of the Gaussian head is frozen except for
+the Gaussian MLPs, while the bilateral-grid transformer is optimized for appearance recovery. The
+predicted bilateral grids map the canonical render to the GT image domain as in Eq. (7). The objective
+becomes
+Lstage2 = Lstage1 + Limg + λ7Ltv + Lunc
+geo,
+(19)
+where Limg supervises appearance recovery, Ltv regularizes the predicted bilateral grids. The full
+objective is provided in Sec. A.3.
+4
+Experiments
+4.1
+Experimental Settings
+Datasets and Metrics.
+We primarily evaluate on the Waymo Open Dataset [39], which contains
+798 training and 202 validation scenes, each lasting about 20 seconds at 10 Hz with 5 vehicle-
+mounted cameras. Following UniSplat [1], we evaluate input-view reconstruction using images at
+timestamp t as targets and novel-view synthesis using images at t + 1. We report PSNR, SSIM [40],
+and LPIPS [41]. We also construct an appearance-challenging subset of 57 scenes selected by
+input-only inter-camera appearance discrepancy scores from adjacent camera pairs in matched or
+overlapping regions. More details and results about the subset are provided in Sec. A.5. We also
+assess generalization on nuScenes using the protocol described in Sec. 4.2.
+7
+
+
+Table 1: Quantitative comparison of image quality on the Waymo and nuScenes datasets. The best,
+second-best, and third-best results are highlighted. ∗: Reported by UniSplat. 3: Evaluated on the
+front 3 views only.
+Method
+Views
+Waymo
+nuScenes
+Reconstruction
+Novel View Synthesis
+Recon&NVS
+PSNR↑SSIM↑LPIPS↓PSNR↑SSIM↑LPIPS↓PSNR↑SSIM↑LPIPS↓
+EvolSplat∗[44]
+Front
+23.35
+0.70
+0.29
+–
+–
+–
+–
+–
+–
+UniSplat∗[1]
+Front
+28.93
+0.86
+0.18
+27.34
+0.80
+0.20
+–
+–
+–
+Ours
+Front
+31.05
+0.89
+0.12
+27.64
+0.84
+0.16
+–
+–
+–
+PixelSplat∗[45]
+Multi
+–
+–
+–
+–
+–
+–
+21.51
+0.616
+0.372
+DriveRecon∗3 [46]
+Multi
+23.86
+0.72
+0.33
+17.32
+0.58
+0.53
+–
+–
+–
+MVSplat∗[47]
+Multi
+24.94
+0.80
+0.23
+22.04
+0.68
+0.34
+21.61
+0.658
+0.295
+DepthSplat∗[48]
+Multi
+25.38
+0.76
+0.26
+23.86
+0.70
+0.31
+–
+–
+–
+Omni-Scene∗[49]
+Multi
+–
+–
+–
+–
+–
+–
+24.27
+0.736
+0.237
+UniSplat∗[1]
+Multi
+29.58
+0.86
+0.17
+25.98
+0.76
+0.24
+25.37
+0.765
+0.246
+Ours
+Multi
+30.53
+0.88
+0.13
+26.35
+0.76
+0.22
+26.19
+0.783
+0.248
+Baseline.
+UniSplat [1] is a GFM-based feed-forward Gaussian reconstruction method for dynamic
+driving scenes. It constructs a 3D latent scaffold from multi-camera videos, performs spatio-temporal
+fusion in the scaffold space, and decodes dynamic-aware Gaussians using both point and voxel-based
+branches. We choose UniSplat as our baseline because, to the best of our knowledge, UniSplat is the
+state-of-the-art feed-forward method trained and evaluated under the full 5-camera setting.
+Implementation Details.
+We follow the baseline architecture, including the GFM backbone,
+semantic feature extraction, and Gaussian head design. The input and rendering resolution is
+350 × 518. Training is performed in two stages as described in Sec. 3.4. The Bilateral Grid
+Transformer uses a DINOv2 [42] ViT-Small encoder for appearance token extraction and predicts
+multi-scale bilateral grids for appearance recovery. We train the model using AdamW [43] on 16
+NVIDIA H20 GPUs with a total batch size of 32. Additional details are provided in Sec. A.4.
+4.2
+Experimental Results
+Image quality on Waymo.
+We compare MCSplat with MVSplat [47], DepthSplat [48], Evol-
+Splat [44], DriveRecon [46], and UniSplat [1], using the Waymo results reported by UniSplat for
+comparison. As shown in Tab. 1, under the front-camera setting, MCSplat improves all reconstruc-
+tion metrics over UniSplat (PSNR +2.12 dB and LPIPS −33.3%) as well as all novel-view synthesis
+metrics. Although the front-camera input is unchanged (Sec. 3.1), canonicalizing its neighboring
+views also benefits reference-view reconstruction. Under the 5-camera setting, MCSplat improves
+all reconstruction metrics. Qualitative comparisons in Figs. 4 and 5 illustrate fewer texture-induced
+geometric artifacts and improved cross-camera consistency; additional visualizations, including
+cross-lane NVS, are provided in Secs. A.6 to A.8.
+Image quality on nuScenes.
+We additionally evaluate on nuScenes following the protocol used by
+UniSplat [1]: the middle frame of each temporal interval is used as input, and the first, middle, and
+last frames are evaluation targets. Thus, the nuScenes metrics in Tab. 1 jointly measure input-view
+reconstruction and temporal novel-view synthesis. MCSplat achieves 26.19 dB PSNR(+0.82 dB) and
+0.783 SSIM(+0.018). This supports generalization beyond the Waymo 5-camera configuration.
+Cross-View Geometry and Normal Consistency on Waymo.
+Image-quality metrics alone cannot
+directly assess Gaussian geometry. We therefore evaluate cross-view depth reprojection errors and
+dense pseudo-normal consistency in Tab. 2. Since LiDAR observations are too sparse for reliable
+dense normal estimation, we use MoGe-2 [50] predictions as pseudo-normal references. Depth
+reprojection errors are evaluated in valid overlapping regions of adjacent cameras. Compared with
+UniSplat, MCSplat reduces the mean depth reprojection error by 61.73% (2.378 to 0.910 m) and
+RMSE by 39.01% (6.427 to 3.920 m). Meanwhile, the mean pseudo-normal angular error decreases
+from 115.05◦to 92.82◦, while the fraction of pixels with angular error below 30◦increases from
+8
+
+
+Table 2: Geometry-oriented evaluation on Waymo. Normal consis-
+tency is measured against MoGe-2[50] pseudo-normals.
+Method
+Depth Reproj. (m)
+Pseudo-Normal Consistency
+Mean↓
+RMSE↓
+Mean (◦)↓< 5◦(%)↑< 11.25◦(%)↑< 30◦(%)↑
+UniSplat
+2.378
+6.427
+115.05
+0.02
+0.10
+1.18
+MCSplat
+0.910
+3.920
+92.82
+4.24
+10.08
+17.38
+Table 3: Ablation on the Stage-1
+training objective.
+Stage-1 Obj. PSNR↑SSIM↑LPIPS↓
+Raw GT
+29.53
+0.85
+0.19
+Canonical
+30.53
+0.88
+0.13
+(a) Ground Truth
+(b) Ours
+(c) UniSplat
+Depth
+Depth
+Depth
+1
+1
+1
+2
+2
+2
+3
+3
+3
+1
+1
+1
+2
+2
+2
+3
+3
+3
+Figure 4: Qualitative comparisons on the Waymo dataset. Compared with existing methods, MCSplat
+produces finer and cross-camera-consistent results, avoiding texture-induced depth ambiguity within
+the yellow road sign.
+1.18% to 17.38%. These results indicate improved cross-view geometric consistency and local surface
+orientation.
+Waymo Multi-View Appearance-Inconsistent Subset.
+To assess robustness under strong cross-
+camera photometric variations, we additionally evaluate MCSplat on a challenging subset of 57
+Waymo validation scenes, selected using model-independent cross-camera appearance discrepancy
+scores (see Sec. A.5). The detailed reconstruction results are reported in the appendix (Tab. 6).
+4.3
+Ablation Study
+We evaluate the roles of Canonical Appearance Construction (CAC), uncertainty-aware geometric
+self-supervision (Geo), and the Bilateral Grid Transformer (BGT) on Waymo using input-view
+reconstruction and geometric consistency.
+Canonical-Space Training in Stage 1.
+Tab. 3 compares raw-image versus canonical-image su-
+pervision for Stage 1 while keeping the remainder of the training protocol unchanged. Canonical
+supervision improves PSNR from 29.53 to 30.53 dB, SSIM from 0.85 to 0.88, and LPIPS from 0.19
+to 0.13. Training Stage 1 directly on raw, camera-dependent images can introduce conflicting photo-
+metric signals in overlap regions and an inconsistent training target for subsequent canonical-space
+appearance recovery.
+Component-Wise Ablation.
+Tab. 4 evaluates the contributions of CAC, Geo, and BGT to cross-
+view depth consistency, pseudo-normal consistency, and input-view reconstruction. CAC reduces
+the mean depth reprojection error by 59.34% (2.378 to 0.967 m) and RMSE from 6.427 to 4.051 m,
+indicating improved shared geometry through consistent appearance supervision. It also reduces the
+9
+
+
+(a) Ground Truth
+(b) Canonical Predction(Ours)
+(c) UniSplat
+(d) Ours
+(e) UniSplat
+(f) Ours
+Figure 5: Qualitative results under cross-camera appearance inconsistency. Zoom in for best view.
+Compared with UniSplat (c), our canonical rendering removes camera-boundary artifacts (b), while
+achieving effective appearance recovery (d).
+Table 4: Component ablation on the Waymo dataset. “Can.” and “Raw” denote canonicalized and raw
+GT images used for evaluation, respectively. Depth reprojection error is evaluated in adjacent-camera
+overlap regions, while normal consistency is measured against MoGe-2 [50] pseudo-normals.
+Method
+Eval. Depth Reproj. (m)
+Reconstruction
+Pseudo-Normal Consistency
+Mean↓
+RMSE↓
+PSNR↑SSIM↑LPIPS↓Mean (◦)↓< 5◦(%)↑< 11.25◦(%)↑< 30◦(%)↑
+Baseline
+Raw
+2.378
+6.427
+29.58
+0.86
+0.17
+115.05
+0.02
+0.10
+1.18
+Baseline + CAC
+Can.
+0.967
+4.051
+31.06
+0.88
+0.13
+97.25
+0.17
+0.74
+4.08
+Baseline + CAC + BGT
+Raw
+0.967
+4.051
+30.76
+0.88
+0.13
+97.25
+0.17
+0.74
+4.08
+Baseline + CAC + Geo
+Can.
+0.910
+3.920
+31.09
+0.88
+0.14
+92.82
+4.24
+10.08
+17.38
+Baseline + CAC + Geo
+Raw
+0.910
+3.920
+29.35
+0.86
+0.14
+92.82
+4.24
+10.08
+17.38
+MCSplat (CAC + Geo + BGT) Raw
+0.910
+3.920
+30.53
+0.88
+0.13
+92.82
+4.24
+10.08
+17.38
+mean pseudo-normal angular error from 115.05◦to 97.25◦. Adding Geo further lowers the depth
+errors to 0.910 m(mean) and 3.920 m (RMSE), while increasing the fraction of pixels with normal
+error below 30◦from 4.08% to 17.38%. BGT primarily restores camera-dependent appearance:
+with CAC and Geo fixed, it improves raw-target PSNR from 29.35 to 30.53 dB, SSIM from 0.86
+to 0.88, and LPIPS from 0.14 to 0.13, without changing depth or normal consistency. Without
+Geo, CAC+BGT achieves a slightly higher raw-target PSNR (30.76 dB), suggesting a geometry–
+photometry trade-off. These results support the complementary roles of CAC (cross-view geometry),
+Geo (local surface geometry), and BGT (appearance recovery).
+5
+Conclusion
+We presented MCSplat, a multi-view consistent feed-forward Gaussian splatting framework for
+driving-scene reconstruction. MCSplat decouples geometry learning from camera-specific appearance
+by constructing a canonical appearance space, recovering raw camera appearance with a multi-scale
+Bilateral Grid Transformer, and applying Fisher-information guided geometric self-supervision to
+uncertain Gaussians. Experiments on Waymo and nuScenes demonstrate improved reconstruction
+quality and cross-dataset generalization, while geometry-oriented evaluations show enhanced cross-
+view depth consistency and local surface-normal agreement. Future work will explore stronger
+temporal appearance modeling and explicit modeling of ISP parameters.
+10
+
+
+Acknowledgments and Disclosure of Funding
+This work was supported by the Fundamental and Interdisciplinary Disciplines Breakthrough Plan of
+the Ministry of Education of China (Grant No. JYB2025XDXM123), the Science and Technology
+Commission of Shanghai Municipality (Grant No. 25ZR1401356), the Shanghai Municipal Science
+and Shanghai Automotive Industry Science and Technology Development Foundation (Grant No.
+2601), the National Key R&D Program of China (Grant No. 2024YFE0115400), the National Natural
+Science Foundation of China (Grant No. 62273256), and the Jiangxi Provincial Major Science and
+Technology Special Project (Grant No. 20262ABE010004). We are particularly grateful to Zaofu
+Intelligent Technology Co., Ltd. for its valuable support.
+References
+[1] Chen Shi, Shaoshuai Shi, Xiaoyang Lyu, Chunyang Liu, Kehua Sheng, Bo Zhang, and Li Jiang. Unisplat:
+Unified spatio-temporal fusion via 3d latent scaffolds for dynamic driving scene reconstruction. In The
+Fourteenth International Conference on Learning Representations, 2026.
+[2] Bernhard Kerbl, Georgios Kopanas, Thomas Leimkühler, George Drettakis, et al. 3d gaussian splatting for
+real-time radiance field rendering. ACM Transactions on Graphics, 42(4):139–1, 2023.
+[3] Ze Yang, Yun Chen, Jingkang Wang, Sivabalan Manivasagam, Wei-Chiu Ma, Anqi Joyce Yang, and Raquel
+Urtasun. Unisim: A neural closed-loop sensor simulator. In Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition, pages 1389–1399, 2023.
+[4] Hao Gao, Shaoyu Chen, Bo Jiang, Bencheng Liao, Yiang Shi, Xiaoyang Guo, Yuechuan Pu, Haoran Yin,
+Xiangyu Li, Xinbang Zhang, et al. Rad: Training an end-to-end driving policy via large-scale 3dgs-based
+reinforcement learning. arXiv preprint arXiv:2502.13144, 2025.
+[5] Xiaoxue Chen, Ziyi Xiong, Yuantao Chen, Gen Li, Nan Wang, Hongcheng Luo, Long Chen, Haiyang Sun,
+Bing Wang, Guang Chen, et al. Dggt: Feedforward 4d reconstruction of dynamic driving scenes using
+unposed images. arXiv preprint arXiv:2512.03004, 2025.
+[6] Zhongrui Yu, Zhao Wang, Yijia Xie, Yida Wang, Xueyang Zhang, Yifei Zhan, and Kun Zhan. Streetforward:
+Perceiving dynamic street with feedforward causal attention. arXiv preprint arXiv:2603.19552, 2026.
+[7] Jianyuan Wang, Minghao Chen, Nikita Karaev, Andrea Vedaldi, Christian Rupprecht, and David Novotny.
+Vggt: Visual geometry grounded transformer.
+In Proceedings of the Computer Vision and Pattern
+Recognition Conference, pages 5294–5306, 2025.
+[8] Yifan Wang, Jianjun Zhou, Haoyi Zhu, Wenzheng Chang, Yang Zhou, Zizun Li, Junyi Chen, Jiangmiao
+Pang, Chunhua Shen, and Tong He. $\pi^3$: Permutation-equivariant visual geometry learning. In The
+Fourteenth International Conference on Learning Representations, 2026.
+[9] Nikhil Keetha, Norman Müller, Johannes Schönberger, Lorenzo Porzi, Yuchen Zhang, Tobias Fischer,
+Arno Knapitsch, Duncan Zauss, Ethan Weber, Nelson Antunes, et al. Mapanything: Universal feed-forward
+metric 3d reconstruction. arXiv preprint arXiv:2509.13414, 2025.
+[10] Haotong Lin, Sili Chen, Junhao Liew, Donny Y Chen, Zhenyu Li, Guang Shi, Jiashi Feng, and Bingyi
+Kang. Depth anything 3: Recovering the visual space from any views. arXiv preprint arXiv:2511.10647,
+2025.
+[11] Ricardo Martin-Brualla, Noha Radwan, Mehdi SM Sajjadi, Jonathan T Barron, Alexey Dosovitskiy, and
+Daniel Duckworth. Nerf in the wild: Neural radiance fields for unconstrained photo collections. In
+Proceedings of the IEEE/CVF conference on computer vision and pattern recognition, pages 7210–7219,
+2021.
+[12] Mehdi Hosseinzadeh, Shin-Fang Chng, Yi Xu, Simon Lucey, Ian Reid, and Ravi Garg. G3splat: Geometri-
+cally consistent generalizable gaussian splatting. arXiv preprint arXiv:2512.17547, 2025.
+[13] Jonas Kulhanek, Songyou Peng, Zuzana Kukelova, Marc Pollefeys, and Torsten Sattler. Wildgaussians: 3d
+gaussian splatting in the wild. arXiv preprint arXiv:2407.08447, 2024.
+[14] Ziteng Cui, Xuangeng Chu, and Tatsuya Harada. Luminance-gs: Adapting 3d gaussian splatting to
+challenging lighting conditions with view-adaptive curve adjustment. In Proceedings of the Computer
+Vision and Pattern Recognition Conference, pages 26472–26482, 2025.
+11
+
+
+[15] Isaac Deutsch, Nicolas Moënne-Loccoz, Gavriel State, and Zan Gojcic. Ppisp: Physically-plausible
+compensation and control of photometric variations in radiance field reconstruction. arXiv preprint
+arXiv:2601.18336, 2026.
+[16] Yuehao Wang, Chaoyi Wang, Bingchen Gong, and Tianfan Xue. Bilateral guided radiance field processing.
+ACM Transactions on Graphics (TOG), 43(4):1–13, 2024.
+[17] Nan Wang, Yuantao Chen, Lixing Xiao, Weiqing Xiao, Bohan Li, Zhaoxi Chen, Chongjie Ye, Shaocong
+Xu, Saining Zhang, Ziyang Yan, et al. Unifying appearance codes and bilateral grids for driving scene
+gaussian splatting. arXiv preprint arXiv:2506.05280, 2025.
+[18] Jisu Shin, Richard Shaw, Seunghyun Shin, Zhensong Zhang, Hae-Gon Jeon, and Eduardo Pérez-Pellitero.
+CHROMA: Consistent harmonization of multi-view appearance via bilateral grid prediction. In The
+Fourteenth International Conference on Learning Representations, 2026.
+[19] Chensheng Peng, Chengwei Zhang, Yixiao Wang, Chenfeng Xu, Yichen Xie, Wenzhao Zheng, Kurt
+Keutzer, Masayoshi Tomizuka, and Wei Zhan. Desire-gs: 4d street gaussians for static-dynamic decompo-
+sition and surface reconstruction for urban driving scenes. In Proceedings of the Computer Vision and
+Pattern Recognition Conference, pages 6782–6791, 2025.
+[20] Hongyu Zhou, Jiahao Shao, Lu Xu, Dongfeng Bai, Weichao Qiu, Bingbing Liu, Yue Wang, Andreas
+Geiger, and Yiyi Liao. Hugs: Holistic urban 3d scene understanding via gaussian splatting. In Proceedings
+of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 21336–21345, 2024.
+[21] Cong Wang, Xianda Guo, Wenbo Xu, Wei Tian, Ruiqi Song, Chenming Zhang, Lingxi Li, and Long Chen.
+Drivesplat: Decoupled driving scene reconstruction with geometry-enhanced partitioned neural gaussians.
+arXiv preprint arXiv:2508.15376, 2025.
+[22] Ben Mildenhall, Pratul P Srinivasan, Matthew Tancik, Jonathan T Barron, Ravi Ramamoorthi, and Ren
+Ng. Nerf: Representing scenes as neural radiance fields for view synthesis. Communications of the ACM,
+65(1):99–106, 2021.
+[23] Xiaoyu Zhou, Zhiwei Lin, Xiaojun Shan, Yongtao Wang, Deqing Sun, and Ming-Hsuan Yang. Drivinggaus-
+sian: Composite gaussian splatting for surrounding dynamic autonomous driving scenes. In Proceedings
+of the IEEE/CVF conference on computer vision and pattern recognition, pages 21634–21643, 2024.
+[24] Yunzhi Yan, Haotong Lin, Chenxu Zhou, Weijie Wang, Haiyang Sun, Kun Zhan, Xianpeng Lang, Xiaowei
+Zhou, and Sida Peng. Street gaussians: Modeling dynamic urban scenes with gaussian splatting. In
+European Conference on Computer Vision, pages 156–173. Springer, 2024.
+[25] Ziyu Chen, Jiawei Yang, Jiahui Huang, Riccardo De Lutio, Janick Martinez Esturo, Boris Ivanovic,
+Or Litany, Zan Gojcic, Sanja Fidler, Marco Pavone, et al. Omnire: Omni urban scene reconstruction. arXiv
+preprint arXiv:2408.16760, 2024.
+[26] Jiawei Xu, Kai Deng, Zexin Fan, Shenlong Wang, Jin Xie, and Jian Yang. Ad-gs: Object-aware b-spline
+gaussian splatting for self-supervised autonomous driving. In Proceedings of the IEEE/CVF International
+Conference on Computer Vision, pages 24770–24779, 2025.
+[27] Jiawei Yang, Jiahui Huang, Yuxiao Chen, Yan Wang, Boyi Li, Yurong You, Apoorva Sharma, Maximilian
+Igl, Peter Karkus, Danfei Xu, et al. Storm: Spatio-temporal reconstruction model for large-scale outdoor
+scenes. arXiv preprint arXiv:2501.00602, 2024.
+[28] Qijian Tian, Xin Tan, Yuan Xie, and Lizhuang Ma. Drivingforward: Feed-forward 3d gaussian splatting
+for driving scene reconstruction from flexible surround-view input. In Proceedings of the AAAI Conference
+on Artificial Intelligence, volume 39, pages 7374–7382, 2025.
+[29] Qirui Hou, Wenzhang Sun, Chang Zeng, Chunfeng Wang, Hao Li, and Jianxun Cui. Drivingscene: A
+multi-task online feed-forward 3d gaussian splatting method for dynamic driving scenes. arXiv preprint
+arXiv:2510.24734, 2025.
+[30] Haibao Yu, Kuntao Xiao, Jiahang Wang, Ruiyang Hao, Yuxin Huang, Guoran Hu, Haifang Qin, Bowen
+Jing, Yuntian Bo, and Ping Luo. Recondrive: Fast feed-forward 4d gaussian splatting for autonomous
+driving scene reconstruction. arXiv preprint arXiv:2603.07552, 2026.
+[31] Jiawei Yang, Jiahui Huang, Boris Ivanovic, Yuxiao Chen, Yan Wang, Boyi Li, Yurong You, Apoorva
+Sharma, Maximilian Igl, Peter Karkus, Danfei Xu, Yue Wang, and Marco Pavone. STORM: Spatio-
+temporal reconstruction model for large-scale outdoor scenes. In The Thirteenth International Conference
+on Learning Representations, 2025.
+12
+
+
+[32] Jiawen Chen, Sylvain Paris, and Frédo Durand. Real-time edge-aware image processing with the bilateral
+grid. ACM Transactions on Graphics (TOG), 26(3):103–es, 2007.
+[33] Wen Jiang, Boshu Lei, and Kostas Daniilidis. Fisherrf: Active view selection and uncertainty quantification
+for radiance fields using fisher information. arXiv preprint arXiv:2311.17874, 2023.
+[34] Mijeong Kim, Jongwoo Lim, and Bohyung Han. 4d gaussian splatting in the wild with uncertainty-aware
+regularization. Advances in Neural Information Processing Systems, 37:129209–129226, 2024.
+[35] Weiquan Wang, Feifei Shao, Lin Li, Zhen Wang, Jun Xiao, and Long Chen. Uncertainty-aware 4d gaussian
+splatting for monocular occluded human rendering. arXiv preprint arXiv:2602.06343, 2026.
+[36] Ronald A Fisher. On the mathematical foundations of theoretical statistics. Philosophical transactions
+of the Royal Society of London. Series A, containing papers of a mathematical or physical character,
+222(594-604):309–368, 1922.
+[37] Alex Hanson, Allen Tu, Vasu Singla, Mayuka Jayawardhana, Matthias Zwicker, and Tom Goldstein. Pup
+3d-gs: Principled uncertainty pruning for 3d gaussian splatting. In Proceedings of the Computer Vision
+and Pattern Recognition Conference, pages 5949–5958, 2025.
+[38] Haiyi Li, Qi Chen, Denis Kalkofen, and Hsiang-Ting Chen. Ougs: Active view selection via object-aware
+uncertainty estimation in 3dgs. arXiv preprint arXiv:2511.09397, 2025.
+[39] Pei Sun, Henrik Kretzschmar, Xerxes Dotiwalla, Aurelien Chouard, Vijaysai Patnaik, Paul Tsui, James Guo,
+Yin Zhou, Yuning Chai, Benjamin Caine, et al. Scalability in perception for autonomous driving: Waymo
+open dataset. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition,
+pages 2446–2454, 2020.
+[40] Zhou Wang, Alan C Bovik, Hamid R Sheikh, and Eero P Simoncelli. Image quality assessment: from error
+visibility to structural similarity. IEEE transactions on image processing, 13(4):600–612, 2004.
+[41] Richard Zhang, Phillip Isola, Alexei A Efros, Eli Shechtman, and Oliver Wang. The unreasonable
+effectiveness of deep features as a perceptual metric. In Proceedings of the IEEE conference on computer
+vision and pattern recognition, pages 586–595, 2018.
+[42] Maxime Oquab, Timothée Darcet, Théo Moutakanni, Huy Vo, Marc Szafraniec, Vasil Khalidov, Pierre
+Fernandez, Daniel Haziza, Francisco Massa, Alaaeldin El-Nouby, et al. Dinov2: Learning robust visual
+features without supervision. arXiv preprint arXiv:2304.07193, 2023.
+[43] Ilya Loshchilov and Frank Hutter.
+Decoupled weight decay regularization.
+arXiv preprint
+arXiv:1711.05101, 2017.
+[44] Sheng Miao, Jiaxin Huang, Dongfeng Bai, Xu Yan, Hongyu Zhou, Yue Wang, Bingbing Liu, Andreas
+Geiger, and Yiyi Liao. Evolsplat: Efficient volume-based gaussian splatting for urban view synthesis. In
+Proceedings of the Computer Vision and Pattern Recognition Conference, pages 11286–11296, 2025.
+[45] David Charatan, Sizhe Lester Li, Andrea Tagliasacchi, and Vincent Sitzmann. pixelsplat: 3d gaussian
+splats from image pairs for scalable generalizable 3d reconstruction. In 2024 IEEE/CVF Conference on
+Computer Vision and Pattern Recognition (CVPR), pages 19457–19467. IEEE, 2024.
+[46] Hao Lu, Tianshuo Xu, Wenzhao Zheng, Yunpeng Zhang, Wei Zhan, Dalong Du, Masayoshi Tomizuka,
+Kurt Keutzer, and Yingcong Chen. Drivingrecon: Large 4d gaussian reconstruction model for autonomous
+driving. arXiv preprint arXiv:2412.09043, 2024.
+[47] Yuedong Chen, Haofei Xu, Chuanxia Zheng, Bohan Zhuang, Marc Pollefeys, Andreas Geiger, Tat-Jen
+Cham, and Jianfei Cai. Mvsplat: Efficient 3d gaussian splatting from sparse multi-view images. In
+European conference on computer vision, pages 370–386. Springer, 2024.
+[48] Haofei Xu, Songyou Peng, Fangjinhua Wang, Hermann Blum, Daniel Barath, Andreas Geiger, and Marc
+Pollefeys. Depthsplat: Connecting gaussian splatting and depth. In Proceedings of the Computer Vision
+and Pattern Recognition Conference, pages 16453–16463, 2025.
+[49] Dongxu Wei, Zhiqi Li, and Peidong Liu. Omni-scene: Omni-gaussian representation for ego-centric sparse-
+view scene reconstruction. In 2025 IEEE/CVF Conference on Computer Vision and Pattern Recognition
+(CVPR), pages 22317–22327. IEEE, 2025.
+[50] Ruicheng Wang, Sicheng Xu, Yue Dong, Yu Deng, Jianfeng Xiang, Zelong Lv, Guangzhong Sun, Xin
+Tong, and Jiaolong Yang. Moge-2: Accurate monocular geometry with metric scale and sharp details,
+2025.
+13
+
+
+[51] Ruicheng Wang, Sicheng Xu, Yue Dong, Yu Deng, Jianfeng Xiang, Zelong Lv, Guangzhong Sun, Xin
+Tong, and Jiaolong Yang. Moge-2: Accurate monocular geometry with metric scale and sharp details.
+arXiv preprint arXiv:2507.02546, 2025.
+14
+
+
+A
+Technical appendices and supplementary material
+This supplementary material provides additional technical details, implementation clarifications, and
+qualitative results that complement the main paper.
+Sec. A.1 discusses the compatibility of MCSplat with existing GFM-based feed-forward driving
+Gaussian frameworks.
+Sec. A.2 explains how Fisher information is computed and used for within-step geometric reweighting.
+Sec. A.3 provides detailed definitions of the training loss terms.
+Sec. A.4 provides implementation details, including model configuration, training stages, optimization
+settings, and hyperparameters.
+Sec. A.5 describes the construction and quantitative evaluation of the appearance-challenging valida-
+tion subset for cross-camera photometric inconsistency.
+Sec. A.6 presents additional 2D rendering results on the Waymo validation set.
+Sec. A.7 presents additional 3D Gaussian visualizations under novel views.
+Sec. A.8 presents qualitative cross-lane novel-view synthesis under laterally shifted camera trajecto-
+ries.
+A.1
+Compatibility with GFM-Based Feed-Forward Driving Gaussian Frameworks
+Existing GFM-based feed-forward driving Gaussian frameworks[5, 1, 6, 30] usually follow a common
+pipeline: multi-view images are first encoded by a pretrained geometry foundation model, then
+decoded by a dense prediction or DPT-style Gaussian head to produce image-aligned Gaussian
+primitives, which are finally supervised through differentiable rendering and reconstruction losses.
+Although different methods may vary in temporal fusion, Gaussian parameterization, or auxiliary
+dynamic modules, their core Gaussian prediction process can be abstracted as an image-to-Gaussian
+feed-forward mapping followed by rasterization, as shown in Fig. 6(a).
+MCSplat is designed to be compatible with this general pipeline. As shown in Fig. 6(b), we keep
+the GFM backbone and Gaussian prediction branch unchanged, and introduce three modular additions:
+canonical appearance construction provides photometrically consistent inputs and supervision, the
+multi-scale Bilateral Grid Transformer maps canonical renderings back to raw camera appearance, and
+Fisher-information-based uncertainty reweights geometric self-supervision. Therefore, MCSplat can
+enhance existing GFM-based feed-forward Gaussian frameworks by decoupling geometry learning
+from camera-specific appearance variation while preserving their original feed-forward reconstruction
+structure. The ablation results in Tab. 4 further validate the effectiveness of the proposed modules.
+A.2
+Within-Step Fisher Information-Guided Reweighting
+A practical question is how Fisher information computed at the current training step can be used
+to weight geometric regularizers in the same step. Our implementation adopts a single-step online
+reweighting strategy rather than a recursive optimization. At iteration t, a standard forward pass
+first produces the current Gaussian set G(t), rendered images ˆI(t), and raw per-Gaussian geometric
+(a) GFM-based FeedForward Driving Scene GS Pipeline
+Geometric
+Foundation
+Model
+DPT-style 
+Gaussian Head
+Rasterizer
+Reconstruction Loss ℒ𝑟𝑟𝑟𝑟𝑟𝑟
+Photometrically 
+Inconsistent 
+GT Images
+(b) Our Pipeline
+Geometric
+Foundation
+Model
+DPT-style 
+Gaussian Head
+Rasterizer
+Reconstruction Loss 𝓛𝓛𝒓𝒓𝒓𝒓𝒓𝒓
+Photometrically 
+Inconsistent 
+GT Images
+Photometrically 
+Consistent 
+Images
+Uncertainty
+Self-Supervision Geometric Loss 𝓛𝓛𝒈𝒈𝒈𝒈𝒈𝒈
+𝒖𝒖𝒖𝒖𝒖𝒖
+Multiscale Bilateral Grid Transformer
+Appearance 
+Recovery
+Figure 6: Intuitive pipeline comparison between our method and existing GFM-based feed-forward
+driving Gaussian frameworks.
+15
+
+
+penalties ℓ(t)
+i,orient and ℓ(t)
+i,flat. Before the main backward pass, we query the gradient of the photometric
+loss with respect to Gaussian centers on the same forward graph to obtain Fisher information.
+Specifically, we use the translational Fisher information as the uncertainty cue:
+F (t),xyz
+i
+=
+1
+|Vcur|
+X
+q∈Vcur
+
+∂L(t)
+photo,q
+∂µ(t)
+i
+
+2
+2
+,
+(20)
+where µ(t)
+i
+is the center of Gaussian gi at the current step. We then convert the Fisher information
+into an uncertainty weight:
+w(t)
+i
+= stopgrad
+"
+exp
+ 
+−γ
+F (t),xyz
+i
+maxj F (t),xyz
+j
++ ε
+!#
+,
+(21)
+where stopgrad(·) denotes the stop-gradient operator. This detachment is essential: the Fisher
+information serves only as a current-step importance weight and does not introduce higher-order
+gradients through the computation.
+The orientation and flatness losses are then obtained by weighting the raw per-Gaussian penalties
+from the same forward pass:
+L(t)
+orient =
+P
+i w(t)
+i
+ℓ(t)
+i,orient
+P
+i w(t)
+i
++ ε
+,
+L(t)
+flat =
+P
+i w(t)
+i
+ℓ(t)
+i,flat
+P
+i w(t)
+i
++ ε
+.
+(22)
+Thus, the current-step Fisher information does not recursively define the geometric loss. Instead,
+it provides an online estimation of geometric uncertainty that reweights the geometric regularizers
+before the final loss is backpropagated:
+L(t) = L(t)
+base + λorientL(t)
+orient + λflatL(t)
+flat,
+(23)
+where L(t)
+base denotes the photometric and auxiliary losses used in the corresponding training stage.
+This design keeps the optimization first-order while allowing geometric self-supervision to adapt to
+the local uncertainty of the current reconstruction state.
+A.3
+Full Stage-wise Training Objective
+Here we present the extended training objectives used in the two-stage optimization. We denote the
+current-frame and future-frame view sets as Vcur and Vfut, respectively.
+Stage 1.
+In the first stage, the GFM backbone is frozen, while the sparse 3D convolution modules
+and Gaussian head are trained in the canonical appearance space. The bilateral-grid branch is
+bypassed. The objective is defined as
+Lstage1 =
+X
+v∈Vcur
+
+λ1Lv,can
+mse
++ λ2Lv,can
+lpips + λ3Lv
+dyn + λ4Lv
+scale
+
+(24)
++
+X
+v∈Vfut
+
+λ1Lv,can
+mse
+⊙Bv + λ2Lv,can
+lpips
+
+.
+(25)
+Here, ⊙denotes element-wise multiplication, and the background mask Bv excludes dynamic regions
+in future-frame supervision to avoid optimization instability.
+Stage 2.
+In the second stage, most of the Gaussian head is frozen except for the Gaussian MLPs,
+while the bilateral-grid transformer is optimized for appearance recovery. The predicted bilateral
+grids map the canonical render to the raw image domain as in Eq. (7). The objective is
+Lstage2 = Lstage1 +
+X
+v∈Vcur∪Vfut
+
+λ5Lv,img
+mse
++ λ6Lv,img
+lpips
+
++ λ7Ltv + Lunc
+geo.
+(26)
+The image-domain losses Lv,img
+mse
+and Lv,img
+lpips supervise the recovered raw-domain image. The total-
+variation loss Ltv regularizes the predicted bilateral grids, and Lunc
+geo regularizes Gaussian geometry
+using uncertainty-aware orientation and flatness constraints. We detail these loss terms below.
+16
+
+
+Details about each loss term.
+Let ˆIv
+can and Iv
+can denote the canonical prediction and canonical
+target, and let ˆIv
+img = Tq,p(ˆIv
+can) be the raw-domain image recovered by the predicted bilateral grids
+B(m)
+q
+, with target Iv
+img. Let Bv(p) ∈{0, 1} be the exclusion mask (used only for future-view MSE)
+for pixel p in the future-view Pv. The individual loss terms can be calculated as
+Lv,can
+mse
+=
+X
+p∈Pv
+ˆIv
+can(p) −Iv
+can(p)
+
+2
+2 ,
+(27)
+Lv,can
+mse
+⊙Bv =
+X
+p∈Pv
+Bv(p)
+ˆIv
+can(p) −Iv
+can(p)
+
+2
+2 ,
+(28)
+Lv,can
+lpips = LPIPS
+
+ˆIv
+can, Iv
+can
+
+,
+(29)
+Lv
+dyn = −
+X
+p∈Pv
+h 1 −Bv(p)
+
+log ˆDv(p) + Bv(p) log
+ 1 −ˆDv(p)
+i
+,
+(30)
+Lv,img
+mse
+=
+X
+p∈Pv
+ˆIv
+img(p) −Iv
+img(p)
+
+2
+2 ,
+(31)
+Lv,img
+lpips = LPIPS
+
+ˆIv
+img, Iv
+img
+
+.
+(32)
+Since the point clouds estimated by geometry foundation models are often not metrically accurate, we
+first use the ROE solver from MoGe [51] to compute the optimal scale and shift parameters (s∗
+v, t∗
+v)
+between the estimated point cloud and the LiDAR points:
+(s∗
+v, t∗
+v) = arg min
+s,t
+X
+p∈Pv
+1
+Zv(p)
+
+s ˆZv
+local(p) + t −Zv(p)
+2
+.
+(33)
+Here, ˆZv
+local denotes the local depth predicted by the Gaussian head before applying the learned scale
+and shift, and Zv denotes the corresponding depth supervision. A small MLP predicts scale ˆsv and
+shift ˆtv from the pooled GFM features:
+(ˆsv, ˆtv) = MLP(AvgPool(Fgeo
+v
+)) .
+(34)
+The scale-shift loss Lv
+scale then supervises the predicted alignment parameters to match this closed-
+form optimum:
+Lv
+scale = SmoothL1(log ˆsv, log s∗
+v) + SmoothL1
+ ˆtv, t∗
+v
+
+.
+(35)
+For bilateral-grid smoothness loss Ltv, we regularize the predicted multi-scale bilateral grids with a
+total-variation penalty. Let B(m)
+q
+denote the predicted bilateral grid at scale m, where m = 1, . . . , M,
+and q indexes the corresponding view or camera-conditioned grid. Each grid stores affine color-
+transform coefficients over a 3D lattice consisting of the guidance/intensity dimension and two spatial
+dimensions. We penalize finite differences along all three lattice axes:
+Ltv =
+M
+X
+m=1
+1
+Nm
+ B(m)
+q
+:,:,1:,:,: −B(m)
+q
+:,:,:−1,:,:
+
+2
+2
+|∇lB(m)
+q
+|
++
+B(m)
+q
+:,:,:,1:,: −B(m)
+q
+:,:,:,:−1,:
+
+2
+2
+|∇hB(m)
+q
+|
++
+B(m)
+q
+:,:,:,:,1: −B(m)
+q
+:,:,:,:,:−1
+
+2
+2
+|∇wB(m)
+q
+|
+!
+.
+(36)
+Here, ∇l, ∇h, and ∇w denote finite differences along the guidance, height, and width dimensions
+of the bilateral grid, respectively; |∇lB(m)
+q
+|, |∇hB(m)
+q
+|, and |∇wB(m)
+q
+| are the numbers of elements
+in the corresponding difference tensors, and Nm is the number of predicted grids at scale m. This
+loss encourages neighboring lattice cells to predict similar affine color transforms, suppressing
+high-frequency artifacts in the recovered raw-domain image while still allowing smooth spatial- and
+intensity-dependent appearance correction.
+For uncertainty-guided geometric self-supervision loss Lunc
+geo, please refer to Sec. 3.3.
+17
+
+
+A.4
+Implementation Details
+We provide additional implementation details omitted from the main text. We follow the baseline
+architecture in the use of the GFM backbone, semantic feature extraction, and Gaussian head design.
+The input and rendering resolution is fixed to 350 × 518.
+Training is performed in two stages. In Stage 1, the GFM backbone is frozen, and only the 3D sparse
+convolution modules and the Gaussian head are trained. Different from the baseline, both input and
+supervision use the canonicalized images from Sec. 3.1. In Stage 2, all components are frozen except
+for the Gaussian MLPs and the Bilateral Grid Transformer. This stage jointly learns bilateral-grid
+appearance recovery and applies geometric regularization to the trainable Gaussian outputs.
+The Bilateral Grid Transformer adopts a DINOv2 [42] ViT-Small image encoder to extract 384-
+dimensional patch tokens for appearance conditioning. Both the Transformer encoder and decoder
+contain 3 layers. The multi-scale bilateral grids use three resolutions [2, 2, 1], [4, 4, 2], and [8, 8, 4],
+with guidance downsampling factors [4, 4, 2], respectively.
+The model is optimized using AdamW [43] on 16 NVIDIA H20 GPUs with a total batch size of
+32. For the training objective parameters introduced in Sec. 3.4 and above, we set λ1 = λ5 = 5.0,
+λ2 = λ6 = 0.05, λ3 = 0.05, λ4 = 0.1, λ7 = 1.0, λorient = 0.05, and λflat = 0.5.
+A.5
+Validation Subset for Cross-Camera Photometric Inconsistency
+Appearance-Inconsistent Subset Selection.
+To identify Waymo validation scenes with large
+cross-camera appearance variations, we compute an overlap-based appearance discrepancy score
+for each scene. We select 57 scenes using these input-derived, model-independent scores to form a
+challenging validation subset. Instead of comparing full images directly, we only evaluate pixels that
+have valid geometric correspondences across cameras. The score is computed separately for ground
+and sky regions.
+For ground regions, we follow the same LiDAR-affine correspondence construction pipeline in
+Sec. 3.1. Given a valid LiDAR-depth pixel in a reference camera, we back-project it to 3D and then
+project it into the target camera. A match is retained only if it lies inside the target image, passes
+valid-mask filtering, and satisfies the LiDAR depth consistency check when target depth is available.
+The target RGB value is obtained by bilinear sampling.
+For sky regions, where LiDAR depth is unavailable, we use the same proxy sky-point construction as
+in Sec. 3.1: each sky pixel is lifted along its camera ray to a fixed sky depth and then projected into
+the target camera. A correspondence is kept only when both the reference pixel and the projected
+target pixel are classified as sky.
+For each valid correspondence i, let the RGB values in the reference and target cameras be xi =
+(Ri, Gi, Bi) and yi = (R′
+i, G′
+i, B′
+i), respectively. We first compute luminance using BT.601 weights:
+L(xi) = 0.299Ri + 0.587Gi + 0.114Bi,
+L(yi) = 0.299R′
+i + 0.587G′
+i + 0.114B′
+i.
+The per-correspondence appearance difference is defined as the absolute log-luminance difference:
+di = |log2 (max(L(xi), ϵ)) −log2 (max(L(yi), ϵ))| ,
+where ϵ = 10−6 is used for numerical stability. Equivalently, this measures the absolute logarithmic
+brightness ratio between two matched observations.
+For each scene s and region type r ∈{ground, sky}, we average over all valid correspondences
+Ms,r:
+Ss,r =
+1
+Ns,r
+X
+i∈Ms,r
+di,
+Ns,r = |Ms,r|.
+The final scene-level score is computed by weighting the ground and sky scores by their numbers of
+valid correspondences:
+Ss = Ns,groundSs,ground + Ns,skySs,sky
+Ns,ground + Ns,sky
+.
+The final selected Waymo Multi-View Appearance-Inconsistent Subset is listed in Tab. 5.
+18
+
+
+Table 5: Waymo Multi-View Appearance-Inconsistent Subset.
+scene_id seg_name
+scene_id seg_name
+scene_id seg_name
+008 seg_107139
+054 seg_143831
+120 seg_283472
+009 seg_108375
+059 seg_146633
+122 seg_303925
+012 seg_110487
+060 seg_146873
+129 seg_366934
+013 seg_110533
+065 seg_150215
+133 seg_419577
+014 seg_113566
+067 seg_150569
+134 seg_424653
+016 seg_114061
+072 seg_154962
+137 seg_442641
+023 seg_121347
+076 seg_159595
+156 seg_599003
+025 seg_123062
+078 seg_162133
+157 seg_600109
+026 seg_123746
+082 seg_169798
+160 seg_618300
+029 seg_128204
+084 seg_171355
+163 seg_662188
+033 seg_131780
+088 seg_173440
+164 seg_663760
+037 seg_133368
+098 seg_180241
+168 seg_716314
+040 seg_134699
+099 seg_180457
+175 seg_798862
+041 seg_135733
+109 seg_210580
+180 seg_833180
+043 seg_139416
+110 seg_230820
+184 seg_884527
+046 seg_140812
+113 seg_250679
+190 seg_902487
+047 seg_141077
+115 seg_260994
+195 seg_924365
+048 seg_141279
+118 seg_272435
+198 seg_944394
+050 seg_142445
+119 seg_273637
+199 seg_947242
+Reconstruction Results on the Appearance-Inconsistent Subset.
+We compare MCSplat with
+UniSplat [1] on the 57-scene subset. As shown in Tab. 6, MCSplat improves all three reconstruction
+metrics in both view configurations. In the front-camera setting, PSNR increases from 29.18 to
+32.07 dB (+2.89 dB) and LPIPS decreases from 0.15 to 0.12 (-20%). In the 5 camera setting, PSNR
+increases from 29.28 to 30.88 dB (+1.60 dB) and LPIPS decreases from 0.18 to 0.14(-22.2%). The
+consistent gains on this subset indicate improved robustness to pronounced cross-camera appearance
+differences.
+Table 6: Quantitative reconstruction results on the Waymo Appearance-Inconsistent Subset.
+Method
+Views
+PSNR↑
+SSIM↑
+LPIPS↓
+UniSplat
+Front
+29.18
+0.89
+0.15
+Ours
+Front
+32.07
+0.90
+0.12
+UniSplat
+Multi
+29.28
+0.86
+0.18
+Ours
+Multi
+30.88
+0.88
+0.14
+A.6
+Additional Qualitative Results in Image Space
+Additional qualitative results on the Waymo validation set are shown in Figs. 7 to 9. In the challenging
+rainy driving scene in Fig. 7, our method substantially reduces artifacts in the sky compared with the
+baseline, demonstrating strong appearance recovery capability. Moreover, the introduced uncertainty-
+guided geometric regularization improves depth estimation around object boundaries, such as shrubs
+in Fig. 9, transparent materials such as vehicle windows in Fig. 7, pedestrians in Fig. 8, and texture-
+rich regions such as the poster in Fig. 8, which is particularly important for cross-lane novel-view
+synthesis.
+A.7
+Additional Qualitative Results in 3D Gaussian Space
+In Figs. 10 to 12, we show qualitative comparison of single-frame Gaussians under a novel view in
+various scenes. These samples with highlighted regions show that our method recovers the scene
+more faithfully than the baseline.
+19
+
+
+(a) Ground Truth
+(c) Ours
+(b) UniSplat
+Figure 7: Additional qualitative comparisons under severe cross-camera exposure inconsistency. Our
+method reduces exposure-induced cross-camera artifacts and alleviates texture-induced depth errors.
+Around the pickup truck, it avoids confusing the window depth with the background depth, yielding
+a more plausible depth estimate.
+(a) Ground Truth
+(c) Ours
+(b) UniSplat
+Figure 8: Additional qualitative comparisons. Our method effectively removes glass-surface artifacts
+in camera-boundary regions. Compared with LiDAR depth, it also yields improved depth estimation in
+pedestrian regions. On the planar poster surface, our method avoids texture-induced depth ambiguity,
+producing a more reasonable depth prediction.
+20
+
+
+(a) Ground Truth
+(c) Ours
+(b) UniSplat
+(b) UniSplat
+Figure 9: Additional qualitative comparisons on the Waymo dataset. Our method reduces cross-
+camera stitching artifacts and produces more reasonable depth estimates, especially around road
+boundaries and tree or shrub boundaries.
+(a) UniSplat
+(b) Ours
+Figure 10: Qualitative comparison of single-frame Gaussians under a novel view. Compared with
+the baseline, our method reconstructs cleaner road boundaries and sharper scene geometry. The
+highlighted regions show that the baseline suffers from geometry–appearance ambiguity caused by
+multi-view photometric inconsistency, leading to broken road edges, blurred boundary structures, and
+incomplete ground reconstruction.
+21
+
+
+(a) UniSplat
+(b) Ours
+Figure 11: Qualitative comparison of single-frame Gaussians under a novel view in urban scenes.
+The highlighted regions show that our method recovers dynamic pedestrians more faithfully than the
+baseline, while preserving clearer wall textures and more complete ground reconstruction.
+(a) UniSplat
+(b) Ours
+Figure 12: Qualitative comparison of single-frame Gaussians under a novel view. UniSplat tends to
+confuse texture-rich regions with geometric variations, leading to blurred and distorted wall surfaces.
+In contrast, our method preserves sharper texture details and more consistent wall geometry in the
+highlighted regions.
+22
+
+
+A.8
+Cross-Lane Novel-View Synthesis
+We evaluate off-trajectory rendering by shifting the camera 1.8 m and 2.0 m leftward (Figs. 13
+and 14). Compared with UniSplat, MCSplat preserves clearer vehicle contours and fewer geometric
+distortions, particularly around the foreground car and curbside motorcycles at 1.8 m, and the pickup
+trucks and red car at 2.0 m. These results suggest improved geometric consistency under lateral
+viewpoint shifts, although some artifacts remain in occluded or sparsely observed regions.
+B
+Further Discussion
+B.1
+Social Impact
+Social Impact.
+MCSplat aims to improve feed-forward 3D reconstruction and novel-view synthesis
+for autonomous driving scenes. Its potential positive impact lies in enabling more reliable closed-loop
+simulation, safer evaluation of driving policies, and more scalable reconstruction of complex urban
+environments. By reducing geometry–appearance ambiguity and improving novel-view geometric
+consistency, the method may help build more faithful simulation assets for testing autonomous
+systems before real-world deployment.
+However, the method should not be viewed as a substitute for real-world safety validation. Re-
+construction errors may still occur in rare weather, unusual lighting, long-tail objects, or sensor
+configurations outside the training distribution. If such reconstructed scenes are used uncritically
+for safety evaluation, they may lead to overconfidence in downstream autonomous driving systems.
+In addition, high-fidelity scene reconstruction techniques may raise privacy concerns if applied
+to data containing identifiable people, vehicles, or locations. Our experiments are conducted on
+established autonomous driving datasets, and the method is intended for research on reconstruction
+and simulation rather than surveillance or identification. Responsible deployment should include
+dataset governance, privacy-preserving data handling, and careful validation across diverse driving
+conditions.
+B.2
+Limitations
+Although MCSplat demonstrates strong cross-camera appearance consistency and camera-specific
+appearance recovery, its performance can still be affected by the limited appearance diversity of the
+Waymo dataset. In a few scenes, the recovered raw-domain appearance may be less accurate than
+expected and exhibit color shifts. A promising direction is to improve appearance coverage through
+stronger data augmentation and larger, more diverse training datasets.
+23
+
+
+(a) Original trajectory
+(b) Shifted Left by 1.8 m-UniSplat
+(c) Shifted Left by 1.8 m-Ours
+Figure 13: Qualitative cross-lane novel-view synthesis under a 1.8 m leftward camera-trajectory
+shift. (a) Original trajectory; (b) shifted view rendered by UniSplat; (c) shifted view rendered by
+MCSplat. The highlighted regions show improved preservation of the left-foreground car and the
+parked motorcycles along the right sidewalk.
+(b) Shifted Left by 2.0 m-UniSplat
+(a) Original trajectory
+(c) Shifted Left by 2.0 m-Ours
+Figure 14: Qualitative cross-lane novel-view synthesis under a 2.0 m leftward camera-trajectory shift.
+(a) Original trajectory; (b) shifted view rendered by UniSplat; (c) shifted view rendered by MCSplat.
+Compared with UniSplat, MCSplat better preserves the highlighted pickup-truck rear structures and
+the red foreground car, although off-trajectory artifacts remain.
+24

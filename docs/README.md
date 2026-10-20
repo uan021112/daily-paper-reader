@@ -48,7 +48,7 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-10-19</span>
+      <span class="dpr-home-dashboard-kicker">2026-10-20</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
     <strong class="dpr-home-dashboard-count">共 25 篇</strong>
@@ -58,7 +58,7 @@
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>10</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>15</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-10-19 23:33:21 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-20 22:54:41 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,9 +69,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日精选 25 篇机器人与具身智能论文，涵盖精读 10 篇、速读 15 篇。</p>
-<p>最值得关注的是面向任务的零样本 6DoF 抓取，以及 GPT-6-Astra 是否具备具身智能的探讨。</p>
-<p>建议先读《TGrasp6D》了解抓取方法，再看 GPT-6-Astra 论文，关注具身智能的评估依据。</p>
+<p>今日共筛选 25 篇论文，精读 10 篇、速读 15 篇，聚焦视觉几何与 3D 重建。</p>
+<p>最值得关注的是 ReDT 的分辨率解耦视觉几何，以及 FineSplat 的细粒度局部高斯表示。</p>
+<p>建议先读这两篇，再按兴趣浏览 RGB 与 X 射线联合重建、物体状态学习等方向。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -83,9 +83,9 @@
     <strong class="dpr-home-dashboard-count">10 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="TGrasp6D: Task-Informed Vision-Language Priors and Pose Refinement enable Zero-Shot Task-Oriented 6DoF Grasping">TGrasp6D: Task-Informed Vision-Language Priors and Pose Refinement enable Zero-Shot Task-Oriented 6DoF Grasping</span></li><li><span class="dpr-home-dashboard-paper-title" title="Has GPT-6-Astra Achieved Embodied Intelligence?">Has GPT-6-Astra Achieved Embodied Intelligence?</span></li><li><span class="dpr-home-dashboard-paper-title" title="VLA-Fabric: Learning Interaction for Composable Multi-Arm VLA Agents">VLA-Fabric: Learning Interaction for Composable Multi-Arm VLA Agents</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="ReDT: Resolution-Decoupled Visual Geometry Transformer">ReDT: Resolution-Decoupled Visual Geometry Transformer</span></li><li><span class="dpr-home-dashboard-paper-title" title="FineSplat: Fine Patches, Local Groups, Detailed Splats">FineSplat: Fine Patches, Local Groups, Detailed Splats</span></li><li><span class="dpr-home-dashboard-paper-title" title="MCSplat: Multi-View Photometric and Geometric Consistent Feed-Forward Gaussian Splatting for Driving Scenes">MCSplat: Multi-View Photometric and Geometric Consistent Feed-Forward Gaussian Splatting for Driving Scenes</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>5</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>3</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>6</strong></span><span class="dpr-home-dashboard-tag">embodied-ai <strong>4</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -96,9 +96,9 @@
     <strong class="dpr-home-dashboard-count">15 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="SpaceCache: Intermediate Feature Reuse for Efficient Semantic Segmentation on Point Cloud Streams">SpaceCache: Intermediate Feature Reuse for Efficient Semantic Segmentation on Point Cloud Streams</span></li><li><span class="dpr-home-dashboard-paper-title" title="CoDA: Co-Evolution of Data Engines and Action Policies">CoDA: Co-Evolution of Data Engines and Action Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="Scaling Online Exploration for Robot Agents">Scaling Online Exploration for Robot Agents</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="X-Splat: Unified Gaussian Splatting for Joint RGB and X-ray 3D Reconstruction">X-Splat: Unified Gaussian Splatting for Joint RGB and X-ray 3D Reconstruction</span></li><li><span class="dpr-home-dashboard-paper-title" title="SwitchSplat: Learning Discrete Object States from Casually Captured Scenes">SwitchSplat: Learning Discrete Object States from Casually Captured Scenes</span></li><li><span class="dpr-home-dashboard-paper-title" title="OV-PEAR: Observation-Verified Pose-Scale Estimation and Reconstruction for Unknown Industrial Manipulation Objects">OV-PEAR: Observation-Verified Pose-Scale Estimation and Reconstruction for Unknown Industrial Manipulation Objects</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>4</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>4</strong></span><span class="dpr-home-dashboard-tag">embodied-ai <strong>3</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>3</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>3</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span></div>
 </section>
 </div>
 
