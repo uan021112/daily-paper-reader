@@ -1,0 +1,1869 @@
+AMAP CV Lab | Alibaba Group
+TriFold: Folding irregular 3D Gaussians into structured
+latents for 3D Scene Generation
+Yun Wang2, ∗, §
+Chiyu Wang1, ∗, †
+Fan Jiang1, ∗, ‡
+Ziyu Zhu1
+Zhaoxu Sun1
+Guangchi Fang3
+Mu Xu1
+Dapeng Wu2
+1AMAP, Alibaba Group
+2City University of Hong Kong
+3Hong Kong Polytechnic University
+Abstract
+Recent progress in 3D generation has motivated growing interest in compact generative
+representations of complex 3D scenes. For native 3D Gaussian scenes, however, learning
+such representations remains challenging due to widely varying primitive counts, nonuni-
+form spatial density, and differences in geometry and appearance even among spatially
+neighboring primitives. In this work, we introduce TriFold, a native 3D Gaussian VAE
+that encodes Gaussian scenes into a fixed-layout triplane latent and jointly reconstructs
+their geometry and appearance. The key insight is to impose structural regularity on the
+latent space while preserving the spatial adaptivity of the underlying Gaussians. Dur-
+ing encoding, we use cell-wise learned queries to aggregate projected Gaussians into
+multiple slots per cell, reducing the information loss caused by single-feature pooling.
+During decoding, occupancy prediction identifies active regions, where query-based set
+prediction and candidate selection reconstruct local Gaussian sets with spatially varying
+primitive counts. Building on this representation, we train a latent flow-matching model
+for conditional scene-level 3DGS generation, enabling point-cloud-conditioned synthesis
+and single-image-conditioned amodal generation. Experiments demonstrate that TriFold
+achieves high-fidelity reconstruction and generation from a single image that provides
+only a partial observation of the scene, validating its effectiveness for native 3D Gaussian
+representation learning. https://fantasy-amap.github.io/TriFold
+1 Introduction
+Amodal 3D scene generation aims to synthesize complete environments from partial observations, en-
+abling exploration and embodied interaction beyond captured views [1–9]. This requires a representation
+that captures complex 3D structure while remaining tractable for generative modeling. Recent scene-level
+systems use compositional neural fields, progressive expansion, sparse volumes, or latent triplanes to
+model room-scale and unbounded environments [10–16]. Recent advances increasingly rely on structured
+latent representations that reorganize irregular 3D signals into formats compatible with generative mod-
+els [17–21]. However, extending this paradigm to native scene-level 3D Gaussian Splatting (3DGS) [22]
+poses distinct representation challenges. Scene-level Gaussian distributions are heterogeneous: globally,
+scenes can differ by orders of magnitude in primitive count and exhibit highly nonuniform spatial density;
+locally, spatially adjacent Gaussians suffer from severe attribute heterogeneity: neighboring primitives
+often differ sharply in geometry and appearance [23]. These variations motivate a latent representation
+that is structured for generative modeling while preserving scene-specific Gaussian cardinality, spatial
+distributions, and fine-grained local attributes.
+Existing methods reconcile native Gaussian scenes with latent generative modeling through diverse struc-
+tural paradigms. Quantized-grid methods, such as L3DG [24] and GaussianGPT [25], discretize Gaussians
+*Equal contribution.
+†Project leader.
+‡Corresponding author.
+§Work done during internship at AMAP, Alibaba Group.
+TriFold
+Page 1 of 30
+arXiv:2610.23050v1  [cs.CV]  16 Oct 2026
+
+
+AMAP CV Lab | Alibaba Group
+(a) Fixed-layout latents, Content-adaptive Gaussian allocation
+M₂ retained 3DGS primitives
+Joint Geometry + Appearance
+(b) Reconstruction Detail
+(c) Amodal Scene Generation
+N₁ 3DGS Primitives
+Triplane
+Encoder
+Triplane
+Decoder
+★…
+…
+N₂ 3DGS Primitives
+Triplane
+Encoder
+Triplane
+Decoder
+★…
+…
+M₁ retained 3DGS Primitives
+Ground Truth
+Reconstruction
+Input Image
+Side View
+Front View
+Top View
+Variable-cardinality Input
+Fixed-layout Latent
+Content-adaptive Output
+Figure 1: Overview of TriFold. (a) TriFold encodes variable-cardinality Gaussian scenes into fixed-layout tri-
+plane latents that jointly represent geometry and appearance, and decodes content-adaptive Gaussian sets with vari-
+able local densities. (b) The learned representation supports detailed scene reconstruction. (c) Our single-image-
+conditioned amodal generation preserves observed content while inferring plausible geometry and appearance for
+unobserved regions.
+into voxel-aligned representations with predefined local capacity before vector quantization. Such fixed
+per-voxel budgets can underrepresent dense regions while wasting capacity in sparse ones. Canonical-
+token methods instead regularize globally. Can3Tok [26] resamples each scene into a fixed-cardinality
+primitive set, inadvertently imposing a uniform representation budget irrespective of structural complex-
+ity. Sparse latent methods offer topological flexibility by anchoring features to dynamic active voxels.
+TRELLIS [20], for example, constructs sparse latents and decodes geometry via a cascaded pipeline.
+While highly effective for bounded, object-centric assets with comprehensive visual coverage, extend-
+ing this paradigm to expansive scene-level 3DGS is non-trivial: complex occlusions across broad scenes
+complicate exhaustive multiview feature anchoring, while scaling sparse voxel grids and multi-stage
+pipelines over unconstrained volumes introduces notable computational and representation overhead.
+Finally, continuous-field methods, such as DiffGS [27], reparameterize Gaussians as continuous spa-
+tial fields via feature interpolation; yet, this bias toward spatial smoothness can conflict with the high-
+frequency variations in attributes such as scale and rotation across neighboring primitives. Consequently,
+an open challenge remains: how can we provide generative backbones with a regular, fixed-layout latent
+space, while preserving the unconstrained, variable-length nature of native Gaussian representations at
+both the input and output?
+To bridge this gap, we present TriFold, a variational autoencoder that operates directly on native 3D
+Gaussian primitives for scene-level generative modeling. Our key design principle is to impose structural
+regularity in the latent space that jointly represents geometry and appearance, and preserve the flexible,
+content-adaptive organization of native Gaussian primitives. Specifically, the encoder maps variable-
+cardinality, non-uniformly distributed Gaussian sets into fixed-layout triplane latents. It first extracts
+context-aware primitive features with a point transformer. Since multiple features may project to the same
+triplane cell, we use multiple learned queries per cell to aggregate local information. Then, we use Cross-
+plane attention to integrate information across planes through shared Gaussian projections, followed by a
+variational bottleneck that produces triplane latents.
+To recover native 3DGS from this structured latent, our decoder adopts a set-based decoding paradigm
+without rigid 3D discretization. An occupancy predictor first localizes active regions, while an optimal-
+transport-guided set decoder dynamically predicts and filters Gaussian candidates within each region.
+TriFold
+Page 2 of 30
+
+
+AMAP CV Lab | Alibaba Group
+Because the predefined query count serves only as a local capacity upper bound rather than a fixed al-
+location, the spatial allocation and primitive cardinality remain adaptive to scene content. We supervise
+Gaussian centers through optimal-transport matching, while the remaining geometric and appearance at-
+tributes are constrained by a full-scene rendering loss. Together, these objectives enable accurate Gaussian
+reconstruction with high rendering fidelity, providing a regular tensor interface for generative modeling
+while retaining the flexible organization of native 3DGS.
+Building on this structured latent space, we train a latent flow-matching model for conditional scene-
+level 3DGS generation. We consider two conditioning settings: point-cloud-conditioned synthesis from
+complete spatial observations and single-image-conditioned amodal generation. In the latter, a single
+image provides only a partial observation of the scene, requiring the learned scene priors to preserve
+observed content while inferring plausible geometry and appearance in unobserved regions. Experiments
+demonstrate high-fidelity reconstruction and generation in both settings, demonstrating the effectiveness
+of structured triplane latents for native 3D Gaussian scene generation.
+• A native scene-level 3D Gaussian variational autoencoder. We introduce TriFold, which maps
+variable-cardinality Gaussian scenes into a fixed-layout triplane latent and decodes them back into
+content-adaptive native 3DGS.
+• Unified geometry-appearance modeling. Our unified representation jointly encodes scene geometry
+and appearance, and we reconstruct both from the same representation through an occupancy predictor
+and a query-based set decoder.
+• Conditional scene-level 3DGS generation based on TriFold. We train a latent flow-matching model
+on the learned triplane latents, enabling both point-cloud-conditioned synthesis and single-image-
+conditioned amodal generation with plausible geometry and appearance in unobserved regions.
+2 Related Work
+3D Representations and Generative Models.
+The choice of scene representation shapes the fidelity
+and scalability of 3D generative models. Meshes represent explicit surfaces through vertices and faces,
+while voxel grids discretize space into volumetric cells storing occupancy or other attributes, with dense
+grids incurring cubic memory growth with resolution [28–32]. Neural radiance fields represent scenes as
+continuous functions and support high-quality novel-view synthesis, but require repeated neural evalua-
+tions during rendering [33–35]. 3DGS instead uses adaptive explicit primitives for differentiable real-time
+rendering [22]. Representative generative approaches include π-GAN for implicit radiance fields [36],
+SDFusion for volumetric SDF grids [37], GET3D and MeshGPT for explicit meshes [38, 39], and
+3DShape2VecSet, Michelangelo, and TripoSG for generation in learned 3D latent spaces [18, 40, 41].
+These properties make 3DGS attractive for generative modeling. Native 3DGS, however, represents each
+scene as an unordered set whose cardinality and spatial density adapt to scene content. This organization
+is mismatched with latent diffusion and flow-matching backbones, which typically operate on fixed-shape
+tensors [42, 43]. Triplanes offer a regular layout with a practical balance between spatial expressiveness
+and computational efficiency and have been widely used for 3D-aware generation [44, 45]. The central
+challenge is therefore to map adaptive Gaussian sets into such fixed-layout latents while retaining their
+scene-dependent cardinality and spatial density during reconstruction.
+Latent Representations for 3D Gaussians.
+We focus on methods that regularize Gaussian represen-
+tations or construct generative 3D latents with Gaussian decoders. This differs from image-conditioned
+3DGS methods, which directly predict Gaussian representations from one or more images for recon-
+struction or content creation [46–53]. Within this generative latent setting, existing approaches differ
+primarily in how they impose structural regularity. Grid-based methods impose explicit spatial organiza-
+tion: GaussianCube rearranges a fixed number of Gaussians onto voxel grids through optimal transport,
+TriFold
+Page 3 of 30
+
+
+AMAP CV Lab | Alibaba Group
+(a) Training
+VAE
+Encoder
+μ, log σ²
+VAE
+Decoder
+Triplane Encoder
+Point Features
+Learnable
+Projection
+Learnable Queries
+Triplane Decoder
+Occupied 
+Voxels
+Discrete
+Indexing
+Triplane
+Tokens
+Set
+Decoder
+Learnable Queries
+Matched GS 
+Attributes
+K candidates 
+/ voxel
+k ≤ K
+Active 
+Gaussians
+(b) Scene-conditioned Gaussian Generation
+image
+point cloud
+Noise
+Flow Matching Model
+z
+Triplane 
+Decoder
+Generated 
+scene 3DGS
+z
+Reconstructed 3DGS
+Input 3DGS
+𝓛r
+𝓛!
+VAE
+Decoder
+Input 3DGS
+PTv3
+Triplane 
+Encoder
+Triplane 
+Decoder
+★
+Triplanes
+···
+xy Plane
+yz Plane
+yz Plane
+QxHxW
+★
+★
+Occ Head
+Optimal 
+Transport 
+QxHxW
+Figure 2: Overview of TriFold. The triplane encoder maps a variable-cardinality Gaussian set to a fixed-layout
+variational latent, and the triplane decoder reconstructs spatially adaptive local Gaussian sets. The learned latent
+further supports image-conditioned scene generation with flow matching.
+whereas L3DG and GaussianGPT adopt voxel-aligned Gaussian representations with vector-quantized au-
+toencoders [24, 25, 54]. Canonical-token methods such as Can3Tok convert a scene into a fixed-cardinality
+token set [26]. Sparse approaches retain scene-dependent spatial support: TRELLIS constructs sparse la-
+tent features from multiview observations and generates spatial structure and latent features in two stages,
+whereas GS-Voxel reorganizes fitted Gaussian scenes into sparse voxel structures with scene-dependent
+support [20, 55]. Continuous-field methods such as DiffGS decode Gaussian attributes from interpolated
+spatial features [27].
+These approaches enable Gaussian-based generation through different constraints on scene representa-
+tion, including fixed global or local capacity, occupancy-dependent support, and continuous functional
+parameterization. TriFold instead places structural regularity in a fixed-layout triplane latent. It directly
+encodes fitted Gaussian sets with scene-dependent cardinality and density, jointly represents geometry and
+appearance, and decodes native Gaussian primitives with adaptive spatial allocation and local counts. This
+design provides a regular tensor interface for generative modeling while retaining the adaptive organiza-
+tion of native 3DGS.
+Amodal reconstruction and generative 3D representations. Recovering complete 3D structure from
+partial visual observations is an important setting for generative scene modeling. NOVA3R [4] uses
+non-pixel-aligned scene tokens and a generative point-cloud decoder to reconstruct visible and occluded
+geometry, while VolFill [5] learns a volumetric generative prior for single-view amodal scene reconstruc-
+tion. GaussianAnything [56] explores point-cloud-structured latent generation for 3D objects. In contrast,
+TriFold targets a direct Gaussian-to-latent-to-Gaussian interface for native scene-level 3DGS, jointly rep-
+resenting geometry and appearance while recovering content-adaptive primitive distributions and counts.
+3 Method
+TriFold
+Page 4 of 30
+
+
+AMAP CV Lab | Alibaba Group
+3.1 Unified Geometry–Appearance Gaussian Latent Space
+3DGS scenes are unordered, variable-cardinality sets G = {gi}N
+i=1, where gi = (xi, ℓi, qi, αi, ci) denotes
+position, log-scale, rotation, opacity, and spherical-harmonic appearance. We learn a Gaussian-to-triplane
+VAE,
+z ∼qϕ(z | G),
+bG = Dψ(z),
+z ∈R3Cz×Q×Rp×Rp.
+(1)
+The difficulty is asymmetric: several spatially distinct Gaussians can project to one plane cell, while one
+decoded cell can correspond to zero, one, or many Gaussians. Our encoder therefore retains multiple
+features per projected cell, and our decoder predicts a local Gaussian set only where the scene is occu-
+pied. The fixed latent jointly represents geometry and appearance while the decoded set remains spatially
+adaptive. We use Q = 4, Cz = 16, and Rp = 256.
+3.2 Triplane Encoder
+We use a modified PTv3 backbone [57], augmented with 3D rotary positional encoding, to extract a
+context-aware feature hi for each Gaussian gi. For each plane p ∈{xy, xz, yz}, we project the center
+of Gaussian onto the plane, assign the projection to grid cell jp
+i , and concatenate hi with its continuous
+projected coordinates, yielding the plane-conditioned feature ehp
+i . For any cell j, let Ip
+j = {i : jp
+i =
+j} denote the indices of Gaussians projected to cell j. Rather than pooling these features into a single
+descriptor, a query-based set aggregator produces Q feature slots:
+Tp
+j = AggQ
+ {ehp
+i }i∈Ip
+j
+
+∈RQ×C.
+(2)
+Within the aggregator, local geometric contextualization captures the relational topology among the pro-
+jected features, after which Q learned queries adaptively extract these features into discrete slots inde-
+pendently on each plane. The spatial projections of each primitive inherently induce geometric corre-
+spondences across the xy, xz, and yz cells, enabling a sparse cross-plane attention module to propagate
+contextual information across corresponding slots prior to plane densification. Finally, a convolutional
+variational bottleneck predicts (µ, σ) and samples z = µ + σ ⊙ϵ. This yields a regular tensor interface
+without collapsing multiple Gaussians projected to the same cell into a single feature. Architectural details
+are provided in Appendix A.2.
+3.3 Triplane Decoder
+The decoder reverses this mapping in two stages: support localization and Gaussian reconstruction. It first
+samples and aggregates features from the three planes at each voxel center xv, yielding context features
+Cv, predicting occupancy ρv = focc(Cv, xv). Only voxels in bV = {v | ρv > τocc} are decoded during
+inference. For each selected voxel, a DETR-style set decoder [58] uses K learned queries conditioned on
+Cv to predict Gaussian candidates {bgvk}K
+k=1 and their objectness probabilities pobj
+vk . The queries are refined
+through intra-voxel self-attention and sparse inter-voxel attention across neighboring voxels. Because
+the local target is unordered and variable-sized, we use entropy-regularized Optimal Transport (OT) to
+softly match candidates to target Gaussians or a dummy “no-Gaussian” bin, with the matched target mass
+providing supervision for objectness. At inference, candidates are retained according to their objectness-
+opacity scores:
+bG = {bgvk | v ∈bV, pobj
+vk bαvk > τg}.
+(3)
+Thus, K bounds only the local candidate capacity rather than fixing cardinality: both the spatial allocation
+of selected voxels and the number of retained primitives per voxel adapt to scene content, preserving a
+variable-cardinality native Gaussian representation. Appendix A.2 and A.3 provide the details of the
+architecture and OT.
+TriFold
+Page 5 of 30
+
+
+AMAP CV Lab | Alibaba Group
+3.4 Joint Supervision for Gaussian VAE Training
+We train the encoder and decoder to answer three questions: where Gaussian decoding should occur, what
+local Gaussian set should be recovered, and which predicted candidates should remain active at inference.
+Occupancy supervision.
+Occupancy supervision should balance spatial coverage with sparsity. Positive-
+only supervision can lead to an unnecessarily dense active set, whereas treating uncertain boundary
+samples as hard negatives may suppress thin structures. We therefore combine pointwise occupancy
+regression with a voxel-center margin objective:
+Locc = λreg Ex|ρ(x) −o(x)| + λm
+ Ev∈V+[m+ −ρv]2
++ + Ev∈V−[ρv −m−]2
++
+
+.
+(4)
+Here o(x) is the reference occupancy signal and ρv is the predicted occupancy at voxel center v. The sets
+V+ and V−are occupied and confidently empty voxel centers, respectively. The margins m+ and m−
+encourage occupied centers to score above m+ and empty centers below m−.
+Gaussian decoder supervision.
+For each occupied voxel v, we use an unordered set of Mv ≤K target
+Gaussians for set-level supervision, while the decoder predicts K candidates. A detached OT plan P ∗
+v
+softly matches the predicted candidates to these targets and defines the position loss
+Lpos =
+1
+|V+|
+X
+v∈V+
+K
+Mv
+K
+X
+k=1
+Mv
+X
+j=1
+[P ∗
+v ]kj
+∥bxvk −xvj∥1
+h
+,
+(5)
+where h denotes the voxel size. Under this correspondence, we directly supervise only Gaussian centers;
+scale, rotation, appearance, and opacity are instead constrained through rendering supervision. As in set-
+based object prediction, we use an objectness loss Lobj to predict whether each Gaussian corresponds to
+a target primitive, using the non-dummy transport mass as a soft target.
+During rendering supervision, we render the selected Gaussian candidates from sampled cameras and
+compare them with target views rendered from the complete ground truth Gaussian scene:
+Lrender = (1 −η)∥bIr −Ir∥1 + η
+ 1 −SSIM(bIr, Ir)
+
+.
+(6)
+where η balances the pixel-wise and structural similarity terms. We stop gradients from Lrender through
+the predicted Gaussian centers, so that it constrains scale, rotation, spherical-harmonic appearance, and
+opacity without directly optimizing their positions. When a voxel contains more than K primitives,
+matched ℓ1 supervision covers only a subset. Rendering against the full ground-truth scene instead en-
+courages the decoder’s K candidates to preserve the overall target appearance. For occupied voxels, the
+decoder objective is
+LGS = λposLpos + λobjLobj + λrenderLrender
+(7)
+Appendix A.3 provides further details on the complete OT transport marginals, threshold-aligned activa-
+tion objective, and rendering protocol.
+Phantom-voxel supervision.
+Training the set decoder only on ground-truth occupied voxels introduces
+a discrepancy: at inference, false-positive occupancy proposals are also passed to the decoder and may
+produce ghost Gaussians. We therefore mine predicted voxels that do not overlap ground-truth support as
+phantom voxels. Since these voxels contain no target primitives, we apply
+Lph = Ev∈Vph
+"
+1
+K
+K
+X
+k=1
+
+λph,obj BCE(pobj
+vk , 0) + λph,α|bαvk|
+#
+.
+(8)
+TriFold
+Page 6 of 30
+
+
+AMAP CV Lab | Alibaba Group
+GT Scenes
+Ours
+GaussianGPT
+Figure 3: Qualitative VAE reconstruction comparison. Compared with GaussianGPT, our method better captures
+scene geometry and appearance.
+These terms teach the decoder to reject proposer errors rather than assuming that every decoded voxel con-
+tains a primitive. We exclude a small halo around occupied voxels to avoid treating uncertain boundaries
+as negatives; sampling details are given in Appendix A.3.
+The KL term regularizes the latent for generative modeling. The complete objective is
+LVAE = Locc + LGS + Lph + λKLLKL.
+(9)
+More detailed weights and the optimization schedule are reported in Appendix A.6.
+3.5 Scene Generation over Gaussian Latents
+We freeze the VAE and train a conditional latent flow-matching model. For image conditioning, dense
+DINO features are lifted with estimated depth and camera geometry, splatted onto the three latent-aligned
+planes, and concatenated with patch embeddings of the noisy scene latent. Given a normalized clean latent
+z0, noise ϵ, and σ ∈[0, 1], we use the linear path zσ = (1 −σ)z0 + σϵ and optimize
+LFM = E
+ 1
+D ∥vθ(zσ, σ, c) −(ϵ −z0)∥2
+2
+
+.
+(10)
+where D denotes the dimensionality of the vectorized latent. The same latent interface also supports
+point-cloud-conditioned completion. Appendix A.5 details how image and point-cloud observations are
+converted into aligned condition tokens and injected into the flow transformer.
+4 Experiments
+4.1 Datasets and Evaluation Protocol
+Datasets and View Sampling.
+We evaluate on InteriorGS [59], which contains large-scale structured
+indoor 3D Gaussian scenes, and the Aria Synthetic Environments (ASE) 3DGS subset of SceneSplat-
+49K [60]. Since InteriorGS scenes span large spatial regions, we crop them into smaller training samples
+TriFold
+Page 7 of 30
+
+
+AMAP CV Lab | Alibaba Group
+GT Scene
+Reconstructed Scene
+3DGS Count Heatmap
+1
+24
+Figure 4: Adaptive 3DGS allocation. Visualization of the target scene, VAE reconstruction, and retained Gaussian
+count per occupied voxel.
+following the procedure in Appendix A.1, yielding over 19,600 crops. Aria scenes are used directly
+without cropping, yielding approximately 8,600 samples. InteriorGS and Aria scenes are split 9:1 into
+training and test sets before cropping to avoid scene overlap. To construct single-image-to-amodal-3DGS
+pairs, we sample candidate conditioning views and use Qwen3-VL-8B [61] to filter out uninformative
+views.
+Table 1: Quantitative comparison with existing 3D Gaus-
+sian representation methods. Chamfer Distance (CD) val-
+ues are multiplied by 103. Best results are in bold, second-
+best are underlined.
+Method
+PSNR↑
+SSIM↑
+LPIPS↓
+CD↓
+Can3Tok
+4.53
+0.012
+0.920
+10.96
+DiffGS
+12.43
+0.719
+0.374
+3.21
+GaussianGPT
+21.40
+0.856
+0.157
+2.62
+TriFold (Ours)
+26.55
+0.913
+0.088
+2.23
+Implementation Details
+The triplane encoder
+uses Q = 4 tokens per plane cell, and the varia-
+tional latent has Cz = 16 channels per plane at a
+spatial resolution of 2562. The decoder predicts at
+most K = 24 candidates per selected voxel on a
+2563 occupancy grid. We train the Gaussian VAE
+with Adam and a learning rate of 2 × 10−4. After
+convergence, we freeze the VAE, normalize its la-
+tents with training-set statistics, and train the flow
+model with AdamW, learning rate of 10−4, and
+weight decay 0.01. Both stages use gradient clipping and cosine learning-rate schedules with linear
+warmup. We train the VAE for 80K steps and the latent flow model for 100K steps on AMD MI308X
+GPUs, with a per-GPU batch size of 1. Complete data preprocessing and optimization settings are pro-
+vided in Appendices A.1 and A.6.
+4.2 Scene Reconstruction
+In this section, we evaluate how well the Gaussian VAE preserves scene appearance and geometry. We
+compare against Can3Tok [26], DiffGS [27], and GaussianGPT [25], which respectively use canonical
+tokens, continuous feature fields, and voxel-quantized representations. Table 1 reports rendering fidelity
+(PSNR, SSIM, and LPIPS) and geometric reconstruction (CD). Our method achieves the best results across
+all metrics, improving PSNR over GaussianGPT by 5.15 dB while reducing LPIPS and CD. Figure 3 fur-
+ther shows that our VAE better preserves scene structure and appearance. Additional reconstructions are
+provided in Appendix Figure 8, and Appendix A.9 evaluates our VAE’s latent smoothness and robust-
+ness. Using official implementations under the same scene-level training and evaluation protocol, adapted
+Can3Tok and DiffGS baselines converge to low-detail reconstructions, mapping distinct input scenes to
+similar coarse structures (Appendix Figure 9).
+Adaptive Gaussian Allocation.
+Figure 4 compares the target and reconstruction and shows the retained
+candidates per occupied voxel. The decoder predicts K = 24 candidate Gaussians per voxel and retains
+only those with sufficient objectness, allowing the number of output Gaussians to vary with local content.
+Thus, K specifies an upper bound rather than a fixed output count. We choose K = 24 based on the
+InteriorGS statistics in Figure 7, where 97.8% of occupied voxels contain at most 24 Gaussians on the
+TriFold
+Page 8 of 30
+
+
+AMAP CV Lab | Alibaba Group
+Table 2: Conditional generation evaluation. For single-image conditioning, appearance is evaluated separately
+in regions observed and unobserved from the conditioning view. Full-point-cloud conditioning covers the complete
+scene and therefore has no unobserved split. Detailed evaluation protocols are provided in Appendix A.6.
+Observed Appearance
+Unobserved Appearance
+Unobserved Geometry
+Condition
+FID ↓
+KID (×103) ↓
+FID ↓
+KID (×103) ↓
+COV-CD (%) ↑
+MMD-CD (×103) ↓
+Full point cloud
+54.12
+16.76
+N/A (complete conditioning)
+Single image
+60.38
+18.20
+67.81
+21.43
+85.24
+12.75
+Figure 5: Point-cloud-conditioned generation. Given a full point cloud, the latent flow model generates native
+3DGS with coherent geometry and appearance across novel views.
+same 2563 grid. For datasets with higher local densities, the decoder can be configured with a larger K
+without changing the latent layout.
+4.3 Scene Generation
+To evaluate the generative utility of the learned TriFold latent, we train latent flow-matching models under
+full-point-cloud and single-image conditioning. Our latent supports generation from complete spatial ob-
+servations and amodal completion from a single view, while decoding to content-adaptive native 3DGS.
+As existing 3DGS generators typically adopt different conditioning protocols, direct comparisons require
+method-specific adaptation; we focus on evaluating generation within our conditional setup rather than
+benchmarking across generative methods. Qualitatively, Figures 5 and 6 show plausible scene geometry
+and appearance across widely separated views. In particular, the single-image model synthesizes plau-
+sible room structure and content beyond the input view. Additional samples are provided in Figures 13
+and 14. Quantitatively, Table 2 shows better observed-region appearance under full-point-cloud condi-
+tioning, while the single-image model achieves an unobserved-region FID of 67.81 and a COV-CD of
+85.24%. Since a single image only partially observes the scene, plausible completions may differ from
+the reference in unobserved regions.
+4.4 Ablation Studies
+Data Scaling and Cross-dataset Generalization.
+Unless otherwise specified, all ablations are trained
+on the InteriorGS training split. Under this setting, our model transfers to Aria without any Aria training
+data (Table 4), demonstrating cross-dataset generalization. Separately, Table 3 shows consistent gains
+from scaling the training data, with further improvements when Aria is included.
+TriFold
+Page 9 of 30
+
+
+AMAP CV Lab | Alibaba Group
+Input Image
+Front View
+Side View
+Top View
+Figure 6: Single-image amodal generation. Given one input image, the latent flow model generates plausible
+room structure and appearance across novel views.
+Table 3: Training data composition.
+We compare
+models trained with different amounts of data and eval-
+uate all variants on the same held-out test set.
+Training data
+PSNR↑
+SSIM↑
+LPIPS↓
+CD↓
++ InteriorGS
+25.83
+0.904
+0.096
+2.27
++ Aria
+26.55
+0.913
+0.088
+2.23
+Table 4: Cross-dataset generalization. Models are
+evaluated on the Aria test set without any Aria train-
+ing data; the last row is an in-domain reference trained
+with its training set.
+Training data
+PSNR↑
+SSIM↑
+LPIPS↓
+CD↓
+InteriorGS
+22.00
+0.720
+0.33
+2.21
++ Aria (in-domain)
+24.26
+0.781
+0.32
+2.17
+Component Ablations.
+We next isolate the contribution of individual model components while keeping
+the training data and evaluation protocol fixed. Table 5 analyzes the model in three stages. First, the
+multi-query encoder and query-based set decoder each improve the baseline, while combining them yields
+further gains, demonstrating their complementary roles in Gaussian encoding and decoding. Second,
+rendering supervision substantially improves visual fidelity, and combining it with the position loss further
+benefits both appearance and geometry. Finally, phantom-voxel training provides additional gains across
+all metrics, resulting in the full model.
+Table 6: Architectural design choices. Comparison of
+alternative encoder, projection, and decoding designs un-
+der the same evaluation settings.
+Variant
+PSNR↑SSIM↑LPIPS↓CD↓
+Encoder Head
+Sparse 3D CNN
+23.16
+0.830
+0.139
+2.48
+PointNet
+24.37
+0.878
+0.117
+2.41
+PTv3
+25.83
+0.904
+0.096
+2.27
+Aggregation
+Mean pooling
+24.60
+0.857
+0.102
+2.39
+QFormer
+25.83
+0.904
+0.096
+2.27
+Decoder Head
+MLP
+23.09
+0.885
+0.132
+2.55
+Set decoder
+25.83
+0.904
+0.096
+2.27
+Architectural
+Design
+Choices.
+Beyond
+the
+component-level ablation, Table 6 compares al-
+ternative encoder and decoder implementations
+with the rest of the pipeline fixed. For Gaussian
+encoding, point-based backbones outperform the
+sparse 3D CNN, with PTv3 performing best and
+capturing richer geometric information, as illus-
+trated in Figure 10. For aggregation, QFormer im-
+proves over mean pooling, supporting query-based
+aggregation for resolving many-to-one collisions
+in triplane cells.
+For decoding, the set decoder
+substantially outperforms the fixed-output MLP,
+validating adaptive set prediction for recovering
+variable-cardinality Gaussians. Together, these re-
+sults show that the gains arise from architectural
+choices tailored to the irregular and variable-density structure of 3DGS.
+TriFold
+Page 10 of 30
+
+
+AMAP CV Lab | Alibaba Group
+Table 5: Component analysis. Each row adds or replaces one model or training component while keeping the re-
+maining evaluation protocol fixed. For the Lpos-only baseline, we use the same correspondence to directly supervise
+all Gaussian attributes.
+ID
+Architecture
+Training objective
+Rendering quality
+Gaussian reconstruction
+Triplane Encoder
+Triplane Decoder
+Phantom
+Lpos
+Lrender
+PSNR↑
+SSIM↑
+LPIPS↓
+Chamfer Distance (CD) ↓
+baseline
+✓
+12.10
+0.617
+0.491
+3.06
+1
+✓
+✓
+14.72
+0.752
+0.378
+2.58
+2
+✓
+✓
+13.53
+0.669
+0.330
+2.77
+3
+✓
+✓
+✓
+17.81
+0.803
+0.231
+2.48
+4
+✓
+✓
+✓
+22.64
+0.885
+0.134
+2.41
+5
+✓
+✓
+✓
+✓
+24.39
+0.892
+0.107
+2.36
+Ours
+✓
+✓
+✓
+✓
+✓
+25.83
+0.904
+0.096
+2.27
+5 Conclusion
+We introduced TriFold, a native scene-level 3D Gaussian VAE that maps Gaussian sets with adaptive
+cardinality and density into fixed-layout triplane latents. Rather than regularizing the Gaussian repre-
+sentation itself, the encoder captures fine-grained structure using cell-wise learned queries and primitive-
+anchored cross-plane attention, while the decoder predicts local Gaussian sets with scene-dependent allo-
+cations. The resulting latent jointly represents geometry and appearance and provides a regular interface
+for flow-based generative modeling. Experiments demonstrate high-fidelity reconstruction across diverse
+and complex scenes and show that the learned latent supports conditional scene generation, including
+amodal completion from partial observations.
+References
+[1] Terrance DeVries, Miguel Angel Bautista, Nitish Srivastava, Graham W. Taylor, and Joshua M.
+Susskind. Unconstrained scene generation with locally conditioned radiance fields. In Proceedings
+of the IEEE/CVF International Conference on Computer Vision, 2021.
+[2] Miguel Angel Bautista, Pengsheng Guo, Samira Abnar, Walter Talbott, Alexander Toshev, Zhuoyuan
+Chen, Laurent Dinh, Shuangfei Zhai, Hanlin Goh, Daniel Ulbricht, Afshin Dehghan, and Joshua
+Susskind. GAUDI: A neural architect for immersive 3d scene generation. In Advances in Neural
+Information Processing Systems, volume 35, 2022.
+[3] Quan Meng, Lei Li, Matthias Nießner, and Angela Dai. LT3SD: Latent trees for 3d scene diffusion.
+In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages
+650–660, 2025.
+[4] Weirong Chen, Chuanxia Zheng, Ganlin Zhang, Andrea Vedaldi, and Daniel Cremers. NOVA3R:
+Non-pixel-aligned visual transformer for amodal 3d reconstruction. In International Conference on
+Learning Representations, 2026.
+[5] Tuan Duc Ngo, Chuang Gan, and Evangelos Kalogerakis. VolFill: Single-view amodal 3d scene
+reconstruction with volumetric flow matching. arXiv preprint arXiv:2605.31466, 2026.
+[6] Kyle Sargent, Zizhang Li, Tanmay Shah, Charles Herrmann, Hong-Xing Yu, Yunzhi Zhang,
+Eric Ryan Chan, Dmitry Lagun, Li Fei-Fei, Deqing Sun, and Jiajun Wu.
+ZeroNVS: Zero-shot
+360-degree view synthesis from a single image. In Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition, pages 9420–9429, 2024.
+[7] Linyi Jin, Nilesh Kulkarni, and David F. Fouhey. 3DFIRES: Few image 3d reconstruction for scenes
+TriFold
+Page 11 of 30
+
+
+AMAP CV Lab | Alibaba Group
+with hidden surfaces. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 9742–9751, 2024.
+[8] Ethan Weber, Aleksander Holynski, Varun Jampani, Saurabh Saxena, Noah Snavely, Abhishek Kar,
+and Angjoo Kanazawa. NeRFiller: Completing scenes via generative 3d inpainting. In Proceedings
+of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 20731–20741,
+2024.
+[9] Angela Dai, Christian Diller, and Matthias Nießner. SG-NN: Sparse generative neural networks for
+self-supervised scene completion of RGB-D scans. In Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition, pages 849–858, 2020.
+[10] Zhaoxi Chen, Guangcong Wang, and Ziwei Liu.
+Scenedreamer: Unbounded 3d scene genera-
+tion from 2d image collections. IEEE transactions on pattern analysis and machine intelligence,
+45(12):15562–15576, 2023.
+[11] Lukas Höllein, Ang Cao, Andrew Owens, Justin Johnson, and Matthias Nießner. Text2room: Ex-
+tracting textured 3d meshes from 2d text-to-image models. In 2023 IEEE/CVF International Con-
+ference on Computer Vision (ICCV), pages 7875–7886. IEEE, 2023.
+[12] Xuanchi Ren, Jiahui Huang, Xiaohui Zeng, Ken Museth, Sanja Fidler, and Francis Williams. Xcube:
+Large-scale 3d generative modeling using sparse voxel hierarchies. In 2024 IEEE/CVF Conference
+on Computer Vision and Pattern Recognition (CVPR), pages 4209–4219. IEEE, 2024.
+[13] Zhennan Wu, Yang Li, Han Yan, Taizhang Shang, Weixuan Sun, Senbo Wang, Ruikai Cui, Weizhe
+Liu, Hiroyuki Sato, Hongdong Li, et al. Blockfusion: Expandable 3d scene generation using latent
+tri-plane extrapolation. ACM Transactions on Graphics (ToG), 43(4):1–17, 2024.
+[14] Xiaoliang Ju, Zhaoyang Huang, Yijin Li, Guofeng Zhang, Yu Qiao, and Hongsheng Li. Diffind-
+scene: Diffusion-based high-quality 3d indoor scene generation. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition, pages 4526–4535, 2024.
+[15] Qihang Zhang, Yinghao Xu, Yujun Shen, Bo Dai, Bolei Zhou, and Ceyuan Yang. Berfscene: Bev-
+conditioned equivariant radiance fields for infinite 3d scene generation. In 2024 IEEE/CVF Confer-
+ence on Computer Vision and Pattern Recognition (CVPR), pages 6839–6849. IEEE, 2024.
+[16] Songchun Zhang, Yibo Zhang, Quan Zheng, Rui Ma, Wei Hua, Hujun Bao, Weiwei Xu, and
+Changqing Zou. 3d-scenedreamer: Text-driven 3d-consistent scene generation. In 2024 IEEE/CVF
+Conference on Computer Vision and Pattern Recognition (CVPR), pages 10170–10180. IEEE, 2024.
+[17] Tengfei Wang, Bo Zhang, Ting Zhang, Shuyang Gu, Jianmin Bao, Tadas Baltrusaitis, Jingjing Shen,
+Dong Chen, Fang Wen, Qifeng Chen, et al. Rodin: A generative model for sculpting 3d digital
+avatars using diffusion. In 2023 IEEE/CVF conference on computer vision and pattern recognition
+(CVPR), pages 4563–4573. IEEE, 2023.
+[18] Yangguang Li, Zi-Xin Zou, Zexiang Liu, Dehu Wang, Yuan Liang, Zhipeng Yu, Xingchao Liu,
+Yuan-Chen Guo, Ding Liang, Wanli Ouyang, et al. Triposg: High-fidelity 3d shape synthesis using
+large-scale rectified flow models. IEEE Transactions on Pattern Analysis and Machine Intelligence,
+2025.
+[19] Tencent Hunyuan3D Team. Hunyuan3d 2.5: Towards high-fidelity 3d assets generation with ultimate
+details, 2025.
+[20] Jianfeng Xiang, Zelong Lv, Sicheng Xu, Yu Deng, Ruicheng Wang, Bowen Zhang, Dong Chen, Xin
+Tong, and Jiaolong Yang. Structured 3d latents for scalable and versatile 3d generation. In CVPR,
+2025.
+TriFold
+Page 12 of 30
+
+
+AMAP CV Lab | Alibaba Group
+[21] Jianfeng Xiang, Xiaoxue Chen, Sicheng Xu, Ruicheng Wang, Zelong Lv, Yu Deng, Hongyuan Zhu,
+Yue Dong, Hao Zhao, Nicholas Jing Yuan, et al.
+Native and compact structured latents for 3d
+generation. In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition,
+pages 14419–14429, 2026.
+[22] Bernhard Kerbl, Georgios Kopanas, Thomas Leimkuehler, and George Drettakis. 3d gaussian splat-
+ting for real-time radiance field rendering. ACM Transactions on Graphics, 2023.
+[23] Joo Chan Lee, Jong Hwan Ko, and Eunbyung Park.
+Optimized minimal 3d gaussian splatting.
+Advances in Neural Information Processing Systems, 38:135864–135888, 2025.
+[24] Barbara Roessle, Norman Müller, Lorenzo Porzi, Samuel Rota Bulò, Peter Kontschieder, Angela
+Dai, and Matthias Nießner. L3dg: Latent 3d gaussian diffusion. In SIGGRAPH Asia 2024 Confer-
+ence Papers, pages 1–11, 2024.
+[25] Nicolas von Lützow, Barbara Rössle, Katharina Schmid, and Matthias Nießner. GaussianGPT: To-
+wards autoregressive 3d gaussian scene generation. In European Conference on Computer Vision,
+2026.
+[26] Quankai Gao, Iliyan Georgiev, Tuanfeng Y. Wang, Krishna Kumar Singh, Ulrich Neumann, and
+Jae Shin Yoon. Can3Tok: Canonical 3d tokenization and latent modeling of scene-level 3d gaussians.
+In ICCV, 2025.
+[27] Junsheng Zhou, Weiqi Zhang, and Yu-Shen Liu. DiffGS: Functional gaussian splatting diffusion. In
+NeurIPS, 2024.
+[28] Charles R Qi, Hao Su, Kaichun Mo, and Leonidas J Guibas. Pointnet: Deep learning on point sets
+for 3d classification and segmentation. In Proceedings of the IEEE conference on computer vision
+and pattern recognition, pages 652–660, 2017.
+[29] William E. Lorensen and Harvey E. Cline. Marching cubes: A high resolution 3d surface construc-
+tion algorithm. In Proceedings of the 14th Annual Conference on Computer Graphics and Interactive
+Techniques, pages 163–169, 1987.
+[30] Michael Kazhdan, Matthew Bolitho, and Hugues Hoppe. Poisson surface reconstruction. In Euro-
+graphics Symposium on Geometry Processing, pages 61–70, 2006.
+[31] Fei Hou, Chiyu Wang, Wencheng Wang, Hong Qin, Chen Qian, and Ying He. Iterative poisson
+surface reconstruction (ipsr) for unoriented points. arXiv preprint arXiv:2209.09510, 2022.
+[32] Gernot Riegler, Ali Osman Ulusoy, and Andreas Geiger. OctNet: Learning deep 3d representa-
+tions at high resolutions. In Proceedings of the IEEE Conference on Computer Vision and Pattern
+Recognition, pages 3577–3586, 2017.
+[33] Ben Mildenhall, Pratul P. Srinivasan, Matthew Tancik, Jonathan T. Barron, Ravi Ramamoorthi, and
+Ren Ng. NeRF: Representing scenes as neural radiance fields for view synthesis. In European
+Conference on Computer Vision, 2020.
+[34] Peng Wang, Lingjie Liu, Yuan Liu, Christian Theobalt, Taku Komura, and Wenping Wang. Neus:
+Learning neural implicit surfaces by volume rendering for multi-view reconstruction. arXiv preprint
+arXiv:2106.10689, 2021.
+[35] Jianfei Guo, Nianchen Deng, Xinyang Li, Yeqi Bai, Botian Shi, Chiyu Wang, Chenjing Ding,
+Dongliang Wang, and Yikang Li. StreetSurf: Extending multi-view implicit surface reconstruction
+to street views. arXiv preprint arXiv:2306.04988, 2023.
+TriFold
+Page 13 of 30
+
+
+AMAP CV Lab | Alibaba Group
+[36] Eric R Chan, Marco Monteiro, Petr Kellnhofer, Jiajun Wu, and Gordon Wetzstein. pi-gan: Periodic
+implicit generative adversarial networks for 3d-aware image synthesis. In 2021 IEEE/CVF Confer-
+ence on Computer Vision and Pattern Recognition (CVPR), pages 5795–5805. IEEE, 2021.
+[37] Yen-Chi Cheng, Hsin-Ying Lee, Sergey Tulyakov, Alexander G Schwing, and Liang-Yan Gui. Sd-
+fusion: Multimodal 3d shape completion, reconstruction, and generation. In Proceedings of the
+IEEE/CVF conference on computer vision and pattern recognition, pages 4456–4465, 2023.
+[38] Jun Gao, Tianchang Shen, Zian Wang, Wenzheng Chen, Kangxue Yin, Daiqing Li, Or Litany, Zan
+Gojcic, and Sanja Fidler. Get3d: A generative model of high quality 3d textured shapes learned from
+images. Advances in neural information processing systems, 35:31841–31854, 2022.
+[39] Yawar Siddiqui, Antonio Alliegro, Alexey Artemov, Tatiana Tommasi, Daniele Sirigatti, Vladislav
+Rosov, Angela Dai, and Matthias Nießner. Meshgpt: Generating triangle meshes with decoder-only
+transformers. In 2024 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR),
+pages 19615–19625. IEEE, 2024.
+[40] Biao Zhang, Jiapeng Tang, Matthias Niessner, and Peter Wonka. 3dshape2vecset: A 3d shape repre-
+sentation for neural fields and generative diffusion models. ACM Transactions On Graphics (TOG),
+42(4):1–16, 2023.
+[41] Zibo Zhao, Wen Liu, Xin Chen, Xianfang Zeng, Rui Wang, Pei Cheng, Bin Fu, Tao Chen, Gang
+Yu, and Shenghua Gao. Michelangelo: Conditional 3d shape generation based on shape-image-text
+aligned latent representation. Advances in neural information processing systems, 36:73969–73982,
+2023.
+[42] Robin Rombach, Andreas Blattmann, Dominik Lorenz, Patrick Esser, and Björn Ommer. High-
+resolution image synthesis with latent diffusion models. In 2022 IEEE/CVF conference on computer
+vision and pattern recognition (CVPR), pages 10674–10685. ieee, 2022.
+[43] Patrick Esser, Sumith Kulal, Andreas Blattmann, Rahim Entezari, Jonas Müller, Harry Saini, Yam
+Levi, Dominik Lorenz, Axel Sauer, Frederic Boesel, et al. Scaling rectified flow transformers for
+high-resolution image synthesis. In Forty-first international conference on machine learning, 2024.
+[44] Eric R. Chan, Connor Z. Lin, Matthew A. Chan, Koki Nagano, Boxiao Pan, Shalini De Mello, Orazio
+Gallo, Leonidas J. Guibas, Jonathan Tremblay, Sameh Khamis, Tero Karras, and Gordon Wetzstein.
+Efficient geometry-aware 3d generative adversarial networks. In CVPR, 2022.
+[45] Shuang Wu, Youtian Lin, Feihu Zhang, Yifei Zeng, Jingxi Xu, Philip Torr, Xun Cao, and Yao Yao.
+Direct3d: Scalable image-to-3d generation via 3d latent diffusion transformer. Advances in Neural
+Information Processing Systems, 37:121859–121881, 2024.
+[46] David Charatan, Sizhe Lester Li, Andrea Tagliasacchi, and Vincent Sitzmann. pixelsplat: 3d gaussian
+splats from image pairs for scalable generalizable 3d reconstruction. In 2024 IEEE/CVF Conference
+on Computer Vision and Pattern Recognition (CVPR), pages 19457–19467. IEEE, 2024.
+[47] Zi-Xin Zou, Zhipeng Yu, Yuan-Chen Guo, Yangguang Li, Ding Liang, Yan-Pei Cao, and Song-
+Hai Zhang. Triplane meets gaussian splatting: Fast and generalizable single-view 3d reconstruction
+with transformers. In Proceedings of the IEEE/CVF conference on computer vision and pattern
+recognition, pages 10324–10335, 2024.
+[48] Jiaxiang Tang, Zhaoxi Chen, Xiaokang Chen, Tengfei Wang, Gang Zeng, and Ziwei Liu. Lgm:
+Large multi-view gaussian model for high-resolution 3d content creation. In European Conference
+on Computer Vision, pages 1–18. Springer, 2024.
+TriFold
+Page 14 of 30
+
+
+AMAP CV Lab | Alibaba Group
+[49] Yinghao Xu, Zifan Shi, Wang Yifan, Hansheng Chen, Ceyuan Yang, Sida Peng, Yujun Shen, and
+Gordon Wetzstein. Grm: Large gaussian reconstruction model for efficient 3d reconstruction and
+generation. In European Conference on Computer Vision, pages 1–20. Springer, 2024.
+[50] Ben Poole, Ajay Jain, Jonathan T. Barron, and Ben Mildenhall. DreamFusion: Text-to-3d using 2d
+diffusion. In International Conference on Learning Representations, 2023.
+[51] Chen-Hsuan Lin, Jun Gao, Luming Tang, Towaki Takikawa, Xiaohui Zeng, Xun Huang, Karsten
+Kreis, Sanja Fidler, Ming-Yu Liu, and Tsung-Yi Lin. Magic3D: High-resolution text-to-3d content
+creation. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition,
+pages 300–309, 2023.
+[52] Luke Melas-Kyriazi, Iro Laina, Christian Rupprecht, and Andrea Vedaldi. RealFusion: 360-degree
+reconstruction of any object from a single image. In Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition, pages 8446–8455, 2023.
+[53] Ruoshi Liu, Rundi Wu, Basile Van Hoorick, Pavel Tokmakov, Sergey Zakharov, and Carl Vondrick.
+Zero-1-to-3: Zero-shot one image to 3d object.
+In Proceedings of the IEEE/CVF International
+Conference on Computer Vision, pages 9298–9309, 2023.
+[54] Bowen Zhang, Yiji Cheng, Jiaolong Yang, Chunyu Wang, Feng Zhao, Yansong Tang, Dong Chen,
+and Baining Guo. GaussianCube: A structured and explicit radiance representation for 3d generative
+modeling. In NeurIPS, 2024.
+[55] Ming Qian, Zijian Wang, Minchao Sun, Jincheng Xiong, Hang Zhang, Mu Xu, Chi Wang, and
+Baoquan Chen. GS-Voxel: Fitting-free structured latents for large-scale 3dgs generation. arXiv
+preprint arXiv:2608.17988, 2026.
+[56] Yushi Lan, Shangchen Zhou, Zhaoyang Lyu, Fangzhou Hong, Shuai Yang, Bo Dai, Xingang Pan,
+and Chen Change Loy. GaussianAnything: Interactive point cloud flow matching for 3d generation.
+In International Conference on Learning Representations, 2025.
+[57] Xiaoyang Wu, Li Jiang, Peng-Shuai Wang, Zhijian Liu, Xihui Liu, Yu Qiao, Wanli Ouyang, Tong
+He, and Hengshuang Zhao. Point transformer V3: Simpler, faster, stronger. In CVPR, 2024.
+[58] Nicolas Carion, Francisco Massa, Gabriel Synnaeve, Nicolas Usunier, Alexander Kirillov, and
+Sergey Zagoruyko. End-to-end object detection with transformers. In European Conference on
+Computer Vision, 2020.
+[59] Bingchen Miao, Rong Wei, Zhiqi Ge, Xiaoquan sun, Shiqi Gao, Jingzhe Zhu, Renhan Wang, Siliang
+Tang, Jun Xiao, Rui Tang, and Juncheng Li. Towards physically executable 3d gaussian for embodied
+navigation. In The Fourteenth International Conference on Learning Representations, 2026.
+[60] Mengjiao Ma, Qi Ma, Yue Li, Jiahuan Cheng, Runyi Yang, Bin Ren, Nikola Popovic, Mingqiang
+Wei, Nicu Sebe, Luc Van Gool, Theo Gevers, Martin R. Oswald, and Danda Pani Paudel. Scenes-
+plat++: A large dataset and comprehensive benchmark for language gaussian splatting. In Proceed-
+ings of the 39th Conference on Neural Information Processing Systems (NeurIPS 2025), 2025.
+[61] Shuai Bai, Yuxuan Cai, Ruizhe Chen, Keqin Chen, Xionghui Chen, Zesen Cheng, Lianghao
+Deng, Wei Ding, Chang Gao, Chunjiang Ge, et al.
+Qwen3-vl technical report.
+arXiv preprint
+arXiv:2511.21631, 2025.
+[62] Oriane Siméoni, Huy V Vo, Maximilian Seitzer, Federico Baldassarre, Maxime Oquab, Cijo Jose,
+Vasil Khalidov, Marc Szafraniec, Seungeun Yi, Michaël Ramamonjisoa, et al.
+Dinov3.
+arXiv
+preprint arXiv:2508.10104, 2025.
+TriFold
+Page 15 of 30
+
+
+AMAP CV Lab | Alibaba Group
+[63] Haotong Lin, Sili Chen, Junhao Liew, Donny Y Chen, Zhenyu Li, Guang Shi, Jiashi Feng, and
+Bingyi Kang.
+Depth anything 3: Recovering the visual space from any views.
+arXiv preprint
+arXiv:2511.10647, 2025.
+[64] Yun Wang, Longguang Wang, Hanyun Wang, and Yulan Guo. SPNet: Learning stereo matching
+with slanted plane aggregation. IEEE Robotics and Automation Letters, 7(3):6258–6265, 2022.
+[65] Yun Wang, Longguang Wang, Kunhong Li, Yongjian Zhang, Dapeng Oliver Wu, and Yulan Guo.
+Cost volume aggregation in stereo matching revisited: A disparity classification perspective. IEEE
+Transactions on Image Processing, 33:6425–6438, 2024.
+[66] Yun Wang, Kunhong Li, Longguang Wang, Junjie Hu, Dapeng Oliver Wu, and Yulan Guo. AD-
+Stereo: Efficient stereo matching with adaptive downsampling and disparity alignment. IEEE Trans-
+actions on Image Processing, 34:1204–1218, 2025.
+[67] Yongjian Zhang, Longguang Wang, Kunhong Li, Yun Wang, and Yulan Guo. Learning representa-
+tions from foundation models for domain generalized stereo matching. In European Conference on
+Computer Vision, 2024.
+[68] Yun Wang, Longguang Wang, Chenghao Zhang, Yongjian Zhang, Zhanjie Zhang, Ao Ma, Chenyou
+Fan, Tin Lun Lam, and Junjie Hu. Learning robust stereo matching in the wild with selective mixture-
+of-experts. In Proceedings of the IEEE/CVF International Conference on Computer Vision, pages
+21276–21287, 2025.
+[69] Yun Wang, Zhengjie Yang, Jiahao Zheng, Zhanjie Zhang, Dapeng Oliver Wu, and Yulan Guo. SM-
+Former: Empowering self-supervised stereo matching via foundation models and data augmentation.
+IEEE Transactions on Image Processing, 35:4494–4508, 2026.
+[70] Yun Wang, Jiahao Zheng, Chenghao Zhang, Zhanjie Zhang, Kunhong Li, Yongjian Zhang, and Junjie
+Hu. DualNet: Robust self-supervised stereo matching with pseudo-label supervision. In Proceedings
+of the AAAI Conference on Artificial Intelligence, volume 39, pages 8178–8186, 2025.
+[71] Team Wan, Ang Wang, Baole Ai, Bin Wen, Chaojie Mao, Chen-Wei Xie, Di Chen, Feiwu Yu,
+Haiming Zhao, Jianxiao Yang, et al. Wan: Open and advanced large-scale video generative models.
+arXiv preprint arXiv:2503.20314, 2025.
+A Appendix
+In this appendix, we provide additional implementation and training details, along with extended ex-
+perimental evaluations and qualitative results. These additions complement the main paper and further
+demonstrate the effectiveness and robustness of our approach.
+Challenges of Native Scene-level 3DGS Modeling.
+As illustrated in Fig. 7, scene-level 3DGS exhibits
+substantial variations in both global primitive cardinality and local spatial density. Across scene crops,
+total primitive counts vary by more than a factor of four, while the number of Gaussians within occupied
+voxels follows a pronounced heavy-tailed distribution. Compounded by severe clutter and complex occlu-
+sions inherent to indoor environments, these structural irregularities are inherently mismatched with the
+fixed-dimensional tensor structures required by standard latent generative models. A useful latent repre-
+sentation should therefore regularize the representation layout while preserving content-adaptive Gaussian
+allocation in the decoded scene.
+By native 3DGS modeling, we specifically refer to a Gaussian-to-latent-to-Gaussian representation inter-
+face: our autoencoder directly ingests pre-fitted Gaussian sets and reconstructs content-adaptive Gaussian
+TriFold
+Page 16 of 30
+
+
+AMAP CV Lab | Alibaba Group
+Variable cardinality and non-uniform density in scene-level 3DGS
+All voxel statistics use the same 256³ grid
+(a)
+Low cardinality
+351,306 primitives
+(b)
+Median cardinality
+682,525 primitives
+(c)
+High cardinality
+1457,726 primitives
+(d) Primitive count by scene crop
+y-axis: Gaussian primitives in each scene crop
+0
+0.5M
+0.75M
+1.0M
+1.5M
+1
+25
+50
+75
+100
+min 351,306
+median 682,845
+max 1457,726
+Scene-crop rank (ascending primitive count)
+(e) Occupied-voxel density
+y-axis: Fraction of occupied voxels with density ≥ k
+97.8% voxel ≤ 24 Gaussians
+1
+10
+100
+389
+1
+10⁻²
+10⁻⁴
+10⁻⁶
+24
+Gaussians per occupied voxel, k
+Figure 7: Variable cardinality and nonuniform spatial density in scene-level 3DGS. (a-c) Representative Interi-
+orGS scene crops with different primitive counts, visualized using Gaussian centers voxelized on a shared 2563 grid.
+(d) Across 100 random scene crops, the number of primitives ranges from 351,306 to 1,457,726, with a median of
+682,845. (e) The complementary cumulative distribution of occupied-voxel density shows a pronounced long tail:
+97.8% of occupied voxels contain at most 24 Gaussians, while the maximum density can even reach 389 Gaussians
+per voxel. These statistics motivate a representation that accommodates both scene-dependent cardinality and non-
+uniform local Gaussian allocation.
+outputs, without converting the scene into an intermediate 3D representation or entangling representation
+learning with 2D-to-3D visual inference. This paradigm is fundamentally distinct from image-to-3DGS
+VAEs, whose latent representations are jointly shaped by the image-conditioned 3D reconstruction prob-
+lem.
+For computational tractability, our local set decoder uses K = 24 candidate queries per selected voxel.
+Here, K defines the maximum local candidate capacity rather than a fixed output cardinality: each se-
+lected voxel retains a content-dependent subset of candidates, while the number and spatial distribution of
+selected voxels remain scene-dependent. On the same 2563 grid, 97.8% of occupied voxels in the origi-
+nal fitted scenes already contain at most 24 Gaussians. For the remaining high-density tail, the set-level
+matching target retains at most K primitives using an opacity- and scale-aware selection strategy. Impor-
+tantly, this local selection does not limit the rendering target: rendering supervision is computed against
+views rendered from the complete fitted Gaussian scene prior to local primitive selection. The decoder is
+therefore supervised not only by local primitive correspondence, but also by the collective rendering effect
+of the complete Gaussian representation.
+A.1 Data Preparation
+Gaussian Scene Normalization.
+Each input scene is represented as an unordered set of fitted Gaussian
+primitives. A primitive consists of 59 values: a 3D center, 48 spherical-harmonic coefficients for degree-3
+appearance, one opacity logit, three anisotropic log-scales, and a four-dimensional rotation quaternion.
+We use dataset-specific spatial normalization while maintaining a common canonical domain for the Gaus-
+sian VAE. For InteriorGS, each sample is constructed from a predefined 3D crop with a fixed spatial extent
+of B = 8. We translate the Gaussian centers by the corresponding crop center and apply the fixed trans-
+formation TB that maps this crop to the canonical VAE domain. Because B is fixed, the spatial scale of
+this transformation is identical across all InteriorGS scenes. For Aria, which is used for Gaussian VAE
+TriFold
+Page 17 of 30
+
+
+AMAP CV Lab | Alibaba Group
+evaluation but not for conditional diffusion training, no fixed B = 8 crop is applied; we instead determine
+a per-scene normalization scale from robust statistics of the Gaussian centers to map the valid scene extent
+into the same canonical domain.
+In both cases, the model operates on a padded cubic domain of side length 1.1, discretized at a resolution of
+2563. The corresponding spatial transformation is applied consistently to Gaussian centers and occupancy-
+sample coordinates, and Gaussian log-scales are adjusted by the logarithm of its scale factor. Opacity,
+appearance, and rotation remain unchanged.
+For set-level matching during Gaussian VAE training, an over-populated voxel retains at most 24 target
+primitives using an opacity- and scale-aware selection heuristic. This local selection is used only to con-
+struct the bounded set-level target; rendering supervision is computed from the complete fitted Gaussian
+scene before this selection.
+Occupancy Targets Caching.
+The occupancy predictor is supervised by sampled 3D locations rather
+than by dense enumeration of all 2563 voxels. For each scene, we construct a nearest-center distance field
+from the preprocessed Gaussian centers and draw samples across four distinct regions: exact Gaussian
+centers, a thin inner shell, a near-surface transition shell, and far-field points. Center and inner-shell sam-
+ples represent occupied space, the transition shell decays linearly toward zero, and far-field samples serve
+as negatives. In our experimental configuration, the two shell radii correspond to 0.47 and 1.19 voxels at
+resolution 256, and the four groups account for 15%, 20%, 35%, and 30% of the cached samples, respec-
+tively. Samples outside the padded model domain are removed after applying the corresponding scene
+scale. At each training iteration, we randomly sample 250,000 cached locations for occupancy super-
+vision. This hierarchical sampling strategy sharpens the decision boundary while maintaining sufficient
+coverage of empty space.
+A.2 Gaussian VAE Architecture
+Multi-slot Writing and Cross-plane Aggregation.
+The point features are orthographically projected
+onto the xz, xy, and yz planes at a resolution of Rp = 256. Within each occupied cell, a four-layer,
+eight-head QFormer employs Q = 4 learned queries to read the unordered set of projected primitives.
+Prior to attention, each projected feature is encoded as:
+ehp
+i = MLP([ hi + ep, γ(up
+i ), γ(δp
+i ) ]) ,
+δp
+i = Rpup
+i −⌊Rpup
+i ⌋,
+(11)
+where up
+i ∈[0, 1)2 is the normalized in-plane coordinate, δp
+i is its within-cell offset, ep is a learned plane
+embedding, and γ represents an eight-frequency Fourier encoding. The learned queries also receive the
+Fourier encoding of the cell center. Collectively, these terms encode the specific plane, cell, and location of
+the primitive, while the PTv3 feature hi provides the necessary 3D context. The multiple queries capture
+diverse summaries of the primitives colliding within a cell, preventing the information bottleneck caused
+by single-vector pooling.
+Subsequently, the encoder performs a single sparse cross-plane aggregation step. For each primitive, its
+three projected cells constitute an aligned triplet; tokens sharing the same query index attend across this
+triplet, and updates common to multiple primitives are averaged. This mechanism allows the orthogonal
+planes to reconcile complementary views of the same 3D geometry without requiring dense attention
+across all plane cells. Finally, the VAE maps each plane to Cz = 16 variational channels using a base
+width of 384, channel multipliers [1, 2], and three residual blocks per resolution. Stacking the three planes
+along the channel dimension yields a 48 × 4 × 256 × 256 latent tensor.
+Occupancy-guided Support Proposal.
+At each candidate voxel center xv, the predictor retrieves Q
+features from each plane using the exact same integer cell indexing as the Gaussian decoder. For every
+TriFold
+Page 18 of 30
+
+
+AMAP CV Lab | Alibaba Group
+slot q, it concatenates the corresponding xz, xy, and yz features and projects the resulting 3C-dimensional
+vector back down to C dimensions. The predictor then flattens the Q fused features, appends xv alongside
+its six-frequency Fourier encoding, and processes the result through a skip-connected MLP containing
+two four-layer blocks. A sigmoid activation maps the output logit to the occupancy probability ρv. During
+inference, we evaluate the 2563 voxel centers in chunks and forward cells with ρv > 0.4 to the set decoder.
+This shared indexing guarantees that the occupancy predictor and Gaussian decoder consistently access
+the identical three plane cells at any given voxel.
+DETR-style set decoder.
+Since the decoder must decode a regular triplane into an irregular point set
+of unknown local cardinality, we formulate the decoding process as a set prediction problem rather than
+fixed-index regression. First, an occupancy predictor identifies candidate voxels. For each candidate,
+24 learned queries cross-attend to the three sampled plane contexts to explain the local Gaussian set.
+Separate task heads predict the primitive’s offset, scale, rotation, spherical-harmonic appearance, opacity,
+and objectness. Sinkhorn matching establishes an order-independent correspondence to the target set
+(Sec. A.3); unmatched queries are routed to a dummy target. At inference time, inactive candidates are
+dynamically pruned based on their predicted objectness and opacity.
+A.3 Objectness-Aware Set Prediction and OT Matching
+Objectness and Differentiable Selection Supervision.
+Objectness indicates the probability that a query
+should successfully instantiate a Gaussian, whereas opacity defines that instantiated Gaussian’s rendering
+contribution. Decoupling these roles ensures that unused query slots aren’t penalized solely via near-
+zero opacity. The soft objectness target is derived from the non-dummy mass assigned by the Sinkhorn
+algorithm and is supervised via a balanced binary cross-entropy loss. During rendering and inference,
+query k is ranked by a unified score:
+sk = pobj
+k
+αk,
+(12)
+where αk represents its predicted opacity. In our reported VAE configuration, the selection threshold is
+set to 0.1. A differentiable activation loss forces at least one matched query in every occupied voxel to
+surpass a margin of 0.15, while suppressing unmatched queries below the selection boundary. During
+training, the renderer utilizes the union of OT-matched queries and those queries whose predicted scores
+naturally exceed the threshold. Consequently, a false positive selected by the model is directly exposed to
+the rendering objective, rather than being shielded by the target assignment.
+Because candidate enumeration inherently involves a discrete thresholding step, we do not differentiate
+through the set membership operation itself. Instead, the occupancy, objectness, opacity, and activation
+scores governing this set are jointly optimized using differentiable surrogate losses aligned with the infer-
+ence rule. As a result, the threshold functions as a deployment decision based on learned scores, rather
+than a manually tuned, post-hoc pruning heuristic.
+Optimal-transport matching.
+Within each occupied voxel v (of size h), the decoder predicts a fixed
+set of K candidate Gaussians to reconstruct a variable-sized, unordered target set of Mv ≤K Gaussians.
+To absorb candidate slots that do not correspond to any target primitive, we append an additional dummy
+“no-Gaussian” entry. We define the pairwise matching cost solely based on Gaussian centers:
+[Av]kj =
+(
+1
+h ∥bxvk −xvj∥1,
+1 ≤j ≤Mv,
+0,
+j = Mv + 1,
+(13)
+TriFold
+Page 19 of 30
+
+
+AMAP CV Lab | Alibaba Group
+where bxvk and xvj denote the centers of the k-th candidate and the j-th target Gaussian in voxel v, respec-
+tively. We obtain a soft correspondence by solving an entropy-regularized optimal transport problem:
+P ∗
+v = arg
+min
+P∈Π(av,bv) ⟨Av, P⟩F −ε H(P),
+(14)
+where H(P) = −P
+k,j Pkj log Pkj and Π(av, bv) denotes the set of transport plans subject to the
+marginals
+av = 1
+K 1K,
+bv =
+ 1
+K 1⊤
+Mv, 1 −Mv
+K
+⊤
+.
+(15)
+By construction, each target Gaussian receives a mass of 1/K, while the dummy entry absorbs the residual
+mass 1 −Mv/K from unmatched candidate slots. We solve for P ∗
+v with Sinkhorn iterations and stop
+gradients through it, i.e., the transport plan is treated as constant during backpropagation.
+Under this correspondence, we directly supervise only Gaussian centers; scale, rotation, appearance, and
+opacity are instead constrained through rendering supervision. The same transport plan also provides a
+soft objectness target. Since each candidate has a row mass of 1/K, its total non-dummy transport mass
+yields
+tvk = K
+Mv
+X
+j=1
+[P ∗
+v ]kj = 1 −K [P ∗
+v ]k,Mv+1.
+(16)
+Candidates assigned to real Gaussians approach a target of 1, whereas those routed to the dummy entry
+approach 0. We optimize the corresponding objectness logits with a binary cross-entropy loss, balanced
+by the number of positive and negative candidates within each batch. Thus, a single center-based OT
+correspondence serves two purposes: it assigns each candidate a target Gaussian for center supervision,
+and it indicates whether the candidate represents a valid primitive, eliminating any separate matching
+heuristic for objectness.
+Phantom Voxels Regularization.
+If the decoder were trained exclusively on ground-truth occupied vox-
+els, it would never encounter false positives, even though the learned occupancy proposer will inevitably
+produce them during inference. This train-test domain gap would cause queries at erroneous locations
+to decode “ghost” Gaussians with high objectness or opacity. We bridge this gap by deliberately feeding
+selected false-positive proposals to the decoder as phantom voxels. Because they contain no target Gaus-
+sians, all queries within a phantom voxel receive negative objectness supervision, forcing their activation
+and opacity to be heavily suppressed. Phantom training commences after the initial occupancy warm-up
+phase; we subsequently alternate between ground-truth and predicted occupancy supports, enabling the
+decoder to master both accurate local reconstruction and robust recovery from proposer errors. Although
+sampling the phantom set is non-differentiable, all losses evaluated on the selected queries are strictly
+differentiable with respect to the decoder and its prediction heads. This mechanism operates analogously
+to hard-negative mining, directly optimizing the network against failure cases it will realistically face at
+test time.
+A.4 Baseline Implementation and Training
+For Can3Tok, DiffGS, and GaussianGPT, we use the official implementations released by the respective
+authors. To ensure a controlled comparison, we adapt only their data-loading pipelines as necessary to
+train and evaluate all methods on the same scene-level 3DGS dataset and train/test split used by TriFold.
+Unless otherwise stated, we retain the original model architectures, representation designs, training ob-
+jectives, and method-specific optimization settings, including the optimizer, learning-rate schedule, batch
+size, and loss weights, from the corresponding official training configurations.
+Can3Tok’s official implementation requires a fixed primitive budget of 40,000 Gaussians per scene. We
+TriFold
+Page 20 of 30
+
+
+AMAP CV Lab | Alibaba Group
+therefore downsample each pre-fitted 3DGS scene to 40,000 Gaussians before tokenization and keep this
+budget fixed across all scenes. All baseline models are trained from scratch for 80K optimization steps,
+using the same number of optimization steps as our Gaussian VAE. Evaluation is performed on the same
+held-out scenes using the same rendering views and evaluation protocol for all methods.
+Under this setting, GaussianGPT converges to meaningful scene-level reconstructions, whereas the
+adapted Can3Tok and DiffGS models converge to substantially lower-fidelity solutions. In particular,
+distinct input scenes are frequently reconstructed as similar low-detail Gaussian structures, as illustrated
+in Figure 9. We report the resulting models directly rather than excluding these degraded cases from the
+comparison. These results characterize the behavior of the released methods under our scene-level adap-
+tation and evaluation setting and should not be interpreted as general limitations of the original methods
+in the domains for which they were designed.
+Geometric evaluation of degenerate predictions.
+We evaluate center-wise Chamfer Distance (CD) for
+all methods using the same preprocessing and the common normalized scene coordinate frame, without
+method-specific post-hoc alignment. Under our scene-level adaptation, the lower-fidelity baseline solu-
+tions can exhibit degenerate Gaussian attributes and substantial drift of the predicted centers from the
+reference geometry. We retain these errors in the geometric evaluation rather than realigning the predic-
+tions or excluding degraded scenes, such that CD directly reflects the resulting geometric discrepancy.
+Accordingly, the large CD values of the affected baselines reflect their substantial geometric degradation
+rather than differences in the evaluation protocol. Rendering-based metrics (PSNR/SSIM/LPIPS) are eval-
+uated independently using the same rendering views for all methods. Thus, both geometric and rendering
+metrics are computed under a common evaluation protocol, and degraded baseline predictions are reported
+directly rather than removed or assigned special-case values.
+A.5 Conditional Latent Flow Matching
+Condition Injection.
+The image-to-GS and point-cloud-to-GS models share a unified context-conditioning
+architecture. Each input observation is first converted into a dense spatial representation aligned with the
+Gaussian VAE latent grid. These representations are then embedded as condition tokens and concatenated
+with the noisy scene tokens, and the combined sequence is processed via joint self-attention. To distin-
+guish their roles, condition tokens are modulated using the clean timestep (σ = 0) via AdaLN, whereas
+scene tokens are modulated by the sampled noise level. Both token sets share the same two-dimensional
+RoPE coordinates at corresponding spatial locations but use separate patch embeddings to distinguish
+their modalities.
+Image-condition preprocessing and coordinate alignment.
+Our conditional diffusion model is trained
+only on InteriorGS; Aria is used for evaluating the Gaussian VAE and is not included in diffusion training.
+Accordingly, the fixed B = 8 spatial extent described below applies specifically to InteriorGS.
+For image-to-GS conditioning, we resize each conditioning image to 720 × 1280 and extract dense DI-
+NOv3 ViT-H+/16 features [62], yielding a 45×80 patch grid with 1280 feature channels. We additionally
+estimate monocular depth using Depth Anything v3 [63]. Since monocular depth is defined only up to a
+global scale, we rescale the raw prediction edn as
+dn = γd edn,
+(17)
+where γd is a single global depth-scale factor shared across all InteriorGS scenes and fixed throughout
+training and inference. This factor resolves the global scale ambiguity of monocular depth and is indepen-
+dent of the target 3DGS.
+TriFold
+Page 21 of 30
+
+
+AMAP CV Lab | Alibaba Group
+We discard the lowest-confidence 10% of valid depth pixels and back-project the remaining DINO features
+using the corresponding camera intrinsics and extrinsics. For a valid sample n with homogeneous image
+coordinate eun, the back-projected 3D location is
+xworld
+n
+= R⊤ dnK−1eun −t
+
+,
+(18)
+where (R, t) denotes the world-to-camera transformation. After applying γd, the predicted depth and
+camera translation are expressed in the same metric units.
+All InteriorGS samples used for conditional diffusion training and evaluation are constructed from prede-
+fined 3D crops with a fixed spatial extent of B = 8. Let c denote the center of the corresponding crop.
+We first express each lifted point in crop-local coordinates,
+xcrop
+n
+= xworld
+n
+−c,
+(19)
+and then apply the fixed crop-to-canonical transformation
+xtri
+n = TB (xcrop
+n
+) .
+(20)
+Because the crop extent B is fixed, TB uses the same spatial scale for every InteriorGS scene; only
+the crop translation c varies with the predefined crop location. Crucially, the same crop translation and
+transformation TB are applied to the Gaussian scene before encoding it into the target VAE latent. The
+lifted image features and target Gaussian latent therefore share the same canonical coordinate frame.
+Both c and B are specified by the InteriorGS data construction and are available independently of the
+target Gaussian representation. Constructing the image condition at inference therefore requires only
+the conditioning RGB image, its predicted depth, the associated camera parameters, the fixed depth-
+scale factor γd, and the predefined crop transform. No target 3DGS coordinates or target-derived spatial
+statistics are used.
+We orthographically project each lifted DINO feature fn at xtri
+n onto the xz, xy, and yz planes. For plane
+p, let Pp
+j denote the set of lifted samples whose projection falls into cell j. Their features are aggregated
+by mean splatting:
+Sp
+j =
+1
+|Pp
+j |
+X
+n∈Pp
+j
+fn,
+(21)
+with empty cells zero-filled. This produces three condition planes spatially aligned with the target Gaus-
+sian triplane latent. We concatenate the three planes along the channel dimension and apply a dedicated
+2 × 2 convolutional patch embedding to obtain 1282 = 16,384 spatial condition tokens.
+Point-cloud conditioning.
+For point-cloud-to-GS conditioning, we apply the same spatial preprocessing
+used to construct the target Gaussian VAE latent. We retain only the Gaussian positions and colors, while
+replacing opacity, scale, and rotation with fixed neutral values before passing the resulting set through the
+frozen Stage-1 triplane encoder and VAE encoder. Specifically, we use an opacity logit of 40, an isotropic
+log-scale of log(0.07h) (with voxel size h = 1.1/256), and an identity quaternion.
+The resulting condition latent has shape 48×4×256×256. We standardize it using the same training-set
+statistics as for the target VAE latents, flatten the four slots and 48 channels into a 192-channel tensor,
+and apply a separate 2 × 2 patch embedding to obtain 16,384 spatially aligned condition tokens. For both
+conditioning modes, the complete condition is replaced by zeros with probability 10% during training for
+classifier-free guidance.
+Relation to Geometry-Aware Visual Conditioning. Constructing spatially aligned conditioning signals
+from images is closely related to geometric perception and correspondence estimation. Prior stereo meth-
+ods have explored local surface structures through slanted-plane aggregation [64], disparity-aware cost
+TriFold
+Page 22 of 30
+
+
+AMAP CV Lab | Alibaba Group
+GT Scenes
+Ours
+GaussianGPT
+Figure 8: Additional VAE Reconstructions. Under the identical evaluation setup, our VAE preserves more visible
+layout, appearance, and fine-grained local structures in these examples.
+aggregation [65], and structure-preserving adaptive downsampling and disparity alignment [66]. Recent
+approaches further exploit visual foundation models to learn geometry-sensitive and robust representations
+[67–69], while self-supervised methods improve geometric supervision through constrained pseudo-label
+generation [70]. While these approaches focus on stereo correspondence estimation, TriFold employs
+pretrained monocular depth and frozen visual features to construct spatially aligned triplane conditions.
+Our primary contribution lies in learning a structured generative representation of native scene-level 3D
+Gaussians, rather than developing a new geometric estimator.
+A.6 Training and Evaluation Details
+Gaussian VAE training.
+We jointly train the PTv3 encoder, the variational triplane autoencoder, the
+occupancy predictor, and the local Gaussian set decoder end to end. The latent representation comprises
+four slots, each with 16 channels per plane, at a spatial resolution of 2562. The decoder predicts K = 24
+candidate Gaussians per selected voxel, with the active subset determined by predicted objectness. The
+overall objective combines occupancy, center reconstruction, objectness, rendering, and phantom-voxel
+suppression losses, together with KL regularization. As detailed in the main paper, optimal-transport
+matching operates solely on Gaussian centers and provides both the correspondence for center supervision
+and the soft objectness targets. Among the Gaussian attributes, only the normalized center coordinates are
+directly supervised under this correspondence, with a loss weight of 5. Scale, rotation, appearance, and
+opacity receive no direct matched-attribute supervision and are instead constrained through differentiable
+rendering, with additional opacity suppression on phantom voxels.
+For the remaining objectives, the point-sampled and voxel-level occupancy losses use weights of 1 and
+0.5, respectively; the objectness BCE and threshold-aligned activation losses use weights of 1 and 0.3; and
+TriFold
+Page 23 of 30
+
+
+AMAP CV Lab | Alibaba Group
+the phantom-voxel objectness and opacity suppression terms use weights of 0.5 and 0.2. Direct spherical-
+harmonic regression is disabled in the reported configuration. We train the network with Adam at a peak
+learning rate of 2 × 10−4. The KL weight is linearly warmed up to 2 × 10−4 over the first 6k steps, and
+gradient norms are clipped to 1.
+For completeness, we describe the foreground-aware RGB loss used for rendering supervision. Rendered
+training views often contain a large black background, so a uniform full-image average would dispropor-
+tionately weight background pixels. We therefore compute the RGB L1 error separately over foreground
+and background regions and downweight the latter. Pixels whose target alpha exceeds 0.05 are treated as
+foreground. Let Fr and Br denote the foreground and background pixel sets in view r, respectively, and
+let
+ℓr
+S = 1
+|S|
+X
+p∈S
+bIr
+p −Ir
+p
+
+1
+(22)
+denote the mean RGB L1 error over a pixel set S. The RGB loss in our implementation is then
+ℓr
+rgb = wfg ℓr
+F + wbg ℓr
+B
+wfg + wbg
+,
+wfg = 1,
+wbg = 0.1.
+(23)
+Thus, the RGB term L1 in the main paper is implemented as this foreground-aware L1 loss rather than a
+uniform full-image average. The complete rendering objective is
+Lrender = Er
+h
+(1 −η) ℓr
+rgb + η
+ 1 −SSIM(bIr, Ir)
+i
+,
+η = 0.2.
+(24)
+At each training iteration, we randomly sample 32 camera viewpoints per scene and render the full de-
+coded Gaussian set at 640 × 640 resolution, comparing the renderings against the corresponding target
+images. For rendering supervision, all decoded candidates are rendered before objectness-based primitive
+selection, providing scene-level supervision beyond the capacity-limited center targets used for set-level
+matching.
+Gaussian Generation Training.
+We train a Wan-style latent transformer [71] consisting of 30 blocks,
+a hidden width of 1536, a feed-forward width of 8960, and 12 attention heads. The four-slot latent is
+patchified using non-overlapping 2 × 2 spatial patches, yielding 128 · 128 = 16,384 scene tokens. The
+DINO-splat tokens are concatenated with the noisy scene tokens and fed into the transformer via a shared
+self-attention stream. We optimize the flow-matching objective in Eq. 10 using AdamW, with a learning
+rate of 10−4, weight decay of 0.01, 5k warm-up steps, and cosine decay toward 10−5. We apply condi-
+tional dropout with a probability of 0.1, maintain an exponential moving average (EMA) with a decay of
+0.9999, and clip gradients to unit norm. The reported generator is trained for 100k steps.
+Generation Inference and Evaluation.
+For all generation experiments, we use the pretrained parame-
+ters of the latent flow model. At inference, we integrate the learned flow from σ = 1 to σ = 0 using UniPC
+with 50 function evaluations and a classifier-free guidance scale of 1.0. For single-image-conditioned gen-
+eration, each held-out test scene is conditioned on one input image, which provides a partial observation of
+the complete 3D scene. We generate one sample per condition using fixed random seeds. Generated and
+reference 3DGS scenes are rendered from the same 16 evaluation cameras at a resolution of 720 × 480.
+Appearance metrics. We evaluate rendered appearance using Fréchet Inception Distance (FID) and Ker-
+nel Inception Distance (KID), computed from standard Inception-v3 features using the PyTorch-based
+metric implementation. For single-image conditioning, we separately evaluate regions observed and un-
+observed from the conditioning view. Specifically, we back-project valid pixels of the conditioning image
+into 3D using the corresponding depth and camera parameters, and reproject these 3D samples into each
+evaluation view. The resulting projection footprint defines the observed region, while the remaining valid
+TriFold
+Page 24 of 30
+
+
+AMAP CV Lab | Alibaba Group
+(a) Can3Tok
+(b) DiffGS
+Figure 9: Representative reconstruction failures of the adapted Can3Tok and DiffGS baselines. Both baselines
+are trained using their officially released implementations on the same scene-level training split and with the same
+optimization budget used in our comparison. Under this setting, distinct input scenes can be reconstructed as similar
+low-detail structures. These examples illustrate the observed behavior under our scene-level adaptation and are not
+intended to characterize the methods outside this setting.
+region is treated as unobserved. The same region masks are applied to the generated and reference render-
+ings when computing FID and KID. The masks are used exclusively for evaluation and are never provided
+to the generative model.
+Geometry metrics. We evaluate geometric generation using Coverage (COV) and Minimum Matching
+Distance (MMD) under Chamfer Distance (CD). Each generated and reference scene is represented by
+2,048 points sampled from its Gaussian centers. For single-image conditioning, we use the same geo-
+metric projection procedure to distinguish observed and unobserved scene geometry. Specifically, the
+conditioning observation is lifted into 3D using its depth and camera parameters, and its projection, to-
+gether with the corresponding projected depth, determines the portion of the scene covered by the input
+observation. Geometry outside this observed support is treated as unobserved. We sample 2,048 points
+from the corresponding unobserved geometry and compute COV-CD and MMD-CD between generated
+and reference scene sets under the same spatial normalization.
+A.7 Additional VAE Reconstruction Results
+Figure 8 provides additional qualitative comparisons with GaussianGPT. In all three scenes, our method
+can preserve both the global room layout and fine-grained local structures. While GaussianGPT captures
+the coarse spatial envelope, it struggles with thin structures and details, often producing blurred or frag-
+mented geometry. Although our reconstructions are not flawless, regions with sparse observations near
+scene boundaries appear less sharp than the ground truth; they still preserve the high-fidelity scene-specific
+geometry and appearances.
+Figure 9 further examines a representative failure mode of the adapted Can3Tok and DiffGS baselines.
+Both methods tend to decode visually distinct input scenes into similar, low-detail Gaussian structures.
+They recover only a rudimentary spatial envelope, discarding most of the scene-specific layouts, appear-
+ances, and object structures. We present these cases as diagnostic examples to understand representational
+limits, rather than as a universal characterization of either baseline.
+TriFold
+Page 25 of 30
+
+
+AMAP CV Lab | Alibaba Group
+Table 7: Local Gaussian matching. We compare how
+predicted and target Gaussians are matched inside each
+decoded voxel.
+Setting
+PSNR↑SSIM↑LPIPS↓CD↓
+Hard matching
+25.61
+0.908
+0.103
+2.29
+Sinkhorn OT (Ours)
+25.83
+0.904
+0.096
+2.27
+Table 8: Triplane resolution. Rp denotes the plane-
+grid resolution prior to latent compression.
+Setting
+PSNR↑SSIM↑LPIPS↓CD↓
+Rp = 64
+21.07
+0.860
+0.155
+2.65
+Rp = 128
+24.15
+0.882
+0.118
+2.42
+Rp = 256 (Ours)
+25.83
+0.904
+0.096
+2.27
+GT Scenes
+PTV3 (Ours)
+PointNet
+Sparse 3D CNN
+Figure 10: Encoder feature comparison. We visualize features extracted by PTv3, PointNet, and a sparse 3D CNN
+from the same Gaussian input. PTv3 retains clearer spatial variation around surfaces, objects, and scene boundaries
+in this example; Table 6 reports the corresponding quantitative comparison.
+A.8 Expanded Ablation Results and Analysis
+We complement the component ablations in the main paper with controlled studies on local Gaussian
+matching and representation capacity. Tables 7 and 8 examine the matching objective and triplane reso-
+lution, while Tables 9 and 10 vary the number of encoder slots and latent channels. Figures 10 and 11
+provide qualitative evidence supporting the necessity of contextual point features and multiple local slots.
+For all reconstruction ablations, PSNR, SSIM, and LPIPS are computed on the same held-out renderings,
+while Chamfer Distance (CD) is evaluated on decoded Gaussian geometry under identical normalization.
+Each hyperparameter variant is trained from scratch using the same data and evaluation split.
+Figure 10 highlights the importance of the point backbone prior to triplane projection. PointNet [28]
+extracts largely uniform features across the scene, resulting in limited local discriminability. While the
+sparse 3D CNN captures broad spatial variations, these variations mostly correspond to coarse, scene-
+level regions. In contrast, PTv3 features exhibit sharp transitions around floors, walls, furniture, and
+object boundaries. This preserves critical local structures, allowing the encoder to more accurately assign
+features to triplane cells. This qualitative observation aligns with the architectural comparisons in Table 6
+and justifies contextualizing Gaussian primitives before local aggregation.
+Local Matching and Spatial Resolution.
+Table 7 reveals a metric-dependent trade-off between hard
+assignment and Sinkhorn OT. Sinkhorn improves PSNR from 25.61 to 25.83, reduces LPIPS from 0.103 to
+0.096, and reduces CD from 2.29 to 2.27, while hard matching yields a slightly higher SSIM (0.908 versus
+0.904). Overall, the transport-based objective yields superior perceptual and geometric reconstructions,
+even if it does not dominate every single metric. Table 8 exhibits a clearer trend: increasing Rp from 64
+to 256 improves PSNR by 4.76 dB and SSIM by 0.053, while reducing LPIPS by 0.059 and CD by 0.38.
+These consistent gains demonstrate that a coarse grid prematurely discards spatial details prior to latent
+compression.
+Slot Capacity and Latent Width.
+Increasing the encoder capacity from one to four slots improves all
+four metrics (Table 9), including a 1.43 dB increase in PSNR and a 0.11 reduction in CD. This confirms
+that utilizing multiple tokens per projected cell is crucial when multiple Gaussian primitives collapse into
+the same local region. Increasing the slot count from four to eight yields further but diminishing gains,
+revealing a quality–capacity trade-off. By comparison, widening the latent representation from Cz = 16
+TriFold
+Page 26 of 30
+
+
+AMAP CV Lab | Alibaba Group
+Table 9: Encoder token slots. Q denotes the number
+of feature slots per triplane cell.
+Setting
+PSNR↑SSIM↑LPIPS↓CD↓
+Q = 1
+24.40
+0.883
+0.114
+2.38
+Q = 2
+25.26
+0.895
+0.105
+2.32
+Q = 4 (Ours)
+25.83
+0.904
+0.096
+2.27
+Q = 8
+26.11
+0.910
+0.090
+2.23
+Table 10: Latent channel width.
+Cz specifies the
+number of latent channels per plane.
+Setting
+PSNR↑SSIM↑LPIPS↓CD↓
+Cz = 8
+25.16
+0.892
+0.102
+2.34
+Cz = 16 (Ours)
+25.83
+0.904
+0.096
+2.27
+Cz = 32
+25.89
+0.905
+0.094
+2.25
+to Cz = 32 changes PSNR by only 0.06 dB, SSIM by 0.001, LPIPS by 0.002, and CD by 0.02 (Table 10).
+This indicates that the representation benefits significantly more from structured local capacity (slots)
+than from a brute-force increase in latent channels. We use Q = 4 and Cz = 16 as a compact operating
+point; however, Q = 8 remains a viable option when reconstruction quality is strictly prioritized over
+representation size.
+Table 11: Effect of local Gaussian decoder capacity. K is
+the maximum number of Gaussian candidates per selected
+voxel, while rendering supervision always uses the com-
+plete target scene. CD values are multiplied by 103. Best
+results are in bold, second-best are underlined.
+Setting
+PSNR↑
+SSIM↑
+LPIPS↓
+CD↓
+K = 8
+25.06
+0.887
+0.112
+2.31
+K = 16
+25.61
+0.895
+0.106
+2.33
+K = 24 (Ours)
+25.83
+0.904
+0.096
+2.27
+K = 32
+25.96
+0.907
+0.092
+2.27
+Local Gaussian Decoder Capacity.
+We further
+study the effect of the maximum number of Gaus-
+sian candidates K predicted within each selected
+voxel.
+K defines a local capacity upper bound
+rather than a fixed scene-level output cardinality:
+each selected voxel retains a content-dependent
+subset of the K candidates, while the number
+and spatial distribution of selected voxels remain
+scene-dependent. As shown in Table 11, increas-
+ing K from 8 to 24 generally improves reconstruc-
+tion quality, with particularly consistent gains in the appearance metrics. Increasing the capacity further to
+K = 32 yields only marginal improvements (+0.13 dB PSNR, +0.003 SSIM, and −0.004 LPIPS), while
+CD remains unchanged at the reported precision. These results indicate that K = 24 captures most of the
+useful local representation capacity in our setting.
+This behavior is consistent with the local-density statistics in Figure 7: 97.8% of occupied voxels in
+the original fitted scenes contain at most 24 Gaussians on the same 2563 grid. For the remaining high-
+density tail, the set-level correspondence target is truncated to at most K primitives, whereas the rendering
+target remains untruncated and is computed from the complete fitted Gaussian scene before local primitive
+selection. Consequently, although the decoder cannot reproduce more than K individual primitives within
+a single voxel, the retained Gaussians can jointly adjust their non-positional attributes under full-scene
+rendering supervision to approximate the image-space effect of the denser target representation. The small
+performance gap between K = 24 and K = 32 empirically suggests that this bounded local capacity is
+not a major bottleneck for reconstruction fidelity under our data distribution.
+Figure 11 probes the four-slot representation without retraining the decoder. While masking out any single
+slot keeps the global room layout recognizable, it alters the feature response and degrades distinct local
+structures in the reconstructed Gaussians. The degraded regions and artifact patterns vary depending on
+which slot is removed, rather than presenting a uniform failure mode. Together with the monotonic slot-
+count improvements in Table 9, this demonstrates that the slots learn complementary local information.
+While this does not imply a strictly disentangled semantic meaning for each slot, it strongly supports the
+presence of non-redundant local decomposition within the projected cells.
+TriFold
+Page 27 of 30
+
+
+AMAP CV Lab | Alibaba Group
+Q0=0
+Q1=0
+Q2=0
+Q3=0
+All
+Figure 11: Single-slot removal. This intervention complements the slot-count ablation in Table 9. We zero one of
+the Q encoder slots while keeping all remaining latent values fixed. The top row visualizes decoded feature energy
+on the xz plane, and the bottom row shows the corresponding Gaussian reconstruction. Different removals produce
+distinct changes, indicating that the slots are not identical copies of the same local summary.
+A.9 Latent Representation Analysis
+To evaluate the structural integrity and generative suitability of the learned VAE latent space, we analyze
+its smoothness and robustness through interpolation and perturbation. For interpolation, we linearly inter-
+polate between two distinct scene latents, zα = (1 −α)zA + αzB. As shown in Fig. 12(a), the decoded
+triplane features exhibit smooth, continuous semantic transitions along the interpolation path, confirming
+a well-regularized latent manifold.
+To assess robustness, we systematically inject Gaussian noise, apply element-wise dropout, and enforce
+structured masking on the latent codes, subsequently quantifying the resulting degradation relative to the
+unperturbed reconstruction. We further visualize the decoded triplane features under increasing mask-
+ing ratios, where selected latent components are zeroed out. As shown in Fig. 12(b), the representation
+remains highly resilient under moderate perturbations: the decoded scene is largely preserved under Gaus-
+sian noise up to σ = 0.5, gracefully degrading only at extreme noise levels (σ = 1.0).
+A.10 Additional Conditional Generation Results
+We provide additional qualitative results for both point-cloud- and single-image-conditioned generation.
+These visual examples complement the quantitative evaluations in Sec. 4.3 by demonstrating the structural
+diversity of the generated 3D Gaussian scenes.
+Point-cloud Conditioned Generation.
+Figure 13 presents supplementary scenes generated from full
+point-cloud conditions. These samples span a wide variety of indoor layouts that encompass diverse
+arrangements of structures. Notably, the generated Gaussian sets successfully assemble into holistic,
+scene-scale environments rather than degenerating into isolated objects or disconnected fragments. The
+results show that major surfaces and semantic arrangements are robustly generated.
+Single-image Conditioned Generation.
+Figure 14 shows some examples of single-image-conditioned
+generation. In each row, the input view is followed by top, front, and side renderings of a single sampled
+Gaussian scene. The generated scenes preserve prominent cues from the input, including wall decorations,
+window placements, cabinets, and furniture configurations. Crucially, these elements remain geometri-
+cally consistent across novel viewpoints: planar surfaces maintain their relative spatial arrangements, and
+scattered objects (e.g., tables and chairs) are grounded coherently within the shared 3D space.
+TriFold
+Page 28 of 30
+
+
+AMAP CV Lab | Alibaba Group
+Gaussian  Sigma=0
+Gaussian Sigma=0.25
+Gaussian Sigma=0.5
+Gaussian Sigma=1.0
+Gaussian Sigma=0.1
+(a)
+(b)
+Figure 12: Latent interpolation and perturbation analysis. (a) Linear interpolation produces smooth changes
+in decoded triplane features. (b) The latent representation remains stable under moderate perturbations, with pro-
+nounced degradation under Gaussian noise at σ = 1.0.
+Figure 13: Additional point-cloud-conditioned generations. Each panel shows a Gaussian scene sampled from a
+different point-cloud condition. The examples illustrate the diversity of generated indoor layouts and scene content.
+Limitations.
+Our current framework is primarily limited by the scale and diversity of available scene-
+level 3DGS training data. In contrast to image and video VAEs and generative models, which can benefit
+from substantially larger and more diverse training corpora, our Gaussian VAE and latent flow model are
+trained on a relatively limited collection of 3D scenes. This restricts the diversity of the learned scene
+prior and may limit generalization to scene distributions that differ substantially from the training data.
+TriFold
+Page 29 of 30
+
+
+AMAP CV Lab | Alibaba Group
+Input/Render Image
+Top View
+Front View
+Side View
+Figure 14: Single-image-conditioned generation. Each row shows the conditioning view followed by top, front,
+and side renderings of one sampled Gaussian scene. The novel views assess whether input-specific scene cues are
+preserved within a coherent 3D completion.
+We expect larger and more diverse 3DGS datasets to further improve both representation learning and
+generative modeling. A second limitation concerns physical scene scale. To obtain a consistent spatial
+coordinate system, we construct all training samples using the same fixed-size 3D crop and map them
+to a canonical triplane domain. While this fixed-scale normalization stabilizes representation learning, it
+also ties the learned representation to the physical scale used during training, and scenes at substantially
+different spatial scales may not be represented optimally without additional normalization. Extending
+TriFold to scale-conditioned or multi-scale representations, together with training on larger 3DGS corpora,
+is therefore an important direction for improving its generalization to more diverse real-world scenes.
+TriFold
+Page 30 of 30

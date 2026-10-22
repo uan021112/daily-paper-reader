@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-10-20</span>
+      <span class="dpr-home-dashboard-kicker">2026-10-13 ~ 2026-10-22</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 25 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 27 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>10</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>15</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>11</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>16</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-10-20 22:54:41 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-22 02:06:03 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,9 +69,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日共筛选 25 篇论文，精读 10 篇、速读 15 篇，聚焦视觉几何与 3D 重建。</p>
-<p>最值得关注的是 ReDT 的分辨率解耦视觉几何，以及 FineSplat 的细粒度局部高斯表示。</p>
-<p>建议先读这两篇，再按兴趣浏览 RGB 与 X 射线联合重建、物体状态学习等方向。</p>
+<p>10月13日至22日共筛选27篇论文，完成11篇精读、16篇速读，聚焦3D视觉与场景理解。</p>
+<p>最值得关注的是高斯泼溅在全景场景图构建与遮挡感知重光照上的应用，另有类别级位姿估计、纹理生成和单目深度估计值得留意。</p>
+<p>普通读者可先从两篇高分精读入手，再按兴趣延伸到3D生成或深度估计方向。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -80,12 +80,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">10 篇</strong>
+    <strong class="dpr-home-dashboard-count">11 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="ReDT: Resolution-Decoupled Visual Geometry Transformer">ReDT: Resolution-Decoupled Visual Geometry Transformer</span></li><li><span class="dpr-home-dashboard-paper-title" title="FineSplat: Fine Patches, Local Groups, Detailed Splats">FineSplat: Fine Patches, Local Groups, Detailed Splats</span></li><li><span class="dpr-home-dashboard-paper-title" title="MCSplat: Multi-View Photometric and Geometric Consistent Feed-Forward Gaussian Splatting for Driving Scenes">MCSplat: Multi-View Photometric and Geometric Consistent Feed-Forward Gaussian Splatting for Driving Scenes</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="PanoGraphGS: Unifying Panoptic Segmentation and Hierarchical 3D Scene Graphs with Gaussian Splatting">PanoGraphGS: Unifying Panoptic Segmentation and Hierarchical 3D Scene Graphs with Gaussian Splatting</span></li><li><span class="dpr-home-dashboard-paper-title" title="VisibilitySplat: Ray-Traced Occlusion for Relighting with 3D Gaussian Splatting">VisibilitySplat: Ray-Traced Occlusion for Relighting with 3D Gaussian Splatting</span></li><li><span class="dpr-home-dashboard-paper-title" title="RoboCloth: A Large-Scale Real Cloth Material Dataset for Neural Reflectance Reconstruction">RoboCloth: A Large-Scale Real Cloth Material Dataset for Neural Reflectance Reconstruction</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>6</strong></span><span class="dpr-home-dashboard-tag">embodied-ai <strong>4</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>3</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>3</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>3</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -93,12 +93,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">15 篇</strong>
+    <strong class="dpr-home-dashboard-count">16 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="X-Splat: Unified Gaussian Splatting for Joint RGB and X-ray 3D Reconstruction">X-Splat: Unified Gaussian Splatting for Joint RGB and X-ray 3D Reconstruction</span></li><li><span class="dpr-home-dashboard-paper-title" title="SwitchSplat: Learning Discrete Object States from Casually Captured Scenes">SwitchSplat: Learning Discrete Object States from Casually Captured Scenes</span></li><li><span class="dpr-home-dashboard-paper-title" title="OV-PEAR: Observation-Verified Pose-Scale Estimation and Reconstruction for Unknown Industrial Manipulation Objects">OV-PEAR: Observation-Verified Pose-Scale Estimation and Reconstruction for Unknown Industrial Manipulation Objects</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="SchemaPose: RGB-Based Category-Level Pose Estimation with Parametric Category Schema">SchemaPose: RGB-Based Category-Level Pose Estimation with Parametric Category Schema</span></li><li><span class="dpr-home-dashboard-paper-title" title="SUPRA-TEX: 3D Generation with Super-Aligned Texture">SUPRA-TEX: 3D Generation with Super-Aligned Texture</span></li><li><span class="dpr-home-dashboard-paper-title" title="SAP-Depth: Scene-Adaptive Probability Framework for Self-Supervised Monocular Depth Estimation">SAP-Depth: Scene-Adaptive Probability Framework for Self-Supervised Monocular Depth Estimation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>4</strong></span><span class="dpr-home-dashboard-tag">embodied-ai <strong>3</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>3</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>3</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">surf-recon <strong>5</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>3</strong></span><span class="dpr-home-dashboard-tag">material-est <strong>3</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>3</strong></span><span class="dpr-home-dashboard-tag">embodied-ai <strong>2</strong></span></div>
 </section>
 </div>
 
