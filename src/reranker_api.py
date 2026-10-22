@@ -228,11 +228,22 @@ class SiliconFlowReranker:
         break
       except requests.HTTPError as exc:
         text = getattr(response, "text", "") or ""
-        if attempt < self.max_retries and self._is_rate_limit_error(response, text):
+        retryable = (
+          response.status_code in (500, 502, 503, 504)
+          or self._is_rate_limit_error(response, text)
+        )
+        if attempt < self.max_retries and retryable:
+          print(
+            f"[WARN] Remote rerank API status={response.status_code}; "
+            f"retry {attempt + 1}/{self.max_retries} in {self.retry_delay_seconds:g}s",
+            flush=True,
+          )
           time.sleep(self.retry_delay_seconds)
           continue
         raise requests.HTTPError(
-          f"SiliconFlow rerank API failed: status={response.status_code} body={text[:500]}"
+          f"SiliconFlow rerank API failed: status={response.status_code} "
+          f"attempts={attempt + 1} body={text[:500]}",
+          response=response,
         ) from exc
 
     if response is None:
