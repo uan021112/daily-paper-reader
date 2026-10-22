@@ -3,7 +3,7 @@ import pathlib
 import requests
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 
 def _load_module(module_name: str, path: pathlib.Path):
@@ -156,6 +156,89 @@ class RerankerApiTest(unittest.TestCase):
         self.assertEqual(result["results"][0]["index"], 1)
         self.assertEqual(len(session.calls), 2)
         self.assertEqual(reranker.stats("Qwen/Qwen3-Reranker-0.6B")["api_calls"], 2)
+
+    def test_siliconflow_reranker_recovers_from_transient_http_errors(self):
+        for status in (429, 500, 502, 503, 504):
+            with self.subTest(status=status):
+                error = requests.Response()
+                error.status_code = status
+                session = FakeSession([error, error, FakeResponse()])
+                reranker = self.api_mod.SiliconFlowReranker(
+                    api_key="test-key",
+                    max_retries=2,
+                    retry_delay_seconds=0.25,
+                    min_interval_seconds=0,
+                    session=session,
+                )
+
+                with patch.object(self.api_mod.time, "sleep") as sleep:
+                    result = reranker.rerank(
+                        query="graph neural networks",
+                        documents=["doc a", "doc b"],
+                    )
+
+                self.assertEqual(
+                    result["results"],
+                    [
+                        {"index": 1, "relevance_score": 0.9},
+                        {"index": 0, "relevance_score": 0.2},
+                    ],
+                )
+                self.assertEqual(len(session.calls), 3)
+                self.assertEqual(sleep.call_args_list, [call(0.25), call(0.25)])
+                self.assertEqual(reranker.stats()["input_tokens"], 123)
+
+    def test_siliconflow_reranker_stops_when_retry_budget_is_exhausted(self):
+        for statuses in ((502,), (502, 502, 502), (429, 502, 503)):
+            with self.subTest(statuses=statuses):
+                errors = []
+                for status in statuses:
+                    response = requests.Response()
+                    response.status_code = status
+                    errors.append(response)
+                session = FakeSession(errors + [FakeResponse()])
+                reranker = self.api_mod.SiliconFlowReranker(
+                    api_key="test-key",
+                    max_retries=len(errors) - 1,
+                    retry_delay_seconds=0.25,
+                    min_interval_seconds=0,
+                    session=session,
+                )
+
+                with patch.object(self.api_mod.time, "sleep") as sleep:
+                    with self.assertRaises(requests.HTTPError) as raised:
+                        reranker.rerank(
+                            query="graph neural networks",
+                            documents=["doc a", "doc b"],
+                        )
+
+                self.assertIs(raised.exception.response, errors[-1])
+                self.assertEqual(len(session.calls), len(errors))
+                self.assertEqual(sleep.call_count, len(errors) - 1)
+
+    def test_siliconflow_reranker_does_not_retry_permanent_http_errors(self):
+        for status in (400, 401, 403, 404, 413, 422, 501, 505):
+            with self.subTest(status=status):
+                error = requests.Response()
+                error.status_code = status
+                session = FakeSession([error, FakeResponse()])
+                reranker = self.api_mod.SiliconFlowReranker(
+                    api_key="test-key",
+                    max_retries=2,
+                    min_interval_seconds=0,
+                    session=session,
+                )
+
+                with patch.object(self.api_mod.time, "sleep") as sleep:
+                    with self.assertRaises(requests.HTTPError) as raised:
+                        reranker.rerank(
+                            query="graph neural networks",
+                            documents=["doc a", "doc b"],
+                        )
+
+                self.assertIs(raised.exception.response, error)
+                self.assertEqual(len(session.calls), 1)
+                sleep.assert_not_called()
 
     def test_siliconflow_reranker_requires_key(self):
         with patch.dict("os.environ", {}, clear=True):
