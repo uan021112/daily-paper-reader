@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-10-23</span>
+      <span class="dpr-home-dashboard-kicker">2026-10-24</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 21 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 17 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>10</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>11</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>7</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-10-23 22:42:38 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-24 21:22:42 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,9 +69,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日精选21篇机器人与具身智能论文，完成10篇精读、11篇速读。</p>
-<p>最值得关注的是统一世界动作模型 UniWALM 与面向自动驾驶的统一感知重建模型 Foundation4D，均获9分。</p>
-<p>普通读者可先读这两篇，了解机器人控制与自动驾驶如何借助统一模型提升能力。</p>
+<p>10 月 24 日精选 17 篇论文，聚焦机器人操作、3D 重建与空间感知。</p>
+<p>最值得关注的是示范驱动的机器人喂食（9.0 分）和面向过拟合防护的稀疏视角 3D 高斯泼溅（8.0 分）。</p>
+<p>建议先读机器人喂食论文，了解机器人如何从演示中学习动态动作，再按兴趣探索 3D 重建方向。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -83,9 +83,9 @@
     <strong class="dpr-home-dashboard-count">10 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="UniWALM: Unified World Action Language Model for Embodied Robot Control">UniWALM: Unified World Action Language Model for Embodied Robot Control</span></li><li><span class="dpr-home-dashboard-paper-title" title="Foundation4D: Towards a unified perception and reconstruction model for autonomous vehicles">Foundation4D: Towards a unified perception and reconstruction model for autonomous vehicles</span></li><li><span class="dpr-home-dashboard-paper-title" title="OASIS: Online Anchor-centric Scene Inference System for Open-Vocabulary Retrieval and Navigation in Dynamic Environments">OASIS: Online Anchor-centric Scene Inference System for Open-Vocabulary Retrieval and Navigation in Dynamic Environments</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Demonstration-Based Robotic Feeding Using Dynamic Movement Primitives">Demonstration-Based Robotic Feeding Using Dynamic Movement Primitives</span></li><li><span class="dpr-home-dashboard-paper-title" title="Rethinking Sparse-View 3D Gaussian Splatting: A Few-Shot Learning Perspective on Overfitting Prevention">Rethinking Sparse-View 3D Gaussian Splatting: A Few-Shot Learning Perspective on Overfitting Prevention</span></li><li><span class="dpr-home-dashboard-paper-title" title="MAPLE: Mondrian-Anchored Prior for Learning-free Indoor Exploration">MAPLE: Mondrian-Anchored Prior for Learning-free Indoor Exploration</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>3</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -93,12 +93,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">11 篇</strong>
+    <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Query-Time Calibration of CLIP Features for Open-Vocabulary 3D Segmentation">Query-Time Calibration of CLIP Features for Open-Vocabulary 3D Segmentation</span></li><li><span class="dpr-home-dashboard-paper-title" title="F2G-Pose: Geometry-Aware Foundation Feature Lifting for Direct RGB-D Category-Level Object Pose Estimation">F2G-Pose: Geometry-Aware Foundation Feature Lifting for Direct RGB-D Category-Level Object Pose Estimation</span></li><li><span class="dpr-home-dashboard-paper-title" title="CMAR-search: Commonsense and Memory Augmented Reasoning for Object Search in Dynamic Interactive Environments">CMAR-search: Commonsense and Memory Augmented Reasoning for Object Search in Dynamic Interactive Environments</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Point-Level Refinable Semantic Mapping for Spatial Understanding">Point-Level Refinable Semantic Mapping for Spatial Understanding</span></li><li><span class="dpr-home-dashboard-paper-title" title="SceneRig: An Agentic System for Simulation-Ready 3D Scene Reconstruction from Single Images">SceneRig: An Agentic System for Simulation-Ready 3D Scene Reconstruction from Single Images</span></li><li><span class="dpr-home-dashboard-paper-title" title="PanoBench: A Panoptic Occupancy Prediction Benchmark for Autonomous Driving">PanoBench: A Panoptic Occupancy Prediction Benchmark for Autonomous Driving</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>4</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>3</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>3</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">part-seg <strong>3</strong></span><span class="dpr-home-dashboard-tag">embodied-ai <strong>2</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span></div>
 </section>
 </div>
 
