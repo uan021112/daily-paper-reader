@@ -1,0 +1,2541 @@
+Xu Lab
+HKUST
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+from Pairwise Planar Geometry
+Yihang Chen1,2
+Bin Tan2,‡
+Yujun Shen2
+Yinghao Xu1,‡
+Nan Xue2
+1HKUST, Hong Kong, China
+2Robbyant, Ant Group, China
+‡Corresponding Authors
+Input: Feed Forward Poses
+Diffusion Refiner
+𝑇!"!#
+𝑇$%&!"%
+Plane-Embedded Diffusion
+Cross-view 3D Plane Correspondences
+𝑇!"#$%" = 𝑇$%$& " ∆𝑇' 𝑇$%$& 𝑝𝑙𝑎𝑛𝑒𝑠)
+Output: Refined Poses
+Figure 1: Our proposed PosePlaner refines any feed-forward pose in one Euler step of a plane-embedded
+diffusion adapter, and extends to n-view streaming via per-edge view-graph refinement aggregated by
+rotation averaging and a Glomap-style positioner. Left: Tinit (blue) drifts from GT (black). Middle:
+conditioned on per-view planar primitives, the refiner yields Trefine = Tinit · ∆Tθ(Tinit | planes) (red) in
+one step. Right: refined trajectory (red), raw feed-forward (blue), GT (black).
+Recent multi-view Transformers (e.g., DUSt3R and VGGT) have advanced 3D reconstruction
+by scaling training data and model capacity from two views to many views and long sequences,
+subsuming the classical SfM/SLAM pipeline of feature extraction, matching, and pose estimation
+in a single feed-forward pass.
+Yet this subsumption hides the interfaces between pipeline
+stages—correspondences, geometry, and pose are entangled in a single forward pass, leaving
+supervised fine-tuning as the major path to improvement and offering no mechanism to
+correct predictions from geometric evidence at test time. We propose PosePlaner to close
+this gap by reviving the classical coupling between correspondences and pose via flow matching,
+treating pose refinement as a conditional generation problem that takes coarse geometric
+matches and initial pose as input condition and fuses the resulting pose hypotheses into a single
+refined estimate, providing a continuous, data-driven analog of RANSAC voting. Our method
+is trained efficiently on two-view data, yet serves as a periodic refiner for streaming n-view
+pose estimators with no retraining. Empirically, it corrects failures of feed-forward predictors,
+substantially improves correspondence-based solvers, and reduces accumulated drift in long
+streaming sequences. Project page: https://robbyant-research.github.io/PosePlaner/.
+arXiv:2610.34845v1  [cs.CV]  26 Oct 2026
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+1. Introduction
+Recovering relative camera pose between views of a scene is a foundational primitive in 3-D vision
+and the entry point of structure-from-motion (Schönberger & Frahm, 2016), multi-view stereo (Yao
+et al., 2018), SLAM (Mur-Artal et al., 2015), and novel-view synthesis (Mildenhall et al., 2022; Kerbl
+et al., 2023). The problem is hard at both ends: in the two-view setting under limited baselines and
+outlier-prone correspondences, and across long streaming sequences where errors accumulate frame by
+frame. Every pose failure propagates into the downstream pipeline.
+Two prominent paradigms in recent work reach this problem from opposite directions. Feed-forward pose
+predictors (Wang et al., 2025a; 2024) map an image pair directly to (R, t) via visual priors, but their
+prediction is terminal: downstream correspondences cannot refine it. Matcher-plus-solver pipelines (Sarlin
+et al., 2020; Sun et al., 2021; Edstedt et al., 2024; Leroy et al., 2024) hand rich correspondences to a
+five-point solver (Nistér, 2004) wrapped in RANSAC (Fischler & Bolles, 1981), but the matcher’s priors
+collapse into per-pair inlier / outlier decisions and the RANSAC threshold tuning seldom transfers across
+scenes. Both paradigms break the match-pose coupling: visual priors and per-match geometric evidence
+never reach the same differentiable channel.
+In this paper, we bridge the gap between these two paradigms by reintroducing visual correspondences
+into feed-forward 3D reconstruction. Analogous to the algebraic solvers that seed the classical SfM
+pipeline (Schönberger & Frahm, 2016), we treat feed-forward models as pose initializers and refine their
+output as a learned geometric correction step. Our key insight is that 3D surface points paired with
+their normals already encode a cross-view geometric constraint: under the true relative pose, matched
+patch-normal pairs must satisfy an algebraic warping identity, and departures from it yield differentiable
+residuals that grow with pose error. Planar primitives realize this constraint compactly—one 3-D center
+and one normal per image patch. We learn to denoise the pose residual via flow matching, conditioned
+on the initialized pose and matched patch-normal pairs, yielding a refiner that generalizes from two-view
+training to N-view inference without retraining.
+We introduce PosePlaner (Fig. 1), a pose refiner that accepts any initial pose Tinit and returns a
+refined relative pose given patch-normal matching pairs. Building on Plana3r (Liu et al., 2025a), we use
+planar primitives as compact patch-normal representations, where each patch predicts a 3D center and
+plane normal in its own camera frame; pairing these patch-level primitives via an external pixel matcher
+(e.g., MASt3R (Leroy et al., 2024), LoFTR (Sun et al., 2021)) yields M two-view correspondences
+whose warping residuals serve as the conditioning signal for the refiner. For pose refinement in SE(3), we
+exploit the asymmetric difficulty of rotation and translation: a flow-matching (Liu et al., 2023; Lipman
+et al., 2023) multi-query Transformer (Vaswani et al., 2017; Peebles & Xie, 2023) denoises the rotation
+residual conditioned on the plane-warping residuals, producing M hypotheses that a learned score head
+fuses with the initial pose by softmax-weighted voting; translation is then recovered by a geometric
+solver under the refined rotation. Trained once on two-view pairs, PosePlaner extends as a periodic
+tail refiner for streaming n-view pose estimators on long sequences with no retraining. Beyond classical
+bundle adjustment and pose-graph backends (Schönberger & Frahm, 2016), to the best of our knowledge
+this is the first learned, diffusion-based refiner that operates on the pose outputs of streaming n-view
+estimators without sequence-specific retraining. Experimentally, our PosePlaner consistently improves
+upstream estimators from both paradigms on two benchmarks, and its gains grow with sequence length
+in the streaming setting, where drift correction matters most—e.g., on ScanNet at N=2000, rotation
+AUC@5◦improves by +20 points for CUT3R (Wang et al., 2025b) and +21 for TTT3R (Chen et al.,
+2025).
+Our contributions.
+• We propose PosePlaner, the first learned, diffusion-based pose refiner that revives the classical
+correspondence–pose coupling for feed-forward 3D reconstruction models, treating pose refinement as
+a conditional generation problem over plane-warping residuals.
+• We design a hybrid SE(3) refinement scheme: a flow-matching multi-query Transformer for rotation
+with score-based hypothesis fusion, and a geometric solver for translation, enabling single-step
+2
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+inference.
+• We show that a model trained once on two-view pairs serves as a periodic tail refiner for streaming
+n-view estimators with no retraining.
+2. Related Work
+Two-view and feed-forward pose estimation.
+Classical structure-from-motion (Schönberger &
+Frahm, 2016; Mur-Artal et al., 2015) recovers relative pose from sparse correspondences via a closed-
+form essential-matrix solver (Nistér, 2004) wrapped in RANSAC (Fischler & Bolles, 1981); modern
+matchers (Sarlin et al., 2020; Sun et al., 2021; Edstedt et al., 2024; Leroy et al., 2024) replace hand-
+crafted descriptors with learned dense features, but the discrete solver still collapses each match into an
+inlier / outlier vote, and a single bad RANSAC threshold can erase the entire inlier set. Differentiable
+RANSAC variants (Brachmann et al., 2017; Brachmann & Rother, 2018; 2022) relax this voting into
+a soft, end-to-end-trainable selection, yet gradients still flow through aggregate inlier counts rather
+than per-correspondence geometric residuals. A complementary line skips the solver and regresses pose
+directly via large feed-forward 3-D backbones (Wang et al., 2024; Leroy et al., 2024; Wang et al., 2025a)
+or their online streaming descendants (Wang et al., 2025b; Chen et al., 2025; Li et al., 2025; Yuan et al.,
+2026; Zhuo et al., 2025; Lan et al., 2025; Wang & Agapito, 2025; Chen et al., 2026); both produce
+a terminal prediction whose downstream correspondences and accumulated drift never re-enter the
+prediction loop. PosePlaner sits downstream of either paradigm, correcting any initial pose using
+the geometric constraint encoded in matched plane primitives and restoring the pose–correspondence
+coupling that both break.
+Planar primitives for 3-D understanding.
+Indoor scenes are dominated by piecewise-planar
+structure, motivating reconstruction by sparse 3-D plane primitives rather than dense points or meshes (Yu
+et al., 2019; Jin et al., 2021; Xie et al., 2022; Tan et al., 2025; Zhao et al., 2024; Liu et al., 2025b;a). Early
+feed-forward methods (Liu et al., 2018; 2019; Shi et al., 2023) regress plane masks and per-pixel plane
+parameters via instance segmentation, but depend on manually annotated plane labels (ScanNetV2 (Dai
+et al., 2017), Matterport3D (Chang et al., 2017)), capping both training scale and cross-dataset
+generalization. PlanarSplatting (Tan et al., 2025) breaks this bottleneck with a differentiable
+plane-primitive rasterizer whose rendering loss is annotation-free, and Plana3r (Liu et al., 2025a) uses
+it to train a feed-forward stereo plane-primitive backbone at scale, predicting per-patch normals and
+centers end-to-end. On the pose side, NopeSAC (Tan et al., 2023) matches a few scene-level plane
+instances, feeds each pair through a shared MLP to produce one pose hypothesis per correspondence,
+and soft-fuses these (with the init) via a learned scoring layer over their warping costs. PosePlaner
+retains the soft-fusion idea but operates at the much denser patch level and replaces the per-plane MLP
+regressor with a continuous flow-matching denoiser jointly conditioned on the plane-warping residuals of
+all matched patch pairs.
+Diffusion models for pose and 3-D.
+Denoising diffusion (Ho et al., 2020) has been adapted to
+pose by PoseDiffusion (Wang et al., 2023) (camera trajectories conditioned on image features),
+RayDiffusion (Zhang et al., 2024) (denoising a per-pixel ray bundle), and DiffusionSfM (Zhao et al.,
+2025) (jointly denoising per-pixel ray origins and endpoints to recover structure and motion); all three
+are visual-prior-driven, with no explicit per-correspondence geometric channel. Flow matching (Lipman
+et al., 2023; Liu et al., 2023) replaces the noise-prediction objective with a deterministic vector-field
+target, enabling single-step inference. PosePlaner adopts this flow-matching parameterization and
+conditions on plane-warping residuals rather than pixels, so the denoiser sees the algebraic quantity
+a classical solver would minimize—a geometric channel decoupled from any single matcher’s visual
+statistics.
+3. Method
+PosePlaner takes any initial two-view relative pose Tinit of the input image pair (I1, I2) and refines it
+into a more accurate estimate. The main idea rests on a classical observation:
+3
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+Proposition 1 (Plane-Warping Identity). Let (n1, d1) and (n2, d2) be the parameters of a 3D plane
+observed in two camera frames related by a relative pose Trel = (R, t). Then
+n1 = R n2,
+d1 = d2 −(R n2)⊤t.
+(1)
+Departures from this identity produce the plane-warping residuals
+∆n(R) = ∥n1 −R n2∥2 ,
+∆d(R, t) = |d1 −d2 + (R n2)⊤t|,
+(2)
+which vanish at the true pose and grow with pose error.
+These residuals provide an estimator-agnostic conditioning signal for any upstream source. Given a
+two-view Vision Transformer that reads out patch-level 3D planes in each view’s own camera frame
+(Sec. 3.1), we compute the plane-warping residuals between matched pairs and use them as conditioning
+for a flow-matching Transformer that denoises the rotation residual; translation is then recovered by a
+geometric solver under the refined rotation (Sec. 3.2). See Fig. 2 for an overview.
+3.1. Patchwise Plane Primitives and Correspondences
+Our method follows the convention of Vision Transformers (Dosovitskiy et al., 2021), patchifying the input
+images (I1, I2) into S patch tokens each. A siamese ViT encoder processes both views independently,
+and two cross-attention decoders fuse information across views, predicting a 3D planar primitive per
+patch, specifically a center depth, two radii, and an orientation quaternion from which the plane normal
+n and offset d are recovered.
+Plane representation from Siamese Vision Transformers.
+Each patch in a view predicts a local
+planar primitive parameterized by a 3D center P ∈R3 and a unit surface normal n ∈S2, both expressed
+in its own camera frame. The plane offset follows as d = −n⊤P , giving a compact (n, d) per patch.
+We adopt the architecture of Plana3r (Liu et al., 2025a) with one key change: whereas Plana3r
+expresses all primitives in a shared global frame (view 1), we set each primitive to live in its own source
+camera’s frame. The training details of this Siamese Vision Transformer network are in App. B.1.
+Two-view plane correspondences.
+After the plane head produces (n, d) for every patch in both
+views, we establish patch-level correspondences from any external pixel matcher (e.g., SuperGlue (Sarlin
+et al., 2020), LoFTR (Sun et al., 2021), ROMA (Edstedt et al., 2024), or MASt3R (Leroy et al.,
+2024)). Given pixel-level matches, we convert each matched pixel pair to its enclosing patch indices and
+accumulate a vote matrix V ∈RS×S counting the number of pixel matches per patch pair. Patch-level
+correspondences are then extracted by mutual nearest neighbors: patch i in view 1 is matched to patch
+j in view 2 if and only if j = arg maxk Vik and i = arg maxk Vkj. This yields M matched plane pairs
+{(n1
+m, d1
+m), (n2
+m, d2
+m)}M
+m=1, which we pack into geometry tokens
+gm =
+
+n1
+m
+ ¯d1
+m
+ n2
+m
+ ¯d2
+m
+
+∈R8,
+m = 1, . . . , M,
+(3)
+where ¯dv
+m denotes the scene-normalized offset (Sec. 3.2). Each token is the minimal sufficient statistic
+for evaluating the plane-warping residuals of Eq. (2) at any candidate pose. Note that M is not a
+fixed hyperparameter: it is determined per image pair by the matcher’s mutual-NN output and varies
+with scene texture and matcher density (typically tens to a few hundred per pair for the matchers we
+use). The M residuals collectively expose the pose error along diverse normal orientations, forming the
+conditioning signal consumed by the flow-matching refiner below.
+3.2. Flow-Matching Diffusion Refiner
+The refiner takes Tinit = (Rinit, tinit) and the geometry tokens {gm} of Sec. 3.1, and produces a refined
+pose via flow matching (Lipman et al., 2023; Liu et al., 2023). For t ∼U[0, 1] and ϵ ∼N(0, I), the
+formulation defines a linear probability path and a constant target velocity
+zt = (1 −t) z0 + t ϵ,
+v⋆(zt, t) = ϵ −z0,
+(4)
+and the refiner Fθ regresses v⋆at every (zt, t). The straight-line path admits a single deterministic Euler
+step at inference, so refinement reduces to one forward pass (see App. A.3 for the formal argument).
+4
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+Diffusion 
+Transformer
+𝑇!"!# # ∆𝒎𝑇%&'()&
+∆𝒎(𝒏𝒐𝒊𝒔𝒆)
+Geometry tokens {𝑔1}
+Pose token 𝑐
+𝑴 × {𝑛!, 𝑑!, 𝑛", 𝑑"}
+𝟏×{𝑅, 𝑡}
+t
+condition
+Hypotheses Scoring
+Cost
+Figure 2: PosePlaner pipeline. A per-view local-frame plane head produces M geometry tokens
+{gm} (paired plane primitives across the two views) and a global pose token c that encodes the initial
+relative pose Tinit. The multi-query diffusion Transformer denoises Tinit in a single Euler step under
+these conditioning tokens, yielding M hypothesis frustums h1, . . . , hM. A score head softly fuses the
+hypotheses into the final refined pose Trefined, used to align the two-view reconstruction.
+Velocity field parameterization.
+The velocity field Fθ is specified by three choices: the coordinate
+system, the denoising target, and the conditioning signal.
+We normalize all plane offsets by a per-pair scalar σ = 1
+2(|d1| + |d2|) so that ¯dv
+m = dv
+m/σ. A robust
+median over the matched pairs recovers the normalized translation scale:
+sest(R, ˆt) = medianm∈M⋆
+
+¯d2
+m −¯d1
+m
+(Rn2m)⊤ˆt
+,
+τ = sest(R, ˆt) ˆt,
+(5)
+where M⋆excludes matches with near-zero denominators. This maps any Tinit into the range of ¯d
+regardless of its metric scale; the metric translation is recovered by t = σ τ.
+The denoising target is the 9-dimensional residual
+z0 =
+
+rot6d(RgtR⊤
+init)
+ τgt −τinit
+
+∈R9,
+(6)
+with rotation in the continuous 6-D representation of Zhou et al. (2019) (see App. A.2 for why quaternions
+are suboptimal under flow matching). Although our final output uses only the rotation, the translation
+channel acts as a contextual signal that tightens the rotation prediction (Sec. 4.3).
+The refiner conditions on the M geometry tokens {gm} from Eq. (3) and a global pose token c =
+ψ([rot6d(Rinit)∥τinit]) ∈Rd. Linear projections lift both to width d and Lcond=4 self-attention blocks
+produce the context ˆC consumed by the denoiser.
+Multi-query denoiser.
+The denoiser instantiates M queries, one per correspondence, each solving
+the same pose-residual denoising problem under a different local geometric condition. Every query shares
+a latent-time component
+q0 = ϕz(zt) + ϕt
+ SinEmb(t)
+
+∈Rd,
+(7)
+and adds a per-match geometry bias qm = q0 + Wb ˆgm that grounds each query in correspondence m.
+The M queries cross-attend to ˆC and emit per-match velocity predictions vm ∈R9. During training,
+these per-match predictions are aggregated into a single fused velocity by geometric weights
+ωm = softmax(−β gm),
+gm = ∥∆nm∥2 + λ |∆dm|,
+(λ, β) = (3, 10),
+(8)
+5
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+so the M queries cooperatively regress the shared FM target v⋆via their weighted average; correspon-
+dences with small warping residuals dominate the gradient. Per-query diversity at inference arises from
+the per-match geometry bias Wbˆgm, which biases each vm toward a different local geometric condition.
+At inference, each query is integrated independently into one of M hypothesis poses, and the M+1
+hypotheses (with Tinit) are fused by the score head below.
+Score-based fusion.
+A score head evaluates each of the M+1 hypotheses (including Tinit) on plane-
+warping costs
+cr
+h,m =
+Rhn2
+m −n1
+m
+
+2,
+ct
+h,m =
+( ¯d2
+m −(Rhn2
+m)⊤τh) Rhn2
+m −¯d1
+mn1
+m
+
+2,
+(9)
+and produces softmax weights wr, wt over the hypotheses. The fused refined pose reads
+Rref = ΠSO(3)
+ M
+X
+h=0
+wr,h rot6d(Rh)
+
+,
+τref =
+M
+X
+h=0
+wt,h τh,
+(10)
+with ΠSO(3) Gram–Schmidt orthogonalization.
+Training objective.
+The refiner and the score head are optimized jointly with
+Lrefine =
+
+X
+m
+ωm vm −v⋆
+1
+|
+{z
+}
+LFM
++ 0.1 · Et
+h
+(1−t)2X
+m
+ωm gm
+i
+|
+{z
+}
+Lgeo
++ 0.01 · Lscore,
+(11)
+where Lscore denotes the hypothesis-selection loss of (Tan et al., 2023), concentrating wr (resp. wt) on
+the hypothesis with the smallest rotation (resp. translation) error and penalizing off-diagonal entries of
+the correspondence-indexed cost matrix. The three terms encode complementary signals: LFM drives
+the velocity regression on the pose residual, Lgeo constrains the predicted trajectory to the (∆n, ∆d)→0
+manifold of Eq. (2), and Lscore supervises the soft hypothesis selection used in Eq. (10). The temporal
+weight (1−t)2 in Lgeo concentrates geometric supervision on iterates near z0, where the warping residuals
+become linearly informative of the remaining pose error.
+3.3. Inference
+At test time we sample z1 ∼N(0, I), broadcast it to the M queries, and take a single forward Euler step
+per query along the learned velocity field,
+z0,m = z1 −vm(z1, t=1),
+m = 1, . . . , M,
+(12)
+whose unit step covers the full t∈[0, 1] interval. Decoding each z0,m and composing with Tinit yields M
+pose hypotheses {Tm}M
+m=1 in one evaluation of Fθ; the score head then fuses them with Tinit through
+Eq. (10) into the refined pose (Rref, τref). We take R⋆=Rref as the final rotation and recover the metric
+translation by the geometric step below, warm-started from tinit.
+Two-view translation refinement.
+With R fixed to R⋆, translation reduces to a near-linear problem.
+We lock the magnitude s = ∥tinit∥at the scale from Eq. (5) and optimize only the unit direction ˆt ∈S2
+via a Huber-robust objective combining the plane-offset residual ∆dm and a 3-D point-alignment residual
+∆Pm = P 1
+m −R⋆P 2
+m −sˆt, where P v
+m is the back-projection of matched pixel m in view v through
+the dense depth that PlanarSplatting rasterizes from the plane-head primitives. The objective is
+regularized by an init-anchored Tikhonov prior on the direction:
+ˆt⋆= arg min
+ˆt∈S2
+X
+m∈M
+h
+ρd
+ ∆dm
+
++ ρp
+ ∥∆Pm∥2
+i
++ λreg ∥ˆt −ˆtinit∥2
+2.
+(13)
+ρd and ρp are Huber loss functions and λreg is set adaptively from the init’s self-consistency with the
+predicted plane field, so that an already-accurate init is protected (large λreg, solver returns ≈ˆtinit)
+while a poor init lets the data terms dominate. The closed-form schedule and the construction of the
+dense P v
+m are detailed in App. B.3.
+6
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+Multi-view aggregation.
+For streaming n-view inputs, we run the diffusion refiner on every edge
+of the refinement window to obtain refined pairwise rotations {R⋆
+ij} while keeping the upstream’s raw
+pairwise translation directions {traw
+ij } unchanged. Per-frame absolute rotations are then recovered by
+rotation averaging (Hartley et al., 2013; Chatterjee & Govindu, 2013) on {R⋆
+ij}, and per-frame camera
+centers by a Glomap-style fix-rotation positioner (Pan et al., 2024) initialised from the raw translations;
+the explicit objectives are given in App. B.3. The two-view LM translation solver of Eq. (13) is bypassed
+at n-view scale—per-frame translations are determined globally by RA + the positioner from the dense
+edge set—so the same learned refiner (whose only role at n-view is to refine each Rij) serves both regimes
+without retraining.
+4. Experiment
+We evaluate PosePlaner as a plug-in refiner for both two-view and streaming n-view pose estimators
+across two benchmarks, ScanNet1500 (Dai et al., 2017) and 7Scenes (Shotton et al., 2013), in Sec. 4.1
+and Sec. 4.2; an additional zero-shot two-view evaluation on Matterport3D (Chang et al., 2017)
+(SparsePlanes (Jin et al., 2021) test split) is reported in App. C.1 (Tab. 7). Implementation and
+training details are in App. B.
+4.1. Two-View Camera Pose Refinement
+Evaluation protocol.
+We evaluate on ScanNet1500 (Dai et al., 2017) (1500 standard test pairs
+from (Sarlin et al., 2020)) and 7Scenes (Shotton et al., 2013) (4070 pairs formed at frame gap 50 across
+all 46 sequences; zero-shot, not in our training mixture). We attach PosePlaner downstream of
+seven upstream pose sources: four correspondence-based solvers (SuperGlue (Sarlin et al., 2020),
+LoFTR (Sun et al., 2021), ROMA (Edstedt et al., 2024), MASt3R (Leroy et al., 2024)) and three
+diffusion-based pose estimators (PoseDiffusion (Wang et al., 2023), RayDiffusion (Zhang et al.,
+2024), DiffusionSfM (Zhao et al., 2025)). Each correspondence-based upstream uses its own native
+pose solver followed by a two-view bundle adjustment to produce the init pose. We report pairwise
+rotation and translation AUC at 5◦and 10◦(higher is better).
+NopeSAC configuration.
+We evaluate the frozen NopeSAC (Tan et al., 2023) refinement head
+using MASt3R patch matches and our predicted plane pairs. Initial poses are post-BA estimates for
+correspondence-based upstreams and independently rerun predictions for diffusion-based upstreams on
+the same test pairs. We bypass its PlaneTR frontend, native matching, and pixel camera prediction,
+retaining the official plane warp, AIM, 50-slot head, and soft fusion. The released ScanNet checkpoint is
+used without retraining on either benchmark. We report its directly predicted rotation and translation;
+PosePlaner retains its geometric translation refinement (Eq. (13)). This evaluates the released head
+under shared frontend inputs.
+Quantitative results.
+In Tab. 1, PosePlaner outperforms the NopeSAC head at both reported
+rotation and translation thresholds for all four correspondence-based upstreams on both benchmarks.
+The visual-conditioning outputs of PoseDiffusion, RayDiffusion, and DiffusionSfM also im-
+prove substantially after refinement, indicating that the plane-warping residuals carry information
+complementary to visual-only priors.
+Comparison with classical refinement.
+Both methods start from the same LoFTR- or MASt3R-
+derived pre-BA poses and share the same MASt3R matching output. BA uses MASt3R’s point
+correspondences, while PosePlaner uses patch-level correspondences. Overall, PosePlaner substan-
+tially outperforms BA with LoFTR initialization on both datasets and achieves higher rotation AUC
+with MASt3R initialization on 7Scenes (Tab. 2).
+Plane primitives also work as a stand-alone match filter.
+The per-patch plane primitives also
+help without invoking the refiner: applying the cut ∥∆n∥+ |∆d| ≤1 to LoFTR matches removes a
+7
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+Table 1: Two-view pose refinement on ScanNet1500 (Dai et al., 2017) and 7Scenes (Shotton
+et al., 2013). R/t: rotation/translation-direction AUC at 5◦and 10◦(%, higher is better). Valid gives
+the common evaluation subset within each block. PosePlaner uses MASt3R conditioning throughout
+(Tab. 9). Best per block in bold. † Tested zero-shot.
+Method
+ScanNet1500
+7Scenes†
+R@5 R@10 t@5 t@10
+Valid
+R@5 R@10 t@5 t@10
+Valid
+Correspondence-based solvers
+SuperGlue (Sarlin et al., 2020)
+43.9
+62.4
+21.3
+39.6 1427/1500 42.3
+65.9
+18.9
+37.6 4014/4070
+SuperGlue + NopeSAC head
+34.9
+58.7
+7.4
+19.9
+34.3
+61.5
+7.1
+19.9
+SuperGlue + PosePlaner
+48.9 68.9 21.5 40.4
+45.8 69.7 19.0 37.6
+LoFTR (Sun et al., 2021)
+11.5
+25.0
+2.1
+5.6
+1028/1500 17.7
+34.2
+3.7
+10.1 3585/4070
+LoFTR + NopeSAC head
+26.7
+49.9
+1.6
+4.6
+27.1
+52.8
+2.6
+8.3
+LoFTR + PosePlaner
+29.4 52.9
+3.5
+9.0
+31.2 56.8
+4.4
+12.7
+ROMA (Edstedt et al., 2024)
+66.7 81.2 39.1 58.8 1500/1500 50.7
+73.3
+25.6 46.7 4068/4070
+ROMA + NopeSAC head
+38.6
+61.8
+9.8
+25.6
+35.4
+62.6
+8.4
+23.2
+ROMA + PosePlaner
+64.1
+80.1
+37.0
+57.3
+52.0 74.1
+25.4
+46.1
+MASt3R (Leroy et al., 2024)
+66.5 82.4 41.3 61.6 1495/1500 50.6
+73.3
+26.7 47.9 4065/4070
+MASt3R + NopeSAC head
+38.2
+61.6
+10.2
+26.0
+35.4
+62.7
+8.8
+23.2
+MASt3R + PosePlaner
+65.0
+81.7
+38.6
+59.8
+51.5 74.0
+26.0
+47.0
+Diffusion-based pose estimators (visual conditioning)
+PoseDiff. (Wang et al., 2023)
+2.2
+9.0
+0.5
+1.2
+1500/1500
+3.2
+12.2
+0.4
+1.5
+4070/4070
+PoseDiff. + NopeSAC head
+18.2
+41.3
+0.8
+3.0
+18.0
+42.4
+0.4
+1.5
+PoseDiff. + PosePlaner
+18.9
+38.8
+2.2
+6.0
+20.6 44.6
+1.0
+3.8
+RayDiff. (Zhang et al., 2024)
+11.7
+33.4
+1.7
+6.9
+1500/1500 10.3
+32.7
+1.0
+4.4
+4070/4070
+RayDiff. + NopeSAC head
+6.5
+19.2
+0.3
+1.3
+7.4
+20.5
+0.2
+0.7
+RayDiff. + PosePlaner
+25.3 50.5
+5.4
+15.5
+23.3 51.4
+2.2
+7.6
+DiffusionSfM (Zhao et al., 2025) 37.8
+64.3
+3.0
+16.0 1500/1500 39.6
+66.6
+3.9
+16.5 4070/4070
+DiffusionSfM + NopeSAC head
+35.0
+59.5
+4.1
+13.8
+33.5
+61.1
+4.3
+14.9
+DiffusionSfM + PosePlaner
+43.6 68.6 12.8 30.5
+43.6 69.1
+6.2
+20.3
+LoFTR
++ Ours
+Figure 3: Planar primitives as a stand-alone match filter. Three 7Scenes pairs, LoFTR (Sun
+et al., 2021) upstream. Top: raw LoFTR matches. Bottom: matches surviving the cut ∥∆n∥+|∆d|≤1.
+Green/red mark RANSAC inliers/outliers; top-left numbers are inlier ratio and pose error.
+large fraction of RANSAC outliers while preserving inliers, and re-solving pose on the filtered subset
+substantially reduces rotation and translation error (Fig. 3).
+4.2. Multi-View Refinement on Streaming Pose Estimators
+Evaluation protocol.
+On ScanNet (Dai et al., 2017) and 7Scenes (Shotton et al., 2013) (zero-shot),
+we form N-frame trajectories at N ∈{200, 500, 2000} at frame gap 2; the streaming baseline ingests the
+8
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+Table 2: Controlled comparison with bundle adjustment. BA and PosePlaner use the same
+initial poses and MASt3R correspondences. R@5, R@10, and R@20 are rotation AUC at 5◦, 10◦, and 20◦
+(%, higher is better). Best results in each initialization group are bold. Table 1’s correspondence-based
+initializations have already undergone BA.
+Initialization / refinement
+ScanNet1500
+7Scenes
+R@5
+R@10
+R@20
+R@5
+R@10
+R@20
+LoFTR (pre-BA)
+11.5
+25.2
+44.1
+17.8
+34.3
+53.4
++ BA
+13.4
+26.5
+44.9
+24.4
+39.6
+56.7
++ PosePlaner
+29.5
+53.1
+70.7
+31.2
+56.8
+75.4
+MASt3R (pre-BA)
+66.0
+82.1
+90.9
+49.6
+72.7
+86.1
++ BA
+66.5
+82.4
+91.1
+50.6
+73.3
+86.4
++ PosePlaner
+64.7
+81.5
+90.6
+50.9
+73.6
+86.5
+first N frames unrefined and PosePlaner refines the last 100 pairwise. Both raw and refined per-pair
+(R, t) pass through the same multi-view backend (rotation averaging + fix-rotation Glomap-style
+positioner (Pan et al., 2024); full details in App. B.3), so the only difference is whether each input pair is
+refined. We evaluate four streaming reconstructors (CUT3R (Wang et al., 2025b), TTT3R (Chen et al.,
+2025), WinT3R (Li et al., 2025), Spann3R (Wang & Agapito, 2025)) and report pairwise rotation and
+translation AUC at 5◦and 20◦over the
+ 100
+2
+
+tail pairs.
+Quantitative results.
+Tab. 3 sweeps N to vary the drift entering refinement. At N=200 the baseline
+has accumulated little drift and refinement is roughly at parity, while at N=500 and especially N=2000
+both rotation and translation AUC improve clearly across all four baselines on both datasets, with the
+gap widening monotonically with N. This converts streaming pose estimation from an unbounded-error
+regime into a bounded-error one at the cost of a single refinement pass over the last 100 frames.
+Qualitative comparisons.
+Fig. 4 visualizes a representative ScanNet trajectory under our sliding-
+window refinement protocol (full details in App. C.3).
+The raw streaming baselines (blue) drift
+progressively from ground truth (black); after refinement (red) the refined tail snaps back into close
+agreement across all three baselines (CUT3R, TTT3R, WinT3R), mirroring the tail-100-frame AUC
+improvements that Tab. 3 reports. Additional sequences are in App. C.3.
+Zero-shot outdoor generalization.
+We evaluate zero-shot multi-view refinement on Oxford
+Spires (Tao et al., 2026) and MatrixCity (Li et al., 2023) with CUT3R and TTT3R at N ∈{200, 500, 2000}
+(Tab. 4). Both the plane predictor and pose refiner are trained only on indoor data and kept frozen.
+Rotation AUC improves at N = 500 and N = 2000, while gains at N = 200 are less consistent and some
+translation metrics decline. Additional tests on CrossLoc (Yan et al., 2022) drone sequences at N = 200
+and N = 500, together with trajectory construction details, are provided in App. C.1.
+4.3. Ablation Study
+We ablate PosePlaner along three axes within Tab. 5: (i) what conditioning the refiner needs (w/o
+{gm}, c), (ii) how the M+1 pose hypotheses are aggregated (w/o score head, i.e., the softmax-weighted
+score-head fusion is replaced by a uniform average), and (iii) how the pose residual is parameterized
+(w/o translation drops the translation channel from z0, leaving a rot-only z0 ∈R6; w/o rot6d replaces
+the rot6d rotation latent with a unit quaternion in R4).
+Conditioning ablation.
+Removing the geometry tokens {gm} collapses performance to the init level:
+without per-match evidence the model can only reproduce the prior mean. Removing the pose token
+c (equivalently, replacing Tinit with the identity) forces the model to estimate pose from scratch; the
+SuperGlue and LoFTR columns become identical since the upstream pose no longer enters the model.
+The model still recovers a reasonable pose from warping residuals alone, but consistently below the
+accuracy obtained with a real init.
+9
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+Table 3: n-view pose accuracy on streaming ScanNet (Dai et al., 2017) and 7Scenes (Shotton
+et al., 2013). Pairwise R and t AUC at 5◦and 20◦over the
+ 100
+2
+
+pairs in the refined tail. Higher is
+better. † Tested zero-shot.
+Method
+N=200
+N=500
+N=2000
+R@5
+R@20
+t@5
+t@20
+R@5
+R@20
+t@5
+t@20
+R@5
+R@20
+t@5
+t@20
+ScanNet
+CUT3R
+23.3
+65.0
+4.1
+24.0
+16.5
+55.7
+2.2
+19.0
+17.3
+53.4
+1.0
+13.2
+CUT3R + PosePlaner
+40.5
+80.3
+7.7
+38.0
+37.3
+78.9
+6.3
+38.4
+37.3
+79.8
+3.4
+31.2
+TTT3R
+46.2
+83.1
+11.1
+42.7
+36.1
+79.3
+8.0
+38.7
+27.5
+72.5
+3.4
+28.6
+TTT3R + PosePlaner
+50.7
+85.6
+10.8
+45.9
+47.1
+84.3
+10.8
+47.3
+48.2
+85.0
+10.4
+41.8
+WinT3R
+37.7
+77.1
+8.4
+37.4
+28.3
+66.3
+5.5
+28.8
+19.2
+48.6
+3.1
+16.8
+WinT3R + PosePlaner
+45.9
+83.7
+9.5
+42.7
+42.5
+80.7
+7.8
+41.3
+27.9
+65.0
+3.9
+20.8
+Spann3R
+32.4
+69.2
+6.9
+31.9
+20.0
+55.6
+3.5
+21.4
+19.4
+52.8
+1.8
+16.0
+Spann3R + PosePlaner
+45.6
+82.2
+9.3
+42.2
+38.8
+76.4
+7.0
+37.1
+37.1
+77.4
+4.2
+30.9
+7Scenes†
+CUT3R
+22.0
+65.4
+3.2
+24.8
+16.2
+54.4
+2.0
+17.4
+12.0
+47.3
+0.4
+7.7
+CUT3R + PosePlaner
+35.1
+77.7
+5.9
+34.8
+35.1
+78.0
+4.7
+35.7
+28.1
+71.0
+2.2
+26.0
+TTT3R
+44.1
+83.9
+11.2
+48.8
+36.0
+79.4
+7.9
+40.5
+38.4
+82.1
+3.4
+27.1
+TTT3R + PosePlaner
+44.5
+83.3
+11.0
+47.8
+41.9
+83.7
+9.7
+47.3
+41.7
+83.6
+4.0
+31.2
+WinT3R
+40.0
+81.7
+7.4
+37.8
+44.2
+82.9
+12.7
+45.7
+41.6
+78.7
+12.7
+35.5
+WinT3R + PosePlaner
+43.9
+83.4
+7.6
+42.4
+46.3
+85.0
+12.8
+49.4
+42.9
+81.2
+15.2
+38.4
+Spann3R
+34.5
+77.2
+7.7
+37.3
+35.7
+76.5
+8.1
+38.9
+39.6
+77.0
+9.2
+32.5
+Spann3R + PosePlaner
+40.8
+81.8
+8.9
+42.9
+42.1
+82.6
+9.4
+46.8
+43.7
+79.7
+8.2
+33.9
+Scene0757_00
+CUT3R ± ours
+TTT3R ± ours
+WinT3R ± ours
+Figure 4: Streaming pose refinement on a representative ScanNet (Dai et al., 2017) sequence
+(Scene0757_00). Left: sample frames. Right three panels: estimated camera trajectories under
+CUT3R (Wang et al., 2025b), TTT3R (Chen et al., 2025), and WinT3R (Li et al., 2025). Black:
+ground-truth; blue: raw baseline; red: after PosePlaner refinement. • start, × end.
+Score-head fusion vs. uniform averaging.
+The w/o score head variant uniform-averages the M+1
+pose hypotheses instead of fusing them by the score head’s softmax weights. Performance drops: outlier
+hypotheses receive the same weight as well-aligned ones, whereas the score head learns to discount them
+via plane-warping cost (Eq. (9)).
+Pose-residual parameterization matters.
+The w/o translation variant drops the translation channel
+from the diffusion residual (rot-only z0 ∈R6); rotation accuracy degrades because the bilinear coupling
+between R and t in ∆d provides a contextual signal that tightens the rotation prediction. The w/o rot6d
+variant replaces the continuous 6-D rotation representation (Zhou et al., 2019) with a unit quaternion
+in R4 and reduces rotation accuracy. Quaternions form a double cover of SO(3): q and −q represent
+the same rotation. Choosing a unique quaternion for each rotation introduces discontinuities that can
+produce abrupt changes in Euclidean flow-matching targets. The continuous 6-D representation avoids
+this ambiguity. Appendix A.2 provides the mathematical explanation.
+Training objective.
+Flow matching with a single Euler step outperforms direct regression and 100-
+step DDPM in rotation and translation-direction AUC on ScanNet1500 with LoFTR initialization.
+10
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+Table 4: Zero-shot outdoor multi-view refinement. R@5/R@20 and t@5/t@20 are rotation and
+translation-direction AUC at 5◦/20◦(%, ↑). Better results within each pair are bold. † Tested zero-shot.
+Method
+N = 200
+N = 500
+N = 2000
+R@5
+R@20
+t@5
+t@20
+R@5
+R@20
+t@5
+t@20
+R@5
+R@20
+t@5
+t@20
+Oxford Spires†
+CUT3R
+59.1
+85.1
+28.9
+66.2
+35.5
+75.7
+8.1
+52.5
+34.0
+70.1
+11.6
+46.5
+CUT3R + PosePlaner
+65.8
+90.8
+33.5
+70.5
+50.4
+82.8
+22.4
+64.1
+53.3
+85.8
+22.7
+67.4
+TTT3R
+73.6
+92.7
+45.8
+77.3
+59.7
+88.5
+27.5
+74.9
+37.2
+76.5
+11.4
+53.2
+TTT3R + PosePlaner
+72.3
+92.5
+42.0
+74.9
+62.9
+89.2
+29.8
+74.0
+51.3
+85.6
+19.9
+67.9
+MatrixCity†
+CUT3R
+13.2
+48.5
+4.8
+20.1
+12.4
+49.3
+3.1
+15.9
+9.9
+40.4
+3.7
+15.2
+CUT3R + PosePlaner
+16.4
+55.6
+5.6
+22.8
+15.1
+53.5
+3.5
+17.8
+15.5
+54.0
+8.2
+22.2
+TTT3R
+18.1
+52.7
+5.2
+18.8
+10.5
+45.3
+4.3
+18.7
+12.7
+47.2
+3.8
+15.8
+TTT3R + PosePlaner
+20.6
+56.9
+6.6
+23.0
+14.4
+49.7
+5.2
+19.4
+17.2
+54.5
+7.3
+20.2
+Table 5: Ablation study on ScanNet1500 with SuperGlue and LoFTR upstream. R and t AUC
+at τ ∈{5, 10, 20}◦; higher is better, best per column in bold. Removing the pose token c forces the
+model to estimate pose without the upstream init, so the SuperGlue and LoFTR blocks of that row
+are identical by construction.
+Variant
+Init: SuperGlue
+Init: LoFTR
+R@5 R@10 R@20
+t@5
+t@10 t@20 R@5 R@10 R@20 t@5 t@10 t@20
+Full (ours)
+48.9
+68.9
+82.1
+21.5 40.4 59.5 29.4
+52.9
+70.6
+3.5
+9.0
+18.4
+w/o {gm}
+43.0
+61.7
+76.0
+21.3
+39.6
+58.0
+11.5
+25.1
+44.2
+2.1
+5.6
+13.0
+w/o c
+17.4
+36.2
+54.5
+2.1
+5.0
+10.9
+17.4
+36.2
+54.5
+2.1
+5.0
+10.9
+w/o score head
+48.0
+68.1
+81.6
+21.4
+40.4
+59.4
+26.5
+50.4
+69.0
+3.2
+8.7
+17.9
+w/o translation
+40.5
+61.1
+77.3
+21.0
+39.7
+58.7
+16.4
+36.1
+58.4
+2.3
+6.7
+15.9
+w/o rot6d
+43.7
+65.0
+79.7
+21.0
+40.1
+58.9
+20.4
+43.3
+64.0
+2.3
+7.5
+16.9
+Appendix C.4 presents the quantitative results and experimental setup.
+4.4. Limitations
+PosePlaner relies on reliable planar evidence, so scenes with limited planar structure or inaccurate plane
+predictions can reduce refinement gains. The plane source is interchangeable: Appendix C.5 demonstrates
+refinement with MoGe-derived planes (Wang et al., 2025c), suggesting that improved geometry predictors
+could further benefit our method. For already-accurate initial poses, plane-prediction noise can outweigh
+the remaining opportunity for correction and cause slight regressions, as observed for ROMA and
+MASt3R on ScanNet1500 (Tab. 1). Refinement is therefore most useful when the initialization leaves
+substantial room for correction; it is not guaranteed to improve an already-near-optimal estimate.
+5. Conclusion
+We presented PosePlaner, a flow-matching pose refiner that restores correspondence–pose coupling in
+feed-forward 3-D reconstruction. It combines single-step rotation refinement conditioned on matched
+planar primitives with geometric translation recovery for two-view inputs. Trained on two-view pairs,
+the same refiner improves streaming multi-view poses without retraining. Experiments demonstrate
+gains across correspondence-based and diffusion-based pose estimators and reduced drift in streaming
+reconstruction. Extending the conditioning to other geometric primitives is a promising direction for
+future work.
+11
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+References
+Brachmann, E. and Rother, C. Learning less is more - 6d camera localization via 3d surface regression.
+In 2018 IEEE Conference on Computer Vision and Pattern Recognition, CVPR 2018, Salt Lake City,
+UT, USA, June 18-22, 2018, pp. 4654–4662. Computer Vision Foundation / IEEE Computer Society,
+2018. doi: 10.1109/CVPR.2018.00489. URL http://openaccess.thecvf.com/content_cvpr_2018/
+html/Brachmann_Learning_Less_Is_CVPR_2018_paper.html. 3
+Brachmann, E. and Rother, C. Visual camera re-localization from RGB and RGB-D images using DSAC.
+IEEE Trans. Pattern Anal. Mach. Intell., 44(9):5847–5865, 2022. doi: 10.1109/TPAMI.2021.3070754.
+URL https://doi.org/10.1109/TPAMI.2021.3070754. 3
+Brachmann, E., Krull, A., Nowozin, S., Shotton, J., Michel, F., Gumhold, S., and Rother, C. DSAC
+- differentiable RANSAC for camera localization. In 2017 IEEE Conference on Computer Vision
+and Pattern Recognition, CVPR 2017, Honolulu, HI, USA, July 21-26, 2017, pp. 2492–2500. IEEE
+Computer Society, 2017. doi: 10.1109/CVPR.2017.267. URL https://doi.org/10.1109/CVPR.2017.
+267. 3
+Chang, A. X., Dai, A., Funkhouser, T. A., Halber, M., Nießner, M., Savva, M., Song, S., Zeng, A., and
+Zhang, Y. Matterport3d: Learning from RGB-D data in indoor environments. In 2017 International
+Conference on 3D Vision, 3DV 2017, Qingdao, China, October 10-12, 2017, pp. 667–676. IEEE
+Computer Society, 2017. doi: 10.1109/3DV.2017.00081. URL https://doi.org/10.1109/3DV.2017.
+00081. 3, 7, 25
+Chatterjee, A. and Govindu, V. M. Efficient and robust large-scale rotation averaging. In IEEE
+International Conference on Computer Vision, ICCV 2013, Sydney, Australia, December 1-8, 2013,
+pp. 521–528. IEEE Computer Society, 2013. doi: 10.1109/ICCV.2013.70. URL https://doi.org/10.
+1109/ICCV.2013.70. 7, 24, 26
+Chen, L.-Z., Gao, J., Chen, Y., Cheng, K. L., Sun, Y., Hu, L., Xue, N., Zhu, X., Shen, Y., Yao, Y., et al.
+Geometric context transformer for streaming 3d reconstruction. arXiv preprint arXiv:2604.14141,
+2026. 3
+Chen, X., Chen, Y., Xiu, Y., Geiger, A., and Chen, A. TTT3R: 3d reconstruction as test-time training.
+CoRR, abs/2509.26645, 2025. doi: 10.48550/ARXIV.2509.26645. URL https://doi.org/10.48550/
+arXiv.2509.26645. 2, 3, 9, 10, 26
+Dai, A., Chang, A. X., Savva, M., Halber, M., Funkhouser, T. A., and Nießner, M. Scannet: Richly-
+annotated 3d reconstructions of indoor scenes.
+In 2017 IEEE Conference on Computer Vision
+and Pattern Recognition, CVPR 2017, Honolulu, HI, USA, July 21-26, 2017, pp. 2432–2443. IEEE
+Computer Society, 2017. doi: 10.1109/CVPR.2017.261. URL https://doi.org/10.1109/CVPR.2017.
+261. 3, 7, 8, 10, 23, 24
+Dehghan, A., Baruch, G., Chen, Z., Feigin, Y., Fu, P., Gebauer, T., Kurz, D., Dimry, T., Joffe,
+B., Schwartz, A., and Shulman, E. Arkitscenes: A diverse real-world dataset for 3d indoor scene
+understanding using mobile RGB-D data. In Vanschoren, J. and Yeung, S. (eds.), Proceedings of the
+Neural Information Processing Systems Track on Datasets and Benchmarks 1, NeurIPS Datasets and
+Benchmarks 2021, December 2021, virtual, 2021. URL https://datasets-benchmarks-proceedings.
+neurips.cc/paper/2021/hash/66f041e16a60928b05a7e228a89c3799-Abstract-round1.html. 23,
+24
+Dosovitskiy, A., Beyer, L., Kolesnikov, A., Weissenborn, D., Zhai, X., Unterthiner, T., Dehghani,
+M., Minderer, M., Heigold, G., Gelly, S., Uszkoreit, J., and Houlsby, N. An image is worth 16x16
+words: Transformers for image recognition at scale. In 9th International Conference on Learning
+Representations, ICLR 2021, Virtual Event, Austria, May 3-7, 2021. OpenReview.net, 2021. URL
+https://openreview.net/forum?id=YicbFdNTTy. 4
+12
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+Edstedt, J., Sun, Q., Bökman, G., Wadenbäck, M., and Felsberg, M. Roma: Robust dense feature
+matching. In IEEE/CVF Conference on Computer Vision and Pattern Recognition, CVPR 2024,
+Seattle, WA, USA, June 16-22, 2024, pp. 19790–19800. IEEE, 2024. doi: 10.1109/CVPR52733.2024.
+01871. URL https://doi.org/10.1109/CVPR52733.2024.01871. 2, 3, 4, 7, 8, 27
+Fischler, M. A. and Bolles, R. C. Random sample consensus: A paradigm for model fitting with
+applications to image analysis and automated cartography. Commun. ACM, 24(6):381–395, 1981. doi:
+10.1145/358669.358692. URL https://doi.org/10.1145/358669.358692. 2, 3
+Hartley, R. I., Trumpf, J., Dai, Y., and Li, H. Rotation averaging. Int. J. Comput. Vis., 103(3):267–305,
+2013. doi: 10.1007/S11263-012-0601-0. URL https://doi.org/10.1007/s11263-012-0601-0. 7, 24,
+26
+Ho, J., Jain, A., and Abbeel, P. Denoising diffusion probabilistic models. In Larochelle, H., Ran-
+zato, M., Hadsell, R., Balcan, M., and Lin, H. (eds.), Advances in Neural Information Processing
+Systems 33: Annual Conference on Neural Information Processing Systems 2020, NeurIPS 2020,
+December 6-12, 2020, virtual, 2020. URL https://proceedings.neurips.cc/paper/2020/hash/
+4c5bcfec8584af0d967f1ab10179ca4b-Abstract.html. 3, 21
+Hu, M., Yin, W., Zhang, C., Cai, Z., Long, X., Chen, H., Wang, K., Yu, G., Shen, C., and Shen,
+S. Metric3d v2: A versatile monocular geometric foundation model for zero-shot metric depth and
+surface normal estimation. IEEE Trans. Pattern Anal. Mach. Intell., 46(12):10579–10596, 2024. doi:
+10.1109/TPAMI.2024.3444912. URL https://doi.org/10.1109/TPAMI.2024.3444912. 23
+Jin, L., Qian, S., Owens, A., and Fouhey, D. F. Planar surface reconstruction from sparse views. In
+2021 IEEE/CVF International Conference on Computer Vision, ICCV 2021, Montreal, QC, Canada,
+October 10-17, 2021, pp. 12971–12980. IEEE, 2021. doi: 10.1109/ICCV48922.2021.01275. URL
+https://doi.org/10.1109/ICCV48922.2021.01275. 3, 7, 25, 26
+Kerbl, B., Kopanas, G., Leimkühler, T., and Drettakis, G. 3d gaussian splatting for real-time radiance
+field rendering. ACM Trans. Graph., 42(4):139:1–139:14, 2023. doi: 10.1145/3592433. URL https:
+//doi.org/10.1145/3592433. 2
+Lan, Y., Luo, Y., Hong, F., Zhou, S., Chen, H., Lyu, Z., Yang, S., Dai, B., Loy, C. C., and Pan, X.
+Stream3r: Scalable sequential 3d reconstruction with causal transformer. CoRR, abs/2508.10893, 2025.
+doi: 10.48550/ARXIV.2508.10893. URL https://doi.org/10.48550/arXiv.2508.10893. 3
+Leroy, V., Cabon, Y., and Revaud, J. Grounding image matching in 3d with mast3r. In Leonardis, A.,
+Ricci, E., Roth, S., Russakovsky, O., Sattler, T., and Varol, G. (eds.), Computer Vision - ECCV 2024
+- 18th European Conference, Milan, Italy, September 29-October 4, 2024, Proceedings, Part LXXII,
+Lecture Notes in Computer Science, pp. 71–91. Springer, 2024. doi: 10.1007/978-3-031-73220-1\_5.
+URL https://doi.org/10.1007/978-3-031-73220-1_5. 2, 3, 4, 7, 8, 23, 27
+Li, Y., Jiang, L., Xu, L., Xiangli, Y., Wang, Z., Lin, D., and Dai, B. Matrixcity: A large-scale city
+dataset for city-scale neural rendering and beyond. In IEEE/CVF International Conference on
+Computer Vision, ICCV 2023, Paris, France, October 1-6, 2023, pp. 3182–3192. IEEE, 2023. doi:
+10.1109/ICCV51070.2023.00297. URL https://doi.org/10.1109/ICCV51070.2023.00297. 9, 25
+Li, Z., Zhou, J., Wang, Y., Guo, H., Chang, W., Zhou, Y., Zhu, H., Chen, J., Shen, C., and He, T.
+Wint3r: Window-based streaming reconstruction with camera token pool. CoRR, abs/2509.05296,
+2025. doi: 10.48550/ARXIV.2509.05296. URL https://doi.org/10.48550/arXiv.2509.05296. 3, 9,
+10, 26
+Lipman, Y., Chen, R. T. Q., Ben-Hamu, H., Nickel, M., and Le, M. Flow matching for generative modeling.
+In The Eleventh International Conference on Learning Representations, ICLR 2023, Kigali, Rwanda,
+May 1-5, 2023. OpenReview.net, 2023. URL https://openreview.net/forum?id=PqvMRDCJT9t. 2,
+3, 4, 21
+13
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+Liu, C., Yang, J., Ceylan, D., Yumer, E., and Furukawa, Y. Planenet: Piece-wise planar reconstruction
+from a single RGB image. In 2018 IEEE Conference on Computer Vision and Pattern Recognition,
+CVPR 2018, Salt Lake City, UT, USA, June 18-22, 2018, pp. 2579–2588. Computer Vision Foundation
+/ IEEE Computer Society, 2018. doi: 10.1109/CVPR.2018.00273. URL http://openaccess.thecvf.
+com/content_cvpr_2018/html/Liu_PlaneNet_Piece-Wise_Planar_CVPR_2018_paper.html. 3
+Liu,
+C.,
+Kim,
+K.,
+Gu,
+J.,
+Furukawa,
+Y.,
+and
+Kautz,
+J.
+Planercnn:
+3d
+plane
+de-
+tection and reconstruction from a single image.
+In IEEE Conference on Computer Vi-
+sion and Pattern Recognition,
+CVPR 2019,
+Long Beach,
+CA, USA, June 16-20,
+2019,
+pp. 4450–4459. Computer Vision Foundation / IEEE, 2019.
+doi:
+10.1109/CVPR.2019.
+00458.
+URL
+http://openaccess.thecvf.com/content_CVPR_2019/html/Liu_PlaneRCNN_3D_
+Plane_Detection_and_Reconstruction_From_a_Single_Image_CVPR_2019_paper.html. 3
+Liu, C., Tan, B., Ke, Z., Zhang, S., Liu, J., Qian, M., Xue, N., Shen, Y., and Braud, T. PLANA3R:
+zero-shot metric planar 3d reconstruction via feed-forward planar splatting. CoRR, abs/2510.18714,
+2025a. doi: 10.48550/ARXIV.2510.18714. URL https://doi.org/10.48550/arXiv.2510.18714. 2,
+3, 4, 22, 23, 24
+Liu,
+J.,
+Yu,
+R.,
+Chen,
+S.,
+Huang,
+S. X.,
+and Guo,
+H.
+Towards in-the-wild 3d plane
+reconstruction from a single image.
+In IEEE/CVF Conference on Computer Vision and
+Pattern
+Recognition,
+CVPR
+2025,
+Nashville,
+TN,
+USA,
+June
+11-15,
+2025,
+pp.
+27027–
+27037. Computer Vision Foundation / IEEE, 2025b.
+doi:
+10.1109/CVPR52734.2025.02517.
+URL https://openaccess.thecvf.com/content/CVPR2025/html/Liu_Towards_In-the-wild_3D_
+Plane_Reconstruction_from_a_Single_Image_CVPR_2025_paper.html. 3
+Liu, X., Gong, C., and Liu, Q. Flow straight and fast: Learning to generate and transfer data with
+rectified flow. In The Eleventh International Conference on Learning Representations, ICLR 2023,
+Kigali, Rwanda, May 1-5, 2023. OpenReview.net, 2023. URL https://openreview.net/forum?id=
+XVjTT1nw5z. 2, 3, 4, 21
+Loshchilov, I. and Hutter, F. Decoupled weight decay regularization. In 7th International Conference on
+Learning Representations, ICLR 2019, New Orleans, LA, USA, May 6-9, 2019. OpenReview.net, 2019.
+URL https://openreview.net/forum?id=Bkg6RiCqY7. 23
+Mildenhall, B., Srinivasan, P. P., Tancik, M., Barron, J. T., Ramamoorthi, R., and Ng, R. Nerf:
+representing scenes as neural radiance fields for view synthesis. Commun. ACM, 65(1):99–106, 2022.
+doi: 10.1145/3503250. URL https://doi.org/10.1145/3503250. 2
+Mur-Artal, R., Montiel, J. M. M., and Tardós, J. D. ORB-SLAM: A versatile and accurate monocular
+SLAM system. IEEE Trans. Robotics, 31(5):1147–1163, 2015. doi: 10.1109/TRO.2015.2463671. URL
+https://doi.org/10.1109/TRO.2015.2463671. 2, 3
+Nistér, D. An efficient solution to the five-point relative pose problem. IEEE Trans. Pattern Anal. Mach.
+Intell., 26(6):756–777, 2004. doi: 10.1109/TPAMI.2004.17. URL https://doi.org/10.1109/TPAMI.
+2004.17. 2, 3
+Pan, L., Baráth, D., Pollefeys, M., and Schönberger, J. L. Global structure-from-motion revisited. In
+Leonardis, A., Ricci, E., Roth, S., Russakovsky, O., Sattler, T., and Varol, G. (eds.), Computer Vision -
+ECCV 2024 - 18th European Conference, Milan, Italy, September 29-October 4, 2024, Proceedings, Part
+XL, Lecture Notes in Computer Science, pp. 58–77. Springer, 2024. doi: 10.1007/978-3-031-73661-2\_4.
+URL https://doi.org/10.1007/978-3-031-73661-2_4. 7, 9, 24, 25, 26
+Peebles, W. and Xie, S. Scalable diffusion models with transformers. In IEEE/CVF International
+Conference on Computer Vision, ICCV 2023, Paris, France, October 1-6, 2023, pp. 4172–4182. IEEE,
+2023. doi: 10.1109/ICCV51070.2023.00387. URL https://doi.org/10.1109/ICCV51070.2023.00387.
+2
+14
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+Sarlin, P., DeTone, D., Malisiewicz, T., and Rabinovich, A.
+Superglue:
+Learning feature
+matching with graph neural networks.
+In 2020 IEEE/CVF Conference on Computer Vi-
+sion and Pattern Recognition, CVPR 2020, Seattle, WA, USA, June 13-19, 2020, pp. 4937–
+4946. Computer Vision Foundation / IEEE, 2020.
+doi:
+10.1109/CVPR42600.2020.00499.
+URL https://openaccess.thecvf.com/content_CVPR_2020/html/Sarlin_SuperGlue_Learning_
+Feature_Matching_With_Graph_Neural_Networks_CVPR_2020_paper.html. 2, 3, 4, 7, 8, 26, 27
+Savva, M., Malik, J., Parikh, D., Batra, D., Kadian, A., Maksymets, O., Zhao, Y., Wijmans, E.,
+Jain, B., Straub, J., Liu, J., and Koltun, V. Habitat: A platform for embodied AI research. In
+2019 IEEE/CVF International Conference on Computer Vision, ICCV 2019, Seoul, Korea (South),
+October 27 - November 2, 2019, pp. 9338–9346. IEEE, 2019. doi: 10.1109/ICCV.2019.00943. URL
+https://doi.org/10.1109/ICCV.2019.00943. 23, 24
+Schönberger, J. L. and Frahm, J. Structure-from-motion revisited. In 2016 IEEE Conference on
+Computer Vision and Pattern Recognition, CVPR 2016, Las Vegas, NV, USA, June 27-30, 2016, pp.
+4104–4113. IEEE Computer Society, 2016. doi: 10.1109/CVPR.2016.445. URL https://doi.org/10.
+1109/CVPR.2016.445. 2, 3
+Shi, J., Zhi, S., and Xu, K. Planerectr: Unified query learning for 3d plane recovery from a single
+view. In IEEE/CVF International Conference on Computer Vision, ICCV 2023, Paris, France,
+October 1-6, 2023, pp. 9343–9352. IEEE, 2023. doi: 10.1109/ICCV51070.2023.00860. URL https:
+//doi.org/10.1109/ICCV51070.2023.00860. 3
+Shotton, J., Glocker, B., Zach, C., Izadi, S., Criminisi, A., and Fitzgibbon, A. W. Scene coordinate
+regression forests for camera relocalization in RGB-D images. In 2013 IEEE Conference on Computer
+Vision and Pattern Recognition, Portland, OR, USA, June 23-28, 2013, pp. 2930–2937. IEEE Computer
+Society, 2013. doi: 10.1109/CVPR.2013.377. URL https://doi.org/10.1109/CVPR.2013.377. 7, 8,
+10
+Sun, J., Shen, Z., Wang, Y., Bao, H., and Zhou, X. Loftr: Detector-free local feature matching with
+transformers. In IEEE Conference on Computer Vision and Pattern Recognition, CVPR 2021, vir-
+tual, June 19-25, 2021, pp. 8922–8931. Computer Vision Foundation / IEEE, 2021. doi: 10.1109/
+CVPR46437.2021.00881.
+URL https://openaccess.thecvf.com/content/CVPR2021/html/Sun_
+LoFTR_Detector-Free_Local_Feature_Matching_With_Transformers_CVPR_2021_paper.html. 2,
+3, 4, 7, 8, 26, 27
+Tan, B., Xue, N., Wu, T., and Xia, G.
+NOPE-SAC: neural one-plane RANSAC for sparse-view
+planar 3d reconstruction. IEEE Trans. Pattern Anal. Mach. Intell., 45(12):15233–15248, 2023. doi:
+10.1109/TPAMI.2023.3314745. URL https://doi.org/10.1109/TPAMI.2023.3314745. 3, 6, 7, 19
+Tan,
+B.,
+Yu,
+R.,
+Shen,
+Y.,
+and
+Xue,
+N.
+Planarsplatting:
+Accurate
+planar
+sur-
+face reconstruction in 3 minutes.
+In IEEE/CVF Conference on Computer Vision and
+Pattern
+Recognition,
+CVPR
+2025,
+Nashville,
+TN,
+USA,
+June
+11-15,
+2025,
+pp.
+1190–
+1199.
+Computer
+Vision
+Foundation
+/
+IEEE,
+2025.
+doi:
+10.1109/CVPR52734.2025.
+00119.
+URL https://openaccess.thecvf.com/content/CVPR2025/html/Tan_PlanarSplatting_
+Accurate_Planar_Surface_Reconstruction_in_3_Minutes_CVPR_2025_paper.html. 3, 22
+Tao, Y., Muñoz-Bañón, M. Á., Zhang, L., Wang, J., Fu, L. F. T., and Fallon, M.
+The oxford
+spires dataset: Benchmarking large-scale lidar-visual localisation, reconstruction and radiance field
+methods.
+Int. J. Robotics Res., 45(6):839–857, 2026.
+doi: 10.1177/02783649251369905.
+URL
+https://doi.org/10.1177/02783649251369905. 9, 25
+Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez, A. N., Kaiser, L., and Polosukhin,
+I. Attention is all you need. In Guyon, I., von Luxburg, U., Bengio, S., Wallach, H. M., Fergus, R.,
+Vishwanathan, S. V. N., and Garnett, R. (eds.), Advances in Neural Information Processing Systems
+30: Annual Conference on Neural Information Processing Systems 2017, December 4-9, 2017, Long
+Beach, CA, USA, pp. 5998–6008, 2017. URL https://proceedings.neurips.cc/paper/2017/hash/
+3f5ee243547dee91fbd053c1c4a845aa-Abstract.html. 2
+15
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+Wang, H. and Agapito, L. 3d reconstruction with spatial memory. In International Conference on 3D
+Vision, 3DV 2025, Singapore, March 25-28, 2025, pp. 78–89. IEEE, 2025. doi: 10.1109/3DV66043.
+2025.00013. URL https://doi.org/10.1109/3DV66043.2025.00013. 3, 9
+Wang, J., Rupprecht, C., and Novotný, D. Posediffusion: Solving pose estimation via diffusion-aided
+bundle adjustment. In IEEE/CVF International Conference on Computer Vision, ICCV 2023, Paris,
+France, October 1-6, 2023, pp. 9739–9749. IEEE, 2023. doi: 10.1109/ICCV51070.2023.00896. URL
+https://doi.org/10.1109/ICCV51070.2023.00896. 3, 7, 8
+Wang, J., Chen, M., Karaev, N., Vedaldi, A., Rupprecht, C., and Novotný, D. VGGT: visual geometry
+grounded transformer. In IEEE/CVF Conference on Computer Vision and Pattern Recognition, CVPR
+2025, Nashville, TN, USA, June 11-15, 2025, pp. 5294–5306. Computer Vision Foundation / IEEE,
+2025a.
+doi: 10.1109/CVPR52734.2025.00499.
+URL https://openaccess.thecvf.com/content/
+CVPR2025/html/Wang_VGGT_Visual_Geometry_Grounded_Transformer_CVPR_2025_paper.html.
+2,
+3
+Wang,
+Q.,
+Zhang,
+Y.,
+Holynski,
+A.,
+Efros,
+A.
+A.,
+and
+Kanazawa,
+A.
+Continuous
+3d perception model with persistent state.
+In IEEE/CVF Conference on Computer Vi-
+sion and Pattern Recognition,
+CVPR 2025,
+Nashville,
+TN, USA, June 11-15,
+2025,
+pp.
+10510–10522. Computer Vision Foundation / IEEE, 2025b.
+doi:
+10.1109/CVPR52734.2025.
+00983.
+URL https://openaccess.thecvf.com/content/CVPR2025/html/Wang_Continuous_3D_
+Perception_Model_with_Persistent_State_CVPR_2025_paper.html. 2, 3, 9, 10, 26
+Wang, R., Xu, S., Dai, C., Xiang, J., Deng, Y., Tong, X., and Yang, J.
+Moge:
+Un-
+locking
+accurate
+monocular
+geometry
+estimation
+for
+open-domain
+images
+with
+opti-
+mal
+training
+supervision.
+In
+IEEE/CVF Conference on Computer Vision and Pattern
+Recognition,
+CVPR 2025,
+Nashville,
+TN, USA, June 11-15,
+2025,
+pp. 5261–5271. Com-
+puter Vision Foundation / IEEE, 2025c.
+doi:
+10.1109/CVPR52734.2025.00496.
+URL
+https://openaccess.thecvf.com/content/CVPR2025/html/Wang_MoGe_Unlocking_Accurate_
+Monocular_Geometry_Estimation_for_Open-Domain_Images_with_CVPR_2025_paper.html. 11, 27
+Wang, S., Leroy, V., Cabon, Y., Chidlovskii, B., and Revaud, J. Dust3r: Geometric 3d vision made easy.
+In IEEE/CVF Conference on Computer Vision and Pattern Recognition, CVPR 2024, Seattle, WA,
+USA, June 16-22, 2024, pp. 20697–20709. IEEE, 2024. doi: 10.1109/CVPR52733.2024.01956. URL
+https://doi.org/10.1109/CVPR52733.2024.01956. 2, 3
+Xie, Y., Gadelha, M., Yang, F., Zhou, X., and Jiang, H. Planarrecon: Real-time 3d plane detection and
+reconstruction from posed monocular videos. CoRR, abs/2206.07710, 2022. doi: 10.48550/ARXIV.
+2206.07710. URL https://doi.org/10.48550/arXiv.2206.07710. 3
+Yan, Q., Zheng, J., Reding, S., Li, S., and Doytchinov, I.
+Crossloc: Scalable aerial localization
+assisted by multimodal synthetic data. In IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, CVPR 2022, New Orleans, LA, USA, June 18-24, 2022, pp. 17337–17347. IEEE, 2022.
+doi: 10.1109/CVPR52688.2022.01684. URL https://doi.org/10.1109/CVPR52688.2022.01684. 9,
+26
+Yao, Y., Luo, Z., Li, S., Fang, T., and Quan, L. Mvsnet: Depth inference for unstructured multi-view
+stereo. In Ferrari, V., Hebert, M., Sminchisescu, C., and Weiss, Y. (eds.), Computer Vision - ECCV
+2018 - 15th European Conference, Munich, Germany, September 8-14, 2018, Proceedings, Part VIII,
+Lecture Notes in Computer Science, pp. 785–801. Springer, 2018. doi: 10.1007/978-3-030-01237-3\_47.
+URL https://doi.org/10.1007/978-3-030-01237-3_47. 2
+Yeshwanth, C., Liu, Y., Nießner, M., and Dai, A. Scannet++: A high-fidelity dataset of 3d indoor
+scenes. In IEEE/CVF International Conference on Computer Vision, ICCV 2023, Paris, France,
+October 1-6, 2023, pp. 12–22. IEEE, 2023.
+doi: 10.1109/ICCV51070.2023.00008.
+URL https:
+//doi.org/10.1109/ICCV51070.2023.00008. 23, 24
+16
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+Yu,
+Z.,
+Zheng,
+J.,
+Lian,
+D.,
+Zhou,
+Z.,
+and
+Gao,
+S.
+Single-image
+piece-wise
+planar
+3d reconstruction via associative embedding.
+In IEEE Conference on Computer Vision
+and
+Pattern
+Recognition,
+CVPR
+2019,
+Long
+Beach,
+CA,
+USA,
+June
+16-20,
+2019,
+pp.
+1029–1037. Computer Vision Foundation / IEEE, 2019.
+doi:
+10.1109/CVPR.2019.00112.
+URL http://openaccess.thecvf.com/content_CVPR_2019/html/Yu_Single-Image_Piece-Wise_
+Planar_3D_Reconstruction_via_Associative_Embedding_CVPR_2019_paper.html. 3
+Yuan, S., Yang, Y., Yang, X., Zhang, X., Zhao, Z., Zhang, L., and Zhang, Z. Infinitevggt: Visual
+geometry grounded transformer for endless streams. CoRR, abs/2601.02281, 2026. doi: 10.48550/
+ARXIV.2601.02281. URL https://doi.org/10.48550/arXiv.2601.02281. 3
+Zhang, J. Y., Lin, A., Kumar, M., Yang, T., Ramanan, D., and Tulsiani, S. Cameras as rays: Pose
+estimation via ray diffusion. In The Twelfth International Conference on Learning Representations,
+ICLR 2024, Vienna, Austria, May 7-11, 2024. OpenReview.net, 2024. URL https://openreview.
+net/forum?id=EanCFCwAjM. 3, 7, 8
+Zhao, Q., Lin, A., Tan, J., Zhang, J. Y., Ramanan, D., and Tulsiani, S.
+Diffusionsfm:
+Pre-
+dicting structure and motion via ray origin and endpoint diffusion.
+In IEEE/CVF Conference
+on Computer Vision and Pattern Recognition, CVPR 2025, Nashville, TN, USA, June 11-15,
+2025, pp. 6317–6326. Computer Vision Foundation / IEEE, 2025.
+doi:
+10.1109/CVPR52734.
+2025.00592. URL https://openaccess.thecvf.com/content/CVPR2025/html/Zhao_DiffusionSfM_
+Predicting_Structure_and_Motion_via_Ray_Origin_and_Endpoint_CVPR_2025_paper.html. 3, 7,
+8
+Zhao, W., Liu, J., Zhang, S., Li, Y., Chen, S., Huang, S. X., Liu, Y., and Guo, H. Monoplane: Exploiting
+monocular geometric cues for generalizable 3d plane reconstruction. In IEEE/RSJ International
+Conference on Intelligent Robots and Systems, IROS 2024, Abu Dhabi, United Arab Emirates, October
+14-18, 2024, pp. 8481–8488. IEEE, 2024. doi: 10.1109/IROS58592.2024.10802672. URL https:
+//doi.org/10.1109/IROS58592.2024.10802672. 3
+Zhou, Y., Barnes, C., Lu, J., Yang, J., and Li, H. On the continuity of rotation representations in neural
+networks. In IEEE Conference on Computer Vision and Pattern Recognition, CVPR 2019, Long Beach,
+CA, USA, June 16-20, 2019, pp. 5745–5753. Computer Vision Foundation / IEEE, 2019. doi: 10.1109/
+CVPR.2019.00589. URL http://openaccess.thecvf.com/content_CVPR_2019/html/Zhou_On_the_
+Continuity_of_Rotation_Representations_in_Neural_Networks_CVPR_2019_paper.html. 5, 10,
+20
+Zhuo, D., Zheng, W., Guo, J., Wu, Y., Zhou, J., and Lu, J. Streaming 4d visual geometry transformer.
+CoRR, abs/2507.11539, 2025. doi: 10.48550/ARXIV.2507.11539. URL https://doi.org/10.48550/
+arXiv.2507.11539. 3
+17
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+Appendix Contents
+A Geometric and Algorithmic Foundations
+19
+A.1 Plane-Warping Residuals as Conditioning Signal
+. . . . . . . . . . . . . . . . . . . . . .
+19
+A.2 Rotation as a Continuous 6-D Representation . . . . . . . . . . . . . . . . . . . . . . . .
+20
+A.3 Flow Matching as a Linear Denoising Process . . . . . . . . . . . . . . . . . . . . . . . .
+21
+B Model and Training Details
+22
+B.1
+Plane Head Training Details . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+22
+B.2
+Refiner Architecture Details . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+23
+B.3 Training and Inference Details . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+23
+C Additional Evaluation Setup and Results
+25
+C.1 Pair and Sequence Construction . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+25
+C.2 External Match-Source Sensitivity
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+26
+C.3 Additional Streaming Trajectories . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+26
+C.4 Training Objective Comparison . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+27
+C.5 Alternative Plane Source . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+27
+D Social Impacts
+28
+18
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+Technical Appendices and Supplementary Material
+A. Geometric and Algorithmic Foundations
+This section formalizes three pieces of background that the main text builds on: the plane-warping
+residuals used as conditioning (Sec. A.1), the continuous 6-D rotation representation carried by the pose
+latent (Sec. A.2), and the flow-matching parameterization under which a single Euler step at inference is
+sufficient (Sec. A.3).
+A.1. Plane-Warping Residuals as Conditioning Signal
+Vanishing at the true pose; monotonic away from it.
+Let en(R):=n1 −Rn2 and ed(R, t):=
+d1 −d2 + (Rn2)⊤t denote the (vector / signed) raw residuals whose norm and absolute value are the
+∆n and ∆d of Eq. (2). By construction, en(Rgt) = 0 and ed(Rgt, tgt) = 0 identically. Under a joint
+first-order perturbation R = exp([δr]×)Rgt and t = tgt + δt, these raw residuals expand to
+en(R) ≈−[δr]× Rgtn2 ,
+(14)
+ed(R, t) ≈
+ Rgtn2
+⊤δt +
+ [δr]×Rgtn2
+⊤tgt .
+(15)
+∆n = ∥en∥2 is therefore linear in the rotation error along the angle between δr and Rgtn2; ∆d = |ed|
+contains a translation-only probe along the direction Rgtn2 plus a rotation-coupled term whose strength
+scales with ∥tgt∥. A set of M correspondences with diverse normals therefore exposes the full δr/δt
+error along M different directions, effectively a dense per-direction error map.
+Estimator-agnostic by construction.
+Eqs. (14)–(15) read the residuals off paired plane primitives
+and a candidate pose alone, with no dependency on how that pose was produced. The same conditioning
+signal is therefore presented to the refiner regardless of upstream—feed-forward network, matcher-plus-
+solver, or identity initialization.
+Empirical verification: the refiner implicitly learns the warp.
+In contrast to NopeSAC (Tan
+et al., 2023), which explicitly warps view-1’s plane parameters by the initial pose to feed the network a
+pre-aligned representation, PosePlaner provides only the raw per-view primitives (n1
+m, ¯d1
+m, n2
+m, ¯d2
+m)
+in each camera’s own local frame; the warping residuals (∆n, ∆d) enter only as detached geometric
+weights ωm (Eq. (8)) and the auxiliary Lgeo (Eq. (11)), never as inputs. This setup encourages the
+network to learn the warping algebra from the geometric supervision rather than rely on input-space
+normalization. Fig. 5 suggests the network does pick up this implicit warp: across all matched plane
+pairs, both histograms collapse markedly toward zero after refinement—median ∥∆n∥2 drops from 0.200
+to 0.084 and median |∆d| from 0.072 to 0.064—even though neither residual is fed in, and the effect
+transfers across ScanNet1500 (in-distribution) and 7Scenes (zero-shot).
+matched plane pairs
+(a) ScanNet1500, upstream = LoFTR
+matched plane pairs
+(b) 7Scenes, upstream = LoFTR
+Figure 5: Refinement collapses the plane-warping residuals. (a) ScanNet1500 and (b) 7Scenes,
+LoFTR upstream. Each sub-figure: ∥∆n∥2 (left) and |∆d| (right, scene-normalized) over all matched
+plane pairs; blue = raw, red = after PosePlaner; dashed lines mark means.
+19
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+A.2. Rotation as a Continuous 6-D Representation
+The rotation part of the pose residual z0 in Eq. (6) is encoded in the 6-D representation of Zhou et al.
+(2019), not as a unit quaternion. Under a flow-matching objective this choice is forced, not cosmetic:
+quaternions carry a topological discontinuity that interacts destructively with continuous probability
+paths.
+Formal definition of a continuous representation.
+Following Zhou et al. (2019), a representation
+of SO(3) with domain X ⊆Rd is a pair of maps
+f : SO(3) →X,
+g : X →SO(3),
+g ◦f = idSO(3),
+(16)
+and the representation is continuous when both f and g are continuous under the Euclidean topology
+of Rd. Neural networks are continuous under this topology, so a discontinuous g forces the network to
+reproduce a discontinuity somewhere inside its training support.
+The d ≤4 obstruction.
+Zhou et al. (2019) prove that no continuous representation of SO(3) exists
+for d ≤4. Concretely, the discontinuity always lives in the encoder f, since the polynomial decoders
+typically used for these representations are themselves continuous:
+• Euler angles (d=3) have a gimbal-lock singularity where f is not unique and g is not one-to-one.
+• Axis-angle (d=3) maps SO(3) to a closed ball of radius π, with antipodal points on the boundary
+∥r∥= π identified to the same rotation; the encoder f must therefore choose one of the two boundary
+representatives, creating a sign-flip discontinuity at ∥r∥= π.
+• Unit quaternions (d=4) form a double cover of SO(3): every R maps to an antipodal pair ±q on
+S3. The decoder g : R4 →SO(3) is the standard quaternion-to-matrix polynomial, which is continuous
+everywhere; the obstruction lies in the encoder f : SO(3)→S3, which must select one of ±q globally
+and therefore admits no continuous global section—arbitrarily close rotations either side of the chosen
+branch are encoded to far-apart quaternions of opposite sign.
+SO(3) is compact and topologically non-trivial, so no homeomorphism to Rd exists for any finite d; a
+continuous embedding is the best one can hope for, and Zhou et al. (2019) show d = 5 is the minimum
+(d = 6 is the simplest practical construction).
+The 6-D continuous representation.
+The encoder drops the third column of R,
+f
+ [ r1 | r2 | r3 ]
+
+= [r1; r2] ∈R6.
+(17)
+The decoder g : R6 →SO(3) is Gram–Schmidt orthonormalization on the two column vectors: given
+(a1, a2) ∈R3 × R3 linearly independent,
+b1 = N(a1),
+b2 = N
+ a2 −(b1·a2) b1
+
+,
+b3 = b1 × b2,
+(18)
+with g(a1, a2) = [b1 | b2 | b3] and N(v) = v/∥v∥2. Both f and g are continuous on the full-measure
+open subset of R6 where a1, a2 are linearly independent, and g ◦f = idSO(3) by construction.
+Why continuity is critical under flow matching.
+The flow-matching path of Eq. (19) is a
+straight line in the ambient Euclidean space, not on S3. The encoder f enters only at the endpoint
+z0 = f(RgtR⊤
+init), but precisely because f is discontinuous along the antipodal branch cut, two arbitrarily
+close ground-truth rotations on either side of the cut are encoded to quaternions of opposite sign ±q,
+producing two FM target velocities v⋆= ϵ −(±q) that disagree by 2q for the same input geometric
+condition. The network is then forced to average two conflicting targets near the cut, biasing the learned
+velocity toward the conditional mean of the bimodal label distribution rather than either branch. With
+rot6d, the encoder f is continuous on the open dense subset where R has linearly independent first two
+columns, so z0 varies continuously with R and v⋆is single-valued at every (zt, t). The one-step Euler
+guarantee established in App. A.3 therefore holds end-to-end only when the encoder is continuous.
+20
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+A.3. Flow Matching as a Linear Denoising Process
+This subsection reviews the flow-matching objective used by the refiner and then explains why a single
+Euler step at inference is sufficient, via an analogy to Newton’s method on linear systems.
+Flow-matching preliminaries.
+Flow matching (Lipman et al., 2023; Liu et al., 2023) defines a
+continuous probability path pt(z) between a tractable prior p1 = N(0, I) and the data distribution p0
+through a straight-line interpolation,
+zt = (1 −t) z0 + t ϵ,
+ϵ ∼N(0, I),
+t ∈[0, 1].
+(19)
+Differentiating with respect to t gives the instantaneous target velocity
+v⋆(zt, t) = dzt
+dt
+= ϵ −z0,
+(20)
+which is constant along the line connecting z0 and ϵ. The training objective regresses a learned velocity
+field vθ(zt, t) to this target,
+LFM = Et,z0,ϵ
+vθ(zt, t) −v⋆
+1
+
+.
+(21)
+At inference, z0 is recovered by integrating the learned ODE from t = 1 to t = 0,
+z0 = z1 −
+Z 1
+0
+vθ(zt, t) dt.
+(22)
+Comparison with DDPM.
+Standard DDPM (Ho et al., 2020) regresses either ϵ or z0 under a
+variance-preserving schedule whose probability path is curved (a geodesic on a Gaussian manifold, not a
+straight line). Integrating a curved path requires many steps to stay close to it, so DDPM samplers
+typically use 50–1000 steps. Flow matching replaces the curve with a line, so the integrand in Eq. (22)
+becomes constant in t and sampling accuracy decouples from step count.
+Why one Euler step suffices: conditional-mean regression at t = 1.
+The most striking empirical
+property of our refiner is that a single Euler step at inference (Eq. (12)) matches a many-step DDPM
+sampler. The clean justification is not that the learned ODE is constant along paths—it is not, since
+the network regresses the marginal velocity vθ(zt, t)=E[ϵ −z0 | zt, t] rather than the sample-specific
+v⋆—but rather that, at the single time t=1 we use, this marginal velocity reduces to a conditional-mean
+estimator of z0. Concretely, since z1 = ϵ ∼N(0, I) is independent of z0 under the FM coupling,
+vθ(ϵ, 1) = E
+
+ϵ −z0
+ z1 = ϵ
+
+= ϵ −E[z0 | c],
+(23)
+where c collects the conditioning tokens (geometry {ˆgm} and pose ˆc). A single forward Euler step from
+z1 therefore yields
+z1 −vθ(z1, 1) = ϵ −
+ ϵ −E[z0 | c]
+
+= E[z0 | c].
+(24)
+That is, single-step FM inference is mathematically equivalent to direct conditional-mean regression
+of z0 given the geometric conditioning. Additional Euler steps between t = 1 and t = 0 only matter
+when the marginal field is non-affine in t along the integration trajectory; they cannot improve the t=1
+readout, which is already an unbiased estimator of E[z0 | c].
+Newton-style intuition.
+The structural reason this conditional-mean readout is sharp in our setting
+is the same one that makes Newton’s method exact on linear systems: a tractable forward map admits a
+closed-form inverse, so iteration is only useful when the map is non-affine. Here the FM forward process
+zt = (1 −t)z0 + tϵ is affine in t, and the conditioning c collapses the residual distribution p(z0 | c) to a
+low-variance, near-unimodal cluster (the pose-residual is small once a sensible Tinit has been provided).
+Three properties of our problem keep this conditional-mean estimator low-variance:
+• The latent is 9-dimensional, far lower than image-scale diffusion, so the marginal velocity is an easy
+function to fit.
+21
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+• The pose-residual is concentrated near a fixed point in this 9-D space by construction, via scene
+normalization and the residual parameterization of Eq. (6), so p(z0 | c) is sharply peaked.
+• The FM path is continuous end to end (App. A.2), so the conditional mean varies smoothly with c.
+A single Euler step at t=1 is therefore the natural inference choice for pose-residual denoising under our
+flow-matching probability path.
+B. Model and Training Details
+B.1. Plane Head Training Details
+This section gives the plane-head representation, the per-view local-frame convention, and the training
+objective omitted from Sec. 3.1.
+Representation.
+The plane head produces a patch-level planar description of each view: every decoder
+token emits one plane (n, d), giving one normal-offset pair per patch. Following Plana3r (Liu et al.,
+2025a), each token regresses not (n, d) directly but a compact tuple (di
+π, ri
+π, qi,j
+π ): the center depth along
+the token’s viewing ray in source view Ii, two elliptical radii defining the primitive’s disk footprint, and
+a unit quaternion expressed in the frame of a reference camera Ij. From this tuple,
+nπ = R(qi,j
+π ) [0, 0, 1]⊤,
+dπ = −n⊤
+πPπ,
+(25)
+with Pπ the primitive’s 3-D center in Ij, so nπ and dπ live in Ij. Our sole departure from Plana3r
+is the choice of j: the original fixes j=1 (a single global frame, which forces view-2 primitives to be
+transformed through the predicted pose before supervision), whereas we set j=i, so every primitive lives
+in its own source camera’s frame. Three consequences follow. (i) Plane prediction decouples from pose
+and scales directly to n ≥2 views. (ii) The plane-head loss decomposes per view: each view’s primitives
+are compared only against its own ground truth, so no pose enters the plane-head gradient. Training
+still uses image pairs, and we keep Plana3r’s paired sampling, siamese encoder, and cross-attention
+decoders to preserve metric-scale consistency within each pair. (iii) The warping identity (1) becomes
+observable: the two views produce genuinely distinct (n1, d1) and (n2, d2), so the residuals (∆n, ∆d) of
+Eq. (2) turn into non-trivial conditioning signals that carry the pose error into Sec. 3.2. All remaining
+components (ViT encoder, two cross-attention decoders, the hierarchical primitive prediction architecture
+(HPPA) with low H
+16 × W
+16 and high H
+8 × W
+8 resolutions selectively fused, and the PlanarSplatting
+rasterizer (Tan et al., 2025)) are inherited from Plana3r unchanged.
+Training objective and refiner input.
+We supervise the head with the plane-only losses of Plana3r,
+applied per view in its own local frame. Following (Liu et al., 2025a, Eq. 3), the patch loss on each
+HPPA resolution ∗∈{low, high} is
+Lpatch
+∗
+= α1
+1 −(N patch
+∗
+)⊤N r, gt
+∗
+
+1 + α1
+N patch
+∗
+−N r, gt
+∗
+
+1 + α2
+Dpatch
+∗
+−Dr, gt
+∗
+
+1,
+(26)
+where (N r, gt
+∗
+, Dr, gt
+∗
+) are the source-view ground-truth normal and depth maps resized to the HPPA
+grid. The rendering loss Lrender
+∗
+(Liu et al., 2025a, Eq. 4) has the identical functional form, substituting
+N patch
+∗
+→N render
+∗
+and Dpatch
+∗
+→Drender
+∗
+(the full-resolution PlanarSplatting renderings) against the
+original-resolution (N gt, Dgt) with weights (β1, β2) and index ∗∈{low, high, selected}. The plane-head
+objective sums the two losses over the two views,
+Lplane =
+X
+i=1,2
+
+Lpatch,(i) + Lrender,(i)
+.
+(27)
+We drop the pose loss of the original Plana3r (Liu et al., 2025a, Eq. 5): under our local-frame
+convention it is both unnecessary (pose is not part of the head’s output) and inconsistent with the
+per-view decomposition above. At inference, the refiner consumes only the low-resolution primitives
+{(ni
+m, di
+m)}M
+m=1 from the native H
+16 × W
+16 HPPA grid (without the deconvolution upsampler), yielding
+M plane correspondences per pair; this keeps M small enough for full self-attention in the refiner and
+retains the resolution at which the planar assumption is most reliable.
+22
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+Training data.
+Both the plane head and the refiner are trained on the same four-indoor-scene
+mixture used by Plana3r (Liu et al., 2025a), summarized in Tab. 6: ∼3.94M two-view pairs from
+ScanNetV2 (Dai et al., 2017), ScanNet++ (Yeshwanth et al., 2023), ARKitScenes (Dehghan
+et al., 2021), and Habitat (Savva et al., 2019). Pseudo ground-truth normal maps are generated by
+Metric3Dv2 (Hu et al., 2024); depth maps are taken directly from the datasets.
+Visualization.
+Fig. 6 visualizes both the plane head’s per-pixel rasterized normal and the
+MASt3R (Leroy et al., 2024) patch correspondences entering the refiner as {gm}M
+m=1 (Eq. (3)) on three
+7Scenes pairs. Color-uniform tiles correspond to single plane primitives; the yellow corr lines pair
+patches that, after rasterization, look like the same physical plane viewed from two cameras.
+B.2. Refiner Architecture Details
+This section expands the multi-query denoiser introduced in Sec. 3.2 with the per-query construction,
+attention depth, output head, and the precomputable-context optimization that the single-step inference
+relies on.
+Per-query latent-time and geometry bias.
+The latent-time component of Eq. (7) uses ϕz :R9 →Rd
+and ϕt :Rdt →Rd as small MLPs, with SinEmb(·) a sinusoidal time embedding. The per-match geometry
+bias qm = q0 + Wb ˆgm, with learned Wb ∈Rd×d, grounds query m in correspondence m.
+Cross-attention stack and output head.
+The M queries pass through Lden=4 pre-norm cross-
+attention blocks attending to the context ˆC, followed by a LayerNorm+Linear(d, 9) head that emits the
+per-match velocity predictions vm(zt, t).
+Precomputable context.
+The time step t modulates only the queries (no AdaLN-Zero on ˆC), so ˆC
+is computed once per pair and reused across all queries and Euler steps—a natural fit for the single-step
+inference of Sec. 3.2.
+B.3. Training and Inference Details
+Implementation.
+The plane head adopts the training recipe of Plana3r (Liu et al., 2025a) adapted
+to the per-view local-frame convention of Sec. 3.1: the ViT encoder and the two cross-attention decoders
+are initialized from DUSt3R’s 512-DPT pre-trained weights, optimized with AdamW (Loshchilov &
+Hutter, 2019) (learning rate 1×10−4 →1×10−6) under the plane-related losses of Eq. (27) at input
+resolution 512×384, with a one-epoch warm-up under the patch loss alone followed by ten epochs
+jointly optimizing patch and rendering losses; the gradient threshold for selectively fusing the low- and
+high-resolution primitives is gth =0.5. With the plane head frozen, the diffusion refiner and the score
+head are then trained on our four-dataset mixture (Tab. 6) with Eq. (11) for 20 epochs at per-GPU batch
+size 12, using AdamW with the same 1×10−4 →1×10−6 schedule, Lcond =Lden =4 Transformer blocks,
+and M query tokens per pair. At inference, a single Euler step (Eq. (12)) yields the refined rotation R⋆;
+translation is recovered by the adaptively regularized Levenberg–Marquardt solver of Eq. (13). Total
+compute is 128 GPU-days on NVIDIA A800 GPUs.
+The remainder of this subsection details the inference-time solvers omitted from Sec. 3.2.
+Scene-range normalization.
+The per-pair scalar σ that non-dimensionalises d in Eq. (5) is the mean
+absolute plane offset across all S patches per view,
+σ =
+1
+2S
+ PS
+p=1 |d1
+p| + PS
+p=1 |d2
+p|
+
+,
+(28)
+which makes ¯dv
+m = dv
+m/σ approximately O(1) across pairs.
+23
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+Table 6: Training data and sample sizes. Same mixture used by Plana3r (Liu et al., 2025a).
+Dataset
+Type
+# Pairs
+ScanNetV2 (Dai et al., 2017)
+Indoor / Real
+610K
+ScanNet++ (Yeshwanth et al., 2023)
+Indoor / Real
+810K
+ARKitScenes (Dehghan et al., 2021)
+Indoor / Real
+2,400K
+Habitat (Savva et al., 2019)
+Indoor / Synthetic
+120K
+Total
+∼3,940K
+(a) chess, seq-01
+(b) office, seq-01
+(c) stairs, seq-01
+Figure 6: Predicted plane primitives and matched patch correspondences. Three 7Scenes
+pairs (columns). Top: input RGB (view 1 | view 2). Bottom: PlanarSplatting-rasterized normal
+from our plane head with the 24×32 patch grid (white); yellow lines connect MASt3R’s matched patch
+centers, which form {gm}M
+m=1 in Eq. (3).
+Two-view translation solver (Eq. (13)).
+Locking s = ∥tinit∥, the two data residuals are
+∆dm(ˆt) = d1
+m −d2
+m + (R⋆n2
+m)⊤(sˆt),
+(29)
+∆Pm(ˆt) = P 1
+m −R⋆P 2
+m −sˆt,
+(30)
+where P v
+m = zv
+mK−1
+v [um; 1] is the back-projection of matched pixel um through the dense depth zv
+m
+rasterized by PlanarSplatting from the per-patch plane primitives. Both ρd, ρp are Huber losses
+with threshold 0.1 and weights wd =wp =1. The init-anchored Tikhonov weight λreg adapts to the init’s
+quality: with r(0)
+m = (R⋆n2
+m)⊤tinit −(d2
+m −d1
+m) the ∆d residual at ˆtinit, we set σinit = 1.4826 MAD(r(0))
+on its 20–80% IQR-trimmed core and
+λreg = clip
+ λ0(σref/σinit)α, λmin, λmax
+
+,
+(λ0, σref, α, λmin, λmax) = (200, 0.5, 4, 1, 106),
+(31)
+so a small σinit (init already consistent with the predicted planes) inflates λreg and the solver returns ≈ˆtinit,
+while a large σinit lets the data terms drive the solve. We optimize via scipy.optimize.least_squares
+(TRF, Huber fscale = 0.1) over ˆt ∈S2, ≤15 Jacobian evaluations.
+Multi-view aggregation (n-view).
+For streaming n-view inputs we follow the Glomap (Pan
+et al., 2024) global-SfM pipeline—rotation averaging, multi-view track construction, point-based global
+positioning, and bundle adjustment—over the refinement-window edge set E. The diffusion refiner is
+invoked only for the per-edge rotation R⋆
+ij; the per-edge translation traw
+ij
+is taken directly from the
+upstream estimator and used unchanged downstream.
+Rotation averaging. Per-frame absolute rotations are recovered from the pairwise {R⋆
+ij} by robust
+least-squares (Hartley et al., 2013; Chatterjee & Govindu, 2013),
+{Ri}⋆= arg min
+{Ri}
+X
+(i,j)∈E
+ρ
+
+d(R⊤
+j R⋆
+ijRi, I)
+
+,
+(32)
+with ρ a Huber loss and d chordal distance.
+24
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+Tracks and translation warm-start. Multi-view tracks {τk} are built by union-find over pixel-cell-quantized
+correspondences from the matcher; the upstream’s raw pairwise translations {traw
+ij } together with {Ri}⋆
+are composed into an absolute c2w trajectory and used as warm-start camera centers for the positioner
+below.
+Global positioning.
+With {Ri} fixed and tracks {τk} attached with bearings vki = R⊤
+i K−1
+i
+[uki; 1],
+Glomap’s point-based mode (Pan et al., 2024) jointly optimizes camera centers, 3-D point positions,
+and per-observation scales,
+{ci, Xk, ski}⋆= arg min
+X
+k
+X
+(k,i)∈τk
+ρ(∥vki −ski(Xk −ci)∥2) ,
+ski ≥0.
+(33)
+Bundle adjustment. A Huber-robust BA (Pan et al., 2024) over (ci, Xk) with pinhole reprojection error
+refines centers and 3-D points; we run Glomap with fix_rotations=True so that {Ri}⋆from rotation
+averaging remain frozen throughout positioning and BA, and the entire downstream pipeline only ever
+consumes the refined rotations. The two-view LM translation solver of Eq. (13) is bypassed entirely
+at n-view scale, since the dense edge set E already over-constrains every ci through the RA + GP +
+BA pipeline; the same plane-conditioned refiner—whose only role at n-view is to produce {R⋆
+ij} per
+edge—therefore serves both regimes without retraining.
+C. Additional Evaluation Setup and Results
+C.1. Pair and Sequence Construction
+This subsection gives the per-sequence quantitative breakdown deferred from Sec. 4 for the two-view
+and streaming evaluation splits.
+7Scenes two-view pair list.
+We use all 46 sequences across the seven scenes (chess, fire, heads, office,
+pumpkin, redkitchen, stairs) without any train/test restriction. Pairs are formed as (i, i+50) at stride 10
+within each sequence, producing 95 pairs per 1000-frame sequence and 45 per 500-frame stairs sequence,
+totalling 40×95 + 6×45 = 4070 pairs. The exact pair list is released with our code.
+Matterport3D two-view pair list.
+For an additional zero-shot test, we use the 7996-pair test set
+of SparsePlanes (Jin et al., 2021) on Matterport3D (Chang et al., 2017). Results in Tab. 7 mirror
+the pattern from ScanNet1500 and 7Scenes: PosePlaner delivers a large gain on the weaker LoFTR
+upstream (R@5: 10.7 →20.2, R@20: 30.6 →52.8) and a smaller but consistent gain on the stronger
+SuperGlue upstream (R@5: 38.3→40.8, R@20: 66.7→70.6).
+ScanNet streaming.
+The 100 trajectories of the ScanNet1500 test set (scenes 0707–0806) range in raw
+length from 163 to 4168 frames; we sample at frame gap 2 to obtain the streaming sequences. For each
+input-length threshold N ∈{200, 500, 2000} we retain trajectories with ≥2N raw frames (equivalently
+≥N sampled frames)—99, 86, and 7 respectively—and let the streaming baseline ingest the first N
+sampled frames while PosePlaner refines the last 100.
+7Scenes streaming.
+We form N-frame trajectories at frame gap 2 from the same 46 sequences as the
+two-view setup. For N ∈{200, 500} we take the first N sampled frames of every sequence with ≥2N raw
+frames—46 trajectories at N=200 (every sequence qualifies) and 40 at N=500 (the six 500-frame stairs
+sequences fall below the 1000-frame raw threshold). For N=2000 no single sequence is long enough, so
+we concatenate sequences within each scene end-to-end and take the first 2000 sampled frames, yielding
+5 scene-level trajectories (chess, fire, office, pumpkin, redkitchen; heads and stairs have insufficient total
+raw frames after gap-2 subsampling).
+Outdoor multi-view sequences.
+We preserve the source frame order and take the first N ∈
+{200, 500, 2000} frames of each sufficiently long trajectory. Oxford Spires (Tao et al., 2026) provides 14
+trajectories at each length, and MatrixCity (Li et al., 2023) provides 10 (five aerial and five street-level).
+25
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+Table 7: Two-view rotation refinement on Matterport3D. Evaluated zero-shot on the 7996-pair
+test set of SparsePlanes (Jin et al., 2021). Rotation AUC@τ ◦for two upstream matchers in two
+configurations: init and +PosePlaner. The Valid column counts pairs with a valid upstream pose;
+AUC is computed only on this subset. Higher is better; best per block in bold.
+Method
+LoFTR (Sun et al., 2021)
+SuperGlue (Sarlin et al., 2020)
+R@5
+R@10
+R@20
+Valid
+R@5
+R@10
+R@20
+Valid
+init
+10.7
+18.8
+30.6
+4385/7996
+38.3
+53.5
+66.7
+6853/7996
++ PosePlaner
+20.2
+36.0
+52.8
+40.8
+57.2
+70.6
+The four CrossLoc (Yan et al., 2022) flight segments contain 1176, 841, 623, and 373 frames, giving
+four trajectories at N = 200, three at N = 500, and none at N = 2000. CUT3R and TTT3R use the
+same inputs. We evaluate relative-pose pairs among the final 100 frames and average per-trajectory
+AUCs without weighting. Pairs with undefined translation direction are excluded from translation AUC
+in both branches. Both branches share the reconstruction backend over all N frames; PosePlaner
+supplies refined pairwise rotations. Table 8 reports the additional tests on CrossLoc drone sequences at
+N = 200 and N = 500.
+Table 8: Zero-shot multi-view refinement on CrossLoc drone sequences. R@5/R@20 and
+t@5/t@20: rotation/translation-direction AUC at 5◦/20◦(%, ↑). Better results within each pair are
+bold.
+Method
+N = 200
+N = 500
+R@5
+R@20
+t@5
+t@20
+R@5
+R@20
+t@5
+t@20
+CUT3R
+20.5
+55.2
+22.6
+64.6
+11.7
+42.7
+5.1
+45.0
+CUT3R + PosePlaner
+20.3
+60.9
+24.6
+68.4
+12.1
+44.5
+5.7
+48.1
+TTT3R
+26.0
+69.6
+33.3
+73.5
+20.5
+70.9
+24.8
+73.6
+TTT3R + PosePlaner
+26.2
+70.0
+29.6
+65.9
+25.1
+73.0
+28.2
+75.0
+C.2. External Match-Source Sensitivity
+PosePlaner’s geometry tokens {gm} come from patch correspondences produced by an external
+matcher (Sec. 3.1); this matcher is in principle independent of the upstream pose source. To verify
+that the refiner’s gain is not tied to a particular matcher, we fix the upstream pose source to either
+SuperGlue or LoFTR and sweep four matchers (SuperGlue, LoFTR, ROMA, MASt3R) as the
+source of patch correspondences fed into the diffusion refiner. Tab. 9 reports the resulting two-view
+rotation AUC on ScanNet1500. PosePlaner improves over the init pose for the vast majority of
+(upstream, matcher) combinations, and stronger matchers (ROMA, MASt3R) yield clearly larger gains;
+the qualitative trend is preserved across all four matchers, confirming that the refiner is robust to the
+choice of correspondence source.
+C.3. Additional Streaming Trajectories
+Sliding-window protocol.
+Each trajectory is 200 frames long. We slide a 100-frame window with
+50-frame overlap, so the trajectory contains three refinement windows ([0, 100), [50, 150), [100, 200));
+within each window, PosePlaner treats every pair as the two-view problem of Sec. 4.1 and the per-pair
+refined poses are aggregated by rotation averaging (Hartley et al., 2013; Chatterjee & Govindu, 2013)
+plus a fix-rotation Glomap-style positioner (Pan et al., 2024). The same protocol is used for the main
+paper’s Fig. 4.
+Additional trajectories.
+Fig. 7 extends the streaming results of Sec. 4.2 with three additional
+sequences spanning low-texture and cluttered indoor settings; each is refined on top of CUT3R (Wang
+et al., 2025b), TTT3R (Chen et al., 2025), and WinT3R (Li et al., 2025). Across all three sequences
+the refined trajectory tracks the ground truth substantially closer than the raw baseline, confirming that
+26
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+Table 9: Sensitivity to the external match source. Two-view rotation AUC on ScanNet1500
+with the upstream pose fixed to SuperGlue or LoFTR, while the matcher used to produce patch
+correspondences for PosePlaner’s conditioning is varied across four options. The init row reports
+each upstream’s raw pose accuracy from Tab. 1. Higher is better.
+Conditioning match
+Upstream: SuperGlue
+Upstream: LoFTR
+R@5
+R@10
+R@20
+R@5
+R@10
+R@20
+init (no refinement)
+43.9
+62.4
+76.4
+11.5
+25.0
+44.0
++ PosePlaner, SuperGlue (Sarlin et al., 2020) match
+45.1
+64.1
+78.0
+17.8
+38.8
+59.5
++ PosePlaner, LoFTR (Sun et al., 2021) match
+43.5
+62.6
+76.8
+14.5
+31.1
+50.5
++ PosePlaner, ROMA (Edstedt et al., 2024) match
+49.8
+69.6
+82.5
+32.9
+56.3
+72.8
++ PosePlaner, MASt3R (Leroy et al., 2024) match
+48.9
+68.9
+82.1
+29.4
+52.9
+70.6
+the refiner’s drift correction is consistent across upstream estimators rather than tuned to any one of
+them.
+C.4. Training Objective Comparison
+We compare flow matching with deterministic Direct-x0 regression and DDPM pred-x0, using the same
+architecture, training data, and 20-epoch schedule. Direct-x0 predicts the clean pose residual in one
+forward pass; DDPM uses 100 denoising steps, and flow matching uses one Euler step. All variants use
+MASt3R correspondences and the same geometric translation solver. Both alternatives improve the
+LoFTR initialization, but flow matching achieves higher rotation and translation-direction AUC at all
+reported thresholds (Tab. 10). Each objective is trained once.
+Table 10: Training objective comparison on ScanNet1500. LoFTR initialization, 1028 valid pairs.
+R@θ/t@θ: rotation/translation-direction AUC at θ◦(%, ↑). Best results are bold.
+Method
+R@5
+R@10
+R@20
+t@5
+t@10
+t@20
+LoFTR init
+11.5
+25.0
+44.0
+2.1
+5.6
+13.0
+Direct-x0
+14.8
+30.3
+49.2
+2.3
+6.6
+14.5
+DDPM pred-x0
+16.7
+33.2
+51.8
+2.2
+6.5
+14.6
+Flow matching
+29.4
+52.9
+70.6
+3.5
+9.0
+18.4
+C.5. Alternative Plane Source
+We replace the learned plane predictions with planes fitted to frozen MoGe (Wang et al., 2025c) point
+maps using patchwise RANSAC/PCA. The refiner, initial poses, correspondences, and remaining modules
+are unchanged, with no retraining. Table 11 shows that MoGe-derived planes retain substantial gains
+over the LoFTR initialization, although our learned planes achieve higher rotation AUC at all three
+thresholds.
+Table 11: Alternative plane source on ScanNet1500. Rotation AUC at 5◦/10◦/20◦(%, ↑) on the
+same 1028 valid LoFTR pairs. Best results are bold.
+Plane source
+R@5
+R@10
+R@20
+LoFTR init (no refinement)
+11.5
+25.0
+44.0
+MoGe + RANSAC
+27.1
+50.4
+69.2
+Learned planes (ours)
+29.4
+52.9
+70.6
+27
+
+
+PosePlaner: Denoising Any Feed-Forward Pose Predictor
+Scene0725_00
+Scene0733_00
+Scene0806_00
+CUT3R ± ours
+TTT3R ± ours
+WinT3R ± ours
+Figure 7: Additional streaming trajectories on ScanNet. Each row is one 200-frame sequence
+refined by PosePlaner in the same 100-frame sliding-window scheme as Fig. 4 (50-frame overlap).
+Right three columns plot the estimated camera trajectory under CUT3R, TTT3R, and WinT3R;
+black is ground truth, blue is the raw baseline, and red is after PosePlaner refinement.
+D. Social Impacts
+Positive social impact.
+PosePlaner corrects relative camera pose at the geometric level and
+extends from two-view training to streaming n-view inference without retraining. This makes accurate
+pose estimation more accessible to downstream applications such as AR/VR, robotics, and indoor scene
+understanding.
+Potential negative impact.
+As with any technology that improves camera pose estimation, our
+method could in principle be used in privacy-sensitive contexts. We recommend deploying it within a
+broader pipeline that applies the appropriate consent and access controls.
+28

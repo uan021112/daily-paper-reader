@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-10-26</span>
+      <span class="dpr-home-dashboard-kicker">2026-10-27</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 11 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 25 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>5</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>6</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>10</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>15</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-10-26 23:09:50 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-27 23:06:44 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,9 +69,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日精选聚焦单图驱动的 3D 重建、场景构建与空间理解，共 11 篇推荐。</p>
-<p>最值得看的是 PixGR 的快速前馈式 3D 重建，以及 Easy-3Dfy 的物体级几何组合。</p>
-<p>建议先读 PixGR 把握高分工作，再按兴趣延伸到单图场景生成或空间 grounding。</p>
+<p>完成 25 篇论文推荐：精读 10 篇、速读 15 篇，聚焦 3D 重建与场景理解。</p>
+<p>最值得关注的是 PosePlaner 的姿态预测去噪，以及 CADonatello 面向真实场景的多部件 3D CAD 重建。</p>
+<p>建议普通读者先读 PosePlaner，了解如何借助几何信息提升姿态预测。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -80,12 +80,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">5 篇</strong>
+    <strong class="dpr-home-dashboard-count">10 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="PixGR: Pixel-Space Generative Decoding for Fast Feed-Forward 3D Reconstruction">PixGR: Pixel-Space Generative Decoding for Fast Feed-Forward 3D Reconstruction</span></li><li><span class="dpr-home-dashboard-paper-title" title="Easy-3Dfy: Object-Level Geometric Composition for Single-Image 3D Scene Construction">Easy-3Dfy: Object-Level Geometric Composition for Single-Image 3D Scene Construction</span></li><li><span class="dpr-home-dashboard-paper-title" title="Complementing DINO Features with Image Structure for Part Discovery">Complementing DINO Features with Image Structure for Part Discovery</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="PosePlaner: Denoising Any Feed-Forward Pose Predictor from Pairwise Planar Geometry">PosePlaner: Denoising Any Feed-Forward Pose Predictor from Pairwise Planar Geometry</span></li><li><span class="dpr-home-dashboard-paper-title" title="CADonatello: Towards Real-World Multi-Part 3D CAD Reconstruction">CADonatello: Towards Real-World Multi-Part 3D CAD Reconstruction</span></li><li><span class="dpr-home-dashboard-paper-title" title="FreeView: Robust 3D Reconstruction from Uncurated Views">FreeView: Robust 3D Reconstruction from Uncurated Views</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>3</strong></span><span class="dpr-home-dashboard-tag">embodied-ai <strong>1</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>4</strong></span><span class="dpr-home-dashboard-tag">embodied-ai <strong>3</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -93,12 +93,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">6 篇</strong>
+    <strong class="dpr-home-dashboard-count">15 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="ACE-Brain-0.6: Scaling Spatial Grounding for Physical Foundation Models">ACE-Brain-0.6: Scaling Spatial Grounding for Physical Foundation Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="PnP*: A certifiable solver for Perspective-n-Point">PnP*: A certifiable solver for Perspective-n-Point</span></li><li><span class="dpr-home-dashboard-paper-title" title="CityLift: Compositional 3D Urban Generation from a Single Image">CityLift: Compositional 3D Urban Generation from a Single Image</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Cross-Scale Sparse Attention for Referring Segmentation in Remote Sensing">Cross-Scale Sparse Attention for Referring Segmentation in Remote Sensing</span></li><li><span class="dpr-home-dashboard-paper-title" title="RelateGS: Reliable Semantic and Relational Evidence for 3D Scene Understanding with Gaussian Splatting">RelateGS: Reliable Semantic and Relational Evidence for 3D Scene Understanding with Gaussian Splatting</span></li><li><span class="dpr-home-dashboard-paper-title" title="Hybrid Mamba-Transformer Network for Single-Shot 3D Reconstruction from Fringe Patterns">Hybrid Mamba-Transformer Network for Single-Shot 3D Reconstruction from Fringe Patterns</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span><span class="dpr-home-dashboard-tag">embodied-ai <strong>1</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>5</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>4</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>3</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span><span class="dpr-home-dashboard-tag">embodied-ai <strong>1</strong></span></div>
 </section>
 </div>
 

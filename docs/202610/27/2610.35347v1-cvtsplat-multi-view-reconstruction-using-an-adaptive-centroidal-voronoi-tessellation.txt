@@ -1,0 +1,3043 @@
+CVTSplat: Multi-view Reconstruction Using an Adaptive
+Centroidal Voronoi Tessellation
+Briac Toussaint✉
+Max Planck Institute for Informatics
+Saarbrücken, Germany
+btoussai@mpi-inf.mpg.de
+Diego Thomas
+Kyushu University
+Fukuoka, Japan
+thomas@ait.kyushu-u.ac.jp
+Jean-Sébastien Franco
+Inria
+Grenoble, France
+jean-sebastien.franco@inria.fr
+Edmond Boyer
+Inria
+Grenoble, France
+edmond.boyer@inria.fr
+Christian Theobalt
+Max Planck Institute for Informatics
+Saarbrücken, Germany
+theobalt@mpi-inf.mpg.de
+Abstract
+Voronoi tessellations have recently emerged as an adaptive, space-
+partitioning discretization for shape and appearance reconstruc-
+tion from multi-view images. However, the irregular cells they
+produce make the repeated reconstruction of the tessellation dur-
+ing optimization costly. We therefore explore adaptive centroidal
+Voronoi tessellations (CVTs), which extend standard CVTs with
+non-uniform cell sizes while preserving the regular, well-shaped
+cells that make them efficient to compute. In CVTSplat, cell size
+is modulated by the evolving signed distance field, concentrating
+sites near the zero level set while keeping cells nearly centroidal.
+This regularity lets us specialize the whole pipeline, with GPU al-
+gorithms for nearest-neighbor queries and approximate Voronoi
+construction, and a rasterizer tailored to small, nearly isotropic cells.
+Our Voronoi construction is 5–10× faster than general-purpose al-
+ternatives in this regime. On DTU and BlendedMVS, CVTSplat
+reaches geometric accuracy competitive with the best Gaussian-
+splatting surface methods while training in about 2.5 minutes on a
+single GPU.
+CCS Concepts
+• Computing methodologies →Reconstruction; Shape repre-
+sentations.
+Keywords
+Multiview Reconstruction, Voronoi Diagram, Implicit Surface
+1
+Introduction
+Multi-view reconstruction aims at recovering the geometry and
+appearance of a 3D scene from a collection of images acquired
+from different viewpoints. A central challenge is to design a rep-
+resentation that provides sufficient spatial resolution to capture
+fine surface details while remaining computationally efficient to
+optimize and render. Implicit surface methods coupled with differ-
+entiable rendering have demonstrated high reconstruction quality
+[54], but their practical efficiency and compactness strongly depend
+on how the scene volume is discretized. Uniform discretizations,
+such as dense voxel grids, allocate the same capacity throughout
+space even though accurate geometry and appearance are primar-
+ily required near the reconstructed surface. Conversely, adaptive
+Figure 1: We represent the scene with Voronoi cells carrying
+trainable signed-distance and view-dependent appearance at-
+tributes, and directly rasterize them for differentiable volume
+rendering (middle). Our adaptive CVT combines regular cells
+with increased spatial resolution near the zero level set, con-
+centrating representation capacity where it is most needed
+(bottom right). Top left: signed-distance values mapped to
+hue; bottom right: randomized cell colors illustrate the adap-
+tive refinement near the surface.
+representations concentrate capacity in relevant regions, but intro-
+duce irregular spatial configurations that can make neighborhood
+queries, geometric operations, and rendering more expensive.
+Voronoi-based representations provide an interesting direction
+for addressing this trade-off. Recent works have explored Voronoi
+1
+arXiv:2610.35347v1  [cs.CV]  26 Oct 2026
+
+
+Toussaint et al.
+and related cellular discretizations for neural rendering and recon-
+struction [14, 15, 36, 47, 50, 56]. However, these representations
+do not explicitly exploit one of the fundamental properties of Cen-
+troidal Voronoi Tessellations (CVTs): their tendency to produce
+regular, well-shaped cells. Such regularity is particularly attractive
+computationally, since irregular Voronoi cells may require visiting
+many neighboring sites when constructing the diagram [46]. At the
+same time, a standard CVT tends toward a uniform distribution of
+sites, thereby losing the main benefit of an adaptive representation.
+We therefore investigate adaptive centroidal Voronoi tessella-
+tions as a spatial representation for multi-view reconstruction.
+We modulate cell size using the implicit surface, yielding a near-
+centroidal tessellation with increased site density around the zero
+level set (fig. 1). This combines the representational efficiency of an
+adaptive discretization with the computational benefits of regular
+Voronoi cells, while relying on a standard Voronoi diagram rather
+than a power diagram. Specifically, power diagrams offer another
+way to achieve adaptivity, but require an additional weight per site
+and incur a higher construction cost [14, 49].
+Based on this representation, we introduce CVTSplat, a differen-
+tiable multi-view reconstruction method in which each Voronoi site
+carries a signed-distance value and compact appearance attributes
+decoded into view-dependent radiance. The near-centroidal struc-
+ture of the tessellation lets us specialize every stage of the pipeline
+to this regime. Since well-shaped cells have few and nearby neigh-
+bors, the Voronoi diagram can be constructed from a small set of
+candidate sites. We deliberately accept an approximate diagram in
+the rare cases where this set is incomplete, as the resulting local
+overlaps are compatible with differentiable primitive-based render-
+ing [26]. Similarly, instead of ray tracing an exact diagram [15],
+we directly rasterize the cells [14] and exploit their small, nearly
+isotropic shape to tailor the rasterizer. Together, these choices make
+CVTSplat a regular yet surface-adaptive discretization for efficient
+geometry and appearance reconstruction.
+The complete optimization pipeline is described in figure 2. It
+consists of two components: the adaptive tessellation controls the
+position of the sites, while the differentiable rendering branch op-
+timizes the signed-distance and appearance attributes. The tes-
+sellation is guided by the evolving implicit surface to produce a
+surface-adaptive discretization. Our main contributions are as fol-
+lows:
+(1) We introduce an adaptive centroidal Voronoi discretiza-
+tion for multi-view reconstruction, combining surface adap-
+tivity with the regularity of centroidal tessellations. Our
+complete reconstruction pipeline achieves geometric accu-
+racy competitive with state-of-the-art 3DGS-based methods
+[7, 13, 63] on DTU, while training in approximately 2.5 min-
+utes on a single RTX 5090 and using 4 GB of VRAM.
+(2) We exploit the regularity of the tessellation to make Voronoi-
+based reconstruction computationally efficient. We intro-
+duce specialized GPU algorithms for approximate Voronoi
+construction, repeated 𝐾-nearest-neighbor queries, and De-
+launay triangulation, substantially accelerating these oper-
+ations compared to general-purpose approaches [4, 5, 15,
+46, 49].
+(3) We propose a rasterizer optimized for rendering small,
+isotropic primitives, further consolidating our framework.
+2
+Related Work
+We review the literature most closely related to our approach along
+three directions: adaptive spatial discretizations for implicit 3D
+reconstruction (Sec. 2.1), explicit primitive-based representations
+(Sec. 2.2), and efficient GPU construction of 3D Voronoi and Delau-
+nay diagrams (Sec. 2.3).
+2.1
+Adaptive Spatial Discretizations
+Multi-view 3D reconstruction based on differentiable rendering
+initially relied on continuous neural representations [37, 54], be-
+fore increasingly adopting grid-based or hybrid spatial encodings
+to accelerate optimization and rendering [6, 11, 34, 40, 53]. The
+main objective of these representations is to allocate computation
+sparsely, by concentrating capacity around the reconstructed sur-
+face. However, grid-aligned discretizations typically follow a prede-
+fined spatial structure that either stays fixed during optimization
+or changes discretely across levels of detail.
+Unstructured discretizations offer greater flexibility in adapting
+both the number and spatial extent of their elements. Recent ap-
+proaches have explored Voronoi or Power cells [14, 15, 47, 50], as
+well as tetrahedral representations [29, 36, 52, 56]. These works
+motivate spatial representations that retain the flexibility of unstruc-
+tured discretizations while achieving the accuracy and efficiency
+of highly optimized grid-based methods.
+2.2
+Explicit Splatting Representations
+3D Gaussian Splatting [26] has become a widely used representation
+for high-quality novel-view synthesis due to its adaptive distribu-
+tion of primitives and efficient rasterization. However, recovering
+coherent geometry from an unstructured set of Gaussians is highly
+challenging [7, 13, 18, 19, 21, 45, 61, 63]. Existing methods intro-
+duce additional constraints or regularization to suppress floaters
+and improve depth and normal consistency [7, 63], or dedicated
+procedures for extracting closed surfaces [13, 18].
+Space-partitioning primitives such as tetrahedra and Voronoi
+cells provide an alternative splat support [15, 36] in which neighbor-
+ing elements form a coherent spatial decomposition rather than an
+overlapping collection of primitives. This structure provides consis-
+tent spatial ordering, but maintaining it while the underlying sites
+move during optimization can introduce considerable computa-
+tional overhead. Efficiently updating such adaptive representations
+therefore remains an important challenge.
+2.3
+GPU Voronoi & Delaunay Diagrams
+Construction
+A 3D Voronoi diagram can be represented through its adjacency
+graph, i.e., the neighboring relationships between generating sites.
+This graph can be recovered indirectly through the dual Delaunay
+triangulation [15], or computed directly from the Voronoi cells.
+GPU Delaunay algorithms enable substantial parallelism [5, 15], but
+generally require multiple rounds of point insertion, tetrahedron
+2
+
+
+CVTSplat: Multi-view Reconstruction Using an Adaptive Centroidal Voronoi Tessellation
+Grads wrt. positions
+Grads wrt. SDF and
+spatial features
+Input Sites
+(f) Piecewise linear SDF
+(a) BVH construction & KNN queries
+(b) Voronoi adjacencies computation
+(d) Delaunay Triangulation & Marching Tets
+(e) Attributes smoothing
+(c) Centroids computation & CVT Loss
+(g) Light Probes Interpolation
+& Color prediction
+(h) Diﬀerentiable Volume Rendering,
+Single & Multiview losses
+Repeat for all viewpoints
+in the mini-batch
+Fast and Adaptive Tessellation
+Diﬀerentiable Volume Rendering
+Optional
+Figure 2: Overview of our approach during optimization. Top row: Construction of the tessellation. (a) The sites are processed to
+obtain a list of their 32 nearest neighbors, (b) before building the Voronoi diagram as an adjacency graph. (c) The center of mass
+of each cell is then computed to regularize the distribution of the sites via the CVT loss. (d) The Voronoi diagram is optionally
+converted to a Delaunay triangulation to extract the zero-level set with marching tetrahedra. Bottom row: Differentiable volume
+rendering from posed images. (e) The sites’ attributes (learnable SDF and features) are smoothed with a Gaussian kernel. (f)
+The gradient of the SDF is also computed to produce normal vectors, which define a piecewise linear SDF over the cells. Then,
+for all viewpoints in the mini-batch, (g) a per-site color is computed based on the camera’s position, (h) before rasterizing the
+scene and comparing against the ground-truth image.
+splitting, flipping, and repair, making frequent reconstruction of a
+dynamically evolving diagram costly.
+GPU methods for direct Voronoi construction were initially de-
+veloped for relatively uniform point distributions [4, 46], provid-
+ing large speedups over CPU implementations [31, 51]. More re-
+cently, Taveira et al. [49] extended this family of approaches to
+non-uniform point distributions. Following the clipping formula-
+tion of Ray et al. [46], Voronoi cells are constructed independently
+by successively clipping them against bisector planes induced by
+neighboring sites. Although cells can be processed in parallel, the
+clipping operations for each cell are sequential, and irregular cells
+may require significantly more operations. Leaving cells unregular-
+ized [15] can thereby increase the total construction cost.
+3
+Fast and Adaptive Spatial Data Structure
+Our spatial representation consists of a set of sites {x𝑖}0≤𝑖<𝑁(i.e.
+3D points) that induce a Voronoi tessellation of the scene volume.
+Each site stores the geometric and appearance attributes used by
+the reconstruction, including a signed-distance value and view-
+dependent radiance features. The Voronoi cells provide the volu-
+metric primitives used for rendering, while their dual Delaunay
+connectivity provides the local neighborhood structure required
+for mesh extraction. Because the site positions evolve throughout
+optimization, these structures must be updated repeatedly. A key
+property of our representation is that the sites remain close to a cen-
+troidal configuration, producing compact cells with a small number
+of nearby neighbors and enabling efficient GPU construction.
+In the following, we first describe how we obtain this adaptive
+centroidal distribution (Sec. 3.1) and compute its centroids (Sec.
+3.2). We then present our fast Voronoi construction (Sec. 3.3), its
+conversion to Delaunay tetrahedra (Sec. 3.4), and the KNN kernel
+supporting these operations (Sec. 3.5).
+3.1
+Adaptive Centroidal Voronoi Tessellation
+Figure 3: Left: The volume and centroid of the cell are com-
+puted by casting rays from the site’s location. Right: Our
+biased CVT loss maintains the sites slightly closer to the
+implicit surface than the centroids ¯x, resulting in stretched
+cells along the SDF gradient.
+3
+
+
+Toussaint et al.
+In a centroidal Voronoi tessellation (CVT), the sites x𝑖coincide
+with the center of mass ¯x𝑖of their cell (the centroids). It is not
+the case at first because the sites have arbitrary positions, but
+iteratively minimizing the CVT loss LCVT = Í ||x𝑖−¯x𝑖||2 brings
+the tessellation closer to being centroidal, with regular cells [35].
+Since we need an adaptive distribution rather than a uniform one,
+we propose to bias this loss using the normal vector of the SDF (see
+figure 3). Our biased CVT loss is as follows:
+LCVT =
+∑︁
+𝑖
+1
+sg(𝑟𝑖) ||x𝑖−sg(¯x𝑖−𝛽𝑖𝑟𝑖n𝑖) ||2
+2.
+(1)
+sg(·) is the stop-gradient operator and 𝑟𝑖is the radius of the cell.
+Adaptivity may also be achieved using a spatially-varying mass
+density when computing cell moments [9] but our approach is more
+direct. Intuitively, the centroid ¯x𝑖is offset by a fraction 𝛽𝑖of the
+cell radius along the SDF gradient n𝑖. We divide by 𝑟𝑖to make the
+loss scale-invariant. 𝛽𝑖directly depends on the SDF ˆ𝑓𝑖:
+𝛽𝑖= 𝑎· tanh(
+ˆ𝑓𝑖
+2𝑏).
+(2)
+𝑎,𝑏> 0 control the magnitude of the shift. Using 𝑎= 0 gives the
+standard centroidal tessellation. In our experiments, we set 𝑎= 0.1
+and 𝑏= 0.001 which corresponds to shifting the centroid by 10% of
+the cell radius. This results in smaller cells near the zero level-set
+and larger cells further away, with cell radius growing approxi-
+mately linearly with SDF (refer to the supplementary material for
+an empirical analysis). The size of the cells is not explicitly imposed,
+which lets them arrange themselves independently of their number
+and of the object’s surface area.
+3.2
+Computation of the Centroids
+The CVT loss depends on the centroid ¯x𝑖, itself depending on the
+volume V𝑖. They can be computed using a tetrahedral decompo-
+sition of the cell [46] or its polyhedron representation [39]. We
+propose a simpler alternative, although approximate, based on Rie-
+mann sums. Evaluating these sums only requires knowledge of
+the bisector planes, directly available from the Voronoi adjacency
+graph. Specifically, we sample 𝑛= 64 rays r𝑘∈𝑆2 from a Fibonacci
+sphere lattice, and measure the distance 𝑙𝑘from the site x𝑖to the
+nearest bisector plane along r𝑘(see figure 3, left).
+V𝑖=
+∫
+C𝑖
+𝑑x =
+∫
+𝑆2
+∫𝑙(r)
+0
+𝑠2𝑑𝑠𝑑𝜎=
+∫
+𝑆2
+𝑙(r)3
+3
+𝑑𝜎≈4𝜋
+3𝑛
+𝑛−1
+∑︁
+𝑘=0
+𝑙3
+𝑘.
+(3)
+The volume integral over cell C𝑖is decomposed into a 1D integral
+and an integral over the unit sphere 𝑆2. 𝑙(r) is the distance from
+the site to the nearest clipping plane along r and 𝑑𝜎is an infini-
+tesimal surface element on 𝑆2. Because the rays are approximately
+uniformly spread, their weight in the Riemann sum is 4𝜋
+𝑛. A similar
+computation gives the centroid ¯x𝑖:
+¯x𝑖−x𝑖= 1
+V𝑖
+∫
+C𝑖
+x −x𝑖𝑑x = 1
+V𝑖
+∫
+𝑆2
+∫𝑙(r)
+0
+r𝑠· 𝑠2𝑑𝑠𝑑𝜎
+(4)
+= 1
+V𝑖
+∫
+𝑆2 r𝑙(r)4
+4
+𝑑𝜎≈1
+V𝑖
+4𝜋
+𝑛
+𝑛−1
+∑︁
+𝑘=0
+r𝑘
+𝑙4
+𝑘
+4 = 3
+4
+Í r𝑘𝑙4
+𝑘
+Í𝑙3
+𝑘
+.
+(5)
+V𝑖and ¯x𝑖are re-evaluated at every training iteration. The accuracy
+of these quadrature formulas is assessed in the appendix. Our ap-
+proach does not preclude using a more direct computation [39, 46]
+if greater precision is required, since Voronoi vertices can be recov-
+ered from the Delaunay triangulation (Sec. 3.4).
+3.3
+Voronoi Diagram Construction
+Following previous GPU approaches [4, 46, 49], we represent the
+Voronoi diagram as an adjacency graph. However, we propose a new
+algorithm designed specifically for near-centroidal distributions.
+We assume the sites are in general position as a simplification,
+this means there are no duplicates and five sites or more are not
+cospherical.
+Cells as linear programs. The Voronoi cell of the site x𝑖is:
+C𝑖= {x ∈R3, ||x −x𝑖||2
+2 ≤||x −x𝑗||2
+2,
+∀𝑗≠𝑖}.
+(6)
+Let x = x𝑖+ y. The distance constraints in equation 6 can be
+reformulated geometrically as plane equations:
+||x −x𝑖||2
+2 ≤||x −x𝑗||2
+2
+(7)
+⇔
+||y||2
+2 ≤||x𝑖+ y −x𝑗||2
+2
+(8)
+⇔
+||y||2
+2 ≤||x𝑖−x𝑗||2
+2 + 2y · (x𝑖−x𝑗) + ||y||2
+2
+(9)
+⇔
+y · (x𝑗−x𝑖) ≤1
+2 ||x𝑗−x𝑖||2
+2.
+(10)
+Therefore, the Voronoi cell is equivalently defined as the feasibility
+region of a linear program in R3:
+C𝑖= {x ∈R3, (x −x𝑖) · (x𝑗−x𝑖) ≤1
+2 ||x𝑗−x𝑖||2
+2,
+∀𝑗≠𝑖}. (11)
+The Voronoi cell C𝑖is bounded by a subset of the bisector planes
+between x𝑖and its neighboring sites. We call a neighbor x𝑗active
+if its bisector plane with x𝑖intersects C𝑖, and the corresponding
+constraint in (11) contributes to the boundary of C𝑖. Not all neigh-
+boring sites are necessarily active; for example, removing x𝑘does
+not change C𝑖in Fig. 4. Therefore, identifying the set of active neigh-
+bors, or equivalently their bisector planes, is sufficient to define the
+Voronoi cell.
+Figure 4: Voronoi cell in 2D. The bisector plane P𝑘is inactive
+since it does not participate in defining the cell C𝑖. Any neigh-
+boring point beyond the security radius, defined as twice the
+cell radius, is guaranteed to not participate.
+4
+
+
+CVTSplat: Multi-view Reconstruction Using an Adaptive Centroidal Voronoi Tessellation
+Adjacency as 2D feasibility. An active bisector plane must contain
+points of C𝑖since it corresponds to a facet of the convex polyhe-
+dron enclosing the cell. Conversely, inactive bisector planes do not
+contain any points of the Voronoi cell. This leads to a simple test:
+The site 𝑟is a Voronoi neighbor of site 𝑖
+(12)
+⇐⇒P𝑟is active for cell C𝑖
+(13)
+⇐⇒P𝑟∩C𝑖≠∅
+(14)
+We parametrize P𝑟as x =
+1
+2 (x𝑟+ x𝑖) + 𝑢e1 + 𝑣e2, where
+(e1, e2, (x𝑟−x𝑖)/||x𝑟−x𝑖||) is an orthonormal basis [10]. Substitut-
+ing the parametric equation for P𝑟into the remaining constraints
+of Eq. (11) yields a 2D linear program (see Fig. 5):
+𝑎𝑗𝑢+ 𝑏𝑗𝑣≤𝑐𝑗,
+𝑗≠𝑖, 𝑗≠𝑟,
+(15)
+and x𝑟is a neighbor if and only if this system is feasible.
+Figure 5: The 2D inequalities enclose the feasibility region,
+which corresponds to a facet of the polyhedron wrapping
+the cell. Each line is the intersection of the reference plane
+P𝑟with another bisector plane P𝑗.
+Feasibility test. We test feasibility with Seidel’s incremental algo-
+rithm [2, 48], which maintains a feasible point and updates it only
+when a new constraint is violated, by solving a 1D problem along
+that constraint’s boundary line. Instead of shuffling the constraints
+randomly, we process them in increasing distance order, as returned
+by the KNN kernel (Sec. 3.5). The nearest planes are the most likely
+to bound the cell, so infeasibility is usually detected early.
+GPU implementation. We consider that only the 32 nearest neigh-
+bors are likely to define active bisector planes, so there are 32
+threads dedicated for building each cell. Each one tests a candidate
+plane P𝑟against the 37 remaining constraints (31 other neighbors
+and the 6 planes of the scene bounding box). The 2D constraints
+are built on the fly from the site positions so no per-thread storage
+is needed, which is a significant bottleneck in previous approaches
+[4, 46] due to reduced GPU occupancy. At the end, each thread
+outputs a single bit classifying whether the neighbor is Voronoi-
+adjacent.
+Approximation. The assumption that 32 neighbors are enough
+generally holds in the case of our biased CVT. To further reduce
+the number of missing adjacencies, we center the KNN queries
+at the previously computed cell centroids rather than at the sites
+themselves. This substantially improves the completeness of the
+resulting Voronoi diagrams, as demonstrated in the supplementary
+material. More neighbors could be included to handle more irregular
+cells, though with a performance loss. If a true neighbor beyond the
+𝐾nearest sites is missed, the cell will be enlarged and will overlap
+its neighbor. A missing constraint can also enlarge the feasible
+region of Eq. (15), so that a non-neighbor is wrongly marked as
+adjacent. Both errors are local and only affect cells near the few
+sites concerned.
+3.4
+Delaunay Triangulation
+Figure 6: The adjacency matrix of the site 𝑖encodes which of
+its neighbors are adjacent to each other.
+We convert the approximate Voronoi diagram into the dual De-
+launay triangulation for mesh extraction, illustrated in figure 6. For
+conciseness, "Voronoi neighbor" will be shortened to "neighbor" in
+the following discussion.
+The Delaunay tetrahedra are groups of 4 sites (𝑖, 𝑗,𝑘,𝑙) that are
+pairwise neighbors, and whose circumsphere does not contain any
+other site. Thus, we enumerate all possible 4-cliques, and then
+test whether their circumsphere is empty. Only ordered tuples
+𝑖< 𝑗< 𝑘< 𝑙are emitted to avoid duplicates.
+We build a binary adjacency matrix M for each site𝑖, that encodes
+the adjacency relation of its neighbors: 𝑀𝑗,𝑘is 1 if sites 𝑗and 𝑘are
+neighbors. To form a quadruplet, we look for a neighbor 𝑙of 𝑖such
+that 𝑀𝑗,𝑙and 𝑀𝑘,𝑙are set to 1 in M.
+We efficiently enumerate the quadruplets (𝑖, 𝑗,𝑘,𝑙) by leveraging
+the binary nature of M: because each site has 32 neighbors at most,
+the rows of M can be encoded as 32-bit integers. Thus, 𝑗indices
+correspond to the direct neighbors of 𝑖, 𝑘indices correspond to the
+bits set in row 𝑀𝑗, and 𝑙indices correspond to the bits set in the
+binary AND of rows 𝑀𝑗and 𝑀𝑘. The __ffs CUDA intrinsic lets us
+iterate over the toggled bits of an integer.
+Not all quadruplets form Delaunay tetrahedra so we remove the
+ones containing other sites in their circumsphere. In practice, we
+only need to test the neighbors of 𝑖against the circumsphere. A
+proof is available in the supplementary document.
+Because our Voronoi diagram may be incomplete, our triangula-
+tion is not guaranteed to be exact for cells with missing clipping
+planes or in case of numerical ambiguities in the circumsphere
+check. This can result in a few holes or non-manifold edges in
+the extracted mesh out of millions of triangles. We quantify these
+defects in the supplementary material.
+3.5
+Fast GPU KNN Search
+We propose a fast K-nearest neighbor kernel, tailored for 𝐾= 32
+and for repeated queries, to take advantage of our specific setting:
+5
+
+
+Toussaint et al.
+the sites move by small amounts between rebuilds of the nearest-
+neighbors lists, which implies a high degree of temporal consistency
+that can be leveraged. Like Jakob et al. [24], we start by building
+an acceleration structure to avoid a naive 𝑂(𝑁2) brute force check.
+We use a classic LBVH [30] with up to 128 points per node. This
+gives a shallow hierarchy well-suited for querying a relatively large
+number of neighbors.
+The nearest neighbors are gathered using ball-queries, i.e. gath-
+ering all points within some distance of the query point, instead
+of the more common heap-based approach [24, 46]. The ball-query
+is restarted with a smaller or larger radius until the number of
+gathered points is between 32 and 64, using a binary search. They
+are subsequently sorted in increasing distance to the query point
+[42] and the first 32 are returned. Each query point has its own
+search radius which we save for later runs. The point cloud evolves
+slowly so the search radius is likely to be valid the next time the
+KNN routine is called, sparing repeated BVH traversals.
+Heap-based approaches generally assign one thread per query
+point, and therefore need a per-thread traversal stack or priority
+queue, in addition to the heap already required to keep track of the
+K closest points. While the heap can be stored in registers [24], this
+reduces occupancy considerably for large values of K or spills the
+registers to global memory.
+Our strategy addresses these issues: we assign one warp per
+query point, with all lanes visiting the BVH together. A single BVH
+traversal stack is needed for the whole warp, and the points can
+be loaded with coalesced memory accesses. The points within the
+search radius are compacted to a shared memory buffer sorted in
+parallel at the end, which is faster than iterative heap insertions.
+4
+Differentiable Volume Rendering
+After gathering the nearest neighbors of all sites and computing the
+Voronoi diagram, we can proceed with rendering of the scene. The
+volume rendering integral is typically evaluated with ray-marching
+[37, 54], by querying the radiance and density fields at arbitrary
+locations along the rays. Directly adopting this formulation for our
+discretization is ill-suited: interpolating point neighborhoods at
+each ray sample is costly [58], while interpolating over the Voronoi
+cells generally requires a tetrahedral mesh [36, 52]. Instead, we
+follow RadiantFoam [15] and use piecewise integration where each
+cell only contributes to the portion of the ray it intersects. Radiant-
+Foam [15] and SDFoam [47] use a constant density inside the cells
+which does not account for local surface orientation. In compari-
+son, we define the SDF as a linear function in each cell to obtain
+nonlinearities once composed with NeuS [54]’s SDF-to-density con-
+version, and which crucially still gives a closed-form solution to
+the volume integral over the ray segments.
+Three elements are necessary: (i) the SDF gradient at each site
+to define a piecewise SDF, (ii) per-primitive radiance and (iii) reg-
+ularization terms to stabilize optimization. We reuse the nearest
+neighbors gathered during the Voronoi diagram construction (sec-
+tion 3.5) to regularize the sites’ attributes and to compute the SDF
+gradient. For view-dependent appearance, we favor a neural im-
+plicit approach instead of per-site spherical harmonics to reduce
+the number of appearance parameters, as explained in section 4.2.
+Finally, section 4.3 covers our rasterization algorithm designed for
+small primitives.
+4.1
+Attributes Smoothing
+Smoothing shape and appearance attributes is essential to stabilize
+optimization and recover sensible geometry in the case of discrete
+representations [53, 57]. Here, we leverage ideas from the Smoothed
+Particle Hydrodynamics (SPH) literature to define smoothing oper-
+ators of arbitrary fields defined at the sites [44]. These operators are
+differentiable with respect to spatial coordinates, which in turn en-
+ables us to define the gradient of the SDF in a differentiable manner.
+Let 𝐺(𝑢) be the smoothing operator:
+𝐺(𝑢)𝑖=
+∑︁
+𝑗∈N(𝑖)
+𝑢𝑗𝑤𝑖𝑗/
+∑︁
+𝑗∈N(𝑖)
+𝑤𝑖𝑗.
+(16)
+𝑢can be any scalar or vector field held by the sites, and 𝐺(𝑢)𝑖
+denotes the smoothed field computed at the position of site 𝑖. N (𝑖)
+is the set of neighbors of 𝑖, plus 𝑖itself. The smoothing weights are
+defined as follows:
+𝑤𝑖𝑗= V𝑗exp
+
+−||x𝑖−x𝑗||2
+2
+2𝜎2𝑅2
+𝑖
+
+(17)
+𝑅𝑖= max
+𝑗∈N(𝑖)(||x𝑖−x𝑗||2).
+(18)
+V𝑗is the volume of cell 𝑗and 𝜎is chosen so that sites further
+away than the last neighbor would have small weights if they were
+included. Other smoothing schemes are possible [27, 28] but we
+found this simple one to be effective. The weights 𝑤𝑖𝑗take the cell
+volume into account so that 𝐺approximates the convolution of the
+field 𝑢by a Gaussian kernel:
+(𝑢(y) ∗𝑒−||y||2
+2𝜎2𝑅2 )(x) =
+∫
+R3 𝑢(y) exp
+
+−||x −y||2
+2𝜎2𝑅2
+
+𝑑y
+(19)
+≈
+∑︁
+𝑗
+𝑢𝑗exp
+
+−||x −x𝑗||2
+2𝜎2𝑅2
+
+V𝑗.
+(20)
+Equation 20 is the Riemann sum of the integral discretized over
+all the sites, that we further divide by the sum of the weights to
+normalize 𝐺. Following [53, 57], we apply our Gaussian filter 𝐺on
+the raw SDF 𝑓to obtain smoother values:
+ˆ𝑓= 𝐺(𝑓)
+(21)
+Next, we obtain the gradient vector of the smoothed SDF by com-
+puting partial derivatives of 𝐺applied on ˆ𝑓:
+n𝑖= ∇x𝑖𝐺( ˆ𝑓)𝑖.
+(22)
+We are now able to define regularization objectives typically
+used in multi-view implicit surface reconstruction:
+LSDF =
+∑︁
+𝑖
+(𝑓𝑖−ˆ𝑓𝑖)2
+max(| sg
+
+ˆ𝑓𝑖
+
+|, 0.01)
+(23)
+Ln =
+∑︁
+𝑖
+||
+n𝑖
+||n𝑖||2
+−sg
+
+𝐺(
+n𝑖
+||n𝑖||2
+)
+
+||2
+2
+(24)
+LEik =
+∑︁
+𝑖
+(||n𝑖||2 −1)2
+(25)
+LSDF keeps 𝑓and ˆ𝑓close to each other, Ln is a smoothness term
+on the normalized gradient vectors and LEik is the classic eikonal
+6
+
+
+CVTSplat: Multi-view Reconstruction Using an Adaptive Centroidal Voronoi Tessellation
+regularization [17]. sg(·) is the stop gradient operator added to
+simplify the backward pass. Furthermore, we do not back-propagate
+loss gradients through the positions of the sites, by treating them as
+constants in this formulation: their positions are entirely managed
+by the CVT loss defined in section 3.1.
+So far, the SDF was only defined at the sites. We extend it to an
+entire Voronoi cell using an affine approximation:
+ˆ𝑓(x) = ˆ𝑓𝑖+ (x −x𝑖) · n𝑖,
+∀x ∈C𝑖.
+(26)
+When considering all the cells, the signed-distance field will be
+piecewise linear with small discontinuities allowed between cells.
+The affine approximations let us obtain a closed-form solution to
+the volume rendering integral, as described in section 4.3, which
+may not be possible with typical interpolation schemes.
+4.2
+Appearance Representation
+Figure 7: The light probes, parametrized with spherical har-
+monics, are interpolated to produce view-dependent features
+F𝑎,v and F𝑎,w, based on the local view direction v and reflected
+vector w.
+We assign a view-dependent color to each cell C𝑖to model the
+scene appearance. Like 3DGS [26], the color is constant inside a
+primitive, which gives a piecewise constant color field in our case.
+Our appearance parametrization takes inspiration from [53]. The
+main idea is to split view-independent components (e.g. texture)
+from view-dependent components of the light field (e.g. shading)
+to significantly reduce the number of parameters compared to a
+distinct spherical harmonic (SH) basis per primitive.
+The view-independent component is parametrized by a feature
+vector F𝑠
+𝑖∈R4, called the spatial features, assigned to each site. The
+view-dependent component is modeled by a dense voxel grid of
+spherical harmonic (SH) coefficients called the light probes. They
+are trilinearly interpolated at the location of the sites to produce a
+per-primitive SH basis, subsequently evaluated in the direction of a
+unit vector to obtain angular features F𝑎
+𝑖∈R4. More specifically, we
+use two sets of light probes: the first one is queried with the incident
+vector v and the other uses the reflected vector w, which give F𝑎,v
+𝑖
+and F𝑎,w
+𝑖
+respectively. The site color c𝑖is obtained by decoding the
+spatial and angular features with a tiny MLP:
+c𝑖= MLP(F𝑠
+𝑖, F𝑎,v
+𝑖, F𝑎,w
+𝑖
+, (n𝑖· v𝑖)1, · · · , (n𝑖· v𝑖)4)
+(27)
+For regularization, we add a smoothness term on the spatial
+features, similar to the smoothness term on the normals:
+LF𝑠=
+∑︁
+𝑖
+||F𝑠
+𝑖−sg 𝐺(F𝑠
+𝑖) ||2
+2
+(28)
+The light probes are also regularized by applying a Gaussian filter
+G on the voxels and penalizing deviations between the smoothed
+and raw coefficients:
+Lprobes =
+∑︁
+||𝛽−sg(G(𝛽)) ||2
+2
+(29)
+The sum is applied on all the voxels and SH basis coefficients 𝛽.
+In practice, the two voxel grids have resolution 323, with 16
+SH coefficients per voxel and each SH coefficient in R4. The MLP
+has 16 neurons with 2 hidden layers and squareplus activations [3].
+Because there are multiple sites located in the same voxel in general,
+the light probes represent a small proportion of all parameters
+(equivalent to ≈1 parameter per primitive in our experiments).
+4.3
+Real-Time Rasterization
+The scene is ready to be rasterized into an image once every site
+has been assigned a color for the current camera position. We use
+NeuS’ rendering equation [54] with reciprocal transmittance [38]
+to blend colors along a camera ray o + 𝑡r,𝑡> 0:
+C =
+∫+∞
+0
+c(𝑡)𝜎(𝑡)𝑇(0,𝑡)𝑑𝑡
+(30)
+𝑇(0,𝑡) = 𝑒−
+∫𝑡
+0 𝜎(𝑢)𝑑𝑢
+(31)
+𝜎(𝑡) = 𝑠Φ(−𝑠ˆ𝑓(𝑡))|n · r|
+(32)
+Φ is the sigmoid function and 𝑠> 0 is the sharpness parameter
+controlling the density decay outside of the implicit surface. In the
+equations above, c(𝑡) = c(o + 𝑡r), 𝜎(𝑡) = 𝜎(o + 𝑡r), etc.
+Because the color is constant inside a cell and the SDF is piece-
+wise linear (see figure 8), and by further assuming the cells do not
+overlap which is typically the case, we obtain a closed-form so-
+lution for equation 30. Complete derivations are provided in the
+supplementary document, we give the final formula below:
+C =
+∑︁
+c𝑖(1 −𝛼𝑖)
+Ö
+𝑗<𝑖
+𝛼𝑗
+(33)
+𝛼𝑖= 1 + 𝑒−𝑠ˆ𝑓(𝑡−
+𝑖)
+1 + 𝑒−𝑠ˆ𝑓(𝑡+
+𝑖) ∈[0, 1]
+(34)
+We use the convention that 𝛼corresponds to the transparency of
+the cell. ˆ𝑓(𝑡−
+𝑖) and ˆ𝑓(𝑡+
+𝑖) are the piecewise SDF (equation 26) eval-
+uated at the entry and exit points of the ray in the cell respectively.
+The sum in equation 33 is carried over the set of Voronoi cells in-
+tersected by the ray, ordered by increasing distance to the camera
+to guarantee geometrically-consistent blending (not depth, see [14]
+for a proof). Note that the fraction in eq. 34 should be inverted for
+back-facing cells so that 𝛼≤1.
+In practice, we first assign each cell to every 8 × 8 pixel tile
+intersected by the projection of its bounding sphere, sort them by
+tile id and by distance, and then evaluate equation 33.
+4.3.1
+Chunked Rasterizer. We noticed using one thread per ray
+results in poor GPU utilization whenever some rays intersect more
+cells than the average, which occurs for grazing rays that are parallel
+to the surface. In the worst case, a single thread can keep the GPU
+7
+
+
+Toussaint et al.
+Figure 8: The color is constant but the density varies inside
+the cells. They are sorted by distance to the camera for pop-
+free rasterization.
+Chunk 2
+Chunk 0
+Chunk 3
+Chunk 4
+Chunk 1
+Chunk 10
+Chunk 9
+Chunk 8
+Chunk 7
+Chunk 6
+Chunk 5
+All Chunks
+Figure 9: The pixel tiles are split into chunks of 32 consecu-
+tive cells. All chunks are rasterized in parallel but the ones
+marked in red have been skipped by detecting occlusions dy-
+namically. The final result (top left) is the 𝛼-blending of all
+the chunks in front-to-back order, evaluated in a subsequent
+pass.
+busy while the rest have terminated long before. Thus, we propose
+to split the sum in equation 33 into contiguous ranges of 32 cells
+that we call chunks, with the goal of increasing parallelism during
+rasterization.
+As figure 9 shows, all chunks are scheduled to be processed in
+parallel, with chunks closer to the camera being handled first since
+we order them front-to-back. Naively processing the chunks all at
+once is not ideal because occluded cells would still be intersected
+and blended. In comparison, a sequential processing can exit as
+soon as the per-ray transmittance reaches zero. To retain this useful
+behavior, we propose a communication system based on per-pixel
+flags that are updated atomically by the chunks when they terminate
+their local rasterization task.
+Each flag contains a transmittance accumulator𝑇𝑐and a distance
+counter 𝐷𝑐, updated jointly with an atomic compare-and-swap. 𝑇𝑐
+corresponds to the multiplication of the partial transmittance values
+of the chunks having completed so far. The distance counter 𝐷𝑐
+contains the (depth) index of the furthest completed chunk. When
+a chunk starts, it reads the flags of its 8x8 pixel tile and decides if
+rasterization is needed based on the following table:
+Early-exit decision table
+𝑇𝑐≥𝜖
+𝑇𝑐< 𝜖
+chunk index < 𝐷𝑐
+Cannot skip
+Cannot skip
+chunk index > 𝐷𝑐
+Cannot skip
+Can skip
+Rasterization is skipped if all rays in the chunk can skip. The
+accumulator 𝑇𝑐is an upper bound of the true transmittance up to
+chunk 𝐷𝑐, valid for all chunks with depth index𝑖≥𝐷𝑐. It is an upper
+bound since earlier chunks may not have updated 𝑇𝑐when further
+ones read it. Therefore, a low value for 𝑇𝑐guarantees that further
+chunks will not contribute to the final color. On the other hand,
+chunks closer than the distance counter have to run regardless of
+𝑇𝑐. This scheme allows chunks pertaining to the same pixel tile to
+be processed fully in parallel if the GPU has enough thread blocks
+available, while hidden chunks will be opportunistically skipped.
+A distinct GPU kernel performs the final blending of each chunk’s
+output color and transmittance in a later pass.
+The main cost in evaluating equation 33 is the computation of the
+ray/cell intersection intervals (𝑡−
+𝑖,𝑡+
+𝑖) due to execution divergence:
+each ray intersects a different subset of cells. To reduce this cost,
+we let threads work on different cells concurrently. The alternative
+is to iterate over the cells sequentially, and only the threads whose
+ray intersects the current cell can make progress while the others
+are inactive. For a given chunk, we first load the attributes of its 32
+cells cooperatively in shared memory.
+Then, each thread performs a ray/sphere intersection test [20]
+against the cells’ bounding spheres, which produces a bit mask with
+one bit per cell. This part is sequential but relatively inexpensive.
+Next, each thread iterates over the bits set in its intersection mask
+and performs the more expensive ray/cell check against the cor-
+responding cell, which need not be the same for all threads. The
+maximum number of bits set in the mask across threads determines
+the total number of iterations, often lower than 32 since a ray is
+unlikely to intersect all cells’ bounding spheres in the chunk. This
+optimization makes sense in our case because the cells are only a
+few pixels across and intersection tests are costly. Larger primitives
+would not benefit as much because more rays intersect them at
+once, and thus incur lower execution divergence.
+The bisector planes are encoded as vectors p𝑘
+𝑖
+∈R3, whose
+direction is the plane normal, oriented away from the site, and with
+length equal to the distance between the site and the plane.
+𝑡−
+𝑖= max
+𝑘
+p𝑘
+𝑖·r<0
+∥p𝑘
+𝑖∥2
+2 −(o −x𝑖) · p𝑘
+𝑖
+r · p𝑘
+𝑖
+,
+(35)
+𝑡+
+𝑖= min
+𝑘
+p𝑘
+𝑖·r>0
+∥p𝑘
+𝑖∥2
+2 −(o −x𝑖) · p𝑘
+𝑖
+r · p𝑘
+𝑖
+.
+(36)
+If 𝑡−
+𝑖≥𝑡+
+𝑖, this indicates the ray does not intersect the cell.
+5
+Optimization and Implementation
+5.1
+Color remapping
+The rendered color C in equation 33 is further composited with
+background pixel values sampled from a trainable envmap at infin-
+ity: C2 = C + Cenv𝑇, with 𝑇= Î𝛼𝑖the transmittance. We use an
+8
+
+
+CVTSplat: Multi-view Reconstruction Using an Adaptive Centroidal Voronoi Tessellation
+octahedral mapping to parametrize the envmap [8], with a resolu-
+tion of 10242. Then, the color is tone-mapped to the [0, 1] interval:
+C3 = C2/(C2 + 1.0), before applying a trainable color correction
+curve: Cfinal = 𝛾(C3). The color correction curve is a piecewise
+linear ramp mapping the [0, 1] interval to itself, distinct for each
+color channel and each camera [53].
+5.2
+Image Losses
+Our data term is a weighted combination of a normalized L2 loss,
+a mask loss, a structural loss and a multi-view loss. We also add
+an L1 smoothing term on the depth, taken as the first intersection
+with the implicit surface.
+LRGB =
+∑︁
+||Cfinal −Cgt||2
+𝑀
+max (Cgt, 0.01)
+(37)
+LMask =
+∑︁
+(𝑇−(1 −𝑀))2
+(38)
+LDSSIM =
+∑︁
+(1 −SSIM(Cfinal, Cgt))𝑀
+(39)
+LMV =
+∑︁
+(1 −ZNCC)
+(40)
+L𝐷=
+∑︁
+|𝑑−sg  ¯𝑑 |
+(41)
+Cgt is the ground truth image, 𝑀is the mask,𝑇is the transmittance,
+ZNCC is the cross-correlation computed on pairs of nearby view-
+points, 𝑑is the depth and ¯𝑑is the averaged depth of the neighboring
+pixels. The sums are applied to all the pixels of the cameras in the
+mini-batch. We use coarse-to-fine supervision from the ground
+truth images, with four levels of detail in total. Our complete opti-
+mization objective is a weighted combination of all the losses:
+L = 𝜆RGBLRGB + 𝜆MaskLMask + 𝜆DSSIMLDSSIM
++ 𝜆MVLMV + 𝜆𝐷L𝐷+ 𝜆CVTLCVT
++ 𝜆SDFLSDF + 𝜆nLn + 𝜆EikLEik
++ 𝜆probesLprobes + 𝜆F𝑠LF𝑠.
+(42)
+We propose to additionally weigh the image-loss gradients per-
+primitive during the backward pass based on their projected size.
+This re-weighting makes the training seamless when the resolution
+of the training images is switched to the next level of detail in the
+coarse-to-fine pyramid.
+𝑟proj = 𝑟𝑓𝑥/𝑧
+(43)
+𝑔mod = 1/𝑟2
+proj
+(44)
+𝑟is the radius of the cell’s bounding sphere, 𝑓𝑥is the focal length
+and 𝑧is the depth of the site for the current viewpoint. 𝑔mod is the
+per-primitive weight.
+5.3
+Initialization and Densification
+Initially, we spread the sites in the scene bounding box based on a
+uniform distribution and apply 10 iterations of Lloyd’s relaxation to
+uniformize the cells (𝑎= 0 in equation 1). The SDF is initialized from
+a sphere, while the rest of the learnable features are randomized
+based on a normal distribution.
+We start with 200K sites, and increase their number every 10
+iterations until we reach 4M sites by following a geometric progres-
+sion. To place new sites, we pick a random viewpoint and render a
+depth map and a feature map. The feature map is the 𝛼-blending
+of the sites’ spatial features F𝑠. A new site is placed at the depth
+sampled from a random valid pixel in the depth map, and its feature
+vector F𝑠is sampled from the same pixel in the feature map.
+The nearest-neighbors list is rebuilt each time new points are
+added, while the Voronoi diagram is recomputed more frequently:
+at each iteration in the beginning, and every five iterations towards
+the end. We train for 10K iterations, with four training images per
+mini-batch. New points are added starting from the 400th iteration,
+until the last 400 iterations. For the last 400 iterations, we replace the
+planar-based ZNCC with a nonplanar version to avoid suppressing
+fine-scale details. More details regarding the multi-view loss and
+the weight scheduling are given in the supplementary material.
+6
+Experimental validation
+All experiments in this section used a workstation equipped with
+an RTX 5090 GPU and an Intel Core Ultra 7 265K with 20 cores to
+measure timings, with the exception of table 2 where we report
+each method’s timing and corresponding hardware configuration.
+Best, second and third best results are highlighted in the tables.
+6.1
+Multi-view Reconstruction
+Evaluation on DTU. We evaluate the multi-view reconstruction
+accuracy of our approach on 15 scenes from the DTU dataset [1].
+Quantitative results are reported in table 2 and qualitative results
+are shown in figure 10. We achieve state-of-the-art geometric accu-
+racy, tied with GGGS [63] and BlobsToSpokes [13], while requir-
+ing a training time of approximately 2.5 minutes. Our approach
+reproduces high-frequency geometric details that GGGS and Blob-
+sToSpokes miss, this is particularly noticeable in the close-ups on
+scans 24 and 106 shown at the top of fig. 10. We hypothesize the
+qualitative improvement does not lead to quantitative improvement
+due to noise in the ground truth point clouds and down-sampling
+of the input reconstructions by the official evaluation script.
+For consistency with the 3DGS-like approaches [21], we discard
+vertices that project outside of the training masks as well as hidden
+vertices before Chamfer distance evaluation, since closed surfaces
+tend to be penalized under the DTU evaluation protocol.
+Evaluation on BlendedMVS. We also compare our approach on 8
+scenes from the BlendedMVS [59] dataset in table 1, with qualitative
+results presented in figure 11. We measure Chamfer distances as
+point-to-mesh distances in the normalized reference frame used
+for training, with the same evaluation protocol on this dataset as
+ProbeSDF [53]. The images were cropped before running PGSR
+and GGGS according to the 2DGS protocol [21], since they require
+a projection center in the middle of the images. We achieve high
+geometric accuracy using the same hyperparameters as on DTU,
+with GGGS slightly ahead quantitatively but with noticeable noise
+(see figure 11). PGSR fails to produce a mesh in two instances due
+to ambiguous white backgrounds which caused the GPU to run out
+of memory during mesh extraction.
+Additional evaluations of photometric accuracy are provided in
+the supplementary material.
+6.2
+Training Speed Analysis on DTU
+We evaluate in table 3 the two main configuration hyperparameters
+of our approach: the number of sites and the number of training
+iterations. Reducing either of these produces a small decrease in
+9
+
+
+Toussaint et al.
+Table 1: Chamfer distance on BlendedMVS with 4M sites.
+Method
+Mean
+Dog
+Bear
+Clock
+Durian
+Man
+Sculpture
+Stone
+Jade
+NeuS2 [55]
+2.93
+2.78
+2.71
+2.63
+4.23
+2.25
+2.50
+1.91
+4.43
+Voxurf [57]
+2.64
+2.28
+2.20
+1.88
+2.98
+2.11
+1.75
+3.96
+3.99
+ProbeSDF [53]
+2.21
+2.24
+2.03
+1.69
+3.26
+1.81
+1.61
+1.36
+3.71
+PGSR [7]
+1.56
+1.21
+1.20
+N/A
+2.15
+1.39
+1.81
+1.58
+N/A
+GGGS [63]
+0.88
+0.55
+0.37
+0.71
+0.93
+0.85
+0.99
+0.40
+2.28
+CVTSplat
+1.13
+0.91
+0.49
+0.97
+1.44
+0.91
+1.21
+0.60
+2.53
+Ground Truth
+CVTSplat
+GGGS
+PGSR
+scan 24
+scan 106
+scan 97
+scan 69
+scan 122
+scan 65
+Figure 10: Qualitative comparison on DTU against GGGS [63]
+and PGSR [7]. The ground truth meshes were obtained by
+applying Poisson reconstruction [25] on the ground truth
+point clouds. Our approach recovers finer details, especially
+visible on scans 24, 106 and 122.
+accuracy but lowers training time substantially. Qualitative results
+are shown in figure 12.
+Next, using the chunked rasterizer described in section 4.3.1 has
+the largest impact on runtime: the optimization takes 147s with it,
+Ground Truth
+Man
+Clock
+Jade
+Dog
+CVTSplat
+GGGS
+PGSR
+N/A
+N/A
+N/A
+N/A
+0.000 0.001 0.002 0.003 0.004 0.005
+Figure 11: Qualitative comparison on BlendedMVS against
+GGGS [63] and PGSR [7]. Errors are mesured relative to the
+unit bounding box enclosing the objects. Our approach pro-
+duces smoother geometry than GGGS (see close-ups on man
+and clock, heatmaps on jade), although some concavities are
+better reconstructed with GGGS (clock, jade, dog). PGSR fails
+on two examples and is less accurate overall.
+10
+
+
+CVTSplat: Multi-view Reconstruction Using an Adaptive Centroidal Voronoi Tessellation
+Table 2: Chamfer distance on the DTU benchmark in millimeters. Lower is better. Best, second-best, and third-best results are
+highlighted.
+Method
+24
+37
+40
+55
+63
+65
+69
+83
+97
+105
+106
+110
+114
+118
+122
+Mean Runtime GPU
+Implicit
+VolSDF [60]
+1.14 1.26 0.81 0.49 1.25 0.70 0.72 1.29 1.18 0.70 0.66 1.08 0.42 0.61 0.55
+0.86
+>12 h
+RTX 2080 Ti
+NeuS [54]
+1.00 1.37 0.93 0.43 1.10 0.65 0.57 1.48 1.09 0.83 0.52 1.20 0.35 0.49 0.54
+0.84
+8 h
+RTX 2080 Ti
+Neuralangelo [33]
+0.37 0.72 0.35 0.35 0.87 0.54 0.53 1.29 0.97 0.73 0.47 0.74 0.32 0.41 0.43
+0.61
+>128h
+V100
+NeuS2 [55]
+0.56 0.76 0.49 0.37 0.92 0.71 0.76 1.22 1.08 0.63 0.59 0.89 0.40 0.48 0.55
+0.70
+5 min
+RTX 3090
+Voxurf [57]
+0.91 0.73 0.45 0.34 0.99 0.66 0.83 1.36 1.31 0.78 0.53 1.12 0.37 0.53 0.51
+0.76
+15 min
+A100
+ProbeSDF [53]
+0.65 0.74 0.34 0.34 1.02 0.71 0.62 1.34 0.94 0.70 0.53 0.96 0.36 0.45 0.47
+0.68
+2.5 min
+RTX 3090
+Geo-NeuS [12]
+0.38 0.54 0.34 0.36 0.80 0.45 0.41 1.03 0.84 0.55 0.46 0.47 0.29 0.36 0.35
+0.51
+> 12 h
+RTX 3090
+GeoSVR [32]
+0.32 0.51 0.30 0.33 0.71 0.48 0.42 1.03 0.62 0.56 0.33 0.46 0.30 0.34 0.32
+0.47
+50 min
+RTX 3090 Ti
+Explicit
+SuGaR [19]
+1.47 1.33 1.13 0.61 2.25 1.71 1.15 1.63 1.62 1.07 0.79 2.45 0.98 0.88 0.79
+1.33
+1h
+RTX 4090
+2DGS [21]
+0.48 0.91 0.39 0.39 1.01 0.83 0.81 1.36 1.27 0.76 0.70 1.40 0.40 0.76 0.52
+0.80
+12 min
+RTX 4090
+GOF [61]
+0.50 0.82 0.37 0.37 1.12 0.74 0.73 1.18 1.29 0.68 0.77 0.90 0.42 0.66 0.49
+0.74
+50 min
+RTX 4090
+RaDe-GS [62]
+0.46 0.73 0.33 0.38 0.79 0.75 0.76 1.19 1.22 0.62 0.70 0.78 0.36 0.68 0.47
+0.68
+8 min
+RTX 4090
+MILo [18]
+0.43 0.74 0.34 0.37 0.80 0.74 0.70 1.21 1.22 0.66 0.62 0.80 0.37 0.76 0.48
+0.68
+25 min
+RTX 4090
+PGSR [7]
+0.34 0.54 0.44 0.37 0.78 0.57 0.49 1.06 0.63 0.59 0.47 0.50 0.30 0.37 0.34
+0.52
+30 min
+RTX 4090
+GGGS [63]
+0.38 0.50 0.27 0.31 0.80 0.43 0.42 1.04 0.64 0.52 0.31 0.56 0.30 0.31 0.33
+0.47
+15 min
+RTX 4090
+BlobsToSpokes [13] 0.39 0.50 0.26 0.32 0.80 0.46 0.44 1.05 0.65 0.52 0.34 0.58 0.32 0.33 0.34
+0.49
+20 min
+RTX 4090
+CVTSplat
+0.35 0.49 0.30 0.29 0.76 0.45 0.46 0.97 0.75 0.49 0.38 0.58 0.29 0.32 0.31
+0.48
+2.5 min
+RTX 5090
+Notes: Timings are approximate and are not hardware-normalized. GGGS and BlobsToSpokes use the 20k iterations setting.
+Table 3: Training speed analysis on DTU.
+Method (#Sites, #Optim. steps)
+24
+37
+40
+55
+63
+65
+69
+83
+97
+105
+106
+110
+114
+118
+122
+Mean
+Time (s)
+1M Sites, 10K
+0.38
+0.54
+0.30
+0.30
+0.82
+0.50
+0.47
+1.02
+0.75
+0.53
+0.33
+0.66
+0.30
+0.34
+0.34
+0.50
+87
+2M Sites, 10K
+0.36
+0.51
+0.30
+0.30
+0.82
+0.48
+0.47
+1.00
+0.74
+0.51
+0.33
+0.65
+0.30
+0.33
+0.33
+0.50
+110
+4M Sites, 5K
+0.36
+0.58
+0.30
+0.30
+0.75
+0.46
+0.46
+0.97
+0.74
+0.50
+0.39
+0.75
+0.29
+0.32
+0.31
+0.50
+79
+4M Sites, 7.5K
+0.35
+0.50
+0.30
+0.30
+0.75
+0.46
+0.46
+0.97
+0.74
+0.49
+0.39
+0.65
+0.29
+0.32
+0.31
+0.48
+115
+Basic Rasterizer (4M Sites, 10K)
+0.35
+0.49
+0.30
+0.29
+0.76
+0.45
+0.46
+0.97
+0.76
+0.49
+0.41
+0.58
+0.29
+0.32
+0.31
+0.48
+280
+Chunked Rasterizer (4M Sites, 10K)
+0.35
+0.49
+0.30
+0.29
+0.76
+0.45
+0.46
+0.97
+0.75
+0.49
+0.38
+0.58
+0.29
+0.32
+0.31
+0.48
+147
+4M Sites
+147s 
+2M Sites
+110s
+1M Sites
+87s
+10K iter.
+147s
+7.5K iter.
+115s
+5K iter.
+79s
+Scan 24
+Scan 37
+Figure 12: Test with fewer sites or fewer optimization steps.
+Top: Using fewer sites produces a predictable loss of geo-
+metric details with faster optimization. Bottom: Our model
+converges after 10K training steps, with marginal improve-
+ment beyond 7.5K steps.
+compared to 280s using a baseline that assigns a single GPU thread
+per pixel similarly to 3DGS [26]. This almost gives a 2× speedup
+on the end-to-end optimization. Both rasterizers achieve nearly the
+same Chamfer distance and the remaining discrepancy can likely
+be attributed to differences in floating-point arithmetic.
+6.3
+Ablations on DTU
+We ablate our losses and regularization terms in table 4, ordered by
+decreasing importance. Figure 13 compares against the base model
+qualitatively. Training using a linear radiance tone-mapped after
+rasterization, compared to a typical sigmoid-bounded nonlinear
+radiance, avoids a failure case on scan 65 due to large patches of
+saturated pixels, but makes little difference otherwise. Removing
+the multi-view loss (No ZNCC) or the depth smoothing loss has a
+strong impact overall. Setting 𝑎= 0.05 in the biased CVT loss (eq.
+1), instead of 𝑎= 0.10 prevents the cells from shrinking sufficiently
+which reduces accuracy but does not create hard failure cases. The
+reflection probes are important for recovering smooth geometry in
+specular regions (scan 110, 69). Adding an environment map helps
+compensating for slight inaccuracies in the supervision masks (scan
+83). The rest of the components have lower importance: the SSIM,
+color correction curves and view probes are added for robustness
+against inconsistent illumination conditions. Removing one of them
+does not affect geometry meaningfully. Finishing training with
+the non planar ZNCC term instead of the planar ZNCC gives a
+qualitative improvement in fine details (scan 106). Finally, removing
+the normal smoothing term (eq. 24) slightly improves the Chamfer
+distance compared to our base model but also introduces artifacts
+(scan 110). The gradient modulation (eq. 44) does not change the
+end result but makes training more stable.
+11
+
+
+Toussaint et al.
+Table 4: Ablation study on DTU.
+Method
+24
+37
+40
+55
+63
+65
+69
+83
+97
+105
+106
+110
+114
+118
+122
+Mean
+No Linear Radiance
+0.35
+0.49
+0.30
+0.29
+0.79
+1.78
+0.44
+0.99
+0.84
+0.50
+0.32
+0.59
+0.29
+0.32
+0.31
+0.57
+No ZNCC
+0.40
+0.57
+0.33
+0.31
+0.80
+0.52
+0.52
+1.05
+0.83
+0.54
+0.38
+1.07
+0.29
+0.35
+0.32
+0.55
+No Depth Smoothing
+0.44
+0.50
+0.46
+0.29
+0.75
+0.45
+0.46
+0.97
+0.75
+0.50
+0.50
+0.70
+0.29
+0.36
+0.31
+0.52
+Biased CVT (𝑎= 0.05)
+0.36
+0.51
+0.34
+0.30
+0.81
+0.50
+0.48
+1.02
+0.77
+0.52
+0.34
+0.80
+0.30
+0.34
+0.34
+0.52
+No Ref. Probes
+0.35
+0.56
+0.30
+0.29
+0.76
+0.45
+0.50
+0.97
+0.82
+0.49
+0.38
+0.81
+0.30
+0.32
+0.31
+0.51
+No Envmap
+0.35
+0.52
+0.29
+0.29
+0.80
+0.44
+0.44
+1.12
+0.76
+0.53
+0.39
+0.64
+0.28
+0.31
+0.30
+0.50
+Planar ZNCC Only
+0.35
+0.51
+0.30
+0.29
+0.75
+0.45
+0.46
+0.96
+0.75
+0.50
+0.39
+0.60
+0.30
+0.32
+0.31
+0.48
+No Color Correction
+0.35
+0.49
+0.30
+0.29
+0.75
+0.44
+0.46
+0.97
+0.76
+0.50
+0.41
+0.59
+0.29
+0.32
+0.31
+0.48
+No View Probes
+0.35
+0.49
+0.30
+0.29
+0.75
+0.47
+0.47
+0.97
+0.68
+0.50
+0.40
+0.58
+0.29
+0.32
+0.31
+0.48
+No SSIM
+0.35
+0.51
+0.30
+0.29
+0.75
+0.46
+0.46
+0.97
+0.70
+0.51
+0.32
+0.60
+0.30
+0.33
+0.31
+0.48
+No Gradient Mod.
+0.34
+0.49
+0.29
+0.29
+0.75
+0.44
+0.46
+0.99
+0.79
+0.48
+0.41
+0.52
+0.28
+0.31
+0.30
+0.48
+No Normal Smoothing
+0.35
+0.50
+0.29
+0.29
+0.74
+0.45
+0.49
+0.93
+0.75
+0.46
+0.43
+0.54
+0.29
+0.31
+0.30
+0.47
+Base Model
+0.35
+0.49
+0.30
+0.29
+0.76
+0.45
+0.46
+0.97
+0.75
+0.49
+0.38
+0.58
+0.29
+0.32
+0.31
+0.48
+Scan 110, Base Model
+No ZNCC
+No depth smoothing
+No normals smoothing
+No ref. probes
+Scan 40
+Scan 65
+Scan 69
+Scan 106
+Scan 83
+No depth smoothing
+Nonlinear radiance
+No ref. probes
+Planar ZNCC Finish
+No envmap
+Base Model
+Figure 13: We remove one loss on each example to ablate our
+model. Bottom: The multi-view (ZNCC), depth and normal
+losses as well as the reflection probes are important for geo-
+metric accuracy. Top: Training with a linear radiance avoids
+a failure case on scan 65. Not replacing the planar ZNCC with
+a nonplanar variant in the last phase of training suppresses
+fine details (scan 106). The envmap alleviates silhouette arti-
+facts from inaccurate masks (scan 83).
+6.4
+KNN Efficiency
+We measure the speed of our KNN (K=32) implementation against
+five baselines on the 4M points DTU checkpoints and present the
+results in table 5. For our approach, we distinguish between the case
+where the ball query search radius is already known (w. warmup)
+compared to when it is unknown which takes approximately 3×
+longer. In practice, most of the sites can rely on the search radius
+used in the KNN lookup of the previous training iteration.
+Table 5: KNN timings (ms) on our DTU point clouds with 4M
+points. The * symbol denotes CPU operations.
+CVTSplat
+with/without warmup
+RestrictedVoronoi
+[4]
+CuPy-KNN
+[23]
+Torch-kdtree
+[16]
+Sklearn
+[43]
+TrueKNN
+[41]
+Build Tree
+1.3
+<1
+17.3
+6742*
+1925*
+-
+Query Tree
+13.7 / 46.8
+97.9
+720
+1026
+25630*
+-
+Total
+15.0 / 48.1
+97.9
+737
+7768
+27556
+28543
+MeshlessVoronoi [46] and RestrictedVoronoi [4] use the same
+strategy so we only discuss [4] which was slightly faster. The input
+points are partitioned on a dense voxel grid as a pre-process. Then,
+each query point visits the voxels in concentric rings and keeps
+track of the KNN using a heap in shared memory. Importantly, we
+doubled their hard-coded maximum search radius to accommodate
+our adaptive point distributions, otherwise these baselines fail to
+gather all requested neighbors.
+CuPy-KNN [23] is a re-implementation of [24], based on a BVH
+and using a heap stored in the registers. Torch-kdtree [16] works
+similarly to Cupy-KNN but builds its acceleration structure on the
+CPU. Overall, the heap-based approaches are much less efficient
+than our gather-then-sort approach, even more so when temporal
+consistency is leveraged. TrueKNN [41] relies on the RT cores
+of the GPU to benefit from hardware-accelerated BVH traversal.
+This strategy is effective for uniform point distributions but under
+performs on our point clouds since several retries are needed for
+low-density regions. We also include scikit-learn [43] as a CPU
+reference.
+6.5
+Voronoi and Delaunay Efficiency
+Table 6: Voronoi diagram construction timings (ms) on our
+trained DTU point clouds (4M points).
+CVTSplat
+(Ours)
+MeshlessVoronoi
+[46]
+RestrictedVoronoi
+[4]
+Paragram
+[49]
+gDel3D
+[5]
+RadFoam
+[15]
+KNN
+15.0
+126.6
+97.9
+-
+-
+-
+Adjacency
+11.9
+44.5
+40.5
+275.5
+617.4
+18995
+Centroids
+3.0
+-
+-
+-
+Total
+29.9
+171.0
+138.4
+275.5
+617.4
+18995
+200K
+1M
+2M
+3M
+4M
+Number of sites
+0
+50
+100
+150
+200
+250
+300
+Time (ms)
+Linear scale
+CVTSplat
+RestrictedVoronoi (1st round)
+MeshlessVoronoi
+Paragram
+gDel3D
+Radfoam
+200K
+500K
+1M
+2M
+4M
+Number of sites
+101
+102
+103
+104
+Time (ms)
+Logarithmic scale
+Figure 14: Timings for Voronoi diagram construction, evalu-
+ated on DTU checkpoints saved every 500 optimization steps.
+Reported numbers include KNN and centroids computations
+if applicable.
+We compare the speed of our algorithm for Voronoi diagram
+construction against five GPU baselines in table 6 and in figure 14,
+on the 4M points DTU checkpoints. Paragram [49], gDel3D [5] and
+RadiantFoam [15] only output the Voronoi adjacency graph. Closer
+to our approach, MeshlessVoronoi [46] and RestrictedVoronoi [4]
+produce a list of KNN and also compute cell centroids. We ran
+both of them with single-precision arithmetic and K=32 neighbors,
+equivalently to our setting. In the case of RestrictedVoronoi [4], we
+only report the first round of KNN gathering which corresponds to
+what we are doing. Subsequent retries with larger K for incomplete
+cells increase their runtime by about 1.5×. The reported timing
+for our approach assumes the KNN search radius is known, to
+match the typical case encountered during optimization. Overall,
+our approach is consistently 5× faster than [46] and 10× faster than
+[49] in this context, and scales linearly.
+12
+
+
+CVTSplat: Multi-view Reconstruction Using an Adaptive Centroidal Voronoi Tessellation
+Table 7: Mesh extraction timings on DTU.
+Adjacency →Del.
+Marching Tet.
+Total
+All cells
+11.5 ms
+4.0 ms
+15.5 ms
+Zero-crossing only
+4.5 ms
+0.6 ms
+5.1 ms
+For mesh extraction, we convert the adjacency graph into a
+Delaunay triangulation (sec. 3.4) and subsequently apply marching
+tetrahedra on the smoothed SDF ˆ𝑓. It is sufficient to only generate
+the tetrahedra that cross the zero level set, which divides the total
+mesh extraction time by 3× according to table 7. The zero level set
+is extracted as a triangle soup for real-time visualization during
+training. The duplicate vertices are merged on the CPU before
+outputting the final mesh on disk, which takes two seconds in total.
+7
+Limitations and Future Work
+A limitation of our Voronoi diagram construction algorithm is its
+approximate nature, which makes it unsuitable for applications
+requiring exact adjacencies. Iterative retries with a larger number
+of neighbors in the spirit of Basselin et al. [4] could recover the miss-
+ing adjacencies. A fallback to double precision could also improve
+robustness in degenerate configurations.
+As evaluated in the supplementary material, we find the pro-
+portion of incomplete cells to be low in practice for our choice of
+hyperparameters. More aggressive adaptivity could be balanced
+using a larger number of neighbors but at an increased cost. Deriv-
+ing theoretical upper bounds on the required number of neighbors
+based on cell regularity [22] could be useful but may be inapplicable
+in our case since we make no guarantee on sites spacing.
+Extending our adaptive discretization to open scenes is an in-
+teresting direction for future research. The main obstacles are our
+naive sphere initialization and the potential lack of scalability for
+representing geometric and photometric details over large spatial
+extents. The former could be addressed using monocular priors [32]
+and the latter could benefit from adaptive densification based on
+image content [15, 26], or primitives with greater expressivity [50].
+8
+Conclusion
+We have presented CVTSplat, an approach for multi-view recon-
+struction combining adaptive Voronoi tessellations with differen-
+tiable implicit surface modeling. Our centroidal regularization plays
+a central role: beyond producing well-shaped cells, it enables us
+to specialize several components of the pipeline for efficiency. In
+particular, we introduced a Voronoi diagram construction algorithm
+that exploits the regularity of the tessellation. We further tailored
+neighbor queries, centroid computation, rasterization and mesh ex-
+traction to our representation. Together, these developments yield
+a highly efficient pipeline that achieves geometric accuracy com-
+petitive with the state-of-the-art on two object-level reconstruction
+benchmarks.
+Acknowledgments
+This work was partly supported by AMEDJP26wm0625404 and
+JSPS/KAKENHI JP26K14883.
+References
+[1] Henrik Aanæs, Rasmus Ramsbøl Jensen, George Vogiatzis, Engin Tola, and
+Anders Bjorholm Dahl. 2016. Large-Scale Data for Multiple-View Stereopsis.
+International Journal of Computer Vision (2016), 1–16.
+[2] Gupta Anupam and Sleator Danny. 2016. Seidel’s LP algorithm lecture. https:
+//www.cs.cmu.edu/~15451-s16/lectures/lec15-16-v2.pdf.
+[3] Jonathan T Barron. 2021. Squareplus: A softplus-like algebraic rectifier. arXiv
+preprint arXiv:2112.11687 (2021).
+[4] Justine Basselin, Laurent Alonso, Nicolas Ray, Dmitry Sokolov, Sylvain Lefebvre,
+and Bruno Lévy. 2021. Restricted power diagrams on the GPU. In Computer
+Graphics Forum, Vol. 40. Wiley Online Library, 1–12.
+[5] Thanh-Tung Cao, Ashwin Nanjappa, Mingcen Gao, and Tiow-Seng Tan. 2014. A
+GPU Accelerated Algorithm for 3D Delaunay Triangulation. In Proceedings of
+the 18th Meeting of the ACM SIGGRAPH Symposium on Interactive 3D Graphics
+and Games (I3D ’14). Association for Computing Machinery, New York, NY, USA,
+47–54. doi:10.1145/2556700.2556710
+[6] Anpei Chen, Zexiang Xu, Andreas Geiger, Jingyi Yu, and Hao Su. 2022. Tensorf:
+Tensorial radiance fields. In European conference on computer vision. Springer,
+333–350.
+[7] Danpeng Chen, Hai Li, Weicai Ye, Yifan Wang, Weijian Xie, Shangjin Zhai, Nan
+Wang, Haomin Liu, Hujun Bao, and Guofeng Zhang. 2024. Pgsr: Planar-based
+gaussian splatting for efficient and high-fidelity surface reconstruction. IEEE
+Transactions on Visualization and Computer Graphics 31, 9 (2024), 6100–6111.
+[8] Zina H Cigolle, Sam Donow, Daniel Evangelakos, Michael Mara, Morgan
+McGuire, and Quirin Meyer. 2014. A survey of efficient representations for
+independent unit vectors. Journal of Computer Graphics Techniques 3, 2 (2014).
+[9] Qiang Du, Vance Faber, and Max D. Gunzburger. 1999. Centroidal Voronoi
+Tessellations: Applications and Algorithms. SIAM Rev. 41 (1999), 637–676.
+[10] Tom Duff, James Burgess, Per Christensen, Christophe Hery, Andrew Kensler,
+Max Liani, and Ryusuke Villemin. 2017. Building an orthonormal basis, revisited.
+J. Comput. Graph. Tech 6, 1 (2017).
+[11] Sara Fridovich-Keil, Alex Yu, Matthew Tancik, Qinhong Chen, Benjamin Recht,
+and Angjoo Kanazawa. 2022. Plenoxels: Radiance fields without neural networks.
+In 2022 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR).
+IEEE, 5491–5500.
+[12] Qiancheng Fu, Qingshan Xu, Yew Soon Ong, and Wenbing Tao. 2022. Geo-neus:
+Geometry-consistent neural implicit surfaces learning for multi-view reconstruc-
+tion. Advances in Neural Information Processing Systems 35 (2022), 3403–3416.
+[13] Diego Gomez, Antoine Guédon, Nissim Maruani, Bingchen Gong, and Maks
+Ovsjanikov. 2026. From Blobs to Spokes: High-Fidelity Surface Reconstruction
+via Oriented Gaussians. arXiv preprint arXiv:2604.07337 (2026).
+[14] Shrisudhan Govindarajan, Daniel Rebain, Dor Verbin, Kwang Moo Yi, Anish
+Prabhu, and Andrea Tagliasacchi. 2026. Power Foam: Unifying Real-Time Differ-
+entiable Ray Tracing and Rasterization. arXiv preprint arXiv:2604.24994 (2026).
+[15] Shrisudhan Govindarajan, Daniel Rebain, Kwang Moo Yi, and Andrea Tagliasac-
+chi. 2025. Radiant foam: Real-time differentiable ray tracing. In 2025 IEEE/CVF
+International Conference on Computer Vision (ICCV). IEEE, 4135–4145.
+[16] Thomas Grandits. [n. d.]. torch_kdtree. https://github.com/thomgrand/torch_
+kdtree/tree/main_torch. Software repository, main_torch branch. Accessed 25
+September 2026.
+[17] Amos Gropp, Lior Yariv, Niv Haim, Matan Atzmon, and Yaron Lipman.
+2020. Implicit geometric regularization for learning shapes. arXiv preprint
+arXiv:2002.10099 (2020).
+[18] Antoine Guédon, Diego Gomez, Nissim Maruani, Bingchen Gong, George Dret-
+takis, and Maks Ovsjanikov. 2025. Milo: Mesh-in-the-loop gaussian splatting
+for detailed and efficient surface reconstruction. ACM Transactions on Graphics
+(TOG) 44, 6 (2025), 1–15.
+[19] Antoine Guédon and Vincent Lepetit. 2024. Sugar: Surface-aligned gaussian
+splatting for efficient 3d mesh reconstruction and high-quality mesh rendering.
+In 2024 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR).
+IEEE, 5354–5363.
+[20] Eric Haines, Johannes Günther, and Tomas Akenine-Möller. 2019. Precision
+improvements for ray/sphere intersection. In Ray Tracing Gems: High-Quality
+and Real-Time Rendering with DXR and Other APIs. Springer, 87–94.
+[21] Binbin Huang, Zehao Yu, Anpei Chen, Andreas Geiger, and Shenghua Gao. 2024.
+2D Gaussian Splatting for Geometrically Accurate Radiance Fields. In SIGGRAPH
+2024 Conference Papers. Association for Computing Machinery. doi:10.1145/
+3641519.3657428
+[22] Benoît Hudson, Gary L. Miller, and Todd Phillips. 2006. Sparse Voronoi Refine-
+ment. In International Meshing Roundtable Conference.
+[23] Felix Igelbrink. [n. d.]. CuPy-KNN. https://github.com/mortacious/cupy-knn.
+Software repository. Accessed 25 September 2026.
+[24] Johannes Jakob and Michael Guthe. 2021. Optimizing LBVH-Construction and
+Hierarchy-Traversal to accelerate kNN Queries on Point Clouds using the GPU.
+In Computer Graphics Forum, Vol. 40. Wiley Online Library, 124–137.
+[25] Michael Kazhdan and Hugues Hoppe. 2013. Screened poisson surface recon-
+struction. ACM Transactions on Graphics (ToG) 32, 3 (2013), 1–13.
+13
+
+
+Toussaint et al.
+[26] Bernhard Kerbl, Georgios Kopanas, Thomas Leimkühler, George Drettakis, et al.
+2023. 3d gaussian splatting for real-time radiance field rendering. ACM Trans.
+Graph. 42, 4 (2023), 139–1.
+[27] Dan Koschier, Jan Bender, Barbara Solenthaler, and Matthias Teschner. 2019.
+SPH Eurographics Tutorial. https://sph-tutorial.physics-simulation.org/.
+[28] Dan Koschier, Jan Bender, Barbara Solenthaler, and Matthias Teschner. 2020.
+Smoothed particle hydrodynamics techniques for the physics based simulation
+of fluids and solids. arXiv preprint arXiv:2009.06944 (2020).
+[29] Jonas Kulhanek and Torsten Sattler. 2023. Tetra-nerf: Representing neural ra-
+diance fields using tetrahedra. In 2023 IEEE/CVF International Conference on
+Computer Vision (ICCV). IEEE, 18412–18423.
+[30] Christian Lauterbach, Michael Garland, Shubhabrata Sengupta, David Luebke,
+and Dinesh Manocha. 2009. Fast BVH construction on GPUs. In Computer
+graphics forum, Vol. 28. Wiley Online Library, 375–384.
+[31] Bruno Lévy. 2026. Geogram: A Programming Library with Geometric Algorithms.
+https://github.com/BrunoLevy/geogram
+[32] Jiahe Li, Jiawei Zhang, Youmin Zhang, Xiao Bai, Jin Zheng, Xiaohan Yu, and
+Lin Gu. 2026. Geosvr: Taming sparse voxels for geometrically accurate surface
+reconstruction. Advances in Neural Information Processing Systems 38 (2026),
+108809–108837.
+[33] Zhaoshuo Li, Thomas Müller, Alex Evans, Russell H Taylor, Mathias Unberath,
+Ming-Yu Liu, and Chen-Hsuan Lin. 2023. Neuralangelo: High-fidelity neural
+surface reconstruction. In 2023 IEEE/CVF Conference on Computer Vision and
+Pattern Recognition (CVPR). IEEE, 8456–8465.
+[34] Lingjie Liu, Jiatao Gu, Kyaw Zaw Lin, Tat-Seng Chua, and Christian Theobalt.
+2020. Neural sparse voxel fields. Advances in Neural Information Processing
+Systems 33 (2020), 15651–15663.
+[35] Stuart Lloyd. 1982. Least squares quantization in PCM. IEEE transactions on
+information theory 28, 2 (1982), 129–137.
+[36] Alexander Mai, Trevor Hedstrom, George Kopanas, Janne Kontkanen, Falko
+Kuester, and Jonathan T Barron. 2026. Radiance meshes for volumetric recon-
+struction. In Proceedings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition. 8267–8277.
+[37] Ben Mildenhall, Pratul P Srinivasan, Matthew Tancik, Jonathan T Barron, Ravi
+Ramamoorthi, and Ren Ng. 2021. Nerf: Representing scenes as neural radiance
+fields for view synthesis. Commun. ACM 65, 1 (2021), 99–106.
+[38] Bailey Miller, Hanyu Chen, Alice Lai, and Ioannis Gkioulekas. 2024. Objects
+as volumes: A stochastic geometry view of opaque solids. In 2024 IEEE/CVF
+Conference on Computer Vision and Pattern Recognition (CVPR). IEEE, 87–97.
+[39] Brian Mirtich. 1996. Fast and accurate computation of polyhedral mass properties.
+Journal of graphics tools 1, 2 (1996), 31–50.
+[40] Thomas Müller, Alex Evans, Christoph Schied, and Alexander Keller. 2022. In-
+stant neural graphics primitives with a multiresolution hash encoding. ACM
+transactions on graphics (TOG) 41, 4 (2022), 1–15.
+[41] Vani Nagarajan, Durga Mandarapu, and Milind Kulkarni. 2023. Rt-knns unbound:
+Using rt cores to accelerate unrestricted neighbor search. In Proceedings of the
+37th International Conference on Supercomputing. 289–300.
+[42] NVIDIA Corporation. 2026. cub::WarpMergeSort. CUDA Core Compute Libraries
+documentation. Accessed: 2026-08-26. https://nvidia.github.io/cccl/unstable/
+cub/api/classcub_1_1WarpMergeSort.html
+[43] F. Pedregosa, G. Varoquaux, A. Gramfort, V. Michel, B. Thirion, O. Grisel, M.
+Blondel, P. Prettenhofer, R. Weiss, V. Dubourg, J. Vanderplas, A. Passos, D. Cour-
+napeau, M. Brucher, M. Perrot, and E. Duchesnay. 2011. Scikit-learn: Machine
+Learning in Python. Journal of Machine Learning Research 12 (2011), 2825–2830.
+[44] Daniel J Price. 2012. Smoothed particle hydrodynamics and magnetohydrody-
+namics. J. Comput. Phys. 231, 3 (2012), 759–794.
+[45] Lukas Radl, Felix Windisch, Thomas Deixelberger, Jozef Hladky, Michael Steiner,
+Dieter Schmalstieg, and Markus Steinberger. 2025. SOF: Sorted Opacity Fields
+for Fast Unbounded Surface Rconstruction. In SIGGRAPH Asia Conference Pro-
+ceedings.
+[46] Nicolas Ray, Dmitry Sokolov, Sylvain Lefebvre, and Bruno Lévy. 2018. Meshless
+Voronoi on the GPU. ACM Transactions on Graphics (TOG) 37, 6 (2018), 1–12.
+[47] Antonella Rech, Nicola Conci, and Nicola Garau. 2026. SDFoam: Signed-Distance
+Foam for explicit surface reconstruction. In Proceedings of the IEEE/CVF Confer-
+ence on Computer Vision and Pattern Recognition. 300–308.
+[48] Raimund Seidel. 1991. Small-dimensional linear programming and convex hulls
+made easy. Discrete & Computational Geometry 6, 3 (1991), 423–434.
+[49] Bernardo Taveira, Carl Lindström, Maryam Fatemi, Lars Hammarstrand, and
+Fredrik Kahl. 2026. Scalable GPU Construction of 3D Voronoi and Power Dia-
+grams. arXiv preprint arXiv:2605.06408 (2026).
+[50] Bernardo Taveira, Carl Lindström, Joakim Johnander, and Fredrik Kahl. 2026.
+Differentiable Voronoi Ray Tracing Beyond Rasterization Speeds. arXiv preprint
+arXiv:2608.17682 (2026).
+[51] The CGAL Project. 2026. CGAL User and Reference Manual (6.2 ed.). CGAL
+Editorial Board. https://doc.cgal.org/6.2/Manual/packages.html
+[52] Diego Thomas, Briac Toussaint, Jean-Sébastien Franco, and Edmond Boyer. 2025.
+VortSDF: 3D Modeling with Centroidal Voronoi Tessellation on Signed Distance
+Field. In Proceedings of the IEEE/CVF Winter Conference on Applications of Com-
+puter Vision. IEEE, 495–504. doi:10.1109/WACV61041.2025.00058
+[53] Briac Toussaint, Diego Thomas, and Jean-Sébastien Franco. 2025. Probesdf: Light
+field probes for neural surface reconstruction. In 2025 IEEE/CVF Conference on
+Computer Vision and Pattern Recognition (CVPR). IEEE, 11026–11035.
+[54] Peng Wang, Lingjie Liu, Yuan Liu, Christian Theobalt, Taku Komura, and Wen-
+ping Wang. 2021. Neus: Learning neural implicit surfaces by volume rendering
+for multi-view reconstruction. arXiv preprint arXiv:2106.10689 (2021).
+[55] Yiming Wang, Qin Han, Marc Habermann, Kostas Daniilidis, Christian Theobalt,
+and Lingjie Liu. 2023. Neus2: Fast learning of neural implicit surfaces for multi-
+view reconstruction. In 2023 IEEE/CVF international conference on computer vision
+(ICCV). IEEE, 3272–3283.
+[56] Johannes Weidenfeller, Shaofei Wang, Philipp Fürnstahl, and Siyu Tang. 2026.
+ADELE-Adaptive Delaunay Grids for High-Fidelity Mesh-Native Reconstruction.
+arXiv preprint arXiv:2609.06723 (2026).
+[57] Tong Wu, Jiaqi Wang, Xingang Pan, Xudong Xu, Christian Theobalt, Ziwei Liu,
+and Dahua Lin. 2023. Voxurf: Voxel-based Efficient and Accurate Neural Surface
+Reconstruction. In International Conference on Learning Representations (ICLR).
+[58] Qiangeng Xu, Zexiang Xu, Julien Philip, Sai Bi, Zhixin Shu, Kalyan Sunkavalli,
+and Ulrich Neumann. 2022. Point-nerf: Point-based neural radiance fields. In
+2022 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR).
+IEEE, 5428–5438.
+[59] Yao Yao, Zixin Luo, Shiwei Li, Jingyang Zhang, Yufan Ren, Lei Zhou, Tian Fang,
+and Long Quan. 2020. Blendedmvs: A large-scale dataset for generalized multi-
+view stereo networks. In 2020 IEEE/CVF Conference on Computer Vision and
+Pattern Recognition (CVPR). IEEE, 1787–1796.
+[60] Lior Yariv, Jiatao Gu, Yoni Kasten, and Yaron Lipman. 2021. Volume rendering of
+neural implicit surfaces. Advances in neural information processing systems 34
+(2021), 4805–4815.
+[61] Zehao Yu, Torsten Sattler, and Andreas Geiger. 2024. Gaussian opacity fields:
+Efficient adaptive surface reconstruction in unbounded scenes. ACM Transactions
+on Graphics (ToG) 43, 6 (2024), 1–13.
+[62] Baowen Zhang, Chuan Fang, Rakesh Shrestha, Yixun Liang, Xiao-Xiao Long,
+and Ping Tan. 2026. Rade-gs: Rasterizing depth in gaussian splatting. ACM
+Transactions on Graphics 45, 2 (2026), 1–14.
+[63] Baowen Zhang, Chenxing Jiang, Heng Li, Shaojie Shen, and Ping Tan. 2026.
+Geometry-Grounded Gaussian Splatting. arXiv preprint arXiv:2601.17835 (2026).
+14
+
+
+CVTSplat: Multi-view Reconstruction Using an Adaptive Centroidal Voronoi Tessellation
+A
+Overview
+This supplementary document provides additional implementation
+details, experiments, derivations and proofs. We report the opti-
+mization schedule (section B) followed by statistics on our adaptive
+Voronoi tessellation: study of mesh defects (section C), accuracy
+of cell moments computation (section D), frequency of incomplete
+cells and relationship between cell size and SDF (section E). Evalua-
+tions of rendering speed, photometric accuracy and model size are
+available in sections F, G and H respectively. Section I gives details
+regarding the multi-view loss and section J concludes with proofs
+omitted from the main paper.
+B
+Hyperparameters Scheduling
+Our optimization schedule is detailed in table 8.
+Table 8: Optimization schedule. Array values are linearly
+interpolated throughout training.
+Training phases. 10,000 iterations: 400 initialization, 9200 main training,
+and 400 cleanup. No sites are added during initialization or cleanup.
+Point population. 200k initial sites up to 4M sites. Densification every
+10 iterations.
+Data and optimization. 4 image levels of detail, batch size: 4 images
+per batch using gradient accumulation, learning rate [0.025, 0.001].
+Structure updates. KNN every 10 iterations, Voronoi diagram construc-
+tion frequency [1, 2, 5].
+Geometric regularization. LSDF =[0.4, 0.1], Ln =[0.05, 0.1],
+LEik =[0.005], depth smoothing LD =[0.5].
+CVT Densification. LCVT = 1, 𝑎=[0.05, 0.10], 𝑏=[0.01, 0.001,
+0.0001].
+Image losses. LRGB =[5, 10], LDSSIM =[1, 2], LMV =[0.1, 10],
+LMask =[5, 0.1].
+Appearance. NeuS sharpness 𝑠=[5, 15, 30, 60, 120], features
+smoothing LF𝑠=[0.05], probes smoothing Lprobes =[0.1, 1].
+10242 background envmap, two 323 spherical-harmonic probe grids.
+C
+Mesh Defects Analysis
+Table 9 reports the average number of topological errors in our
+extracted meshes. We count the number of non-manifold edges, i.e.
+edges having more than two incident triangles, and boundary edges
+that have a single incident triangle. The implicit surface touches
+the bounding box walls in some scenes, which creates legitimate
+boundary edges. Therefore, we only count the ones within 95% of
+the bounding box that actually correspond to small holes in the
+extracted meshes. Missing Voronoi adjacencies can prevent the
+formation of tetrahedra and produce small holes, where a single
+triangle is missing in general. Non-manifold edges may result from
+inconsistent tetrahedron selection near degenerate configurations
+or from incomplete Voronoi neighbor lists. Overall, these defects
+are infrequent relative to the number of mesh triangles and could
+potentially be addressed by topological post-processing.
+D
+Cell Moments Estimation
+We evaluate in Figure 15 the accuracy of the quadrature formulas for
+cell volume and centroid using varying numbers of rays sampled
+on a Fibonacci sphere lattice. Errors are relative and computed
+Table 9: Average mesh extraction defects by dataset.
+Dataset
+Non-manifold edges
+Boundary edges
+Triangles
+DTU
+2.7
+2.3
+6.4M
+BlendedMVS
+2.4
+1.4
+6.7M
+with respect to a reference using 8192 rays. Volume and radius
+errors are relative to their reference values while the centroid error
+corresponds to the centroid displacement divided by the reference
+cell radius. The radius is estimated from the maximum sampled
+distance to the cell boundary over the set of ray directions. The
+error curves for the volume and centroid are nearly overlapped and
+decrease as 1/𝑁, where 𝑁is the number of rays. The radius error
+decreases more slowly, approximately as 1/
+√
+𝑁.
+With our default of 64 rays, the mean errors are 0.79% for the
+volume, 0.77% for the centroid, and 5.65% for the radius. The cell
+radius mainly serves to define an approximate bounding sphere dur-
+ing rasterization. A more accurate value could be computed using
+the maximum distance to the circumcenters of incident tetrahedra
+(i.e. the Voronoi vertices), but that would require computing the
+Delaunay triangulation from the adjacency graph every time it is
+updated which would add some overhead. Our approximate bound-
+ing spheres only clip the furthest corners of the cells, that would
+not contribute significantly to the volume integral if included.
+32
+64
+128
+256
+512
+1024
+2048
+4096
+Number of rays sampled on the unit sphere
+0.01%
+0.1%
+1%
+10%
+Relative error
+Mean over 15 DTU scans; 8192-ray reference
+Approximation error of the cells moments.
+Radius
+Volume
+Centroid
+Figure 15: Relative error curves when computing cell volume,
+centroid and bounding sphere radius using a varying number
+of ray samples. The volume and centroid error curves are
+nearly overlapped in the plot.
+E
+Distribution of cells
+Figure 16 presents statistics about the number of Voronoi neighbors
+and their distribution within the KNN list. This test used 64 nearest
+neighbors instead of 32 for validation. A small proportion of cells
+has Voronoi neighbors beyond the 32nd nearest neighbor (≈0.1%).
+Extracting the KNN at the centroid decreases that rate substantially
+(≈0.0006%) but has little importance on multi-view optimization in
+practice. Incomplete cells are typically located away from the im-
+plicit surface and therefore do not participate in volume rendering
+15
+
+
+Toussaint et al.
+0
+4
+8
+12
+16
+20
+24
+28
+32+
+Voronoi neighbors per site
+0
+5
+10
+15
+20
+25
+30
+Share of sites (%)
+Number of Voronoi neighbors
+Site-centered
+Centroid-centered
+0
+8
+16
+24
+32
+40
+48
+56
+63
+Zero-based neighbor index
+0.0
+2.5
+5.0
+7.5
+10.0
+12.5
+15.0
+17.5
+20.0
+Share of sites (%)
+Furthest Voronoi neighbor (linear)
+0
+8
+16
+24
+32
+40
+48
+56
+63
+Zero-based neighbor index
+10−6
+10−5
+10−4
+10−3
+10−2
+10−1
+100
+101
+Share of sites (%)
+Beyond 32 KNN:
+Site-centered: 0.1073%
+Centroid-centered: 0.0006%
+Furthest Voronoi neighbor (log)
+Figure 16: Histograms pooled over all 23 DTU and BlendedMVS scenes (92 million sites). The blue one queries KNN at each site
+while the red one queries at the cell centroid computed at the previous update. Left: Number of Voronoi neighbors per site. The
+mean is ≈14.2, corresponding to 14 bisector planes contributing to each cell on average. Middle and Right: zero-based index of
+the last detected Voronoi neighbor in the KNN list, with linear and logarithmic frequency scales respectively. For ≈60% of sites,
+all Voronoi neighbors lie among the first 16 nearest neighbors. The frequency decreases roughly exponentially beyond index
+15, with ≈0.1% of cells not finding their last Voronoi neighbor within the 32-KNN list with the base strategy. Using shifted ball
+queries reduces the frequency of incomplete cells by a factor of 170 in comparison (≈600 cells in total out of 92M).
+−0.1
+0.0
+0.1
+0.2
+0.3
+Signed distance
+−10
+−8
+−6
+−4
+−2
+log2 (r)
+Fit to bin medians:
+r = 0.0027 + 0.174 |d|, R2 = 0.998
+Cell radius r vs. SDF d
+−10
+−8
+−6
+−4
+−2
+log2 (r)
+0.0
+0.5
+1.0
+1.5
+2.0
+Share of sites (%)
+h(r) = 2.76 × 10−5r−1.957
+2−8 ≤r ≤2−4  (26.2% of sites)
+R2 = 0.999 (log frequencies)
+h: share of sites (%)
+Distribution of cell radii r
+−0.1
+0.0
+0.1
+0.2
+0.3
+Signed distance
+0
+5
+10
+15
+20
+25
+30
+Share of sites (%)
+Distribution of cell SDF d
+10−5
+10−4
+10−3
+10−2
+10−1
+100
+Sites per bin (%)
+Figure 17: Cell-radius statistics averaged over all scenes. Left: the distribution of cell radius 𝑟against SDF 𝑑. The cyan curve fits
+the median radius in each distance bin, showing approximately linear growth with |𝑑|. Its similar branches on either side of
+zero indicate comparable cell size inside and outside the surface at equal distance. Middle: the distribution of log2(𝑟). The red
+curve fits a power-law tail over 2−8 ≤𝑟≤2−4, containing 26.2% of sites. Within this range, each doubling of 𝑟corresponds to
+approximately 3.9× fewer sites per histogram bin (ℎ(𝑟)/ℎ(2𝑟) ≈3.9). Right: The number of cells decreases very quickly away
+from the implicit surface.
+or mesh extraction. Nevertheless, we use the offset KNN strategy
+by default as it provides lower error rates at no additional cost.
+Figure 17 explores the relationship between cell size and signed
+distance induced by our adaptive CVT. The bounding box used
+for training spans the unit cube [−1, +1]3, the SDF and cell radius
+are given in this reference frame. We find an approximately affine
+relationship between cell radius and SDF, with most of the cells
+located close to the implicit surface.
+Figure 18 illustrates the sensitivity of the point distribution to
+the hyperparameter 𝑎in the CVT loss.
+Table 10: Average projected cell radius and rendering speed
+(mean ± standard deviation across scenes).
+Dataset
+Image size
+Cell radius (px)
+Render time (ms)
+FPS
+DTU
+1600 × 1200
+1.55 ± 0.31
+3.63 ± 0.29
+277 ± 21
+BlendedMVS
+768 × 576
+1.21 ± 0.15
+2.40 ± 0.21
+419 ± 36
+F
+Rendering speed
+Table 10 reports the average size of the primitives once projected to
+the training views. Each primitive is weighted by its volume render-
+ing weight to compute this metric. We also report the time taken
+to render an image from the dataset, averaged over all viewpoints
+and scenes. The timings are measured on an RTX 5090 GPU. The
+16
+
+
+CVTSplat: Multi-view Reconstruction Using an Adaptive Centroidal Voronoi Tessellation
+a=0, e=0%
+a=0.05, e=0%
+a=0.10, e=0.1%
+a=0.15, e=13%
+a=0.20, e=45%
+Figure 18: Adaptive discretization of a known SDF. Top: 2D slice with random colors and superimposed extracted mesh. Bottom:
+2D slice with SDF mapped to hue. We fit the SDF using 𝑁= 105 sites and vary the parameter 𝑎in the CVT loss. The mesh
+approximates the zero level set more accurately for 𝑎> 0. The proportion of cells 𝑒with missing bisector planes increases
+sharply for 𝑎> 0.1 when using 32 Euclidean nearest neighbors. Missing bisector planes can cause cells to clearly overlap for
+larger values of 𝑎(see 𝑎= 0.2, center of the horseshoe in the top panel).
+renderings are written to an offscreen buffer so a small additional
+overhead would be needed in practice to display the result.
+G
+Photometric Evaluation
+We evaluate the photometric accuracy of our approach in table
+11, on all available viewpoints and within the silhouette masks
+eroded by two pixels. All tested methods were trained using all
+viewpoints so this experiment measures fitting error rather than
+novel view synthesis fidelity. PGSR [7] and GGGS [63] train on
+cropped images so we evaluate our method in the same setting for
+consistency. PGSR and GGGS used half-resolution images on DTU,
+following their training setup, so we upscale their renderings before
+evaluation. Our method achieves an image quality comparable to
+PGSR but slightly below GGGS, with a larger gap on BlendedMVS.
+Qualitative comparisons on DTU and BlendedMVS are shown in
+figures 19 and 20 respectively. We picked viewpoints for which our
+error is highest compared to GGGS to understand the limitations
+of our appearance model. The texture is generally well-reproduced
+in our case but some specular regions are missing due to the SH
+bases being shared by multiple sites.
+Table 11: Masked image metrics on training views.
+Dataset
+Method
+PSNR ↑SSIM ↑LPIPS ↓
+CVTSplat
+30.32
+0.888
+0.147
+DTU
+GGGS
+30.76
+0.872
+0.253
+PGSR
+30.33
+0.866
+0.265
+CVTSplat
+29.52
+0.894
+0.073
+BMVS
+GGGS
+32.43
+0.953
+0.046
+PGSR
+30.50
+0.902
+0.108
+H
+Model size
+Table 12 presents a comparison of our model in terms of number
+of primitives and number of trainable parameters, compared to
+PGSR [7] and GGGS [63]. Despite using more primitives than GGGS,
+we have a similar total parameter count on DTU, and lower on
+BlendedMVS. Table 13 provides a breakdown of parameter usage
+for our approach.
+Table 12: Average model size.
+Dataset
+Method
+Primitives
+Parameters
+CVTSplat
+4M sites
+39.35M
+BMVS
+GGGS
+1.1M Gaussians
+64.21M
+PGSR
+0.5M Gaussians
+29.95M
+CVTSplat
+4M sites
+39.35M
+DTU
+GGGS
+0.6M Gaussians
+36.16M
+PGSR
+0.3M Gaussians
+16.11M
+Table 13: Parameter count breakdown.
+Component
+Total
+Site positions (3 × 4M)
+12M
+Site distances (1 × 4M)
+4M
+Site features (4 × 4M)
+16M
+Two SH probes grids
+4.2M
+Environment map
+3.1M
+MLP
+595
+Total
+39.3M
+17
+
+
+Toussaint et al.
+0
+5
+10
+15
+20
+25
+30
+35
+40
+Mean absolute RGB-channel error (0-255)
+scan 97 - view 5
+scan 69 - view 4
+scan 114 - view 4
+scan 24 - view 19
+Reference
+CVTSplat
+GGGS
+PGSR
+Figure 19: Qualitative comparison of renderings on DTU.
+Our approach can represent high-frequency texture patterns
+(scan 24, house roof) but misses some specularities compared
+to GGGS and PGSR.
+I
+Details on the Multiview Loss
+We use a multi-view loss inspired by PGSR [7]. Pairs of views that
+are close to each other are chosen at random during training (a
+mini-batch contains 4 views so that pairs can be formed). During
+the forward pass of volume rendering, the depth of the first zero-
+crossing of the SDF is recorded for each ray to form a depth map.
+I.1
+Depth Computation
+For a cell C𝑖having SDF ˆ𝑓𝑖, position x𝑖and SDF gradient n𝑖, we
+have the following approximation:
+ˆ𝑓(x) = ˆ𝑓𝑖+ (x −x𝑖) · n𝑖
+(45)
+0
+5
+10
+15
+20
+25
+30
+35
+40
+Mean absolute RGB-channel error (0-255)
+Dog - view 21
+Clock - view 101
+Bear - view 101
+Stone - view 8
+PGSR
+GGGS
+CVTSplat
+Reference
+Figure 20: Qualitative comparison of renderings on Blended-
+MVS. PGSR failed to converge on the clock scene.
+Then for a ray r(𝑡) = o+𝑡v, the zero-crossing is obtained by solving
+ˆ𝑓(r(𝑡∗)) = 0:
+ˆ𝑓𝑖+ (o + 𝑡∗v −x𝑖) · n𝑖= 0
+(46)
+⇔ˆ𝑓𝑖+ (o −x𝑖) · n𝑖+ 𝑡∗v · n𝑖= 0
+(47)
+⇔𝑡∗= −( ˆ𝑓𝑖+ (o −x𝑖) · n𝑖)/v · n𝑖
+(48)
+The depth value 𝑡∗is discarded if the point r(𝑡∗) falls outside of
+the cell, indicating that the implicit surface does not cross it. There
+may be several zero-crossings along a given ray, so the final depth
+value is taken as the minimum over the intersected cells. In case
+no zero-crossing occurs, we use 𝑡∗= +∞.
+Once a depth map is obtained for both views in the pair, we can
+compute our multi-view loss. We implement two variants based
+on the zero-normalized cross-correlation (ZNCC). The first one is
+similar to prior works [7, 13] based on planar patches, whereas the
+other removes the planar assumption to recover finer details.
+18
+
+
+CVTSplat: Multi-view Reconstruction Using an Adaptive Centroidal Voronoi Tessellation
+I.2
+Planar ZNCC
+Let the pair of views be denoted as (𝐴, 𝐵), with 𝐴the reference
+view and 𝐵the neighboring view. We compute a normal vector
+for each pixel (𝑢, 𝑣) in view 𝐴using centered finite differences in
+the depth map D𝐴. Let n be the normal vector expressed in 𝐴’s
+reference frame. Pixels having invalid depth values (+∞) or invalid
+neighboring pixels are skipped. We check for visibility in view 𝐵
+using a cycle consistency check (same as PGSR [7]):
+𝑑𝐴= D𝐴(𝑢𝐴, 𝑣𝐴)
+(49)
+𝑢𝐵, 𝑣𝐵= 𝜋𝐵(𝜋−1
+𝐴(𝑢𝐴, 𝑣𝐴,𝑑𝐴))
+(50)
+𝑑𝐵= D𝐵(𝑢𝐵, 𝑣𝐵)
+(51)
+𝑢′
+𝐴, 𝑣′
+𝐴= 𝜋𝐴(𝜋−1
+𝐵(𝑢𝐵, 𝑣𝐵,𝑑𝐵))
+(52)
+𝜋denotes the projection operator, mapping 3D points to pixel
+coordinates and 𝜋−1 its inverse that maps a pixel and depth value
+back to a 3D point. We consider the pixel to be occluded in view 𝐵
+if
+√︁
+(𝑢𝐴−𝑢′
+𝐴)2 + (𝑣𝐴−𝑣′
+𝐴)2 > 2. The pixel may be rejected if the
+cycle consistency check fails due to the point projecting outside
+of 𝐵’s field of view, or if the depth in view B is invalid. Lastly, we
+also check that the normal is not too slanted in either view, with a
+rejection threshold of 85° between the normal and the viewing ray.
+If these checks pass, we compute the ZNCC over a 5 × 5 pixel
+patch centered on the pixel of interest. Let 𝑥𝑖,𝑗and 𝑦𝑖,𝑗be the
+grayscale ground truth pixel values for views 𝐴and 𝐵respectively,
+sampled over the pixels in the patch. The grayscale values are ob-
+tained by taking the average of the RGB channels and multiplying
+by the mask channel. The patch forms a plane with normal n, placed
+at depth 𝑑along the ray originating from pixel (𝑢, 𝑣).
+𝑥𝑖,𝑗= I𝐴(𝑢+ 𝑖, 𝑣+ 𝑗)
+−2 ≤𝑖, 𝑗≤2
+(53)
+𝑑′ = 𝑑
+n𝑇K−1
+𝐴(𝑢, 𝑣, 1)𝑇
+n𝑇K−1
+𝐴(𝑢+ 𝑖, 𝑣+ 𝑗, 1)𝑇
+(54)
+𝑦𝑖,𝑗= I𝐵(𝜋𝐵(𝜋−1
+𝐴(𝑢+ 𝑖, 𝑣+ 𝑗,𝑑′)))
+(55)
+In the case of 𝑥𝑖,𝑗, we can directly sample the pixels at their
+centers, whereas 𝑦𝑖,𝑗requires sampling image I𝐵with bilinear in-
+terpolation so that 𝑦𝑖,𝑗is a continuous function of the plane normal
+and depth. The sampling coordinates for 𝑦𝑖,𝑗are obtained by in-
+tersecting the plane with the neighboring rays, which gives an
+intersection depth 𝑑′, then back-projecting to 3D space and finally
+projecting into view B. The ZNCC 𝑧∈[−1, 1] is then computed
+by evaluating the first- and second-order moments of the pixel
+samples, weighted with a Gaussian kernel.
+𝑊=
+∑︁
+𝑤𝑖,𝑗
+(56)
+𝑥= 1
+𝑊
+∑︁
+𝑥𝑖,𝑗𝑤𝑖,𝑗
+(57)
+𝑦= 1
+𝑊
+∑︁
+𝑦𝑖,𝑗𝑤𝑖,𝑗
+(58)
+𝑥2 = 1
+𝑊
+∑︁
+𝑥2
+𝑖,𝑗𝑤𝑖,𝑗
+(59)
+𝑦2 = 1
+𝑊
+∑︁
+𝑦2
+𝑖,𝑗𝑤𝑖,𝑗
+(60)
+𝑥𝑦= 1
+𝑊
+∑︁
+𝑥𝑖,𝑗𝑦𝑖,𝑗𝑤𝑖,𝑗
+(61)
+ZNCC =
+𝑥𝑦−𝑥· 𝑦
+√︁
+𝑥2 −𝑥2 + 𝜖·
+√︃
+𝑦2 −𝑦2 + 𝜖
+(62)
+We take 𝜖= 1.0𝐸−4 for numerical stability. The Gaussian kernel
+is separable (𝑤𝑖,𝑗= 𝑤𝑖𝑤𝑗), with the five weights taken from the 7th
+row of Pascal’s triangle (1, 6, 15, 20, 15, 6, 1), where the first and last
+bins are omitted since they contribute very little.
+I.3
+Nonplanar ZNCC
+Assuming that the surface is locally planar tends to erase fine geo-
+metric details so we propose to remove the planar assumption in the
+ZNCC computation. Doing so is simple, we just use the actual depth
+of the neighboring pixels in view A, instead of taking the depth
+of the ray/plane intersection. This amounts to replacing equation
+54 by 𝑑′ = D𝐴(𝑢+ 𝑖, 𝑣+ 𝑗). In practice, we actually use a separate
+implementation to take advantage of the fact that the pixel values
+𝑦𝑖,𝑗can be shared with neighboring pixels in view A, which is not
+the case in the planar case due to adjacent pixels having different
+plane orientations.
+We evaluate mutual visibility over each pixel in view A in a
+similar manner to the planar case. First, by computing the normal
+as before and checking its angle with respect to both viewpoints,
+and second, by applying the same cycle consistency check. Invalid
+pixels or pixels for which the mutual visibility tests fail are skipped
+in the computation of the moments in equations 56-61.
+I.4
+Loss
+Our multi-view loss is LMV = (1 −ZNCC), summed over all valid
+pixels in view A. We use the planar ZNCC computation for most
+of the training since it is more stable, but switch to the nonplanar
+ZNCC near the end to recover finer details. Note that the grayscale
+ground truth images and depth maps follow the same coarse-to-fine
+training regime as the color losses, which means that the small 5×5
+receptive field will actually cover a larger proportion of the field of
+view in the beginning.
+I.5
+Backward Pass
+The ZNCC computation performs the forward and backward passes
+in the same CUDA kernel for efficiency. It takes as input the depth
+maps D𝐴and D𝐵, the grayscale images I𝐴and I𝐵and intrinsic and
+extrinsic parameters of both cameras. It produces the loss value
+L𝑀𝑉along with depth gradients for view A (𝜕L𝑀𝑉/𝜕D𝐴). The
+19
+
+
+Toussaint et al.
+depth gradients are further propagated to the SDF values during
+the backward pass of the volume rendering.
+J
+Derivations and Proofs
+This section gives more details on the computation of the SDF
+gradient from the neighbors’ SDF (sec. J.1), the computation of
+the volume rendering integral in closed form (J.2), and the check
+to filter non-Delaunay tetrahedra when converting the Voronoi
+adjacencies to a Delaunay triangulation (J.3).
+J.1
+SDF Gradient Computation
+We summarize the expressions used to define the smoothed SDF
+ˆ𝑓= 𝐺(𝑓) and show derivations for its gradient n = ∇x𝐺( ˆ𝑓). The
+smoothing kernel 𝐺is defined by:
+𝐺(𝑢)𝑖=
+∑︁
+𝑗∈N(𝑖)
+𝑢𝑗𝑤𝑖𝑗/
+∑︁
+𝑗∈N(𝑖)
+𝑤𝑖𝑗
+(63)
+𝑤𝑖𝑗= V𝑗exp
+
+−||x𝑖−x𝑗||2
+2
+2𝜎2𝑅2
+𝑖
+
+(64)
+𝑅𝑖= max
+𝑗∈N(𝑖)(||x𝑖−x𝑗||2).
+(65)
+For computation of the SDF gradient, we consider that the neigh-
+borhood N (𝑖), the cell volumes V𝑗and the kernel radius 𝑅𝑖are
+constants. Let 𝑊𝑖= Í
+𝑗∈N(𝑖) 𝑤𝑖𝑗be an intermediate variable to
+simplify the notation.
+∇x𝑖𝑤𝑖𝑗= −x𝑖−x𝑗
+𝜎2𝑅2
+𝑖
+𝑤𝑖𝑗
+(66)
+∇x𝑖𝑊𝑖=
+∑︁
+∇x𝑖𝑤𝑖𝑗
+(67)
+n𝑖= ∇x𝑖𝐺( ˆ𝑓)𝑖
+(68)
+=
+∑︁
+𝑗∈N(𝑖)
+ˆ𝑓𝑗∇x𝑖
+ 𝑤𝑖𝑗/𝑊𝑖
+
+(69)
+=
+∑︁
+𝑗∈N(𝑖)
+ˆ𝑓𝑗
+ ∇x𝑖𝑤𝑖𝑗·𝑊𝑖−𝑤𝑖𝑗· ∇x𝑖𝑊𝑖
+ /𝑊2
+𝑖
+(70)
+=
+∑︁
+𝑗∈N(𝑖)
+ˆ𝑓𝑗a𝑖𝑗.
+(71)
+When back-propagating loss gradients with respect to n𝑖, the
+weights a𝑖𝑗on ˆ𝑓𝑗in equation 71 are treated as constants.
+J.2
+Closed-form Volume Integral
+Assuming the cells are not overlapping, the volume integral can be
+split into one integral per cell, which are then blended to produce the
+color of the ray o +𝑡r. To simplify the notation, let [𝑎,𝑏] = [𝑡−
+𝑖,𝑡+
+𝑖].
+For each cell, we have:
+C𝑖=
+∫𝑏
+𝑎
+c𝑖𝜎(𝑡)𝑇(𝑎,𝑡)𝑑𝑡
+(72)
+𝑇(𝑎,𝑡) = 𝑒−
+∫𝑡
+𝑎𝜎(𝑢)𝑑𝑢
+(73)
+𝜎(𝑡) = 𝑠Φ(−𝑠ˆ𝑓(𝑡))|n𝑖· r|
+(74)
+Because the color c𝑖is constant inside the cell, it can be moved
+outside of the integral in equation 72.
+∫𝑏
+𝑎
+𝜎(𝑡)𝑇(𝑎,𝑡)𝑑𝑡=
+∫𝑏
+𝑎
+−𝑑
+𝑑𝑡𝑇(𝑎,𝑡)𝑑𝑡
+(75)
+= 𝑇(𝑎,𝑎) −𝑇(𝑎,𝑏) = 1 −𝑇(𝑎,𝑏)
+(76)
+∫𝑏
+𝑎
+𝜎(𝑡)𝑑𝑡=
+∫𝑏
+𝑎
+𝑠Φ(−𝑠ˆ𝑓(𝑡))|n𝑖· r|
+(77)
+= 𝑠|n𝑖· r|
+∫𝑏
+𝑎
+Φ(−𝑠ˆ𝑓(𝑡))𝑑𝑡
+(78)
+= 𝑠|n𝑖· r|
+∫𝑏
+𝑎
+1
+1 + exp(𝑠ˆ𝑓(𝑡))
+𝑑𝑡
+(79)
+Recall that the linear SDF approximation is:
+ˆ𝑓(𝑡) = ˆ𝑓(o + 𝑡r)
+(80)
+= ˆ𝑓𝑖+ (o −x𝑖) · n𝑖+ 𝑡r · n𝑖
+(81)
+Now, we perform a change of variable in the integral:
+𝑢= 𝑠ˆ𝑓(𝑡)
+(82)
+𝑑𝑢= 𝑠r · n𝑖𝑑𝑡
+(83)
+∫𝑏
+𝑎
+𝜎(𝑡) d𝑡= 𝑠|n𝑖· r|
+∫𝑠ˆ𝑓(𝑏)
+𝑠ˆ𝑓(𝑎)
+1
+1 + 𝑒𝑢
+d𝑢
+𝑠n𝑖· r
+(84)
+= sgn(n𝑖· r)
+∫𝑠ˆ𝑓(𝑏)
+𝑠ˆ𝑓(𝑎)
+d𝑢
+1 + 𝑒𝑢
+(85)
+= −sgn(n𝑖· r) [ln(1 + 𝑒−𝑢)]𝑠ˆ𝑓(𝑏)
+𝑠ˆ𝑓(𝑎)
+(86)
+= sgn(n𝑖· r) ln
+ 
+1 + 𝑒−𝑠ˆ𝑓(𝑎)
+1 + 𝑒−𝑠ˆ𝑓(𝑏)
+!
+.
+(87)
+Consequently,
+𝑇(𝑎,𝑏) = exp
+
+−
+∫𝑏
+𝑎
+𝜎(𝑡) d𝑡
+
+(88)
+=
+ 
+1 + 𝑒−𝑠ˆ𝑓(𝑎)
+1 + 𝑒−𝑠ˆ𝑓(𝑏)
+!−sgn(n𝑖·r)
+.
+(89)
+This gives the final expression for the transparency:
+𝛼𝑖= 𝑇(𝑡−
+𝑖,𝑡+
+𝑖) =
+
+
+1 + exp −𝑠ˆ𝑓(𝑡−
+𝑖)
+1 + exp −𝑠ˆ𝑓(𝑡+
+𝑖) ,
+n𝑖· r < 0,
+1 + exp −𝑠ˆ𝑓(𝑡+
+𝑖)
+1 + exp −𝑠ˆ𝑓(𝑡−
+𝑖) ,
+n𝑖· r > 0.
+(90)
+The accumulated color is then
+C =
+∑︁
+𝑖
+c𝑖(1 −𝛼𝑖)
+Ö
+𝑗<𝑖
+𝛼𝑗.
+(91)
+20
+
+
+CVTSplat: Multi-view Reconstruction Using an Adaptive Centroidal Voronoi Tessellation
+J.3
+Delaunay Triangulation
+Assuming points in general position, we prove here that if a tetra-
+hedron is not a Delaunay tetrahedron, then each of its four corners
+must have a Voronoi neighbor (not necessarily the same) inside its
+circumsphere.
+By contraposition, this will show that a tetrahedron for which
+any of its four vertices has no Voronoi neighbors inside of the
+circumsphere must be a Delaunay tetrahedron.
+Proof: Assume the tetrahedron IJKL is not a Delaunay tetra-
+hedron. Without loss of generality, we look at corner I. The cir-
+cumsphere of IJKL contains at least one site strictly inside of it
+by definition. Let C be the center of the circumsphere and P the
+offending site: ||𝐶−𝑃|| < 𝑟= ||𝐶−𝐼||, with 𝑟the radius of the
+circumsphere. In other words, C is closer to P than to I, implying
+that C is not inside the cell of I by definition of a Voronoi cell.
+Because C is outside of I’s cell, there must be a site Q, Voronoi
+neighbor of I, that defines a bisector plane such that C is on the
+wrong side:
+(𝐶−𝐼) · (𝑄−𝐼) > 1
+2 ||𝑄−𝐼||2
+2
+(92)
+All that remains to show is that Q must be inside the circum-
+sphere of the tetrahedron:
+||𝑄−𝐶||2 = ||𝑄−𝐼+ 𝐼−𝐶||2
+(93)
+= ||𝑄−𝐼||2 + 2(𝑄−𝐼) · (𝐼−𝐶) + ||𝐼−𝐶||2
+(94)
+= ||𝑄−𝐼||2 −2(𝑄−𝐼) · (𝐶−𝐼)
+|                {z                }
+>||𝑄−𝐼||2
+2
++||𝐼−𝐶||2
+(95)
+< ||𝐼−𝐶||2 = 𝑟2
+(96)
+We have shown that 𝐼has a Voronoi neighbor 𝑄inside the circum-
+sphere, which concludes the proof.
+21
