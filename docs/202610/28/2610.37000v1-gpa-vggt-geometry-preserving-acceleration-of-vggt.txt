@@ -1,0 +1,1809 @@
+GPA-VGGT: Geometry-Preserving Acceleration of VGGT
+Muyeol Sung
+Jangwon Kim
+Jongwoo Lim
+Seoul National University
+{smy4024169, jangwons9, jongwoo.lim}@snu.ac.kr
+Abstract
+Feed-forward geometry models such as VGGT recover
+camera parameters, depth maps, and point maps from
+one to hundreds of views in a single forward pass, mak-
+ing them powerful backbones for multi-view 3D percep-
+tion. However, VGGT’s global attention is quadratic in
+the number of frames and dominates end-to-end run-
+time on long sequences, which has motivated a range of
+training-free efficiency methods such as token merging.
+These methods, however, come with a drop in accuracy
+that makes them hard to use in place of VGGT. We pro-
+pose GPA-VGGT, a training-free acceleration method
+that replaces global attention in early blocks with frame
+attention augmented by a shared cross-frame K/V set.
+In the remaining blocks, we merge only keys and values
+while preserving all queries, restore the attention mass
+of the tokens each merged key represents, and randomly
+project the matching metric to 128 dimensions to re-
+duce matching cost. Across diverse multi-view geom-
+etry tasks, GPA-VGGT provides training-free acceler-
+ation at speedups comparable to prior work while pre-
+serving the information required for precise geometric
+estimation, retaining over 99% of VGGT’s pose accu-
+racy under AUC@3. Our project page is available at
+https: // noheat61. github. io/ GPA-VGGT/ .
+1. Introduction
+After pairwise systems such as DUSt3R [11], feed-
+forward models including Fast3R [12], π3 [13], and
+VGGT [1] extended direct 3D reconstruction to multi-
+view inputs and have become widely used backbones
+for multi-view 3D perception.
+VGGT jointly pre-
+dicts camera parameters, depth maps, point maps, and
+tracks from one to hundreds of unposed views. How-
+ever, this accuracy comes at a substantial computa-
+tional cost: its aggregator alternates between frame
+attention, whose complexity scales linearly with the
+number of views, and global attention, whose complex-
+40
+45
+50
+55
+60
+CO3D AUC@3
+15
+20
+10
+64
+100
+200
+frames
+0
+20
+40
+60
+80
+100
+end-to-end time (s)
+86.8 s
+33.6 s
+vanilla VGGT
+AVGGT(2)
+FastVGGT
+AVGGT(4)
+FasterVGGT
+GPA-VGGT (ours)
+Figure 1.
+Accuracy and runtime scaling with the
+number of input frames. Although existing acceleration
+methods substantially reduce end-to-end runtime, they in-
+cur pronounced camera-pose degradation under the strict
+AUC@3 metric. GPA-VGGT achieves comparable runtime
+while maintaining camera-pose accuracy close to that of
+vanilla VGGT.
+ity scales quadratically. On long sequences, global at-
+tention dominates end-to-end runtime and becomes the
+primary bottleneck, limiting the scalability of VGGT
+to the many-view settings it was designed to support.
+This bottleneck has motivated a growing body
+of acceleration methods.
+FastVGGT [2] introduces
+Token Merging (ToMe) [15] into the aggregator,
+whereas FasterVGGT [6] replaces dense global at-
+tention with block-sparse attention.
+AVGGT [3] re-
+places early global-attention blocks with frame at-
+tention and subsamples keys in later blocks, while
+LiteVGGT [4] uses geometry-aware cached token merg-
+ing and FlashVGGT [5] compresses the global aggre-
+1
+arXiv:2610.37000v1  [cs.CV]  27 Oct 2026
+
+
+gator with learned descriptors, both relying on fine-
+tuning for acceleration. Although these methods report
+substantial speedups with little loss in accuracy, eval-
+uation under a common protocol shows that this accu-
+racy preservation is largely confined to lenient metrics.
+At relaxed pose thresholds (e.g., AUC@30), the degra-
+dation may appear minor; however, as Figure 1 shows,
+camera estimates become noticeably less precise under
+strict thresholds (e.g., AUC@3). The former primar-
+ily reflects coarse pose correctness and can mask errors
+that remain consequential for reconstruction, whereas
+the latter directly tests the geometric precision required
+for an accelerated method to serve as a practical re-
+placement for VGGT.
+We introduce GPA-VGGT, a training-free accelera-
+tion method designed to preserve the information re-
+quired for accurate geometric estimation. GPA-VGGT
+merges keys and values only, retaining every query so
+that each token continues to produce its own output.
+It further adds log s to the logit of each merged or
+pooled key, restoring the attention mass of the tokens
+it represents. In early blocks, GPA-VGGT preserves
+cross-frame context through a compact shared cross-
+frame K/V set comprising the camera and register to-
+kens from all frames, together with a small number of
+content-adaptive pooled patch summaries. Finally, be-
+cause the retained similarity is used only for an argmax
+operation, we reduce matching cost through a fixed
+low-dimensional projection of the matching metric.
+Without additional training, GPA-VGGT processes
+a 200-frame sequence in approximately 34 s, compared
+with 87 s for vanilla VGGT, while matching the run-
+time of other baselines. Across all benchmarks evalu-
+ated using AUC@3, GPA-VGGT remains within 1% of
+vanilla VGGT on benchmarks and shows a particularly
+large advantage over existing acceleration methods on
+the more challenging setting.
+Our contributions are summarized below:
+• We analyze accuracy degradation in existing VGGT
+acceleration methods, including FastVGGT and
+AVGGT, and identify three distinct sources: query
+merging, attention-mass distortion, and early global
+to frame attention replacement.
+• We combine Pooled Cross-Frame Broadcast to
+retain
+early
+cross-frame
+context
+with
+Query-
+Preserving K/V Merging to compress later global
+attention while retaining every query token, and use
+low-dimensional matching to reduce overhead.
+• We evaluate GPA-VGGT on representative bench-
+marks,
+maintaining
+strong
+performance
+across
+multi-view geometry tasks without fine-tuning.
+2. Related Work
+2.1. VGGT Acceleration
+VGGT [1] is a feed-forward multi-view geometry model
+that takes a set of unposed images as input and jointly
+predicts camera parameters, depth maps, point maps,
+and tracking features for all views. Each view is to-
+kenized by a DINOv2 [24] encoder, and its Trans-
+former [25] alternates between frame attention and
+global attention. Although global attention is essential
+for establishing multi-view consistency, its quadratic
+complexity with respect to the number of tokens makes
+it the primary computational bottleneck for long image
+sequences.
+FlashVGGT [5] compresses the global aggregator
+using learned descriptors.
+LiteVGGT [4] introduces
+geometry-aware cached token merging, preserving ge-
+ometrically important tokens while reusing merge in-
+dices across adjacent blocks. Co-Me [9] uses an aux-
+iliary confidence predictor, trained by distillation, to
+identify tokens suitable for merging. QuantVGGT [7]
+and QVGGT [8] improve computational and memory
+efficiency through reduced-precision inference. Because
+these methods rely on additional training or reduced
+precision, they are not the target of our training-free
+architectural design.
+FastVGGT [2] was the first method to introduce to-
+ken merging into VGGT. To address token collapse in
+long sequences, it uses a partitioning strategy tailored
+to the multi-frame layout and preserves a subset of
+salient tokens from merging. FasterVGGT [6] replaces
+dense global attention with training-free block-sparse
+attention, retaining selected block interactions based
+on coarse attention patterns and geometrically mean-
+ingful correspondences.
+AVGGT [3] replaces early
+global blocks with frame attention and applies uniform
+grid-based subsampling to patch tokens in the remain-
+ing global blocks. Its design is motivated by the obser-
+vation that global attention supports cross-view align-
+ment through sparse spatial correspondences rather
+than dense token-to-token interactions.
+HTTM [10]
+performs head-wise temporal token merging with tem-
+poral reordering to preserve feature diversity after head
+concatenation. Although these methods provide sub-
+stantial acceleration, their accuracy degradation be-
+comes more apparent under strict metrics such as
+AUC@3, which are sensitive to fine-grained camera-
+pose errors. Our method instead preserves the infor-
+mation required for precise geometric estimation and
+pose accuracy at AUC@3.
+2
+
+
+2.2. Token Merging
+ToMe [15] was first introduced as a training-free ap-
+proach to improve the throughput of vision transform-
+ers, and was later extended to diffusion, video, and lan-
+guage models. ToMe partitions tokens in each block
+into source and destination sets and merges tokens
+based on the similarity of their attention keys. Since a
+merged key represents multiple tokens, ToMe adds the
+logarithm of the group size to the attention logit so
+that the merged key receives their combined attention
+mass. ToMeSD [16] adapts this procedure to Stable
+Diffusion by selecting destination tokens from a fixed
+2D grid and computing similarity from the block input
+rather than attention keys. It also omits this correction
+and uses a merge–unmerge scheme to preserve dense
+outputs. FastVGGT adopts this ToMeSD-style token
+merging for a 3D geometry backbone, where such de-
+sign choices can lead to fine-grained information loss
+and accuracy degradation in precise geometry estima-
+tion.
+3. Analysis
+3.1. Token Merging Disrupts Token-Specific Pre-
+dictions and Attention Mass
+FastVGGT [2] merges queries together with keys and
+values, then restores the original sequence length by as-
+signing each merged output to all tokens in its group.
+Consequently, non-representative tokens receive out-
+puts that were not computed from their individual
+queries.
+This differs fundamentally from an imper-
+fect approximation that can be corrected after merging.
+FastVGGT preserves salient tokens from merging, but
+this only partially mitigates the loss of token-specific
+predictions.
+Figure 2 (top) plots the member-token
+outputs associated with twelve representative merge
+slots selected from block 12, projected onto the first
+two principal components of the unmerged output field.
+Query merging collapses within-group output diversity
+to zero, whereas K/V-only merging closely overlaps
+with the unmerged outputs in this diagnostic.
+The number of original tokens represented by each
+merged key, its token size s, is accounted for by adding
++ log s to the corresponding attention logit. Following
+ToMeSD [16], FastVGGT omits this correction, so a
+merged key receives the mass of only a single token. In
+VGGT, this omission introduces an asymmetric bias
+because the first frame consists predominantly of des-
+tination tokens; attention is therefore progressively bi-
+ased toward the first frame across merged blocks. Fig-
+ure 2 (bottom) shows that, without the correction, the
+first frame receives nearly twice as much attention mass
+as in the unmerged model, whereas applying the correc-
+83 of 83
+distinct outputs
+block-12 output
+(2 leading PCs)
+no merging
+12 of 83
+distinct outputs
+Q merged
+83 of 83
+distinct outputs
+Q kept (ours)
+no merging
+frame 0
+15%
+frame 3
+9%
+frame 6
+8%
+frame 9
+11%
+Q kept
+no +log s
+28%
+7%
+6%
+9%
+Q kept
++log s (ours)
+16%
+8%
+8%
+10%
+Figure 2. Two sources of accuracy degradation in ex-
+isting token-merging methods. Top: Query merging
+collapses the block-12 outputs of 83 tokens into 12 shared
+outputs, whereas retaining all queries while merging only
+K/V preserves the output diversity of the unmerged model.
+Bottom: Omitting the + log s correction disproportionately
+allocates attention to the first frame. Restoring the correc-
+tion recovers an attention distribution close to that of the
+unmerged model.
+tion restores a distribution close to the unmerged one.
+This effect causes a larger accuracy loss than query
+merging, and the losses from the two factors are ap-
+proximately additive.
+3.2. Early Blocks Still Need Cross-Frame Context
+AVGGT’s layer-wise analysis [3] concludes that early
+global-attention blocks do not form meaningful cross-
+view correspondences, motivating their conversion to
+frame attention. This finding supports replacing dense
+global attention, but does not establish that early
+blocks can dispense with cross-frame context entirely.
+The absence of token-level correspondences does not
+preclude informative interactions at the regional level,
+where compact cross-frame context can still support
+geometric estimation.
+Figure 3 demonstrates that the principal limitation
+of early frame attention is not merely representational
+drift, but the disruption of a shared geometric refer-
+ence across views. In the top row of Figure 3, frame
+attention displaces the block-8 output field by 15.5%
+of its radius relative to the full-global-attention refer-
+ence, whereas the shared cross-frame K/V set reduces
+3
+
+
+this displacement to 7.8%.
+The bottom row further
+reveals that this drift is view-specific rather than glob-
+ally shared: the pairwise cosine similarities between
+per-frame drift directions exhibit a broad distribution,
+with some views moving coherently and others in op-
+posing directions. Their mean similarity is −0.09, close
+to zero, indicating the absence of a common drift direc-
+tion. Whereas a common drift preserves relative geom-
+etry, such inconsistent view-specific perturbations alter
+inter-view relationships and degrade relative-pose esti-
+mation. Adding shared special tokens and pooled patch
+summaries progressively aligns the per-frame drifts,
+thereby preserving the shared geometric reference.
+Early blocks require cross-frame context because
+frame attention induces view-specific representational
+drift, disrupting the relative geometry required for pose
+estimation.
+Preserving this shared geometric refer-
+ence, however, does not require the full cross-frame
+key set; a compact shared context is sufficient. Incor-
+porating cross-frame special tokens partially mitigates
+the drift, and augmenting them with image-token sum-
+maries yields further improvement.
+4. GPA-VGGT
+4.1. Query-Preserving K/V Merging with Token-
+Size Compensation
+We merge keys and values while preserving the full
+query sequence. Each token therefore attends to the
+reduced key set using its own query and retains an in-
+dividual output. In contrast to FastVGGT [2], which
+computes attention over Nmerged ×Nmerged tokens, our
+formulation has complexity N×Nmerged. This increases
+the attention cost by a factor of N/Nmerged relative to
+merging queries, but avoids the accuracy loss caused by
+replacing token-specific outputs with shared ones. For
+the remaining configurations, we follow FastVGGT, us-
+ing the same grouping rule and merge ratio of 0.9.
+After K/V merging, the remaining approximation is
+the replacement of s keys by their mean. The merged
+key then has token size s but receives the attention
+mass of a single key. We correct this bias by adding
+log s to the attention logit of each merged key, without
+altering the merged key vector. Let Gj be the set of
+tokens merged into the j-th key, sj = |Gj|, and ¯kj, ¯vj
+the means of their keys and values. Every query qi,
+i = 1, . . . , N, then produces its own output
+oi =
+Nmerged
+X
+j=1
+softmaxj
+q⊤
+i ¯kj
+√
+d
++ log sj
+
+¯vj,
+(1)
+which equals unmerged attention exactly when the keys
+within each group are identical.
+reference
+block-8 output
+(displacement plane)
+full global attention
+15.5% displaced
+global → frame
+7.8% displaced
++ shared K/V (ours)
+−1.0
+−0.5
+0.0
+0.5
+1.0
+all 45 pairs of 10 frames
++ shared K/V
+(ours)
++ specials
+only
+frame
+μ = +0.83, σ = 0.06
+μ = +0.54, σ = 0.15
+μ = −0.09, σ = 0.27
+Figure 3. Effect of cross-frame context in the early
+blocks.
+Top:
+Replacing global attention with frame
+attention substantially displaces the block-8 output field
+from the full-global-attention reference, whereas the shared
+cross-frame K/V set largely preserves it. Bottom: Pairwise
+alignment of per-frame drift directions. Cross-frame special
+tokens partially align the drift, and image-token summaries
+further reduce its variation, preserving a coherent geomet-
+ric reference across views.
+Accuracy depends primarily on preserving token-
+specific queries and correctly normalizing merged keys.
+Salient-token protection becomes redundant because
+all queries are already retained. Removing it simpli-
+fies the method without sacrificing accuracy, while also
+eliminating its overhead and the double-counting of
+destination tokens in the original implementation.
+4.2. Pooled Cross-Frame Broadcast for Early Lay-
+ers
+We retain cross-frame context in the early blocks
+through a compact shared cross-frame K/V set. Each
+query attends to three disjoint groups: patch tokens
+from its own frame, the camera and four register to-
+kens from all frames, and pooled patch summaries
+from all frames.
+Pooling keeps the shared set com-
+pact, while including each frame’s own summaries
+makes the set identical across frames.
+It can there-
+fore be constructed once and reused without masks
+or per-frame K/V copies.
+For frame f, the key set
+is Kf = [Kpatch
+f
+; Kspecial
+1:F
+; ¯Kpool
+1:F ], and the value set is
+built in the same way.
+We construct content-adaptive pooled summaries
+using cluster-h. We initialize representative locations
+on a stride-8 grid, assign each patch token to the
+representative with the highest cosine similarity, and
+4
+
+
+Blocks 0 – 8
+Frame Attention + shared K/V set
+shared K/V set
+Frame Attention   
+Blocks 9 – 12
+Global Attention
+merged K/V
+Frame Attention
+Blocks 13 – 16
+Global Attention
+merged K/V
+Frame Attention   
+Blocks 17 – 23
+Global Attention
+merged K/V
+Frame Attention   
+Early Blocks 0–8
+Pooled Cross-Frame Broadcast
+Query-Preserving K/V Merging
+Aggressive   Merge
+Weak  Merge
+Aggressive   Merge
+(a)   Pooled Cross-Frame Broadcast
+1) stride-8 seeds
+2) cosine assignment
+3) content-adaptive 
+clusters
+4) 25 pooled K/V, 
+size s
+⋮
++ log s
+(b)   Query-Preserving K/V Merging
+K, V
+128-d
+Gaussian projection
+Argmax
++ log s
+merged K/V
+Q
+Global 
+Attention
+…
+…
+…
+Input
+⋮
+DINOv2
+Later Blocks 9–23
+Figure 4. Overview of GPA-VGGT. Early blocks 0–8 replace global attention with frame attention augmented by a
+shared cross-frame K/V set containing special tokens and content-adaptive pooled image-token summaries. Later blocks
+9–23 preserve all queries and merge only K/V tokens, using a weaker merge ratio in the core blocks 13–16. (a) Pooled
+summaries are constructed by assigning patch tokens to stride-8 seeds according to cosine similarity and averaging the K/V
+tokens within each content-adaptive cluster; the summary size determines the + log s correction. (b) K/V matching is
+computed after a 128-dimensional Gaussian projection, while all queries are retained for global attention.
+average the assigned keys and values to form each
+summary. Unlike fixed-window average pooling, this
+groups patches with similar content rather than merely
+nearby locations.
+Since multi-head attention splits
+each 1024-dimensional token into 16 heads of dimen-
+sion 64, cluster-h performs this assignment indepen-
+dently for each head using its head-specific features.
+Thus, a patch can be grouped differently across heads
+according to the information each head captures. Each
+pooled summary represents s patch tokens but enters
+attention as a single key, so we apply the same + log s
+correction.
+4.3. Core-Block Sensitivity-Aware Merging
+The aggregator is not uniformly tolerant to merging:
+blocks 13–16 are substantially more sensitive than the
+remaining merged blocks, and errors introduced in this
+range are amplified rather than corrected by subse-
+quent blocks. This sensitivity follows from the atten-
+tion patterns.
+In the middle blocks, queries attend
+sharply to a small number of keys, particularly cross-
+view correspondences; averaging keys can therefore di-
+lute the information carried by the most relevant key.
+In later blocks, attention is more diffuse and primar-
+ily directed toward global sink tokens, making merging
+less disruptive. We consequently use a merge ratio of
+0.2 for blocks 13–16 and retain the ratio of 0.9 for all
+other blocks in the merging window.
+4.4. Gaussian Random Projection for Efficient
+Matching
+Token matching incurs additional overhead because it
+determines the source–destination assignments before
+merging. Assigning each source token to its most sim-
+ilar destination requires an O(src × dst × C) argmax
+operation, where C denotes the feature dimension. In
+the accelerated model with the preceding components
+applied, matching accounts for approximately 18% of
+the forward-pass time for a 200-frame sequence when
+using the full C = 1024 representation.
+We reduce matching cost by projecting the matching
+features into a lower-dimensional space using a random
+Gaussian matrix and performing cosine normalization
+and argmax in that space. Each source token i is as-
+signed to the destination
+d(i) = arg max
+j∈D cos
+ P ⊤xi, P ⊤xj
+
+,
+(2)
+where xi ∈R1024 is its matching feature, D the des-
+5
+
+
+CO3D
+RE10K
+AUC@3
+AUC@5
+AUC@10
+AUC@30
+AUC@3
+AUC@5
+AUC@10
+AUC@30
+vanilla VGGT
+57.49
+68.88
+80.66
+91.71
+44.78
+56.67
+70.79
+85.76
+FastVGGT
+41.56
+55.97
+72.61
+88.38
+37.56
+50.52
+66.38
+83.69
+FasterVGGT
+16.05
+33.80
+60.00
+83.91
+22.00
+34.09
+51.47
+73.85
+AVGGT(2)
+51.87
+64.55
+78.02
+90.65
+44.68
+56.49
+70.66
+85.70
+AVGGT(4)
+47.08
+60.75
+75.72
+89.72
+42.53
+54.78
+69.50
+85.21
+GPA-VGGT
+56.94
+68.54
+80.41
+91.57
+44.45
+56.33
+70.46
+85.54
+Table 1. Camera-pose accuracy on CO3D and RE10K, with ten frames per sequence and relative pose errors computed
+over all frame pairs. Bold and underline mark the best and second-best value in each column, excluding vanilla VGGT.
+tination set, and P ∈R1024×128 a random Gaussian
+matrix shared across all blocks and inputs. Reducing
+the feature dimension from 1024 to 128 lowers the cost
+of matching by approximately 7–8×.
+The similarity scores are used only to select des-
+tination indices and are discarded thereafter; merging
+averages the tokens assigned to each group. Even when
+projection changes the selected destination, it typically
+selects an alternative among near-tied candidates: to-
+ken features are highly redundant, and the most sim-
+ilar destination is rarely unique. Thus, random pro-
+jection may reorder nearly equivalent matches without
+producing a fundamentally different assignment. Since
+merging requires each token to be grouped with a suf-
+ficiently similar token rather than one specific destina-
+tion, the projection reduces matching cost while pre-
+serving similarity-based token groups.
+4.5. Custom Kernels
+Two custom Triton [22] kernels implement the design:
+a FlashAttention [21]-style kernel that adds the + log s
+bias inside its online-softmax loop, since passing it as
+a mask makes PyTorch [23] SDPA fall back to a slower
+backend, and a matching kernel that computes the
+source–destination argmax without storing the score
+matrix. Both are numerically equivalent to their Py-
+Torch references; Appendix A gives details.
+5. Experiments
+We organize our evaluation around four questions: (1)
+Does GPA-VGGT preserve camera-pose accuracy un-
+der strict thresholds, and does it keep doing so as the
+sequence grows longer? (2) Does the same preservation
+carry over to other tasks? (3) How does its runtime
+speedup compare with existing acceleration methods?
+(4) Which components are responsible for accuracy re-
+covery and acceleration?
+5.1. Experimental Setup
+We follow the π3 [13] evaluation protocol for both tasks.
+For camera pose estimation, we evaluate on CO3D [17]
+AUC@3 ↑
+AUC@30 ↑
+64
+100
+200
+64
+100
+200
+vanilla VGGT
+62.57
+62.45
+61.47
+92.58
+92.59
+92.42
+FastVGGT
+55.18
+55.97
+56.28
+91.33
+91.54
+91.68
+FasterVGGT
+20.66
+20.40
+19.59
+85.62
+85.57
+85.42
+AVGGT(2)
+58.49
+58.59
+57.71
+91.94
+92.03
+91.85
+AVGGT(4)
+54.27
+54.76
+54.40
+91.35
+91.50
+91.45
+GPA-VGGT
+62.61
+62.55
+61.43
+92.57
+92.59
+92.41
+Table 2. Camera-pose accuracy on CO3D at 64, 100,
+and 200 input frames. Bold and underline mark the best
+and second-best value in each column, excluding vanilla
+VGGT.
+and RealEstate10K (RE10K) [18] with ten frames per
+sequence, compute relative pose errors over all frame
+pairs, and report AUC at the standard thresholds as
+well as the stricter AUC@3. We additionally evaluate
+long-sequence behavior on CO3D using 64, 100, and
+200 input frames.
+For point-map reconstruction, we evaluate on 7-
+Scenes [19] and NRGBD [20] using accuracy, complete-
+ness, and normal consistency, computed over pixels
+valid under the ground-truth mask.
+We follow the
+sparse and dense frame samplings of π3 and report the
+two settings separately. The sparse samplings contain
+26 frames across 9 NRGBD sequences and 86 frames
+across 18 7-Scenes sequences, corresponding to 1–5 se-
+lected frames per sequence; the dense samplings con-
+tain 114 and 426 frames, respectively, corresponding to
+4–25 frames per sequence.
+We retain the original VGGT [1] architecture
+with L = 24 alternating frame-attention and global-
+attention layers. All methods use the same VGGT re-
+leased checkpoint without training or fine-tuning. Ex-
+periments use bfloat16 autocast and are conducted
+on a single NVIDIA RTX A6000 GPU with 48 GiB of
+memory, using PyTorch 2.11 and CUDA 12.8.
+As the official AVGGT [3] code is unreleased, we
+reimplemented the method from its specification. It re-
+produces the reported qualitative trend on RE10K. Ab-
+solute AUC values are not comparable, since its RE10K
+subset and sampling are not public.
+6
+
+
+vanilla VGGT
+FastVGGT
+AVGGT(2)
+GPA-VGGT (ours)
+zoom 1
+zoom 2
+Figure 5. Qualitative reconstruction under estimated camera poses. Each column shows the point cloud produced
+by the corresponding method, and red boxes indicate the enlarged regions below. GPA-VGGT most closely matches the
+geometry reconstructed by vanilla VGGT.
+5.2. Camera Pose
+Table 1 highlights that under AUC@30, most accel-
+erated methods remain close to vanilla VGGT; under
+the stricter AUC@3 metric, however, their performance
+gaps become more pronounced.
+The results also differ across the two benchmarks.
+AVGGT(2) stays close to vanilla VGGT on RE10K
+but incurs a much larger AUC@3 drop on CO3D.
+This difference reflects AVGGT’s fixed-stride K/V sub-
+sampling, in contrast to GPA-VGGT’s content-based
+K/V merging.
+RE10K consists of temporally adja-
+cent indoor views with high overlap and predominantly
+smooth surfaces, making positional subsampling effec-
+tive. In contrast, CO3D contains wider-baseline views
+of detailed objects, where content-aware selection is
+needed to preserve the relevant K/V information. Ac-
+cordingly, GPA-VGGT preserves accuracy across both
+benchmarks.
+Table 2 shows that this trend holds across sequence
+lengths.
+GPA-VGGT’s AUC@3 gap from vanilla
+VGGT does not widen as the sequence length increases,
+while competing methods remain less accurate.
+Figure 5 qualitatively compares the reconstructed
+geometry on the same scene.
+FastVGGT shows the
+object boundary as two separate edges and makes the
+nearby surface blurry, and AVGGT(2) reconstructs
+the same region as two nearby surface layers.
+At
+the scale of the full object it looks similar to vanilla
+VGGT, and only the zoomed-in view reveals a thin-
+ner surface behind those layers.
+GPA-VGGT pre-
+serves one clear boundary and remains visually close
+to vanilla VGGT. FastVGGT remains close to vanilla
+VGGT under AUC@30 but degrades substantially un-
+der AUC@3. The qualitative reconstructions are con-
+sistent with this gap, indicating that AUC@3 more di-
+rectly reflects visible geometric degradation.
+5.3. Point-Map Reconstruction
+Table 3 shows that GPA-VGGT preserves point-map
+reconstruction quality across datasets and sampling
+densities.
+It is closest to vanilla VGGT on dense
+7
+
+
+NRGBD sparse
+NRGBD dense
+7-Scenes sparse
+7-Scenes dense
+Acc ↓
+Comp ↓
+NC ↑
+Acc ↓
+Comp ↓
+NC ↑
+Acc ↓
+Comp ↓
+NC ↑
+Acc ↓
+Comp ↓
+NC ↑
+vanilla VGGT
+0.0510
+0.0665
+0.8843
+0.0144
+0.0152
+0.8743
+0.0432
+0.0557
+0.7337
+0.0215
+0.0259
+0.6673
+FastVGGT
+0.0560
+0.0819
+0.8601
+0.0308
+0.0328
+0.8302
+0.0510
+0.0696
+0.7215
+0.0195
+0.0235
+0.6646
+FasterVGGT
+0.1551
+0.2173
+0.7749
+0.0759
+0.0642
+0.7988
+0.0994
+0.1527
+0.6637
+0.0246
+0.0254
+0.6695
+AVGGT(2)
+0.0355
+0.0396
+0.8981
+0.0154
+0.0157
+0.8562
+0.0613
+0.0765
+0.7115
+0.0210
+0.0257
+0.6653
+AVGGT(4)
+0.0465
+0.0554
+0.8818
+0.0207
+0.0182
+0.8466
+0.0656
+0.0866
+0.7063
+0.0218
+0.0248
+0.6665
+GPA-VGGT
+0.0414
+0.0476
+0.8941
+0.0143
+0.0151
+0.8714
+0.0474
+0.0600
+0.7309
+0.0204
+0.0253
+0.6674
+Table 3. Point-map reconstruction on NRGBD and 7-Scenes, under the sparse and dense frame samplings of π3.
+Bold and underline mark the best and second-best value in each column, excluding vanilla VGGT.
+number of input frames
+time (s) ↓
+10
+32
+64
+100
+200
+500
+vanilla VGGT
+0.84
+3.84
+12.46
+24.01
+86.78
+513.78
+FastVGGT
+0.85
+2.81
+6.46
+11.71
+33.91
+169.43
+FasterVGGT
+0.78
+2.66
+6.18
+11.29
+32.27
+OOM
+AVGGT(2)
+0.78
+2.76
+6.70
+12.66
+37.02
+184.03
+AVGGT(4)
+0.76
+2.51
+5.58
+9.86
+25.82
+111.74
+GPA-VGGT
+0.78
+2.76
+6.49
+11.92
+33.65
+158.63
+Table 4. End-to-end runtime for the whole forward pass,
+camera and depth heads included, on a single A6000.
+NRGBD and sparse 7-Scenes, while maintaining near-
+vanilla normal consistency in every setting. AVGGT(2)
+achieves the best results on sparse NRGBD, but its
+fixed-stride subsampling degrades more substantially
+on dense NRGBD and sparse 7-Scenes. FastVGGT and
+FasterVGGT also show consistent degradation, partic-
+ularly in normal consistency.
+5.4. Runtime
+Table 4 reports end-to-end runtime across sequence
+lengths.
+At 10 frames, no method exceeds a 1.2×
+speedup over vanilla VGGT, whereas all methods ex-
+ceed 2.3× at 200 frames. At 500 frames, FasterVGGT
+runs out of memory, while the remaining methods
+achieve speedups between 2.8× and 4.6×. AVGGT(4)
+is the fastest method beyond 32 frames, reaching 4.60×
+at 500 frames, compared with 3.24× for GPA-VGGT;
+this additional speedup, however, accompanies a sub-
+stantially larger accuracy loss.
+5.5. Ablation
+Table 5 shows a clear division of roles among the de-
+sign components. The second rung is the early global-
+to-frame conversion AVGGT [3] proposes, applied on
+its own:
+it provides the initial runtime reduction,
+cutting 27.7 of the 86.8 seconds, but lowers CO3D
+AUC@3 by 3.06 points.
+Pooled cross-frame broad-
+cast then restores the missing cross-view context and
+recovers 2.82 of those points for 0.7 additional sec-
+onds.
+Query-preserving K/V merging then provides
+the main additional acceleration without substantially
+time ↓
+AUC@3 ↑
+200f
+CO3D
+RE10K
+vanilla VGGT
+86.8 s
+57.49
+44.78
++ frame attention in early blocks
+59.1 s
+54.43
+44.45
++ pooled cross-frame broadcast
+59.8 s
+57.25
+45.20
++ query-preserving K/V merging
+40.1 s
+57.13
+44.45
+on blocks 9–12 and 17–23
++ random-projection matching
+35.5 s
+57.12
+44.47
++ sensitivity-aware core, 13–16
+33.6 s
+56.94
+44.45
+Table 5. Ablation of GPA-VGGT components. Each
+row adds one component to the row above it.
+compromising accuracy. Random-projection matching
+and sensitivity-aware merging further reduce compu-
+tation overhead with only a small additional effect on
+accuracy.
+The same design transfers to π3 [13] and
+VGGT-Ω[14], reaching 2.36× and 1.84× speedups at
+200 frames while largely preserving the AUC@3 of their
+vanilla models on CO3D and RE10K (Appendix H).
+6. Conclusion
+We identify three sources of accuracy degradation in
+accelerated VGGT: information loss from query merg-
+ing, incorrect attention mass after K/V merging, and
+the removal of early cross-frame context. GPA-VGGT
+addresses these issues through Query-Preserving K/V
+Merging with + log s correction, Pooled Cross-Frame
+Broadcast, and low-dimensional matching. Across di-
+verse multi-view geometry evaluations, GPA-VGGT
+reduces inference time while preserving vanilla VGGT’s
+accuracy under both standard and strict metrics.
+7. Acknowledgments
+This work was supported by Institute of Information
+& communications Technology Planning & Evaluation
+(IITP) grant funded by the Korea government (MSIT)
+[No. RS-2021-II211343, Artificial Intelligence Gradu-
+ate School Program (Seoul National University)], and
+by the National Research Foundation of Korea (NRF)
+grant funded by the Korea government (MSIT) (No.
+RS-2024-00359718).
+8
+
+
+References
+[1] Jianyuan
+Wang,
+Minghao
+Chen,
+Nikita
+Karaev,
+Andrea Vedaldi,
+Christian Rupprecht,
+and David
+Novotny.
+VGGT: Visual geometry grounded trans-
+former. In CVPR, 2025. 1, 2, 6
+[2] You Shen,
+Zhipeng Zhang,
+Yansong Qu,
+Xiawu
+Zheng, Jiayi Ji, Shengchuan Zhang, and Liujuan Cao.
+FastVGGT: Training-free acceleration of visual geom-
+etry transformer. In ICLR, 2026. 1, 2, 3, 4, 10
+[3] Xianbing Sun, Zhikai Zhu, Zhengyu Lou, Bo Yang,
+Jinyang Tang, Liqing Zhang, He Wang, and Jianfu
+Zhang. AVGGT: Rethinking global attention for ac-
+celerating VGGT. In CVPR, 2026. 1, 2, 3, 6, 8, 12
+[4] Zhijian Shu, Cheng Lin, Tao Xie, Wei Yin, Ben
+Li, Zhiyuan Pu, Weize Li, Yao Yao, Xun Cao, Xi-
+aoyang Guo, and Xiao-Xiao Long. LiteVGGT: Boost-
+ing vanilla VGGT via geometry-aware cached token
+merging. In CVPR, 2026. 1, 2
+[5] Zipeng Wang and Dan Xu. FlashVGGT: Efficient and
+scalable visual geometry transformers with compressed
+descriptor attention. In CVPR, 2026. 1, 2
+[6] Chung-Shien Brian Wang, Christian Schmidt, Jens
+Piekenbrinck, and Bastian Leibe. Block-sparse global
+attention for efficient multi-view geometry transform-
+ers. In CVPR, 2026. 1, 2
+[7] Weilun Feng, Haotong Qin, Mingqiang Wu, Chuan-
+guang Yang, Yuqi Li, Xiangqi Li, Zhulin An, Libo
+Huang, Yulun Zhang, Michele Magno, and Yongjun
+Xu. Quantized visual geometry grounded transformer.
+In ICLR, 2026. 2
+[8] Zhizhen
+Pan,
+Hesong
+Wang,
+and
+Huan
+Wang.
+QVGGT: Post-training quantized visual geometry
+grounded transformer. In CVPR, 2026. 2
+[9] Yutian Chen, Yuheng Qiu, Ruogu Li, Ali Agha,
+Shayegan Omidshafiei, Jay Patrikar, and Sebastian
+Scherer. Co-Me: Confidence-guided token merging for
+visual geometric transformers. In CVPR, 2026. 2
+[10] Weitian Wang, Lukas Meiner, Shubham Rai, Cecilia
+De La Parra, and Akash Kumar. HTTM: Head-wise
+temporal token merging for faster VGGT. In CVPR,
+2026. 2
+[11] Shuzhe Wang, Vincent Leroy, Yohann Cabon, Boris
+Chidlovskii, and Jerome Revaud. DUSt3R: Geometric
+3D vision made easy. In CVPR, 2024. 1
+[12] Jianing Yang, Alexander Sax, Kevin J. Liang, Mikael
+Henaff, Hao Tang, Ang Cao, Joyce Chai, Franziska
+Meier, and Matt Feiszli. Fast3R: Towards 3D recon-
+struction of 1000+ images in one forward pass.
+In
+CVPR, 2025. 1
+[13] Yifan Wang, Jianjun Zhou, Haoyi Zhu, Wenzheng
+Chang, Yang Zhou, Zizun Li, Junyi Chen, Jiangmiao
+Pang, Chunhua Shen, and Tong He. π3: Permutation-
+equivariant visual geometry learning. In ICLR, 2026.
+1, 6, 8, 12
+[14] Jianyuan Wang, Minghao Chen, Shangzhan Zhang,
+Nikita Karaev, Johannes Sch¨onberger, Patrick La-
+batut, Piotr Bojanowski,
+David Novotny, Andrea
+Vedaldi, and Christian Rupprecht.
+VGGT-Ω.
+In
+CVPR, 2026. 8, 12
+[15] Daniel Bolya, Cheng-Yang Fu, Xiaoliang Dai, Peizhao
+Zhang, Christoph Feichtenhofer, and Judy Hoffman.
+Token merging: Your ViT but faster. In ICLR, 2023.
+1, 3
+[16] Daniel Bolya and Judy Hoffman. Token merging for
+fast stable diffusion. In CVPRW, 2023. 3
+[17] Jeremy Reizenstein, Roman Shapovalov, Philipp Hen-
+zler, Luca Sbordone, Patrick Labatut, and David
+Novotny. Common objects in 3D: Large-scale learning
+and evaluation of real-life 3D category reconstruction.
+In ICCV, 2021. 6
+[18] Tinghui Zhou, Richard Tucker, John Flynn, Graham
+Fyffe, and Noah Snavely. Stereo magnification: Learn-
+ing view synthesis using multiplane images.
+ACM
+TOG, 37(4), 2018. 6
+[19] Jamie
+Shotton,
+Ben
+Glocker,
+Christopher
+Zach,
+Shahram
+Izadi,
+Antonio
+Criminisi,
+and
+Andrew
+Fitzgibbon.
+Scene coordinate regression forests for
+camera relocalization in RGB-D images.
+In CVPR,
+2013. 6
+[20] Dejan Azinovi´c, Ricardo Martin-Brualla, Dan B. Gold-
+man, Matthias Nießner, and Justus Thies.
+Neural
+RGB-D surface reconstruction. In CVPR, 2022. 6
+[21] Tri Dao, Daniel Y. Fu, Stefano Ermon, Atri Rudra,
+and Christopher R´e.
+FlashAttention:
+Fast and
+memory-efficient exact attention with IO-awareness.
+In NeurIPS, 2022. 6, 10
+[22] Philippe Tillet, H. T. Kung, and David Cox. Triton:
+An intermediate language and compiler for tiled neural
+network computations. In ACM SIGPLAN Interna-
+tional Workshop on Machine Learning and Program-
+ming Languages (MAPL), 2019. 6
+[23] Adam Paszke, Sam Gross, Francisco Massa, Adam
+Lerer,
+James Bradbury,
+Gregory Chanan,
+Trevor
+Killeen, Zeming Lin, Natalia Gimelshein, Luca Antiga,
+Alban Desmaison, Andreas K¨opf, Edward Yang, Zach
+DeVito, Martin Raison, Alykhan Tejani, Sasank Chil-
+amkurthy, Benoit Steiner, Lu Fang, Junjie Bai, and
+Soumith Chintala.
+PyTorch:
+An imperative style,
+high-performance deep learning library. In NeurIPS,
+2019. 6, 10
+[24] Maxime Oquab, Timoth´ee Darcet, Th´eo Moutakanni,
+Huy Vo, Marc Szafraniec, Vasil Khalidov, Pierre Fer-
+nandez, Daniel Haziza, Francisco Massa, Alaaeldin El-
+Nouby, Mahmoud Assran, Nicolas Ballas, Wojciech
+Galuba, Russell Howes, Po-Yao Huang, Shang-Wen Li,
+Ishan Misra, Michael Rabbat, Vasu Sharma, Gabriel
+Synnaeve, Hu Xu, Herv´e Jegou, Julien Mairal, Patrick
+Labatut, Armand Joulin, and Piotr Bojanowski. DI-
+NOv2: Learning robust visual features without super-
+vision. TMLR, 2024. 2
+[25] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob
+Uszkoreit, Llion Jones, Aidan N. Gomez, Lukasz
+Kaiser, and Illia Polosukhin. Attention is all you need.
+In NeurIPS, 2017. 2
+9
+
+
+GPA-VGGT: Geometry-Preserving Acceleration of VGGT
+Supplementary Material
+A. Custom Triton Kernels
+A.1. Attention with a Per-Key Additive Bias
+The standard attention interface treats the + log s cor-
+rection as a mask and therefore falls back to a slower
+implementation. For a 200-frame sequence, this fall-
+back takes 2,142 ms, compared with 948 ms for un-
+biased fused attention—more time than key merging
+saves in the merged global-attention block.
+Because the correction depends only on the key in-
+dex, our Triton kernel adds it directly to each score tile
+inside the online-softmax loop, preserving the stream-
+ing structure of FlashAttention [21]. We avoid masked
+loads by clamping out-of-range key indices and as-
+signing duplicate columns a −109 bias.
+This avoids
+padding and copying K/V tensors; only the small bias
+vector is padded. The bias is also pre-scaled on the
+host, avoiding conversion within the inner loop. For a
+200-frame sequence, our kernel takes 984 ms: only 4%
+slower than unbiased fused attention and 2.18× faster
+than the fallback.
+A.2. Memory-Efficient K/V Matching
+Bipartite matching requires only the row-wise maxi-
+mum similarity and argmax index, not the full simi-
+larity matrix. Materializing the full matrix would re-
+quire 27.25 GiB for a 200-frame sequence. Even a chun-
+ked PyTorch [23] reference, which materializes 5,000
+rows at a time, requires a 1.20 GiB temporary buffer.
+Our Triton kernel keeps each score tile in registers and
+writes only the two required outputs, reducing this
+temporary memory to 0.003 GiB.
+The kernel trades a modest increase in runtime for
+substantially lower memory use: the similarity kernel
+itself takes 482 ms against 330 ms for the chunked refer-
+ence at this shape. This overhead of roughly 150 ms is
+small relative to the memory saved, since materializing
+similarity tiles incurs a large transient VRAM cost and
+can become the limiting factor for long sequences.
+The
+PyTorch
+reference
+delegates
+the
+1,024-
+dimensional
+dot-product
+reduction
+to
+its
+matrix-
+multiplication backend.
+In our fused kernel, which
+additionally computes the row-wise maximum and
+argmax, we partition the feature dimension into smaller
+tiles and accumulate partial dot products.
+frames
+vanilla
+FastVGGT
+FasterVGGT
+AVGGT
+GPA-VGGT
+10
+4.58
+4.58
+4.58
+4.58
+4.58
+32
+5.12
+5.12
+5.12
+5.12
+5.12
+64
+6.08
+6.85
+7.48
+6.08
+6.08
+100
+8.27
+9.48
+10.50
+8.27
+8.28
+200
+14.37
+16.78
+19.46
+14.37
+14.38
+300
+20.47
+24.08
+29.43
+20.47
+20.48
+400
+26.57
+31.38
+40.29
+26.57
+26.58
+500
+32.67
+38.69
+OOM
+32.68
+32.69
+Table S1.
+Peak
+GPU
+memory (GiB) during the
+full
+forward
+pass
+on
+a
+single
+A6000,
+measured
+us-
+ing torch.cuda.max memory allocated() after warm-up.
+Vanilla denotes the VRAM-efficient VGGT implementation
+introduced by FastVGGT, and the AVGGT column covers
+both σ = 2 and σ = 4, which produced identical measure-
+ments at every length.
+B. Peak VRAM Footprint
+Table S1 reports the peak VRAM of the full forward
+pass, using the VRAM-efficient VGGT implementation
+introduced by FastVGGT [2] as the vanilla baseline.
+GPA-VGGT remains within 0.02 GiB of vanilla VGGT
+across all sequence lengths and AVGGT matches it ex-
+actly, whereas at 500 frames FastVGGT uses 6.02 GiB
+more VRAM; FasterVGGT already uses 13.72 GiB
+more at 400 frames and exceeds device memory at 500.
+Although K/V merging reduces the K/V sequence
+length in global attention, the full-model peak is
+set by the unchanged feed-forward sublayer within
+a global-aggregator block.
+Moreover, FlashAtten-
+tion [21] does not materialize an N × N score ma-
+trix, so the memory used by the modified global-
+attention sublayer is already linear in the number of
+tokens. GPA-VGGT therefore reduces attention com-
+putation without changing peak VRAM, while keeping
+attention memory nearly identical to vanilla VGGT
+and below the feed-forward-memory peak.
+In con-
+trast, FastVGGT merges queries as well as K/V tokens
+and subsequently restores the original token resolution.
+The associated full-length token copies and unmerging
+buffers raise its attention-memory peak above that of
+the feed-forward sublayer.
+AVGGT incurs essentially no additional peak-
+memory overhead.
+Its subsampled global attention
+drops keys rather than copying tokens back, so it allo-
+cates neither FastVGGT’s unmerging buffers nor any
+workspace that scales with the dropped set, and its
+peak equals vanilla VGGT’s at every sequence length
+and at both subsampling settings.
+10
+
+
+vanilla
+mean
+stride
+cluster
+cluster-h
+CO3D AUC@3
+57.49
+56.44
+56.61
+56.90
+56.94
+∆vs. vanilla
+–
+−1.04
+−0.88
+−0.59
+−0.55
+Table S2. Pooling strategy for the shared cross-frame
+summaries on CO3D, using the same stride-8 seed grid
+and summary-token budget. Bold marks the adopted set-
+ting.
+preserve
++ log s
+output
+CO3D
+Q
+bias
+error
+AUC@3
+no merging
+–
+–
+–
+57.25
+(Pooled Cross-Frame Broadcast only)
+neither component
+–
+–
+0.394
+49.93
+query preservation only
+✓
+–
+0.374
+51.09
++ log s correction only
+–
+✓
+0.112
+55.36
+both (adopted)
+✓
+✓
+0.055
+56.94
+Table S3. Merge-operator components on CO3D, un-
+der a fixed merge window and merge ratio. Output error is
+the relative deviation of the merged attention output from
+unmerged attention on the same input.
+Bold marks the
+adopted operator.
+C. Pooling for the Shared Cross-Frame
+K/V Set
+Each frame’s queries attend to local K/V tokens,
+shared special tokens, and pooled image-token sum-
+maries. The first two groups are held fixed in this ab-
+lation; this section studies how to construct the sum-
+maries. Table S2 compares pooling strategies on CO3D
+using a fixed 8×8 pooling window. Fixed-window mean
+pooling performs worst, while content-based clustering
+is more effective.
+Per-head clustering performs best
+and is used in our model.
+D. Merge-Operator Ablation
+The merge operator independently determines whether
+to merge queries with K/V tokens and whether to cor-
+rect each merged key’s logit by its token size. Table S3
+isolates these choices under an otherwise fixed config-
+uration.
+Merging queries forces all tokens within a
+group to share the same output, whereas preserving
+queries retains within-group diversity but does not ad-
+dress the attention-mass bias caused by K/V merging.
+The + log s correction restores the mass of the tokens
+each merged key represents and provides the larger
+accuracy gain. Together, query preservation and the
++ log s correction nearly recover no-merging accuracy,
+with the benefit becoming larger at higher merge ra-
+tios.
+Figure S1. Core-block selection on VGGT. Each point
+shows how much the final global-block output changes from
+the unmerged model when the indicated contiguous block
+set is protected from merging; lower values mean smaller
+changes. The criterion is computed without ground-truth
+annotations across four datasets. Blocks 13–16 consistently
+give the smallest change and are selected as the core-block
+set.
+E. Selection of the Core Blocks
+We choose the core blocks by measuring how much
+merging changes the aggregator’s final representation.
+For each candidate set, we leave those blocks unmerged
+and apply merging to every other block. We measure
+the relative Frobenius-norm deviation between the fi-
+nal global-block outputs of the merged and unmerged
+models on the special tokens, and normalize it by the
+deviation obtained when all blocks are merged.
+Be-
+cause this measurement uses no ground-truth annota-
+tions, the core blocks are selected without reference to
+task labels.
+We evaluate block sets rather than individual blocks.
+Simply ranking individual blocks and selecting the top
+k does not reliably find the best set. A single-block
+measurement considers one block while all other blocks
+remain unmerged, whereas the full model applies merg-
+ing across multiple blocks. Merging in one block can
+therefore change the token representations and source–
+destination assignments used by later blocks.
+For VGGT, this criterion selects blocks 13–16. Fig-
+ure S1 shows that this set gives the smallest output
+change on all four datasets. No three-block set matches
+this result. We apply the same procedure to π3 and
+VGGT-Ω; Figure S2 shows the resulting core-block se-
+lections, which are used in Section H.
+11
+
+
+dimension
+32
+64
+128
+256
+512
+1024
+matching (ms)
+37
+38
+64
+106
+194
+469
+same destination (%)
+54.4
+67.1
+76.6
+82.8
+87.9
+100
+similarity loss (%)
+3.30
+1.28
+0.56
+0.28
+0.13
+0
+CO3D AUC@3
+56.47
+56.48
+56.94
+56.87
+56.89
+57.09
+Table S4.
+Projected feature dimension for K/V
+matching, with matching cost measured at 200 input
+frames and AUC@3 on CO3D. Same destination and sim-
+ilarity loss are both measured against the full 1,024-
+dimensional metric. Bold marks the adopted dimension.
+F. Matching Feature Dimension
+Table S4 evaluates the fixed random projection used for
+K/V matching. Projecting the matching features from
+1,024 to 128 dimensions lowers the cost of each match-
+ing call from 469 ms to 64 ms. Although only 76.6% of
+source tokens select the same destination as under the
+full-dimensional metric, the selected destinations lose
+only 0.56% similarity relative to the full-metric opti-
+mum, indicating that most disagreements occur among
+near-equivalent candidates. We therefore use 128 di-
+mensions, the smallest projection size that maintains
+accuracy close to the full-dimensional metric.
+G. Comparison with AVGGT
+GPA-VGGT and AVGGT [3] share a two-stage struc-
+ture: both replace early global-attention blocks with
+frame attention and reduce the K/V set in later
+blocks while preserving all queries. In the early stage,
+AVGGT restricts attention to within-frame tokens,
+whereas GPA-VGGT augments each frame with a
+pooled shared cross-frame K/V set. In the later stage,
+AVGGT retains K/V tokens at fixed spatial strides,
+whereas GPA-VGGT selects them through bipartite
+merging.
+At an equal token budget, AVGGT sum-
+marizes all removed tokens with a single unweighted
+mean K/V pair, whereas GPA-VGGT aggregates each
+removed token into the retained token it most closely
+matches and restores the corresponding attention mass
+through the + log s correction.
+The 128-dimensional
+Gaussian projection reduces matching overhead, en-
+abling GPA-VGGT to retain fewer K/V tokens than
+AVGGT(2) while achieving both lower runtime and
+higher accuracy.
+H. Transfer to Other Backbones
+The proposed design applies to backbones that alter-
+nate frame attention and global attention over a token
+layout comprising special tokens followed by a patch
+grid. Both π3 [13] and VGGT-Ω[14] follow this struc-
+ture. We adjust only model-specific properties, includ-
+ing the block layout, the number of special tokens per
+frame, and patch size. Each adaptation uses the same
+128-dimensional Gaussian projection for K/V match-
+ing.
+Table S5 reports the incremental ablation on π3. We
+retain the early-block setting used by AVGGT: global
+attention in blocks 0–9 is replaced by frame attention,
+and K/V merging is applied in blocks 10–17, with a
+lower merge ratio in core blocks 13–15. However, π3 re-
+quires a lower overall merge ratio than VGGT because
+it has fewer global-attention blocks. Each merged block
+therefore has a larger effect on the information propa-
+gated through the remaining global-attention blocks.
+Table S6 reports the same ablation on VGGT-Ω,
+which contains five register blocks at raw indices 2, 6,
+9, 14, and 20 that do not perform cross-frame atten-
+tion over patch tokens.
+We therefore replace global
+attention with frame attention in raw blocks 0, 1, 3,
+4, 5, 7, and 8, and apply K/V merging in the subse-
+quent non-register blocks, with a lower merge ratio in
+raw blocks 12, 13, 15, and 16. As in π3, patch tokens
+participate in global attention in fewer blocks than in
+VGGT, requiring a lower overall merge ratio.
+On both backbones, the shared cross-frame K/V set
+mitigates the accuracy loss caused by replacing early
+global attention with frame attention.
+The adopted
+configurations accelerate all three backbones while re-
+taining most of the accuracy of their vanilla models.
+I. Additional Qualitative Results
+Figures S3–S5 provide additional qualitative com-
+parisons for examples from 7-Scenes, NRGBD, and
+RealEstate10K.
+12
+
+
+CO3D AUC@τ
+RE10K AUC@τ
+200 frames
+3
+5
+10
+30
+3
+5
+10
+30
+time (s)
+speedup
+vanilla
+58.01
+68.36
+79.16
+89.71
+50.90
+60.67
+72.43
+85.74
+65.5
+1.00×
++ frame attention in early blocks
+56.25
+67.01
+78.35
+89.32
+50.64
+60.39
+72.18
+85.63
+35.4
+1.85×
++ pooled cross-frame broadcast
+58.06
+68.42
+79.18
+89.66
+51.34
+60.85
+72.42
+85.67
+36.5
+1.80×
++ query-preserving K/V merging, r=0.50
+57.29
+67.92
+78.97
+89.56
+51.04
+60.66
+72.35
+85.73
+27.7
+2.36×
++ query-preserving K/V merging, r=0.90
+56.40
+67.34
+78.58
+89.35
+49.85
+59.71
+71.72
+85.45
+23.8
+2.75×
+Table S5. Ablation of the proposed design on π3. Bold marks the adopted configuration.
+CO3D AUC@τ
+RE10K AUC@τ
+200 frames
+3
+5
+10
+30
+3
+5
+10
+30
+time (s)
+speedup
+vanilla
+54.66
+66.09
+77.95
+89.14
+63.22
+71.26
+80.59
+90.58
+41.5
+1.00×
++ frame attention in early blocks
+53.98
+65.59
+77.62
+88.97
+63.01
+71.09
+80.47
+90.57
+29.4
+1.41×
++ pooled cross-frame broadcast
+54.56
+66.01
+77.90
+89.11
+63.21
+71.23
+80.59
+90.61
+29.9
+1.39×
++ query-preserving K/V merging, r=0.50
+53.84
+65.44
+77.52
+89.00
+62.95
+71.05
+80.50
+90.56
+22.5
+1.84×
++ query-preserving K/V merging, r=0.90
+52.97
+64.81
+77.08
+88.81
+62.64
+70.82
+80.36
+90.52
+19.2
+2.17×
+Table S6. Ablation of the proposed design on VGGT-Ω. Bold marks the adopted configuration.
+Figure S2. Core-block selection on π3 and VGGT-Ω. Core blocks are selected using the same measurement as in
+Figure S1. The criterion selects blocks 13–15 on π3 and raw blocks 12, 13, 15, and 16 on VGGT-Ω, where raw block 14 is a
+register block and is therefore excluded from merging.
+13
+
+
+vanilla VGGT
+FastVGGT
+AVGGT(2)
+GPA-VGGT (ours)
+zoom 1
+zoom 2
+Figure S3. A small-room scene from 7-Scenes (heads-seq-02#0).
+14
+
+
+vanilla VGGT
+FastVGGT
+AVGGT(2)
+GPA-VGGT (ours)
+zoom 1
+zoom 2
+Figure S4. A green-room scene from NRGBD (green room#11).
+15
+
+
+vanilla VGGT
+FastVGGT
+AVGGT(2)
+GPA-VGGT (ours)
+zoom 1
+zoom 2
+Figure S5. An outdoor scene from RealEstate10K (2c805f56d92a2e22).
+16

@@ -1,0 +1,2793 @@
+SAGE: Semantic-Augmented Geometric Experts for Point Cloud Registration
+Tomoyasu Shimada
+Kazuhiko Murasaki
+Shoichiro Takeda
+Shogo Sato
+Riku Inoue
+Toshihiko Nishimura
+Ryuichi Tanida
+NTT, Inc.
+Abstract
+Point cloud registration is an essential task for scene recon-
+struction, requiring the alignment of partially overlapping
+point clouds. Under low-overlap conditions, this task re-
+mains challenging because existing geometry-only methods
+cannot distinguish geometrically similar but semantically
+distinct structures (e.g., TV corners vs. desk corners and
+chair legs vs. table legs), resulting in incorrect correspon-
+dences. To address this geometric ambiguity, we present
+Semantic-Augmented Geometric Experts (SAGE), which
+integrates frozen pre-trained point cloud semantic represen-
+tations into the registration pipeline without requiring addi-
+tional sensors or fine-tuning the semantic encoder. To effec-
+tively leverage these semantic distinctions, SAGE employs
+a Semantic-Guided Mixture of Experts (SG-MoE) architec-
+ture. Through semantic-aware routing, SG-MoE enables
+each expert to specialize in distinct semantic-geometric pat-
+terns, reducing mismatches that confound geometry-only
+methods. With a structure-aware estimator, SAGE achieves
+the highest registration recall on 3DLoMatch while remain-
+ing competitive on 3DMatch. When evaluated with the same
+number of refinement iterations, SAGE further achieves the
+highest inlier ratio and registration recall on both bench-
+marks. These results indicate that frozen semantic represen-
+tations provide effective cues for resolving geometric ambi-
+guity in low-overlap registration.
+1. Introduction
+Point cloud registration is an essential task for 3D percep-
+tion in robotics, autonomous driving, and augmented re-
+ality [18]. Despite progress, achieving robust registration
+under challenging conditions with low overlap remains an
+open problem. Current registration methods [17, 19, 26, 48,
+50] generally follow a correspondence-based pipeline. This
+pipeline first establishes point-to-point correspondences be-
+tween two point clouds using deep neural networks, and
+then estimates the transformation from these correspon-
+dences. Thus, this pipeline’s success depends on the qual-
+ity of the correspondences. However, geometrically simi-
+Figure 1. Limitation of geometric features in low-overlap point
+cloud registration. Point clouds are pseudo-colored by seman-
+tic regions for visualization. Top: GeoTransformer [26], relying
+solely on geometric features, is overwhelmed by dominant incor-
+rect correspondences (red lines) due to similar geometric struc-
+tures, failing to establish true inliers (no green lines visible). Bot-
+tom: SAGE (Ours) successfully disambiguates geometrically sim-
+ilar but semantically distinct structures. Green and red lines indi-
+cate inlier and outlier correspondences (threshold: 0.1 m).
+lar structures such as TV edges, desk edges, and furniture
+edges produce similar geometric features even though they
+differ semantically. In low-overlap scenarios where spatial
+context is severely limited, correspondences relying solely
+on geometric features become unreliable because there are
+insufficient points surrounding the target point to distin-
+guish between semantically different features.
+Fig. 1 illustrates this fundamental limitation: widely
+adopted methods such as GeoTransformer [26] can pro-
+duce entirely incorrect correspondences when faced with
+geometrically similar but semantically distinct structures in
+low-overlap scenarios.
+Indeed, geometry-based methods [17, 48–50] have such
+1
+arXiv:2610.36658v1  [cs.CV]  27 Oct 2026
+
+
+limitations. Even recent Mixture of Experts (MoE) methods
+like PSReg [19], which use geometric feature-based routing
+to activate geometry-specialized experts, depend only on
+geometric representations. Although post-processing meth-
+ods such as DecisionPCR [56] can boost results through it-
+erative refinement, they still operate within the geometric
+domain, limited by the quality ceiling of geometry-based
+correspondence establishment. As one possible approach
+to overcome this limitation, several methods use semantic
+information for registration. However, they often require
+RGB-D sensors or calibrated cameras, while others rely
+on domain-specific models that generalize poorly across
+datasets [15, 22, 25, 45].
+To overcome the fundamental limitations of relying
+solely on geometric features, we introduce Semantic-
+Augmented Geometric Experts (SAGE). SAGE integrates
+frozen pre-trained semantic representations into point cloud
+registration through a semantic-guided mixture-of-experts
+architecture that jointly exploits geometric and semantic
+features.
+This design requires neither additional sensors
+nor fine-tuning of the semantic encoder. First, SAGE em-
+ploys the frozen semantic feature extractor of the recent pre-
+trained model Sonata [43] to extract semantic features of the
+input source and target point clouds. Then, SAGE jointly
+encodes the semantic features with input point clouds of the
+source and target to extract their corresponding semantic-
+geometric features.
+After this feature extraction, SAGE
+refines the semantic-geometric features via our proposed
+Semantic-Guided MoE (SG-MoE).
+Our main technical contribution is the design of SG-
+MoE. If Standard MoE [13, 31] is used for feature re-
+finement, as in PSReg [19], geometric knowledge be-
+comes dominant and semantic knowledge is neglected in
+the semantic-geometric features because the loss functions
+commonly adopted in registration tasks primarily optimize
+geometric fidelity. To prevent this domination, we design
+the expert routing in SG-MoE to be based solely on se-
+mantic features extracted from the frozen Sonata. This de-
+sign enables each expert to refine the semantic-geometric
+features by explicitly considering semantic knowledge. As
+a result, SG-MoE performs the feature refinement process
+while preserving both semantic and geometric information.
+Finally, SAGE estimates the transformation between the
+source and target point clouds using their refined semantic-
+geometric features following the superpoint matching in
+GeoTransformer [26].
+As demonstrated in Fig. 1, while
+geometry-only methods like GeoTransformer fail to distin-
+guish geometrically similar structures (producing incorrect
+correspondences shown in red), our SAGE successfully dis-
+tinguishes them by leveraging semantic knowledge, achiev-
+ing accurate registration even in low-overlap scenarios. Our
+contributions are:
+• We propose SAGE, which integrates frozen pre-trained
+semantic representations into point cloud registration
+through a two-stage feature extraction without addi-
+tional sensors or retraining, overcoming the limitations of
+purely geometric features.
+• We design Semantic-Guided MoE (SG-MoE), where
+routing is determined solely by semantic features while
+experts process semantic-geometric features, enabling the
+distinction of geometrically similar but semantically dif-
+ferent structures.
+• Evaluation on 3DMatch [54], 3DLoMatch [17], and
+KITTI [16]1 demonstrates that SAGE achieves the high-
+est registration recall on 3DLoMatch among single-pass
+methods with a structure-aware estimator [26], the best
+feature matching recall across all sample counts and
+the best inlier ratio with 1000 or fewer samples under
+RANSAC, and the lowest translation error on KITTI,
+while performing on par with iterative methods [19, 51].
+2. Related Work
+Classical point cloud registration. Traditional methods
+laid the foundation for automatic point cloud alignment
+through coarse-to-fine pipelines [18]. These methods rely
+on handcrafted geometric descriptors [20, 29, 38] to encode
+local geometry, establish correspondences using RANdom
+SAmple Consensus (RANSAC) variants [1, 5, 10, 14], and
+refine alignment through Iterative Closest Point (ICP) [6,
+9, 24, 28]. These methods successfully automated funda-
+mental registration tasks and introduced the coarse-to-fine
+pipeline that remains widely adopted. Unfortunately, be-
+cause handcrafted descriptors are not learned from data,
+these methods are sensitive to noise and partial observa-
+tions, resulting in limited robustness.
+Learning-based point cloud registration.
+Deep learn-
+ing addressed the discriminative power limitations of hand-
+crafted descriptors by introducing learnable feature repre-
+sentations.
+Pioneering works such as 3DMatch [54] for
+RGB-D scenes and FCGF [11] with sparse convolutions
+demonstrated improvements in both feature discriminabil-
+ity and robustness to noise and partial observations by learn-
+ing local geometric features from large-scale datasets [3, 4,
+12, 47]. However, a new challenge emerged in low-overlap
+scenarios where limited spatial context makes correspon-
+dence establishment particularly difficult. Unlike partial ob-
+servations (which concern the quality and completeness of
+individual point clouds), low-overlap refers to the limited
+shared observable region between two point clouds. Even
+when each scan is individually complete, establishing reli-
+able correspondences becomes difficult when the common
+area is small, as there is insufficient spatial context to disam-
+biguate similar structures. Despite improved feature quality,
+methods relying on local geometric features alone struggle
+1Detailed KITTI experiments and results are provided in Appendix D.1.
+2
+
+
+Figure 2. Overall pipeline of SAGE. Given two input point clouds, the Two-Stage Feature Extraction (Sec. 3.2) first applies a frozen
+Sonata encoder to extract point-level semantic features from each point cloud, and then feeds these semantic features together with the raw
+point coordinates into the KPConv encoder to produce semantic-geometric features. The Spatial Feature Aggregation (Sec. 3.3) then maps
+both the semantic and semantic-geometric features to the superpoint level via nearest-neighbor search and average pooling. The aggre-
+gated features are refined through N alternating iterations of Geometric Transformer layers (red box, self-attention) and Semantic-Guided
+Mixture of Experts (Sec. 3.4) layers (blue box, cross-attention), where semantic features guide expert routing to enable semantic-aware
+specialization. Finally, the framework adopts GeoTransformer’s coarse-to-fine matching for correspondence estimation and registration.
+in such scenarios [18]. This is because they cannot leverage
+global scene structure to resolve ambiguities when similar
+local geometric patterns appear at multiple locations.
+Global context modeling with transformers. Transform-
+ers addressed the locality limitation by enabling global con-
+text modeling through self-attention mechanisms [17, 40,
+49]. GeoTransformer [26] pioneered this direction with ge-
+ometric transformers and superpoint matching. Subsequent
+work explored end-to-end correspondence prediction [48],
+hierarchical modeling, diffusion-based approaches, multi-
+modal fusion, and various architectural improvements [2, 8,
+17, 22, 32–34, 39, 51, 56]. By incorporating global geo-
+metric relationships, these methods improved performance
+in low-overlap scenarios where spatial context is limited.
+However, we observe that purely geometric features strug-
+gle to disambiguate structures with similar geometric pat-
+terns but different semantic meanings.
+Representation learning beyond geometry. Recent ad-
+vances in 3D representation learning [41, 42, 44] have
+demonstrated the potential to learn semantic representations
+beyond pure geometry, offering a promising direction for
+addressing geometric ambiguity. Methods such as Point-
+BERT [53], masked autoencoders, and auto-regressive
+methods [7, 23] capture semantic patterns through pre-
+training with masked point modeling. Notably, Sonata [43]
+learns robust semantic representations by explicitly avoid-
+ing geometric shortcuts during training using a large
+dataset. This makes it possible to semantically distinguish
+between objects that have similar geometric characteristics,
+such as walls and floors.
+Semantic-enhanced registration. Several methods lever-
+age semantic information for registration. S2Reg [45] ac-
+quires semantics via pre-trained 3D models or 2D-3D pro-
+jection from images, while ML-SemReg [46] relies on se-
+mantic labels produced by external semantic segmentation
+models. ColorPCR [22], SemReg [15], and SARNet [25]
+employ multi-modal fusion or semantic constraints. How-
+ever, these approaches either require additional modalities
+such as RGB-D data or calibrated images, or rely on ex-
+plicit semantic labels produced by task-specific segmenta-
+tion models. While these methods demonstrate the value
+of semantic information, directly integrating frozen pre-
+trained semantic representations into point cloud registra-
+tion without additional sensors or retraining remains un-
+explored. To address this, we propose an architecture that
+leverages frozen semantic representations solely from point
+clouds.
+Mixture of experts. Mixture of Experts (MoE) offers an
+architectural approach to handle diverse input patterns effi-
+ciently. Specifically, this approach has a set of small mod-
+ules, called experts, and each expert specializes in differ-
+ent input patterns [13, 31, 55]. PSReg [19] pioneered the
+application of MoE to registration. The method leverages
+GeoTransformer [26] to determine which regions overlap
+between point clouds, and uses this overlap information
+for routing inputs to experts.
+By enabling different ex-
+perts to specialize in different geometric patterns (e.g., pla-
+nar vs.
+curved surfaces, indoor vs.
+outdoor structures),
+3
+
+
+MoE provides adaptive processing capability.
+However,
+routing solely on geometric features fundamentally lim-
+its expert specialization; while experts can handle differ-
+ent geometric patterns, they cannot distinguish between se-
+mantically different structures that exhibit similar geome-
+try. Our method addresses this limitation by incorporating
+pre-trained semantic representations into MoE routing, en-
+abling experts to specialize according to both geometric and
+semantic characteristics.
+3. Method
+3.1. Problem Formulation
+Given two partially overlapping point clouds, P = {pi}NP
+i=1
+and Q = {qj}NQ
+j=1, where pi, qj ∈R3 represent 3D point
+positions, the goal is to estimate the rigid transformation
+T = (R, t) that aligns Q to P, where R ∈SO(3) is the
+rotation in R3 and t ∈R3 is the translation.
+As shown in Fig. 2, our proposed pipeline is based on
+GeoTransformer [26] but incorporates a newly developed
+semantic representation extractor and an SG-MoE Trans-
+former. The pipeline proceeds in five stages: (1) semantic
+representation extraction using a frozen Sonata encoder in
+Sec. 3.2, (2) geometric feature extraction with semantic rep-
+resentations as input to KPConv [37] in Sec. 3.2, (3) spatial
+aggregation of semantic representations to the superpoint
+level in Sec. 3.3, (4) alternating geometric self-attention
+and semantic-guided MoE cross-attention for N iterations
+in Sec. 3.4, and (5) correspondence establishment and reg-
+istration [26].
+3.2. Two-Stage Feature Extraction
+To efficiently extract semantic-geometric features from the
+inputs P and Q, we adopt a two-stage strategy. In the first
+stage, we employ Sonata [43] to extract point-level seman-
+tic representations FP
+s
+∈RNP×ds from the input point
+cloud P, yielding FP
+s
+= Sonata(P). Similarly, we ob-
+tain FQ
+s
+∈RNQ×ds from Q in the same manner. In the
+second stage, we use a trainable KPConv encoder [37] to
+obtain downsampled points ˆP = {ˆpi}
+ˆ
+NP
+i=1 ( ˆNP ≪NP)
+and their corresponding semantic-geometric features ˆFP
+sg ∈
+R ˆ
+NP×dsg as
+  ˆP, ˆFP
+sg
+
+= KPConv
+ P, FP
+s
+
+. Similarly, we
+get
+  ˆQ, ˆFQ
+sg
+
+= KPConv
+ Q, FQ
+s
+
+.
+This two-stage design achieves semantic-geometric fea-
+ture fusion by leveraging KPConv’s ability to learn condi-
+tional convolutions. By providing semantic representations
+FP
+s and FQ
+s as initial features, we enable KPConv’s kernel
+weights to adapt to the joint semantic-geometric space. The
+resulting features ˆFP
+sg and ˆFQ
+sg encode semantic-aware ge-
+ometric patterns that can distinguish geometrically similar
+structures based on their semantic meaning.
+3.3. Spatial Feature Aggregation
+Following GeoTransformer [26]’s coarse-to-fine strategy,
+we perform transformer processing iteratively to refine the
+extracted features above FP
+s and ˆFP
+sg. To process these fea-
+tures with the transformer architecture, we aggregate FP
+s
+with NP points to match the ˆNP points of ˆFP
+sg.
+For each point ˆpk ∈ˆP, we obtain its downsampled se-
+mantic representation ˆf P
+s,k by average-pooling the features
+of its K nearest neighbors (K = 16) in the original point
+cloud P (i.e., ˆf P
+s,k =
+1
+K
+P
+i∈Ik f P
+s,i). This yields the down-
+sampled representations ˆFP
+s with ˆNP points, matching the
+spatial dimension of ˆFP
+sg. The same aggregation is applied
+to Q to obtain ˆFQ
+s .
+3.4. Semantic-Guided Mixture of Experts
+After the above aggregation, we perform the transformer-
+based refinement process iteratively for the semantic-
+geometric features ˆFP
+sg and ˆFQ
+sg. In this process, we use a
+new MoE module called Semantic-Guided Mixture of Ex-
+perts (SG-MoE). Following GeoTransformer [26], we re-
+fine semantic-geometric features through N iterations of
+transformer blocks, where each block consists of a Geo-
+metric Transformer layer (self-attention) and an SG-MoE
+Transformer layer (cross-attention), followed by superpoint
+matching for correspondence establishment, a coarse-to-
+fine strategy that has proven effective in recent transformer-
+based registration methods [17, 49, 51]. Geometric Trans-
+former processes each point cloud independently with geo-
+metric positional encodings, while SG-MoE refines features
+through cross-attention with semantic-guided expert rout-
+ing.
+Although PSReg [19] pioneered MoE for registration, its
+geometry-only routing cannot distinguish regions with sim-
+ilar geometry but different semantics. Moreover, if we di-
+rectly use semantic-geometric features ˆFP
+sg for routing, reg-
+istration losses that optimize for geometric alignment cause
+these representations to collapse into purely geometric pat-
+terns, losing their semantic discriminability. To overcome
+this issue, we design our SG-MoE to route experts using
+superpoint-level semantic representations ˆFP
+s only.
+As shown in Fig. 3, SG-MoE consists of (i) a cross-
+attention layer, (ii) a semantic-guided router, and (iii) ex-
+pert feed-forward networks (FFNs). Unlike Standard MoE
+(Fig. 3a) whose fused-feature routing suffers from geomet-
+ric domination, our SG-MoE (Fig. 3b) strictly routes using
+pure semantic features. This design preserves semantic dis-
+tinctions while experts refine the semantic-geometric fea-
+tures.
+The refinement process in SG-MoE operates as follows.
+First, a cross-attention layer updates semantic-geometric
+features:
+ˆFP
+attention = LayerNorm
+
+ˆFP
+sg + CrossAttn(ˆFP
+sg, ˆFQ
+sg)
+
+,
+(1)
+4
+
+
+(a) Standard MoE
+(b) SG-MoE (ours)
+Figure 3. Comparison of MoE architectures. (a) Standard MoE feeds the fused semantic-geometric features into both the router and the
+experts. (b) Our SG-MoE decouples the inputs, feeding pure semantic features to the router and semantic-geometric features to the experts.
+These processes apply symmetrically with P and Q swapped.
+Similarly, we get ˆFQ
+attention from ˆFQ
+sg and ˆFP
+sg.
+In a semantic-guided expert router network, expert rout-
+ing is guided by frozen semantic representations.
+For
+each superpoint’s semantic representation ˆf P
+s,k ∈Rds, a
+lightweight two-layer routing network computes expert se-
+lection probabilities:
+rk = Softmax(π(ˆf P
+s,k)) ∈RNexpert
+(2)
+where π is a two-layer MLP with ReLU activation. Here,
+rk = [rk,1, . . . , rk,Nexpert] represents the probability distribu-
+tion over Nexpert experts for superpoint k, where rk,i indi-
+cates the probability of assigning superpoint k to expert i.
+We employ a top-1 routing strategy where each superpoint
+is assigned to the expert with the highest probability, i.e.,
+i∗
+k = arg max1≤i≤Nexpert rk,i.
+For each point ˆpk, let ˆf P
+attention,k ∈Rdsg denote the k-th
+transposed row of ˆFP
+attention. The semantic-geometric fea-
+tures from cross-attention are processed by the assigned ex-
+pert:
+ˆf P
+out,k = LayerNorm
+
+ˆf P
+attention,k + ψi∗
+k(ˆf P
+attention,k)
+
+,
+(3)
+where ψi∗
+k is a two-layer feed-forward network with ReLU
+activation.
+The router is regularized by the load-balancing objec-
+tive, while the selected experts are optimized by the reg-
+istration losses. Because routing is determined from frozen
+semantic features, different experts receive different subsets
+of semantic-geometric features and can consequently learn
+distinct refinement functions.
+This semantic-conditioned
+expert specialization helps reduce ambiguities that have
+been reported as a limitation of geometry-only registration
+methods [26, 50].
+Following GeoTransformer [26], after N transformer
+block iterations, the refined features are used to establish
+correspondences through superpoint matching and point
+matching, followed by transformation estimation.
+3.5. Training Objective
+We train SAGE end-to-end using:
+Ltotal = λcoarseLcoarse + λfineLfine + λmoeLmoe.
+(4)
+The first two terms supervise correspondence quality at dif-
+ferent spatial resolutions, while the third term regularizes
+expert utilization in the SG-MoE layer. We describe each
+term below. Note that the Sonata encoder remains frozen
+throughout training. Its semantic representations are never
+updated by gradients, preserving pre-trained knowledge.
+Therefore, the KPConv encoder, transformer layers, routing
+networks, and matching heads are trained by the loss (4).
+Coarse-level supervision loss (Lcoarse).
+We adopt the
+overlap-aware circle loss from GeoTransformer [26] to su-
+pervise superpoint correspondences. The loss is computed
+bidirectionally as Lcoarse = LP→Q
+oc
++ LQ→P
+oc
+, where Loc
+denotes this loss computed in each direction2.
+Fine-level supervision loss (Lfine). Following the optimal
+transport formulation in GeoTransformer [26], we super-
+vise point-level matches within each superpoint pair using
+2The detailed definition is introduced in Appendix B.1.
+5
+
+
+Sinkhorn iterations. Here, ˜P and ˜Q denote intermediate-
+resolution downsampled points obtained from the KPConv
+encoder. During training, we randomly sample Ng = 128
+ground-truth superpoint pairs. For each pair, we compute
+matching costs from point features at the ˜P, ˜Q resolution
+and obtain soft assignments Ai through the Sinkhorn al-
+gorithm, whose (p, q)-th entry ai
+p,q represents the matching
+probability between two points. The negative log-likelihood
+loss is:
+Lfine = 1
+Ng
+Ng
+X
+i=1
+
+−
+X
+(p,q)∈Γi
+log ai
+p,q
+
+
+(5)
+where Γi includes ground-truth matches (within radius
+0.05 m) and dustbin assignments for unmatched points3.
+Expert load balancing loss (Lmoe). To prevent the routing
+network from collapsing to a subset of experts, we adopt
+the load balancing loss [31]. Specifically, we compute the
+average routing probability ¯re =
+1
+|B|
+P
+k∈B rk,e for each
+expert e across all superpoints in the batch B and minimize
+its KL divergence from the uniform distribution:
+Lmoe =
+Nexpert
+X
+e=1
+¯re log
+¯re
+1/Nexpert
+.
+(6)
+4. Experiments
+4.1. Implementation Details
+Network architecture. We use N = 3 transformer block
+iterations. The number of experts is set to Nexpert = 4.
+For the pair-wise distance embedding in geometric self-
+attention, we set σd to the voxel size at the superpoint level,
+and σa = 15◦for the triplet-wise angular embedding. For
+local-to-global registration, only superpoint matches with
+at least 3 local point correspondences are used to compute
+transformation candidates.
+We iteratively recompute the
+transformation with the surviving inlier matches Nr = 5
+times.
+Training and testing. We implement and train SAGE with
+PyTorch on an NVIDIA H100 GPU. Models are trained
+with the Adam optimizer for 45 epochs on 3DMatch with
+a batch size of 1. The learning rate starts from 10−4 and
+is multiplied by 0.95 after each epoch. Loss weights are
+λcoarse = 1.0, λfine = 1.0 and λmoe = 0.01. We randomly
+sample Ng = 128 ground-truth superpoint correspondences
+during training, and Nc = 256 putative superpoint matches
+during testing. Data augmentation follows [17].
+Baselines and reproduction. In the experiments, we evalu-
+ate two approaches: a single-pass approach and an iterative
+3The detailed definition is introduced in Appendix B.2.
+refinement approach. The former predicts the correspon-
+dences and the transformation directly from the extracted
+features without any feedback, and the latter iteratively up-
+dates the correspondences by embedding the estimate from
+the previous iteration as a prior to guide the subsequent
+matching.
+In the single-pass approach, we implemented
+several well-known methods, Predator [17], CoFiNet [49],
+GeoTransformer [26] and RoITr [50], to compare with
+our SAGE. For the iterative refinement approach, we ex-
+tended our SAGE with the same iterative refinement used
+in PEAL [51] and PSReg [19].
+We call this extension
+SAGE† in this paper based on the official implementation
+of PEAL [52]. On the other hand, the implementation of
+PSReg is not officially released, and several implementation
+hyperparameters are not reported, so we re-implemented
+PSReg from scratch. We restrict the comparison to methods
+that operate on point clouds alone, and therefore exclude
+semantic-enhanced methods such as SemReg [15], which
+require additional RGB images from calibrated cameras.
+4.2. Evaluation on 3DMatch and 3DLoMatch
+We evaluate SAGE on the 3DMatch [54] and 3DLo-
+Match [17] datasets to assess its performance in point cloud
+registration. We evaluate performance using three metrics
+following [17, 26]: Inlier Ratio (IR), which measures the
+fraction of putative correspondences whose residuals are
+below 0.1 m under the ground-truth transformation; Feature
+Matching Recall (FMR), which calculates the percentage of
+point cloud pairs with IR exceeding 5%; and Registration
+Recall (RR), which determines the fraction of pairs whose
+transformation error (RMSE) is below 0.2 m4.
+Results with RANSAC-50K. Following standard proto-
+cols [18], we compare recent point cloud registration
+methods with our SAGE. We evaluate each method us-
+ing RANSAC-50K with variable sample counts.
+Ta-
+ble 1 presents comprehensive results on both 3DMatch and
+3DLoMatch benchmarks.
+As shown in Table 1, among the single-pass methods
+the best and second-best scores are highlighted in bold-
+face and underline, respectively. SAGE achieves the best
+FMR across all sample counts (98.3–98.6%), demonstrating
+a superior feature matching capability in high-overlap sce-
+narios. For IR, SAGE achieves the best performance with
+1000 or fewer samples, reaching 87.0% at 250 samples, and
+is second only to RoITr at 5000 and 2500 samples. For
+RR, SAGE achieves 92.0% at 2500 samples and 91.9% at
+1000 samples, both of which are the highest among single-
+pass methods, while remaining competitive at other sample
+counts. The slight gap at 5000 samples (90.8% vs. Geo-
+Transformer’s 92.0%) is due to a limitation of RANSAC
+discussed below.
+4The definition of evaluation metrics is introduced in Appendix C.1.
+6
+
+
+3DMatch
+3DLoMatch
+# Samples
+5000
+2500
+1000
+500
+250
+5000
+2500
+1000
+500
+250
+Feature Matching Recall (%) ↑
+Predator [17]
+96.6
+96.6
+96.5
+96.3
+96.5
+78.6
+77.4
+76.3
+75.7
+75.3
+CoFiNet [49]
+98.1
+98.3
+98.1
+98.2
+98.3
+83.1
+83.5
+83.3
+83.1
+82.6
+GeoTrans. [26]
+97.9
+97.9
+97.9
+97.9
+97.6
+88.3
+88.6
+88.8
+88.6
+88.3
+RoITr [50]
+98.0
+98.0
+97.9
+98.0
+97.9
+89.6
+89.6
+89.5
+89.4
+89.3
+SAGE (ours)
+98.4
+98.5
+98.6
+98.6
+98.3
+89.6
+89.7
+89.9
+90.0
+89.4
+PEAL [51]
+97.8
+98.1
+98.0
+98.0
+97.8
+85.8
+86.0
+85.5
+85.1
+85.0
+PSReg [19]
+97.1
+97.4
+97.7
+97.7
+97.7
+85.3
+85.7
+85.7
+85.8
+85.3
+SAGE† (ours)
+97.2
+97.5
+97.7
+97.8
+97.7
+85.4
+85.9
+85.4
+85.2
+85.3
+Inlier Ratio (%) ↑
+Predator [17]
+58.0
+58.4
+57.1
+54.1
+49.3
+26.7
+28.1
+28.3
+27.5
+25.8
+CoFiNet [49]
+49.8
+51.2
+51.9
+52.2
+52.2
+24.4
+25.9
+26.7
+26.8
+26.9
+GeoTrans. [26]
+71.9
+75.2
+76.0
+82.2
+85.1
+43.5
+45.3
+46.2
+52.9
+57.7
+RoITr [50]
+82.6
+82.8
+83.0
+83.0
+83.0
+54.3
+54.6
+55.1
+55.2
+55.3
+SAGE (ours)
+73.5
+79.8
+84.1
+85.8
+87.0
+44.5
+50.3
+56.4
+59.1
+60.9
+PEAL [51]
+74.9
+81.3
+85.7
+87.5
+88.7
+49.7
+55.0
+61.1
+63.6
+65.2
+PSReg [19]
+75.0
+81.3
+85.7
+87.4
+88.5
+49.5
+55.0
+61.0
+63.5
+65.1
+SAGE† (ours)
+75.5
+81.7
+85.9
+87.5
+88.6
+49.9
+55.4
+61.2
+63.6
+65.1
+Registration Recall (%) ↑
+Predator [17]
+89.0
+89.9
+90.6
+88.5
+86.6
+59.8
+61.2
+62.4
+60.8
+58.1
+CoFiNet [49]
+89.3
+88.9
+88.4
+87.4
+87.0
+67.5
+66.2
+64.2
+63.1
+61.0
+GeoTrans. [26]
+92.0
+91.8
+91.8
+91.4
+91.2
+75.0
+74.8
+74.2
+74.1
+73.5
+RoITr [50]
+91.9
+91.7
+91.8
+91.4
+91.0
+74.7
+74.8
+74.8
+74.2
+73.6
+SAGE (ours)
+90.8
+92.0
+91.9
+91.1
+91.0
+73.4
+74.2
+74.5
+74.6
+73.9
+PEAL [51]
+91.9
+91.6
+91.7
+91.7
+91.7
+76.1
+76.1
+76.2
+75.9
+75.9
+PSReg [19]
+91.9
+91.9
+92.2
+92.0
+91.8
+76.4
+76.5
+76.4
+75.9
+75.3
+SAGE† (ours)
+92.2
+92.3
+92.5
+91.9
+92.1
+77.3
+77.3
+77.0
+76.3
+76.0
+Table 1. Evaluation results on 3DMatch and 3DLoMatch using
+RANSAC-50K. Pink rows use iterative refinement. Boldface in-
+dicates the best result and underline indicates the second-best re-
+sult within each group. Iterative PEAL and PSReg are reproduced
+under our setting and fall below their reported numbers.
+On 3DLoMatch, SAGE achieves the best or tied-best
+FMR across all sample counts (89.6–90.0%). For IR, SAGE
+achieves the best performance with 1000 or fewer samples
+(56.4–60.9%), outperforming RoITr’s 55.3% by 5.6 points
+at 250 samples, and is second-best at 5000 and 2500 sam-
+ples. This demonstrates SAGE’s robustness with limited
+correspondences.
+For RR, SAGE achieves 73.4–74.6%,
+which is competitive but slightly below the best meth-
+ods in some configurations, due to the same limitation of
+RANSAC.
+Specifically, the limitation of RANSAC in our setting is
+that its uniform random sampling treats all correspondences
+equally, failing to exploit the semantic structure that SAGE
+introduces.
+Results with structure-aware estimators. We next evalu-
+ate SAGE under two protocols that overcome the limitation
+of RANSAC, and we use these methods to directly compare
+SAGE with the most relevant recent methods. The upper
+group of Table 2 reports single-pass results with LGR [26],
+a structure-aware estimator that exploits spatial relation-
+ships among correspondences rather than sampling them
+uniformly. Because PEAL refines its estimate over several
+iterations, we evaluate SAGE, PEAL, and PSReg under a
+common iterative protocol in which each method receives
+the same budget of six refinement iterations, which places
+3DMatch
+3DLoMatch
+FMR↑
+IR↑
+RR↑
+FMR↑
+IR↑
+RR↑
+GeoTrans. [26]
+98.2
+70.9
+92.5
+87.1
+43.5
+74.0
+RoITr [50]
+98.1
+82.0
+90.9
+89.4
+54.4
+73.4
+SAGE (ours)
+98.2
+71.7
+91.0
+89.4
+44.3
+76.3
+PEAL [51]
+97.8
+73.5
+91.5
+85.8
+49.5
+76.9
+PSReg [19]
+97.1
+73.4
+92.1
+85.4
+49.5
+77.4
+SAGE† (ours)
+97.2
+73.7
+92.2
+85.4
+49.7
+77.6
+Table 2. Evaluation on 3DMatch and 3DLoMatch with LGR [26].
+Configuration
+FMR ↑[%]
+IR↑[%]
+RR↑[%]
+baseline
+87.1
+43.5
+74.0
+Two-Stage Feature Extraction only
+88.5
+40.4
+74.7
+Standard MoE only
+87.5
+42.6
+74.7
+SG-MoE only
+87.5
+43.8
+75.3
+Full SAGE
+89.4
+44.3
+76.3
+Table 3. Ablation study on 3DLoMatch with LGR.
+them under identical input and evaluation conditions.
+Under LGR, SAGE attains the highest RR on 3DLo-
+Match (76.3%), surpassing GeoTransformer by 2.3 points
+and RoITr by 2.9 points, while remaining competitive on
+3DMatch (91.0%).
+SAGE reaches this highest RR on
+3DLoMatch despite a lower IR than RoITr, which indicates
+that its correspondences exhibit stronger spatial consistency
+that structure-aware estimators can effectively exploit.
+Under this protocol, SAGE attains the highest IR and
+the highest RR on both 3DMatch and 3DLoMatch, reaching
+92.2% and 77.6% RR respectively, whereas PEAL records
+the highest FMR. This shows that, when every method
+receives the same refinement budget, the semantic-guided
+routing in SAGE produces correspondences that are at least
+as reliable as those of the strongest recent MoE-based and
+iterative methods.
+4.3. Ablation Studies
+We analyze each component’s contribution on 3DLoMatch
+using LGR. Results are shown in Table 3.
+Effect of SG-MoE. Removing SG-MoE decreases RR by
+1.6 points and IR by 3.9 points. This demonstrates that
+semantic-guided expert routing directly improves corre-
+spondence quality. By routing based on frozen semantic
+features, experts naturally specialize for different semantic-
+geometric patterns, enabling effective disambiguation of
+geometrically similar but semantically distinct regions (e.g.,
+walls vs. floors).
+Effect of two-stage feature extraction. Without two-stage
+feature extraction, FMR drops 1.9 points and RR drops 1.0
+point, while IR remains relatively stable. This indicates that
+semantic input primarily enables more discriminative geo-
+metric features by grounding them in semantic understand-
+ing, leading to better feature matching across more point
+cloud pairs.
+7
+
+
+Figure 4. Qualitative comparison of correspondences on 3DLoMatch scenes.
+Each column shows a different point cloud pair. Top:
+GeoTransformer’s registration with correspondences (red for outliers, green for inliers). Bottom: SAGE’s registration and correspondences.
+SAGE effectively leverages semantic guidance to correctly identify inliers, even in low-overlap scenarios.
+Complementary effects. Comparing w/ two-stage feature
+extraction (RR: 74.7%, IR: 40.4%) and w/ SG-MoE (RR:
+75.3%, IR: 43.8%) reveals that both components contribute
+to different aspects. Two-stage feature extraction mainly
+improves FMR (+1.4 points) at the cost of IR (−3.1 points),
+whereas SG-MoE improves both IR and RR (+0.3 and +1.3
+points). The complete SAGE achieves a 2.3-point RR im-
+provement over the baseline, demonstrating the synergy of
+both components. Even with only one component, SAGE
+outperforms the baseline in RR, confirming the value of
+each design choice.
+4.4. Qualitative Results
+Fig. 4 shows qualitative comparisons on challenging 3DLo-
+Match scenes with geometrically similar structures. We vi-
+sualize correspondences as lines colored green for inliers
+and red for outliers. In scenes where some furniture shares
+similar local geometry, GeoTransformer [26] (top row) pro-
+duces predominantly outliers, resulting in low IR in some
+cases. In contrast, SAGE (bottom row) successfully dis-
+tinguishes these geometrically similar but semantically dis-
+tinct structures through semantic understanding, achieving
+high IR and accurate final registration. This visual evidence
+shows that semantic-guided expert routing effectively han-
+dles ambiguous geometric patterns that confound purely ge-
+ometric methods. 5
+Fig. 5 compares the expert activation patterns of Stan-
+dard MoE and SG-MoE. Standard MoE produces frag-
+mented assignments primarily driven by local geometric
+patterns, whereas SG-MoE assigns semantically similar re-
+gions to consistent experts, as illustrated by the coherent
+assignments of the highlighted furniture. This specializa-
+tion emerges without explicit supervision of expert roles
+5Additional qualitative comparisons with GeoTrans. are provided in
+Appendix D.6 (Fig. B).
+Figure 5. Expert activation patterns. Top: Standard MoE pro-
+duces fragmented expert assignments primarily driven by local ge-
+ometry. Bottom: SG-MoE consistently assigns semantically sim-
+ilar regions, such as the furniture highlighted by red circles, to the
+same expert, demonstrating semantic-guided specialization.
+and supports consistent feature processing across semanti-
+cally related structures.
+5. Conclusion
+We presented SAGE, a framework that integrates frozen
+pre-trained
+semantic
+representations
+with
+a
+mixture
+of experts for point cloud registration, requiring nei-
+ther additional sensors nor retraining of the semantic
+encoder. SAGE addresses a key limitation of geometry-
+only methods by distinguishing geometrically similar
+but
+semantically
+different
+structures,
+and
+achieves
+the
+highest
+registration
+recall
+among
+directly
+com-
+parable
+methods
+on
+low-overlap
+3DLoMatch
+while
+remaining competitive on 3DMatch and outdoor scenes.
+8
+
+
+References
+[1] Dror Aiger, Niloy J Mitra, and Daniel Cohen-Or. 4-Points
+Congruent Sets for Robust Pairwise Surface Registration.
+ACM Transactions on Graphics, 27(3):85:1–85:10, 2008. 2
+[2] Li An, Pengbo Zhou, Mingquan Zhou, Yong Wang, and Guo-
+hua Geng. Diffusion Transformer for Point Cloud Registra-
+tion: Digital Modeling of Cultural Heritage. Heritage Sci-
+ence, 12(1):198, 2024. 3
+[3] Yasuhiro Aoki, Hunter Goforth, Rangaprasad Arun Srivat-
+san, and Simon Lucey. PointnetLK: Robust & Efficient Point
+Cloud Registration Using PointNet. In IEEE/CVF Confer-
+ence on Computer Vision and Pattern Recognition, 2019. 2
+[4] Xuyang Bai, Zixin Luo, Lei Zhou, Hongbo Fu, Long Quan,
+and Chiew-Lan Tai. D3Feat: Joint Learning of Dense Detec-
+tion and Description of 3D Local Features. In IEEE/CVF
+Conference on Computer Vision and Pattern Recognition,
+2020. 2
+[5] Daniel Barath and Jiˇr´ı Matas.
+Graph-Cut RANSAC.
+In
+IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, 2018. 2
+[6] Paul J Besl and Neil D McKay. A Method for Registration
+of 3-D Shapes. IEEE Transactions on Pattern Analysis and
+Machine Intelligence, 14(2):239–256, 1992. 2
+[7] Guangyan Chen, Meiling Wang, Yi Yang, Kai Yu, Li Yuan,
+and Yufeng Yue. PointGPT: Auto-regressively Generative
+Pre-training from Point Clouds. In Advances in Neural In-
+formation Processing Systems, 2023. 3
+[8] Guangyan Chen, Meiling Wang, Qingxiang Zhang, Li Yuan,
+and Yufeng Yue. Full Transformer Framework for Robust
+Point Cloud Registration With Deep Information Interaction.
+IEEE Transactions on Neural Networks and Learning Sys-
+tems, 35(10):13368–13382, 2024. 3
+[9] Yang Chen and G´erard Medioni. Object Modelling by Reg-
+istration of Multiple Range Images. Image and Vision Com-
+puting, 10(3):145–155, 1992. 2
+[10] Sungjoon Choi, Qian-Yi Zhou, and Vladlen Koltun. Robust
+Reconstruction of Indoor Scenes. In IEEE Conference on
+Computer Vision and Pattern Recognition, 2015. 2
+[11] Christopher Choy, Jaesik Park, and Vladlen Koltun. Fully
+Convolutional Geometric Features. In IEEE/CVF Interna-
+tional Conference on Computer Vision, 2019. 2
+[12] Haowen Deng, Tolga Birdal, and Slobodan Ilic.
+PPF-
+FoldNet: Unsupervised Learning of Rotation Invariant 3D
+Local Descriptors. In European Conference on Computer
+Vision, 2018. 2
+[13] William Fedus, Barret Zoph, and Noam Shazeer.
+Switch
+Transformers: Scaling to Trillion Parameter Models with
+Simple and Efficient Sparsity. Journal of Machine Learning
+Research, 23(120):1–39, 2022. 2, 3
+[14] Martin A Fischler and Robert C Bolles. Random Sample
+Consensus: A Paradigm for Model Fitting with Applications
+to Image Analysis and Automated Cartography. Communi-
+cations of the ACM, 24(6):381–395, 1981. 2
+[15] Sheldon Fung, Xuequan Lu, Dasith de Silva Edirimuni, Wei
+Pan, Xiao Liu, and Hongdong Li. SemReg: Semantics Con-
+strained Point Cloud Registration. In European Conference
+on Computer Vision, 2024. 2, 3, 6
+[16] Andreas Geiger, Philip Lenz, and Raquel Urtasun. Are We
+Ready for Autonomous Driving? The KITTI Vision Bench-
+mark Suite. In IEEE Conference on Computer Vision and
+Pattern Recognition, 2012. 2, 15
+[17] Shengyu Huang, Zan Gojcic, Mikhail Usvyatsov, Andreas
+Wieser, and Konrad Schindler. PREDATOR: Registration of
+3D Point Clouds with Low Overlap. In IEEE/CVF Confer-
+ence on Computer Vision and Pattern Recognition, 2021. 1,
+2, 3, 4, 6, 7, 15
+[18] Xiaoshui Huang, Guofeng Mei, Jian Zhang, and Rana Ab-
+bas. A Comprehensive Survey on Point Cloud Registration.
+arXiv preprint arXiv:2103.02690, 2021. 1, 2, 3, 6
+[19] Xiaoshui Huang, Zhou Huang, Yifan Zuo, Yongshun Gong,
+Chengdong Zhang, Deyang Liu, and Yuming Fang. PSReg:
+Prior-Guided Sparse Mixture of Experts for Point Cloud
+Registration. In AAAI Conference on Artificial Intelligence,
+2025. 1, 2, 3, 4, 6, 7, 22
+[20] Andrew E Johnson and Martial Hebert. Using Spin Images
+for Efficient Object Recognition in Cluttered 3D Scenes.
+IEEE Transactions on Pattern Analysis and Machine Intel-
+ligence, 21(5):433–449, 1999. 2
+[21] Tsung-Yi Lin, Piotr Doll´ar, Ross Girshick, Kaiming He,
+Bharath Hariharan, and Serge Belongie. Feature Pyramid
+Networks for Object Detection.
+In IEEE Conference on
+Computer Vision and Pattern Recognition, 2017. 12
+[22] Juncheng Mu, Lin Bie, Shaoyi Du, and Yue Gao. ColorPCR:
+Color Point Cloud Registration with Multi-Stage Geometric-
+Color Fusion. In IEEE/CVF Conference on Computer Vision
+and Pattern Recognition, 2024. 2, 3
+[23] Yatian Pang, Wenxiao Wang, Francis E. H. Tay, Wei Liu,
+Yonghong Tian, and Li Yuan.
+Masked Autoencoders for
+Point Cloud Self-supervised Learning.
+In European Con-
+ference on Computer Vision, 2022. 3
+[24] Helmut Pottmann, Qi-Xing Huang, Yong-Liang Yang, and
+Shi-Min Hu. Geometry and Convergence Analysis of Algo-
+rithms for Registration of 3D Shapes. International Journal
+of Computer Vision, 67(3):277–296, 2006. 2
+[25] Haobo Qin, Yinchang Zhou, Chao Liu, Xiaopeng Zhang,
+Zhanglin Cheng, and Jianwei Guo. SARNet: Semantic Aug-
+mented Registration of Large-Scale Urban Point Clouds. In
+International Conference on Computational Visual Media,
+2024. 2, 3
+[26] Zheng Qin, Hao Yu, Changjian Wang, Yulan Guo, Yuxing
+Peng, and Kai Xu. Geometric Transformer for Fast and Ro-
+bust Point Cloud Registration. In IEEE/CVF Conference on
+Computer Vision and Pattern Recognition, 2022. 1, 2, 3, 4,
+5, 6, 7, 8, 12, 13, 14, 15, 22
+[27] Ignacio Rocco, Mircea Cimpoi, Relja Arandjelovi´c, Akihiko
+Torii, Tomas Pajdla, and Josef Sivic. Neighbourhood Con-
+sensus Networks. In Advances in Neural Information Pro-
+cessing Systems, 2018. 13
+[28] Szymon Rusinkiewicz and Marc Levoy. Efficient Variants
+of The ICP Algorithm. In International Conference on 3-D
+Digital Imaging and Modeling, 2001. 2
+[29] Radu Bogdan Rusu, Nico Blodow, and Michael Beetz. Fast
+Point Feature Histograms (FPFH) for 3D Registration. In
+IEEE International Conference on Robotics and Automation,
+2009. 2
+9
+
+
+[30] Paul-Edouard Sarlin, Daniel DeTone, Tomasz Malisiewicz,
+and Andrew Rabinovich.
+SuperGlue:
+Learning Feature
+Matching with Graph Neural Networks. In IEEE/CVF Con-
+ference on Computer Vision and Pattern Recognition, 2020.
+13, 14
+[31] Noam Shazeer, Azalia Mirhoseini, Krzysztof Maziarz, Andy
+Davis, Quoc Le, Geoffrey Hinton, and Jeff Dean.
+Out-
+rageously Large Neural Networks:
+The Sparsely-Gated
+Mixture-of-Experts Layer. In International Conference on
+Learning Representations, 2017. 2, 3, 6, 14
+[32] Rui She, Qiyu Kang, Sijie Wang, Wee Peng Tay, Kai Zhao,
+Yang Song, Tianyu Geng, Yi Xu, Diego Navarro Navarro,
+and Andreas Hartmannsgruber.
+PointDifformer: Robust
+Point Cloud Registration with Neural Diffusion and Trans-
+former. IEEE Transactions on Geoscience and Remote Sens-
+ing, 62:1–15, 2024. 3
+[33] Rui She, Sijie Wang, Qiyu Kang, Kai Zhao, Yang Song,
+Wee Peng Tay, Tianyu Geng, and Xingchao Jian.
+PosD-
+iffNet: Positional Neural Diffusion for Point Cloud Regis-
+tration in a Large Field of View with Perturbations. In AAAI
+Conference on Artificial Intelligence, 2024.
+[34] Tomoyasu Shimada,
+Kazuhiko Murasaki,
+Shogo Sato,
+Toshihiko Nishimura, Taiga Yoshida, and Ryuichi Tanida.
+Memory-Efficient Point Cloud Registration via Overlapping
+Region Sampling.
+In International Conference on Visual
+Communications and Image Processing, 2024. 3
+[35] Richard Sinkhorn and Paul Knopp. Concerning Nonnegative
+Matrices and Doubly Stochastic Matrices. Pacific Journal of
+Mathematics, 21(2):343–348, 1967. 13
+[36] Jiaming Sun, Zehong Shen, Yuang Wang, Hujun Bao, and
+Xiaowei Zhou. LoFTR: Detector-free Local Feature Match-
+ing with Transformers. In IEEE/CVF Conference on Com-
+puter Vision and Pattern Recognition, 2021. 13
+[37] Hugues Thomas, Charles R Qi, Jean-Emmanuel Deschaud,
+Beatriz Marcotegui, Franc¸ois Goulette, and Leonidas J
+Guibas. KPConv: Flexible and Deformable Convolution for
+Point Clouds.
+In IEEE/CVF International Conference on
+Computer Vision, 2019. 4
+[38] Federico Tombari, Samuele Salti, and Luigi Di Stefano.
+Unique Signatures of Histograms for Local Surface Descrip-
+tion. In European Conference on Computer Vision, 2010.
+2
+[39] Meiling Wang, Guangyan Chen, Yi Yang, Li Yuan, and
+Yufeng Yue. Point Tree Transformer for Point Cloud Regis-
+tration. IEEE Transactions on Circuits and Systems for Video
+Technology, 35(7):6756–6772, 2025. 3
+[40] Yue Wang and Justin M. Solomon.
+Deep Closest Point:
+Learning Representations for Point Cloud Registration. In
+IEEE/CVF International Conference on Computer Vision,
+2019. 3
+[41] Ziyi Wang, Yanran Zhang, Jie Zhou, and Jiwen Lu.
+UniPre3D: Unified Pre-training of 3D Point Cloud Models
+with Cross-Modal Gaussian Splatting. In IEEE/CVF Con-
+ference on Computer Vision and Pattern Recognition, 2025.
+3
+[42] Xiaoyang Wu, Xin Wen, Xihui Liu, and Hengshuang Zhao.
+Masked Scene Contrast: A Scalable Framework for Unsu-
+pervised 3D Representation Learning. In IEEE/CVF Con-
+ference on Computer Vision and Pattern Recognition, 2023.
+3
+[43] Xiaoyang Wu, Daniel DeTone, Duncan Frost, Tianwei
+Shen, Chris Xie, Nan Yang, Jakob Engel, Richard New-
+combe, Hengshuang Zhao, and Julian Straub.
+Sonata:
+Self-Supervised Learning of Reliable Point Representations.
+In IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, 2025. 2, 3, 4, 12, 13, 18
+[44] Yanhao Wu, Tong Zhang, Wei Ke, Congpei Qiu, Sabine
+S¨usstrunk, and Mathieu Salzmann. Mitigating Object De-
+pendencies: Improving Point Cloud Self-Supervised Learn-
+ing through Object Exchange. In IEEE/CVF Conference on
+Computer Vision and Pattern Recognition, 2024. 3
+[45] Zongyi Xu, Xinyu Gao, Xinqi Jiang, Shiyang Cheng, Qianni
+Zhang, Weisheng Li, and Xinbo Gao.
+S2Reg: Structure-
+semantics Collaborative Point Cloud Registration. Pattern
+Recognition, 161:111290, 2025. 2, 3
+[46] Shaocheng Yan, Pengcheng Shi, and Jiayuan Li.
+ML-
+SemReg: Boosting Point Cloud Registration with Multi-
+level Semantic Consistency.
+In European Conference on
+Computer Vision, 2024. 3
+[47] Yaoqing Yang, Chen Feng, Yiru Shen, and Dong Tian. Fold-
+ingNet: Point Cloud Auto-Encoder via Deep Grid Deforma-
+tion. In IEEE/CVF Conference on Computer Vision and Pat-
+tern Recognition, 2018. 2
+[48] Zi Jian Yew and Gim Hee Lee. REGTR: End-to-End Point
+Cloud Correspondences With Transformers. In IEEE/CVF
+Conference on Computer Vision and Pattern Recognition,
+2022. 1, 3
+[49] Hao Yu, Fu Li, Mahdi Saleh, Benjamin Busam, and Slobo-
+dan Ilic. CoFiNet: Reliable Coarse-to-fine Correspondences
+for Robust PointCloud Registration. In Advances in Neural
+Information Processing Systems, 2021. 3, 4, 6, 7
+[50] Hao Yu, Zheng Qin, Ji Hou, Mahdi Saleh, Dongsheng Li,
+Benjamin Busam, and Slobodan Ilic.
+Rotation-Invariant
+Transformer for Point Cloud Matching. In IEEE/CVF Con-
+ference on Computer Vision and Pattern Recognition, 2023.
+1, 5, 6, 7
+[51] Junle Yu, Luwei Ren, Yu Zhang, Wenhui Zhou, Lili Lin,
+and Guojun Dai.
+PEAL: Prior-Embedded Explicit Atten-
+tion Learning for Low-Overlap Point Cloud Registration.
+In IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, 2023. 2, 3, 4, 6, 7, 22
+[52] Junle Yu, Luwei Ren, Yu Zhang, Wenhui Zhou, Lili Lin,
+and Guojun Dai.
+PEAL: Prior-embedded Explicit Atten-
+tion Learning for Low-overlap Point Cloud Registration.
+https://github.com/Gardlin/PEAL/tree/
+82b382e9da456edc54fc43ba02d6f3aaf1c8e391,
+2023.
+GitHub
+repository,
+commit
+82b382e9da456edc54fc43ba02d6f3aaf1c8e391,
+accessed
+October, 2026. 6
+[53] Xumin Yu, Lulu Tang, Yongming Rao, Tiejun Huang,
+Jie Zhou, and Jiwen Lu.
+Point-BERT: Pre-Training 3D
+Point Cloud Transformers with Masked Point Modeling.
+In IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, 2022. 3
+10
+
+
+[54] Andy Zeng, Shuran Song, Matthias Nießner, Matthew
+Fisher, Jianxiong Xiao, and Thomas Funkhouser. 3DMatch:
+Learning Local Geometric Descriptors from RGB-D Recon-
+structions. In IEEE Conference on Computer Vision and Pat-
+tern Recognition, 2017. 2, 6
+[55] Yaohua Zha, Tao Dai, Hang Guo, Yanzi Wang, Bin Chen, Ke
+Chen, and Shu-Tao Xia. Point Cloud Mixture-of-Domain-
+Experts Model for 3D Self-supervised Learning. In Interna-
+tional Joint Conference on Artificial Intelligence, 2025. 3
+[56] Yaojie Zhang, Tianlun Huang, Weijun Wang, and Wei Feng.
+Decision PCR: Decision Version of the Point Cloud Regis-
+tration Task. arXiv preprint arXiv:2507.14965, 2025. 2, 3
+11
+
+
+SAGE: Semantic-Augmented Geometric Experts for Point Cloud Registration
+Supplementary Material
+A. Network Architecture Details
+A.1. Semantic Representation Extractor (Sonata)
+SAGE employs Sonata [43] as the semantic representation
+extractor. Sonata is a point cloud foundation model that
+is pre-trained through a contrastive learning objective de-
+signed to align point cloud representations with semanti-
+cally meaningful structures while explicitly avoiding geo-
+metric shortcuts. Its encoder follows a sparse convolutional
+architecture that processes voxelized point clouds and pro-
+duces per-point feature vectors of 1024 dimensions.
+An important property of Sonata for our framework is
+that it outputs continuous, high-dimensional semantic rep-
+resentation vectors rather than discrete categorical labels.
+Unlike conventional semantic segmentation models that
+predict specific categories such as “chair” or “car,” Sonata
+captures rich semantic relationships in a continuous feature
+space where semantically similar structures are grouped to-
+gether without being constrained by a predefined label vo-
+cabulary. This characteristic is essential for SAGE because
+it allows the SG-MoE router to exploit fine-grained se-
+mantic distinctions that go beyond coarse category bound-
+aries. For both indoor and outdoor environments, we use
+the frozen Sonata model exclusively as a feature extrac-
+tor, which ensures domain-agnostic operation that remains
+entirely free from the constraints of dataset-specific label
+spaces.
+A.2. Geometric Feature Extractor (KPConv) for
+3DMatch and 3DLoMatch
+Following GeoTransformer [26], we use a KPConv-FPN
+backbone for feature extraction. Prior to feeding the data
+into the backbone network, the input point clouds are pro-
+cessed with an initial voxelization using a sampling resolu-
+tion of 2.5 cm. As the data progresses through successive
+downsampling stages, the voxel resolution is progressively
+coarsened by a factor of two at each level.
+As shown in Table A, SAGE adopts the same KPConv-
+FPN backbone as GeoTransformer [26], with the only mod-
+ification being the input dimension of the first KPConv
+layer. Specifically, we expand the input feature dimension
+from 1 (no input features) to 1088 to incorporate pre-trained
+semantic representations from Sonata [43]. This enables the
+backbone to learn semantic-geometric features from the ini-
+tial stage.
+Table A. Geometric Feature Extractor (KPConv) architecture.
+SAGE modifies only the input dimension of the first KPConv layer
+(red) to accommodate 1024-dimensional Sonata semantic features
+concatenated with 64-dimensional positional encodings.
+Stage
+GeoTransformer
+SAGE
+1
+KPConv(1 →64)
+KPConv(1088 →64)
+ResBlock(64 →128)
+ResBlock(64 →128)
+2
+ResBlock(128 →128, strided)
+ResBlock(128 →128, strided)
+ResBlock(128 →256)
+ResBlock(128 →256)
+ResBlock(256 →256)
+ResBlock(256 →256)
+3
+ResBlock(256 →256, strided)
+ResBlock(256 →256, strided)
+ResBlock(256 →512)
+ResBlock(256 →512)
+ResBlock(512 →512)
+ResBlock(512 →512)
+4
+ResBlock(512 →512, strided)
+ResBlock(512 →512, strided)
+ResBlock(512 →1024)
+ResBlock(512 →1024)
+ResBlock(1024 →1024)
+ResBlock(1024 →1024)
+Upsampling (FPN)
+5
+NearestUpsampling
+NearestUpsampling
+UnaryConv(1536 →512)
+UnaryConv(1536 →512)
+6
+NearestUpsampling
+NearestUpsampling
+UnaryConv(768 →256)
+UnaryConv(768 →256)
+A.3. Geometric Feature Extractor (KPConv) for
+KITTI
+For the KITTI odometry benchmark, we adapt the backbone
+architecture to handle larger-scale outdoor environments.
+The input point clouds are voxelized with a sampling res-
+olution of 30 cm, significantly coarser than the 2.5 cm used
+for 3DMatch, reflecting the difference in spatial scale be-
+tween indoor rooms and outdoor driving scenarios.
+As shown in Table B, we employ a deeper 5-stage back-
+bone compared to the 4-stage backbone used for 3DMatch.
+The additional downsampling stage (Stage 5) is necessary
+to capture long-range spatial relationships in outdoor scenes
+that can span over 100 meters, while maintaining computa-
+tional efficiency. Without this additional stage, the recep-
+tive field would be insufficient to establish correspondences
+across the large spatial extents typical of KITTI scenes.
+Similar to 3DMatch, we modify only the input feature
+dimension of the first KPConv layer from 1 to 1088 to incor-
+porate semantic features from Sonata [43]. The deeper ar-
+chitecture with Feature Pyramid Network [21] connections
+enables effective multi-scale feature fusion across the ex-
+tended spatial hierarchy required for outdoor registration.
+A.4. Semantic-Guided MoE Transformer
+This subsection details the architecture of the SG-MoE
+Transformer introduced in Sec.
+3.4 of the main paper,
+12
+
+
+Table B. KPConv-FPN architecture for KITTI. SAGE uses a 5-
+stage backbone with an additional downsampling stage (Stage 5)
+compared to 3DMatch to handle larger outdoor scenes. The input
+feature dimension of the first KPConv layer is modified from 1 to
+1088 (highlighted in red) to incorporate semantic features.
+Stage
+GeoTransformer
+SAGE
+Downsampling
+1
+KPConv(1 →64)
+KPConv(1088 →64)
+ResBlock(64 →128)
+ResBlock(64 →128)
+2
+ResBlock(128 →128, strided)
+ResBlock(128 →128, strided)
+ResBlock(128 →256)
+ResBlock(128 →256)
+ResBlock(256 →256)
+ResBlock(256 →256)
+3
+ResBlock(256 →256, strided)
+ResBlock(256 →256, strided)
+ResBlock(256 →512)
+ResBlock(256 →512)
+ResBlock(512 →512)
+ResBlock(512 →512)
+4
+ResBlock(512 →512, strided)
+ResBlock(512 →512, strided)
+ResBlock(512 →1024)
+ResBlock(512 →1024)
+ResBlock(1024 →1024)
+ResBlock(1024 →1024)
+5
+ResBlock(1024 →1024, strided)
+ResBlock(1024 →1024, strided)
+ResBlock(1024 →2048)
+ResBlock(1024 →2048)
+ResBlock(2048 →2048)
+ResBlock(2048 →2048)
+Upsampling (FPN)
+6
+NearestUpsampling
+NearestUpsampling
+UnaryConv(3072 →1024)
+UnaryConv(3072 →1024)
+7
+NearestUpsampling
+NearestUpsampling
+UnaryConv(1536 →512)
+UnaryConv(1536 →512)
+8
+NearestUpsampling
+NearestUpsampling
+UnaryConv(768 →256)
+UnaryConv(768 →256)
+which refines the superpoint-level semantic-geometric fea-
+tures before matching. The module operates on dsg = 256-
+dimensional semantic-geometric features and stacks three
+blocks, each consisting of a geometric self-attention layer
+followed by an SG-MoE cross-attention layer (i.e., the
+block pattern [self, cross] repeated three times). The cross-
+attention layer uses 4 heads.
+Router.
+Routing is computed from the superpoint-level
+frozen semantic features ˆfs,k ∈R1024 (Sonata [43] output,
+aggregated to the superpoint level as described in Sec. 3.3
+of the main paper). The routing network π (Eq. (2) of the
+main paper) is a two-layer MLP (1024 →256 →Nexpert)
+with ReLU activation, followed by a softmax and top-1 se-
+lection. We apply a gate dropout of 0.1.
+Experts.
+Each of the Nexpert
+= 4 experts is a two-
+layer feed-forward network with ReLU activation and an
+inverted-bottleneck shape (256 →512 →256), with an
+expert dropout of 0.1. The experts process the semantic-
+geometric features produced by cross-attention, not the se-
+mantic features used for routing.
+A.5. Superpoint Matching Module
+Following GeoTransformer [26], we adopt their superpoint
+matching strategy to establish coarse correspondences be-
+tween downsampled point clouds.
+The module consists
+of three key operations: Gaussian correlation computation,
+dual-normalization, and top-k correspondence selection.
+Gaussian Correlation Matrix. Given the refined semantic-
+geometric features ˆFP
+out ∈R ˆ
+NP×dsg and ˆFQ
+out ∈R ˆ
+NQ×dsg
+from the SG-MoE Transformer, we first normalize them
+onto a unit hypersphere and compute a Gaussian correlation
+matrix S ∈R ˆ
+NP× ˆ
+NQ:
+si,j = exp
+
+−∥ˆf P
+out,i −ˆf Q
+out,j∥2
+2
+
+,
+(7)
+where ˆf P
+out,i and ˆf Q
+out,j are the i-th and j-th rows of normal-
+ized feature matrices.
+Dual-normalization.
+To suppress ambiguous matches
+from geometrically indiscriminative patches, we apply a
+dual-normalization operation [27, 36] on the correlation
+matrix:
+¯si,j =
+si,j
+P ˆ
+NQ
+k=1 si,k
+·
+si,j
+P ˆ
+NP
+k=1 sk,j
+.
+(8)
+This operation normalizes the correlation scores both row-
+wise and column-wise, effectively penalizing matches
+where a superpoint has multiple high-scoring candidates.
+Top-k Correspondence Selection.
+We select the Nc
+highest-scoring entries from the normalized correlation ma-
+trix ¯S as the superpoint correspondences:
+ˆC = {(ˆpxi, ˆqyi) | (xi, yi) ∈topkx,y(¯sx,y)}.
+(9)
+Following GeoTransformer [26], we use Nc = 256 putative
+superpoint matches during inference.
+Empty Patch Removal. Before matching, we remove su-
+perpoints with empty local patches. A superpoint ˆpi is con-
+sidered empty if its associated patch GP
+i
+(i.e., the set of
+points assigned to ˆpi by the point-to-node grouping of Geo-
+Transformer [26]) contains no points. This preprocessing
+step improves matching quality by excluding uninformative
+superpoints.
+A.6. Point Matching Module
+For each superpoint correspondence (ˆpxi, ˆqyi) ∈ˆC, we ex-
+tract dense point correspondences from their local patches
+using an optimal transport layer [30].
+Following
+the
+same
+procedure
+as
+in
+GeoTrans-
+former [26], we compute a cost matrix Ci ∈Rni×mi from
+intermediate-resolution point features FP
+xi and FQ
+yi:
+Ci = FP
+xi(FQ
+yi)T /
+p
+˜d,
+(10)
+where ni = |GP
+xi|, mi = |GQ
+yi| are patch sizes, and ˜d is the
+feature dimension.
+This cost matrix is augmented to ¯Ci ∈R(ni+1)×(mi+1)
+by appending dustbin entries (initialized with learnable pa-
+rameter α) to handle unmatched points. The Sinkhorn algo-
+rithm [35] then produces soft assignments Ai, from which
+we extract correspondences via mutual top-k selection after
+removing dustbin entries. We set k = 3 to obtain approxi-
+mately 6000 correspondences for Local-to-Global Registra-
+tion.
+13
+
+
+A.7. Local-to-Global Registration
+We adopt GeoTransformer’s Local-to-Global Registration
+(LGR) [26], a parameter-free and RANSAC-free method.
+Local Phase: For each superpoint correspondence, we
+solve for transformation Ti = (Ri, ti) using weighted
+SVD over local point correspondences Ci:
+Ri, ti = arg min
+R,t
+X
+(˜pxj ,˜qyj )∈Ci
+wi
+j∥R·˜pxj+t−˜qyj∥2
+2, (11)
+where weights wi
+j are confidence scores from the optimal
+transport layer.
+Global Phase: Select the transformation admitting the
+most inliers:
+R, t = arg max
+Ri,ti
+X
+(˜pxj ,˜qyj )∈C
+I[∥Ri · ˜pxj + ti −˜qyj∥2 < τa], (12)
+with acceptance radius τa = 0.1 m. We refine this transfor-
+mation iteratively for Nr = 5 iterations.
+B. Loss Function Details
+B.1. Overlap-Aware Circle Loss
+We supervise superpoint matching with an overlap-aware
+circle loss adapted from GeoTransformer [26]. For anchor
+superpoints AP (those with at least one overlapping patch
+in ˆQ), we define:
+• P+
+k : positive patches (overlap ≥10%)
+• P−
+k : negative patches (no overlap)
+The loss for the direction P →Q is:
+LP→Q
+oc
+=
+1
+|AP|
+X
+k∈AP
+log
+
+1 +
+X
+j∈P+
+k
+ewk,jβ+
+k,j ·
+X
+ℓ∈P−
+k
+eβ−
+k,ℓ
+
+,
+(13)
+where:
+• dk,j = ∥ˆf P
+out,k −ˆf Q
+out,j∥2 (distance in the refined semantic-
+geometric feature space)
+• wk,j = √ok,j (overlap-based weighting)
+• β+
+k,j = γ(dk,j −∆p) and β−
+k,ℓ= γ(∆n −dk,ℓ)
+The bidirectional coarse loss is Lcoarse = LP→Q
+oc
++
+LQ→P
+oc
+.
+B.2. Optimal Transport Loss
+For each sampled ground-truth superpoint pair during train-
+ing, we supervise point-level matches via negative log-
+likelihood loss [30].
+Given cost matrix Ci augmented to ¯Ci with dustbin
+entries, Sinkhorn iterations produce soft assignment Ai.
+Ground-truth labels Γi include:
+• Matched pairs: (p, q) with ∥T∗(p) −q∥2 < 0.05 m
+• Dustbin assignments for unmatched points
+The fine loss is:
+Lfine = 1
+Ng
+Ng
+X
+i=1
+
+−
+X
+(p,q)∈Γi
+log ai
+p,q
+
+,
+(14)
+where we sample Ng = 128 ground-truth superpoint pairs
+per batch.
+B.3. Expert Load Balancing Loss
+The SG-MoE layer introduces a set of trainable expert net-
+works, which necessitates an auxiliary loss to ensure train-
+ing stability and prevent expert saturation. This is a com-
+mon failure mode in MoE models where the router learns to
+favor only one or a few popular experts, leaving the others
+untrained and wasting capacity. To enforce balanced expert
+utilization, we employ a load balancing loss Lmoe [31].
+This loss encourages the routing network to distribute the
+superpoints uniformly across all Nexpert experts on average
+over the batch. The routing network computes a probability
+distribution rk = [rk,1, . . . , rk,Nexpert] for each superpoint k.
+We first compute the average routing probability for each
+expert e by averaging its probability rk,e across all super-
+points in the batch B (including superpoints from both P
+and Q):
+¯re = 1
+|B|
+X
+k∈B
+rk,e,
+(15)
+where |B| is the total number of superpoints in the
+batch.
+This gives us the batch-wise load distribution
+¯r
+=
+[¯r1, . . . , ¯rNexpert].
+We want this distribution ¯r to
+be as close as possible to a uniform distribution u =
+[1/Nexpert, . . . , 1/Nexpert]. We achieve this by minimizing
+the Kullback-Leibler (KL) divergence between ¯r and u:
+Lmoe = KL(¯r||u) =
+Nexpert
+X
+e=1
+¯re log
+¯re
+1/Nexpert
+.
+(16)
+Minimizing this loss penalizes routing strategies that devi-
+ate significantly from uniformity, encouraging the model to
+leverage the full capacity of all Nexpert specialized experts.
+B.4. Training Configuration
+Optimizer: Adam with learning rate 10−4, multiplied by
+0.95 after each epoch, for 45 epochs.
+Loss hyperparameters:
+• Coarse loss: ∆p = 0.1, ∆n = 1.4, γ = 80
+• Fine loss: matching radius τ = 0.05 m
+• MoE load balancing: λmoe = 0.01
+Random seed: 7351
+C. Evaluation Metrics
+We provide detailed mathematical definitions of the evalua-
+tion metrics used in our experiments. The metrics differ be-
+tween indoor (3DMatch/3DLoMatch) and outdoor (KITTI)
+14
+
+
+benchmarks due to different evaluation protocols and scene
+characteristics.
+C.1. 3DMatch and 3DLoMatch
+Inlier Ratio (IR). The Inlier Ratio measures the quality of
+correspondences as the fraction of inlier matches among all
+putative correspondences:
+IR = 1
+|C|
+X
+(pi,qj)∈C
+I[∥T ∗(pi) −qj∥2 < τinlier],
+(17)
+where C denotes the set of putative correspondences, T ∗is
+the ground-truth transformation, I[·] is the indicator func-
+tion, and τinlier = 0.1 m is the inlier threshold.
+Feature Matching Recall (FMR). The Feature Matching
+Recall evaluates the percentage of point cloud pairs that
+have sufficient inliers for potential successful registration:
+FMR = 1
+N
+N
+X
+i=1
+I[IRi > τFMR],
+(18)
+where N is the total number of point cloud pairs in the
+dataset, and τFMR = 0.05 (5%).
+Registration Recall (RR). The Registration Recall mea-
+sures the fraction of successfully registered point cloud
+pairs:
+RR = 1
+N
+N
+X
+i=1
+I[RMSEi < τRR],
+(19)
+where the RMSE (Root Mean Square Error) is computed
+over ground-truth correspondences C∗under the estimated
+transformation ˆT:
+RMSE =
+v
+u
+u
+t 1
+|C∗|
+X
+(p∗
+i ,q∗
+j )∈C∗
+∥ˆT(p∗
+i ) −q∗
+j ∥2
+2,
+(20)
+and τRR = 0.2 m is the success threshold.
+C.2. KITTI
+For outdoor KITTI odometry benchmark, we adopt differ-
+ent metrics that focus on the accuracy of the estimated trans-
+formation itself rather than correspondence quality.
+Relative Translation Error (RTE). The Relative Transla-
+tion Error measures the Euclidean distance between the es-
+timated translation vector and the ground-truth translation
+vector:
+RTE = ∥ˆt −t∗∥2,
+(21)
+where ˆt is the estimated translation and t∗is the ground-
+truth translation. We report RTE in centimeters.
+Relative Rotation Error (RRE). The Relative Rotation Er-
+ror measures the geodesic distance between the estimated
+rotation matrix and the ground-truth rotation matrix:
+RRE = arccos
+ 
+trace( ˆRT R∗) −1
+2
+!
+,
+(22)
+where ˆR is the estimated rotation matrix and R∗is the
+ground-truth rotation matrix. We report RRE in degrees.
+The geodesic distance represents the angle of rotation
+needed to align ˆR with R∗.
+Registration Recall (RR). Following the KITTI evaluation
+protocol [16], the Registration Recall measures the fraction
+of point cloud pairs whose transformation errors are below
+specified thresholds:
+RR = 1
+N
+N
+X
+i=1
+I[RTEi < τt ∧RREi < τr],
+(23)
+where τt = 2 m is the translation error threshold, τr = 5◦
+is the rotation error threshold, and N is the total number of
+point cloud pairs. Note that both conditions must be satis-
+fied simultaneously for a pair to be considered successfully
+registered.
+Mean error computation.
+Following standard prac-
+tice [17, 26], when reporting mean RTE and RRE values,
+we compute the average only over successfully registered
+pairs (those satisfying the RR criteria) to avoid including
+catastrophic failures that would dominate the statistics.
+D. Additional Experiments
+Unless otherwise stated, all experiments in this section em-
+ploy Local-to-Global Registration (LGR) [26] as the trans-
+formation estimator, which is a RANSAC-free method that
+leverages confidence-weighted correspondences for robust
+pose estimation. As discussed in the main paper, LGR is
+better suited to exploit the semantically structured corre-
+spondences produced by SAGE, and therefore serves as the
+default estimator throughout our supplementary evaluation.
+D.1. Outdoor Scene Performance on KITTI
+To evaluate the generalization capability of SAGE to out-
+door environments, we conduct experiments on the KITTI
+odometry benchmark [16]. Following the standard protocol,
+we measure Relative Translation Error (RTE), Relative Ro-
+tation Error (RRE), and Registration Recall (RR) as defined
+in Sec. C.2.
+As shown in Table C, SAGE achieves competitive per-
+formance with RTE of 6.1 cm, RRE of 0.22◦, and RR of
+99.8%, demonstrating that our semantic-guided approach
+generalizes well to outdoor large-scale scenarios. The re-
+sults confirm that semantic representations learned from in-
+door scenes transfer effectively to outdoor environments,
+validating the robustness of our method across diverse scene
+types.
+D.2. Scene-wise Analysis
+To evaluate the generalization capability of SAGE across di-
+verse environments, we conduct a scene-wise analysis span-
+ning both the 3DMatch and 3DLoMatch benchmarks. Since
+15
+
+
+RTE[cm]↓
+RRE[◦]↓
+RR[%]↑
+FCGF
+9.5
+0.3
+96.6
+D3Feat
+7.2
+0.3
+99.8
+FMR
+∼66
+1.49
+90.6
+DGR
+∼32
+0.37
+98.7
+SpinNet
+9.9
+0.47
+99.1
+Predator
+6.8
+0.27
+99.8
+HregNet
+∼12
+0.29
+99.7
+CoFiNet
+8.2
+0.41
+99.8
+GeoTrans
+6.8
+0.24
+99.8
+DCATr
+6.6
+0.22
+99.7
+SAGE
+6.1
+0.22
+99.8
+Table C. Registration performance on KITTI.
+these two benchmarks share the same set of test scenes but
+differ in the overlap ratio threshold used for selecting point
+cloud pairs, comparing results across both settings allows
+us to examine whether the benefit of semantic guidance is
+consistent regardless of the degree of overlap. This analysis
+also serves to clarify when and why the SG-MoE routing
+mechanism provides the most substantial gains.
+Table D summarizes the Registration Recall (RR) for
+eight distinct scenes. We compare SAGE against GeoTrans-
+former and RoITr.
+The results demonstrate that SAGE achieves the high-
+est overall RR of 87.9%, improving over RoITr (86.4%)
+and GeoTransformer (86.3%).
+A closer look at individ-
+ual scenes reveals a clear pattern that is closely tied to the
+semantic diversity of each environment. SAGE achieves
+the largest gains in scenes that contain a rich variety of
+semantically distinct objects.
+For instance, in the Study
+scene, which typically contains diverse cluttered objects
+such as desks, bookshelves, monitors, and chairs, SAGE
+achieves 80.3% RR, significantly outperforming GeoTrans-
+former (75.2%) and RoITr (74.3%) by over 5 percentage
+points. This substantial improvement can be attributed to
+the SG-MoE router, which assigns superpoints belonging to
+different object categories to specialized experts that can ex-
+tract discriminative semantic-geometric representations for
+each category. In scenes with diverse objects, this expert
+specialization provides clear advantages because each ex-
+pert can learn category-specific feature refinement strate-
+gies rather than relying on a single shared transformation.
+Similarly, in the Kitchen scene, which contains a variety
+of appliances, counters, and cabinets that are geometrically
+similar but semantically different, SAGE achieves 94.2%
+RR compared to GeoTransformer’s 91.7%.
+On the other hand, SAGE shows relatively smaller gains
+or comparable performance in scenes dominated by seman-
+tically homogeneous structures. In the Hotel 3 scene, all
+three methods achieve similar results (85.4–86.4%), be-
+cause the scene is largely composed of uniform corridors
+and walls that offer limited semantic diversity for the SG-
+MoE router to exploit.
+In the MIT Lab scene, SAGE
+(81.2%) slightly underperforms GeoTransformer (83.9%).
+This scene is characterized by long, narrow laboratory cor-
+ridors with repetitive structural elements, where the over-
+lapping regions are dominated by flat walls and floors that
+provide minimal semantic variation.
+D.3. Overlap-wise Analysis
+In real-world scenarios, point cloud pairs often exhibit low
+overlapping areas, which significantly increases the diffi-
+culty of correspondence search. To assess the robustness of
+SAGE against such partiality, we evaluate the performance
+as a function of the overlap ratio.
+We categorize the test pairs into ten bins based on their
+ground-truth overlap ratios, ranging from 0% to 100% with
+a bin width of 10%. The RR for each bin is reported in
+Table E.
+As shown in Table E, SAGE demonstrates a clear and
+consistent advantage across the low-to-moderate overlap
+regime (10–50%), which represents the most challeng-
+ing setting for correspondence-based registration.
+In the
+10–20% bin, which contains the largest number of test
+pairs (1,040 pairs) and poses the greatest challenge, SAGE
+achieves 73.4% RR, outperforming RoITr (72.2%) and
+GeoTransformer (70.6%) by 1.2 and 2.8 percentage points,
+respectively.
+In the 20–30% bin, the improvement over
+RoITr is even more pronounced: SAGE reaches 88.7% RR
+compared to RoITr’s 85.5% (+3.2 points) and GeoTrans-
+former’s 86.4% (+2.3 points). This pattern extends through
+the 30–50% range, where SAGE consistently achieves the
+highest RR. These results provide direct evidence for the
+effectiveness of the SG-MoE routing mechanism. In low-
+overlap scenarios, the visible portion of each point cloud
+is limited, and the few geometric structures available for
+matching are often ambiguous. The SG-MoE router ad-
+dresses this by leveraging semantic cues to assign each
+superpoint to a specialized expert, enabling the model to
+distinguish between geometrically similar but semantically
+different structures even when geometric context alone is
+insufficient.
+In the 50–60% bin, SAGE (98.4%) is slightly below
+GeoTransformer (98.7%). At this overlap level, the regis-
+tration problem becomes substantially easier because ample
+geometric context is available, and the benefit of semantic
+guidance diminishes accordingly. This marginal difference
+is consistent with our observation from the scene-wise anal-
+ysis that semantic routing is most valuable when geometric
+cues alone are insufficient.
+The relationship between overlap ratio and the relative
+advantage of SAGE further validates that the SG-MoE ar-
+chitecture is well suited for the most practically important
+16
+
+
+Scenes
+Kitchen
+Home 1
+Home 2
+Hotel 1
+Hotel 2
+Hotel 3
+Study
+MIT Lab
+All
+#Pairs
+1031
+445
+438
+444
+262
+103
+532
+149
+3404
+GeoTrans.
+91.7
+84.9
+85.4
+94.1
+80.2
+86.4
+75.2
+83.9
+86.3
+RoITr
+94.0
+81.6
+85.4
+93.9
+80.9
+85.4
+74.3
+81.9
+86.4
+SAGE (Ours)
+94.2
+82.3
+86.1
+95.7
+82.8
+85.4
+80.3
+81.2
+87.9
+Table D. Registration Recall (%) on the 3DMatch and 3DLoMatch benchmark across different scene categories. #Pairs denotes the total
+number of point cloud pairs evaluated in each scene.
+Overlap Ratio
+0-10%
+10-20%
+20-30%
+30-40%
+40-50%
+50-60%
+60-70%
+70-80%
+80-90%
+90-100%
+#Pairs
+3
+1040
+832
+387
+417
+304
+224
+131
+58
+8
+GeoTrans.
+66.7
+70.6
+86.4
+94.8
+95.2
+98.7
+99.6
+100.0
+100.0
+100.0
+RoITr
+66.7
+72.2
+85.5
+94.6
+94.5
+98.0
+98.7
+100.0
+100.0
+100.0
+SAGE (Ours)
+66.7
+73.4
+88.7
+95.3
+96.2
+98.4
+99.6
+100.0
+100.0
+100.0
+Table E. Registration Recall (%) comparison across different overlap ratios. #Pairs denotes the number of point cloud pairs in each overlap
+bin.
+Method
+Params (M)
+Mem. (GB)*
+Time (ms)**
+RR (%)
+GeoTransformer
+9.83
+7.02
+75
+74.0
+RoITr
+10.10
+9.28
+140
+73.4
+SAGE (Ours)
+121.71
+16.69
+179
+76.3
+* Memory measured using PyTorch memlab.
+** Inference time measured on NVIDIA H100.
+Table F. Computational Efficiency Analysis
+operating regime, namely scenarios with limited overlap,
+which frequently arise in real-world applications such as
+large-scale SLAM and autonomous navigation.
+D.4. Computational Efficiency
+Table F shows that SAGE requires approximately 12.4×
+more model parameters and 2.4× more memory than Geo-
+Transformer, due to introducing Sonata and MoE. While
+inference time increases to 179ms, this overhead is compa-
+rable to RoITr (140ms), which also employs sophisticated
+architectures for improved performance.
+SAGE has 121.71M total parameters, which is approx-
+imately 12.4 times larger than GeoTransformer (9.83M).
+However, the majority of this increase originates from the
+frozen Sonata encoder (108.41M parameters), which re-
+quires no gradient computation during training or inference.
+Excluding Sonata, SAGE contains only 13.3M parameters;
+the SG-MoE routing networks and expert FFNs add approx-
+imately 3.5M parameters beyond the GeoTransformer back-
+bone, representing only a 35% increase.
+Regarding inference time, SAGE requires 179ms per
+point cloud pair, comparable to RoITr (140ms). In terms
+of performance gain per unit of additional latency over
+GeoTransformer, SAGE achieves 2.3 percentage points
+of RR improvement for 104ms of additional latency,
+whereas RoITr adds 65ms without improving RR (73.4%
+vs. 74.0%), indicating that SAGE utilizes the additional
+computation more effectively.
+It is worth noting that this computational overhead is not
+specific to SAGE, but rather reflects a fundamental cost of
+incorporating pre-trained semantic encoders into the regis-
+tration pipeline. SAGE mitigates this inherent cost by freez-
+ing the encoder entirely and keeping the method-specific
+trainable overhead minimal. The peak memory consump-
+tion of 16.69 GB fits within commonly available GPUs such
+as the NVIDIA RTX 4090 (24 GB), making SAGE prac-
+tical for offline applications that prioritize accuracy, such
+as 3D reconstruction for cultural heritage preservation and
+architectural surveying. As more lightweight point cloud
+foundation models emerge, the frozen encoder could be re-
+placed with a more compact alternative without modifying
+the SG-MoE architecture itself.
+D.5. Additional Ablation Study
+We conduct additional ablation studies to further validate
+the key design choices in SAGE. Specifically, we investi-
+gate three critical questions: (1) Should the semantic en-
+coder be adapted during training? We examine whether
+fine-tuning Sonata with adapters improves performance or
+causes geometric shortcuts. (2) How should semantic fea-
+tures guide expert routing?
+We compare our query-side
+routing against cross-attention-based alternatives. (3) How
+many experts are optimal? We vary the number of experts
+from 2 to 6 to understand the capacity-efficiency trade-off.
+All experiments are conducted on 3DLoMatch with LGR,
+and results are summarized in Table G.
+Sonata with Adapter. As shown in Table G(top), adding
+adapters to Sonata (w/ adapter) achieves 74.8% RR, show-
+17
+
+
+Configuration
+FMR
+IR
+RR
+Sonata Adaptation
+w/o adapter
+89.4
+44.3
+76.3
+w/ adapter
+86.4
+42.6
+74.8
+Routing Strategy
+SG-MoE (ours)
+89.4
+44.3
+76.3
+SCAR
+88.1
+44.4
+75.0
+Number of Experts
+Nexpert = 2
+88.0
+42.3
+74.9
+Nexpert = 3
+89.3
+41.8
+75.1
+Nexpert = 4
+89.4
+44.3
+76.3
+Nexpert = 5
+88.5
+43.6
+75.5
+Nexpert = 6
+88.9
+43.0
+75.7
+Table G. Additional ablation studies on 3DLoMatch with LGR.
+All metrics in %. We evaluate: (1) adding adapters to Sonata, (2)
+alternative routing strategy using cross-attention (SCAR), and (3)
+varying the number of experts.
+ing a notable degradation (−1.5 points) compared to the
+fully frozen Sonata baseline (76.3% RR). This result
+demonstrates that allowing adaptation of the semantic en-
+coder, even with lightweight adapter modules, causes the
+model to fall into a geometric shortcut [43]. Specifically,
+the registration loss functions, which optimize primarily for
+geometric alignment accuracy, drive the adapted semantic
+features to collapse toward purely geometric patterns that
+are more directly useful for minimizing registration errors.
+This geometric shortcut phenomenon causes the semantic
+representations to lose their ability to distinguish between
+geometrically similar but semantically different structures
+(e.g., TV corners vs. desk corners), which is precisely the
+discriminative power that Sonata was pre-trained to pre-
+serve.
+The degradation in FMR (89.4% →86.4%) and IR
+(44.3% →42.6%) further confirms that the adapted fea-
+tures become less effective at establishing reliable corre-
+spondences in low-overlap scenarios where semantic un-
+derstanding is crucial. This validates our design choice of
+keeping Sonata completely frozen throughout training, en-
+suring that the semantic representations maintain their orig-
+inal semantic discriminability and do not degenerate into
+redundant geometric features.
+Alternative Routing Strategy:
+SCAR. We explore an
+alternative routing mechanism called Semantic Cross-
+Attention Routing (SCAR), where expert selection is deter-
+mined by cross-attention between source and target seman-
+tic features rather than using only the query point cloud’s
+semantic features.
+As illustrated in Fig. A, SCAR computes routing prob-
+Figure A. The Overview of SCAR. Semantic Cross-Attention
+Routing (SCAR) first computes cross-attention between source
+and target semantic features, then uses the attended features for
+routing.
+While SCAR incorporates inter-point-cloud informa-
+tion earlier, this premature soft matching introduces noise in low-
+overlap scenarios, leading to inferior performance (76.3% vs.
+75.0% RR on 3DLoMatch).
+abilities by first performing cross-attention between the se-
+mantic features of the two point clouds. Specifically, for
+each superpoint in P, we compute cross-attention scores
+with all superpoints in Q using their frozen semantic rep-
+resentations ˆFP
+s and ˆFQ
+s :
+Ai,j = Softmax
+ ˆf P
+s,i(ˆf Q
+s,j)T
+√ds
+!
+,
+(24)
+and then aggregate the attended features to compute routing
+probabilities:
+sSCAR
+i
+= Softmax
+
+MLPr
+
+
+ˆ
+NQ
+X
+j=1
+Ai,j · ˆf Q
+s,j
+
+
+
+.
+(25)
+The key difference from our SG-MoE is that SCAR
+routes based on cross-attended features that already incor-
+porate information from the target point cloud, while SG-
+MoE routes purely based on the query point cloud’s seman-
+tic features.
+As shown in Table G(middle), SCAR achieves 75.0%
+RR, underperforming our vanilla SG-MoE by 1.3 points de-
+spite maintaining similar IR (44.4% vs. 44.3%). This degra-
+dation suggests that incorporating inter-point-cloud rela-
+tionships into routing introduces premature correspondence
+assumptions before the experts have processed the features.
+The cross-attention operation in SCAR effectively performs
+a soft matching between source and target superpoints to
+18
+
+
+Perturbation
+10%
+20%
+30%
+40%
+50%
+Gaussian noise
+76.4
+75.7
+75.6
+76.3
+76.2
+Feature dropout
+76.4
+76.1
+75.0
+75.8
+76.2
+Random replacement
+75.8
+75.1
+74.8
+74.8
+73.5
+Table H. Robustness to semantic feature degradation. Registration
+Recall (%).
+guide routing, which may bias the routing decisions toward
+incorrect correspondences in challenging low-overlap sce-
+narios.
+In contrast, our SG-MoE design keeps routing decisions
+independent for each point cloud, based solely on its own
+semantic characteristics. This allows experts to first special-
+ize in processing semantic-geometric patterns within each
+point cloud, and then establish correspondences through the
+subsequent cross-attention layers where both semantic and
+refined geometric information are available. Since corre-
+spondence information is already captured and refined in
+these subsequent cross-attention layers, introducing it pre-
+maturely in the routing stage provides no benefit and instead
+adds noise. Our design of using only query-side semantic
+features for routing is simpler, more robust, and more effec-
+tive.
+Number of Experts. We vary the number of experts Nexpert
+from 2 to 6 to study its impact on performance. As shown
+in Table G(bottom), performance generally improves as we
+increase the number of experts from 2 to 4, with the best
+results at Nexpert = 4 (76.3% RR). Beyond 4 experts, per-
+formance degrades (75.5% RR at Nexpert = 5, 75.7% RR at
+Nexpert = 6), likely due to over-specialization and insuffi-
+cient training samples per expert.
+With only 2 experts (74.9% RR), the model lacks suf-
+ficient capacity to capture diverse semantic-geometric pat-
+terns. Three experts (75.1% RR) provide some improve-
+ment but still underperform the optimal configuration. The
+optimal choice of Nexpert = 4 strikes a balance between
+model capacity and training efficiency, allowing each ex-
+pert to specialize in distinct semantic categories (e.g., pla-
+nar structures like walls and floors, furniture, fixtures, and
+small objects) without over-fragmenting the feature space.
+Dependency on Semantic Quality. We evaluated SAGE’s
+robustness by injecting three types of perturbations into se-
+mantic features on 3DLoMatch.
+As shown in Table H, SAGE maintains stable perfor-
+mance (RR >75%) under 50% noise or dropout. This ro-
+bustness stems from the implicit regularization within our
+SG-MoE; through training, the router’s MLP learns to by-
+pass feature noise and prioritize stable semantic cues.
+Specifically, while Gaussian noise and feature dropout
+represent unstructured degradations that the router can learn
+to filter as out-of-distribution noise, random replacement
+introduces structured, semantically plausible but incorrect
+features. These “adversarial” semantic cues can mislead
+the router into assigning superpoints to experts specialized
+in irrelevant semantic contexts, providing them with a high
+but erroneous confidence. This structural confusion disrupts
+the correspondence search more severely than simple noise,
+as it actively guides the geometric refinement process to-
+ward semantically inconsistent regions, resulting in the ob-
+served gradual performance decline as the replacement ratio
+increases.
+D.6. Qualitative Visualization
+To explicitly demonstrate the robustness of SAGE in
+challenging scenarios, we provide qualitative comparisons
+against the baseline GeoTransformer on the 3DLoMatch
+benchmark. Fig. B visualizes the registration results on low-
+overlap pairs.
+As observed in columns (b) and (c), GeoTransformer
+struggles to establish reliable correspondences in low-
+overlap regions, often resulting in low Inlier Ratios (IR)
+and incorrect registrations (high RMSE). In contrast, SAGE
+successfully identifies correct correspondences (shown in
+green lines) by leveraging semantic cues from the Sonata
+foundation model, leading to accurate alignment even when
+the geometric overlap is limited (e.g., < 20%).
+Specif-
+ically, SAGE effectively utilizes distinct semantic objects
+(e.g., furniture, fixtures) to anchor the registration, whereas
+the geometry-only baseline fails due to ambiguous geomet-
+ric structures.
+D.7. Expert Routing Analysis
+To further analyze the semantic specialization of SG-MoE,
+we visualize the expert assignment maps across six diverse
+scenes sampled from both 3DMatch and 3DLoMatch in
+Fig. D. Each superpoint is color-coded by its assigned ex-
+pert (red, blue, green, yellow), and bounding boxes high-
+light semantically salient regions within each scene.
+The visualization reveals that each expert develops a
+consistent functional role across all six scenes. Expert 4
+(yellow) consistently handles large, semantically prominent
+structures such as sofas, beds, and countertops, which serve
+as strong anchors for registration due to their distinctive ge-
+ometry and semantic identity. Expert 2 (blue) specializes
+in mid-scale objects such as chairs, shelves, and desks that
+provide complementary cues for correspondence establish-
+ment. Expert 1 (red) is assigned to smaller, distinctive re-
+gions that are less dominant in terms of spatial extent but
+carry unique semantic signatures.
+Expert 3 (green) pri-
+marily handles low-saliency background structures such as
+walls and floors, which are geometrically common across
+scenes and offer limited discriminative power for registra-
+tion.
+This consistent specialization pattern emerges without
+19
+
+
+Figure B. Qualitative comparison on 3DLoMatch. We compare the registration quality between GeoTransformer (baseline) and SAGE
+(ours) on challenging low-overlap pairs. From left to right: (a) Input source (yellow) and target (blue) point clouds. (b) Correspondences
+generated by GeoTransformer with IR. (c) Correspondences generated by SAGE with IR. (d) Registration result of GeoTransformer with
+RMSE. (e) Registration result of SAGE with RMSE. (f) Ground truth alignment with overlap ratio. SAGE consistently achieves accurate
+registration (low RMSE) even in cases where GeoTransformer completely fails (e.g., 3rd and 4th rows).
+20
+
+
+Figure C. Additional failure cases on 3DLoMatch. Each row shows a challenging scenario where SAGE fails to achieve accurate
+registration. From left to right: (a) Source point cloud (cyan), (b) Target point cloud (yellow), (c) SAGE correspondences with Inlier
+Ratio (red lines: outliers, green lines: inliers), (d) SAGE registration result, (e) Ground truth alignment. These failures occur due to:
+(1) severe occlusion reducing the overlapping area, (2) geometrically indiscriminative regions (uniform walls, floors, ceilings), and (3)
+severe truncation of semantic regions, preventing the semantic encoder from extracting reliable semantic representations. When semantic
+structures are incomplete (e.g., only partial views of furniture), the frozen Sonata encoder cannot provide discriminative semantic features,
+as it was trained on complete object instances.
+any explicit supervision on expert roles; it arises purely
+from the frozen Sonata semantic features that guide the
+routing decisions. The fact that this functional division is
+preserved across scenes with substantially different layouts
+and object compositions demonstrates that SG-MoE routing
+generalizes beyond individual scene characteristics.
+Importantly, within each scene pair, the source and target
+point clouds exhibit consistent expert assignments for the
+same semantic regions. For instance, when a sofa appears in
+both the source and target scans, it is routed to Expert 4 (yel-
+low) in both cases, even though the two scans are captured
+from different viewpoints and contain different degrees of
+occlusion. This source-target consistency is essential for
+registration because the SG-MoE cross-attention layer pro-
+cesses the source and target features through their respec-
+tive assigned experts. When both sides of a correspondence
+21
+
+
+Figure D. Expert routing patterns of SG-MoE across six scenes from 3DMatch and 3DLoMatch. Each scene is shown as a source-target
+pair, where superpoints are color-coded by their assigned expert (red, blue, green, yellow) and bounding boxes highlight semantically
+salient regions. The same semantic regions in the source and target point clouds are routed to the same expert, ensuring compatible feature
+representations for correspondence matching. This consistent functional specialization emerges across diverse scenes without explicit
+supervision, confirming that the frozen semantic features enable scene-agnostic and view-invariant expert routing.
+are handled by the same expert, the resulting feature rep-
+resentations share a common specialized subspace, which
+directly improves the quality of correspondence matching.
+Conversely, if source and target regions of the same ob-
+ject were routed to different experts, the resulting features
+would lie in incompatible subspaces, degrading the match-
+ing accuracy. The observed consistency confirms that the
+frozen semantic representations provide a stable routing sig-
+nal that is invariant to the viewpoint from which a scene is
+observed.
+E. Baseline Reproduction Details
+To make our comparison transparent and reproducible, this
+section describes how we obtain the baseline results in the
+main paper. All methods compared under the matched pro-
+tocol (PEAL [51], PSReg [19], and SAGE) are trained from
+scratch on the same NVIDIA H100 GPU and share the same
+training configuration as SAGE (Sec. B.4): the Adam opti-
+mizer with an initial learning rate of 10−4 multiplied by
+0.95 after each epoch, weight decay 10−6, batch size 1, and
+random seed 7351. They also share the KPConv-FPN back-
+bone (2.5 cm initial voxel size, four stages), 128 coarse tar-
+gets, 256 putative superpoint correspondences, and the ge-
+ometric attention configuration (4 heads, σd = 0.2, σa =
+15◦). Keeping these factors fixed isolates the effect of the
+routing design rather than confounding it with training or
+backbone differences.
+PEAL. The PEAL [51] code is publicly released, so we
+build our PEAL baseline directly on the official repository.
+PEAL conditions its attention on an overlap prior. Although
+the prior data is released, the procedure used to generate it
+is not documented, which prevents us from reproducing it
+exactly. We therefore regenerate the overlap prior from the
+publicly released GeoTransformer [26] pre-trained model
+and train PEAL in our own environment under the shared
+configuration above. We use a budget of six refinement it-
+erations, matching the iterative protocol used for SAGE and
+PSReg.
+PSReg. The official implementation of PSReg [19] is not
+publicly released, and several key hyperparameters, most
+notably the number of experts, are not reported in the paper.
+We therefore re-implement PSReg on the same framework
+as SAGE and train it from scratch. Following the design
+described in the PSReg paper, expert routing is driven by
+geometry-derived overlap information obtained from Geo-
+Transformer [26], with top-1 selection. To keep the compar-
+ison controlled, we set the number of experts to 4, identical
+to SAGE; all remaining settings follow the shared configu-
+ration above.
+On the reproduced numbers. Our reproduced results for
+PEAL and PSReg fall below the values reported in their
+original papers. We attribute this to the absence of released
+22
+
+
+pre-trained models, which forces retraining from scratch,
+and to the undocumented prior generation in PEAL and ex-
+pert configuration in PSReg, which require our own imple-
+mentation. Because these factors cannot be controlled by
+transcribing the originally reported numbers, we report all
+methods under a strictly matched protocol instead, so that
+the differences reflect the registration design rather than un-
+specified training conditions.
+Difference from the reproduced PSReg.
+SG-MoE
+(Sec. A.4) and our PSReg re-implementation share the same
+backbone, attention, expert count (4), and top-1 routing;
+the only difference is the routing signal.
+PSReg fuses
+geometry-derived overlap information into the router in-
+put, whereas SG-MoE routes solely on the frozen seman-
+tic features while the experts still refine semantic-geometric
+features. The matched comparison in the main paper (Ta-
+bles 1 and 2) therefore isolates the contribution of semantic-
+guided routing.
+F. Limitations
+While SAGE demonstrates significant improvements in
+low-overlap point cloud registration, several limitations
+warrant discussion for future work.
+Dependency on Pre-trained Semantic Models.
+SAGE
+relies on the quality and generalization capability of the
+frozen Sonata encoder. The semantic degradation experi-
+ments in Table H quantify this dependency: while SAGE
+is robust to unstructured noise (76.2% RR even at 50%
+Gaussian noise), random replacement of semantic features
+with plausible but incorrect ones causes a more pronounced
+decline to 73.5% RR at 50% replacement. This indicates
+that the SG-MoE router is sensitive to structured seman-
+tic errors that mimic valid features, which could arise in
+practice when the encoder encounters object categories or
+scene types underrepresented in its training data (e.g., in-
+dustrial equipment, medical instruments). In such domains,
+Sonata may produce semantically ambiguous representa-
+tions that mislead the router into suboptimal expert assign-
+ments. As more diverse point cloud foundation models be-
+come available, replacing or complementing Sonata with
+encoders trained on broader data distributions could miti-
+gate this limitation.
+Limited Effectiveness in Semantically Homogeneous
+Scenes. The scene-wise analysis in Table D reveals that
+SAGE’s improvement over baselines is directly tied to the
+semantic diversity of each scene. In the MIT Lab scene,
+which consists of narrow corridors with repetitive walls
+and floors, SAGE (81.2%) slightly underperforms Geo-
+Transformer (83.9%), and in Hotel 3, all three methods
+achieve similar results (85.4–86.4%).
+The overlap-wise
+analysis in Table E further corroborates this trend: at 50–
+60% overlap, where geometric context is already suffi-
+cient, SAGE (98.4%) is marginally below GeoTransformer
+(98.7%). These results indicate that when overlapping re-
+gions are dominated by uniform planar structures that lack
+semantic variation, the SG-MoE router cannot assign su-
+perpoints to meaningfully different experts, and the addi-
+tional routing overhead provides no benefit. Fig. C illus-
+trates concrete failure cases where this limitation manifests:
+severe occlusion leaves only featureless walls and floors in
+the overlapping area, and the truncation of semantic objects
+(e.g., only a partial view of a desk) prevents the frozen en-
+coder from extracting discriminative representations. We
+note that these scenarios are inherently challenging for all
+correspondence-based registration methods, as the lack of
+distinctive features is a fundamental obstacle that is not spe-
+cific to semantic approaches. Addressing robust registra-
+tion in such low-texture, semantically homogeneous envi-
+ronments through temporal cues from sequential scans or
+multi-view constraints remains an important open problem
+for the community.
+Despite these limitations, SAGE establishes a strong
+foundation for incorporating semantic understanding into
+point cloud registration, and the analyses presented in this
+work clarify the conditions under which semantic guidance
+is most and least effective, providing concrete guidance for
+future research in semantic-geometric fusion for 3D vision
+tasks.
+23
