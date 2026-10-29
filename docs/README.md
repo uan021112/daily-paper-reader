@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-10-28</span>
+      <span class="dpr-home-dashboard-kicker">2026-10-29</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 23 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 10 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>9</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>14</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>6</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>4</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-10-28 23:40:31 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-29 23:29:20 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,9 +69,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日共筛选 23 篇论文，精读 9 篇、速读 14 篇，聚焦具身智能与机器人感知。</p>
-<p>最值得关注的是统一具身智能模型 OmniBrain-0，以及兼顾几何保持与加速的 VGGT 方法 GPA-VGGT，均获 10 分。</p>
-<p>建议普通读者先从这两篇精读入手，再按兴趣了解无人机仿真到现实迁移与极端热环境下的机器人感知。</p>
+<p>完成 10 篇论文推荐，精读 6 篇、速读 4 篇，聚焦机器人操作、感知与 3D 场景理解。</p>
+<p>最值得关注的是 LLM 驱动具身操作的鲁棒性评估，以及从力学驱动到数据驱动的触觉操作研究，两篇均获 9.0 分。</p>
+<p>普通读者可先读这两篇高分论文，了解机器人如何提升操作可靠性，以及触觉如何帮助它更好地与环境交互。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -80,12 +80,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">9 篇</strong>
+    <strong class="dpr-home-dashboard-count">6 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="OmniBrain-0: A Unified Agentic Model for Embodied Intelligence">OmniBrain-0: A Unified Agentic Model for Embodied Intelligence</span></li><li><span class="dpr-home-dashboard-paper-title" title="GPA-VGGT: Geometry-Preserving Acceleration of VGGT">GPA-VGGT: Geometry-Preserving Acceleration of VGGT</span></li><li><span class="dpr-home-dashboard-paper-title" title="LingGS: Decoupling Feed-Forward Geometry Prediction from Camera Tracking for High-Fidelity Gaussian SLAM">LingGS: Decoupling Feed-Forward Geometry Prediction from Camera Tracking for High-Fidelity Gaussian SLAM</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Alpha: Systematic Fault Injection and Robustness Evaluation for LLM-Driven Embodied Manipulation">Alpha: Systematic Fault Injection and Robustness Evaluation for LLM-Driven Embodied Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Tactile-Based Robotic Manipulation: From Mechanics-Driven to Data-Driven Perspectives">Tactile-Based Robotic Manipulation: From Mechanics-Driven to Data-Driven Perspectives</span></li><li><span class="dpr-home-dashboard-paper-title" title="MMGNet: Multi-Modal 6-DoF Grasp Synthesis for Cluttered Scenes">MMGNet: Multi-Modal 6-DoF Grasp Synthesis for Cluttered Scenes</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>4</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>3</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>4</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -93,12 +93,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">14 篇</strong>
+    <strong class="dpr-home-dashboard-count">4 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="HyperDrone: Simulation-to-Reality Transfer at Millions of Frames per Second">HyperDrone: Simulation-to-Reality Transfer at Millions of Frames per Second</span></li><li><span class="dpr-home-dashboard-paper-title" title="Thermal-Headroom Routing for Efficient Robot Perception in Extreme Heat">Thermal-Headroom Routing for Efficient Robot Perception in Extreme Heat</span></li><li><span class="dpr-home-dashboard-paper-title" title="OVM-Occ: Open-Vocabulary Monocular Occupancy Prediction via Geometry-Aware Vision-Language Distillation">OVM-Occ: Open-Vocabulary Monocular Occupancy Prediction via Geometry-Aware Vision-Language Distillation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Cut a Wall, See a Wall: Identity Substitution in Occluded Point-Cloud Perception for Construction Robots">Cut a Wall, See a Wall: Identity Substitution in Occluded Point-Cloud Perception for Construction Robots</span></li><li><span class="dpr-home-dashboard-paper-title" title="GaussianSpline: Adaptive Bézier Splines for Highly Dynamic 4D Gaussian Splatting">GaussianSpline: Adaptive Bézier Splines for Highly Dynamic 4D Gaussian Splatting</span></li><li><span class="dpr-home-dashboard-paper-title" title="3D-SceneQ: Empowering 3D LLM With Query-Guided Adaptive Pruning and Multi-Modal Feature Enhancement">3D-SceneQ: Empowering 3D LLM With Query-Guided Adaptive Pruning and Multi-Modal Feature Enhancement</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>3</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>2</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>1</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
 </section>
 </div>
 

@@ -1,0 +1,1600 @@
+SG2SLAM: Spatial Geometry-Informed 3D Gaussian Splatting SLAM
+for Monocular Outdoor Navigation
+Ziang Guo†, Didar Seyidov†, Yixiao Zhou§, Xuefeng Zhang‡,
+Ali Alridha Abdulkarim†, Chen Min◦∗, Zufeng Zhang‡∗, and Dzmitry Tsetserukou†
+Abstract— Monocular outdoor navigation requires robust
+camera motion estimation and a dense, navigable map, where
+3D Gaussian Splatting SLAM serves this task through an
+explicit differentiable parameterization and closed-form pro-
+jection. However, typically, the geometry is recovered by asso-
+ciating 2D pixels with 3D points, so a modular SLAM system
+absorbs tracking error into the map, leading to cascading degra-
+dation. To address these gaps, we present SG2SLAM, which
+couples streaming spatial geometry with a ray-conditioned
+3DGS kernel. Streaming spatial geometry replaces the per-
+frame cross-dimensional correspondence with a chunk-level
+metric prior that supervises tracking and mapping from one
+source. A ray-conditioned kernel extends each primitive with a
+viewing-direction subspace that senses the monocular camera
+viewpoints. The joint optimization over spatial geometry and
+poses ensures a globally consistent map and trajectory out-
+come. Experiments on the KITTI and Waymo Open datasets
+show that our SG2SLAM surpasses the per-frame association
+baselines in the monocular outdoor navigation task. Code will
+be made publicly available upon acceptance.
+I. INTRODUCTION
+Recovering camera motion and creating a dense, navigable
+map of the environment from a monocular RGB stream re-
+main core capabilities for autonomous navigation. Coupling
+3D Gaussian Splatting (3DGS) with visual Simultaneous
+Localization and Mapping (SLAM) has rapidly become a
+mainstream research direction, as its explicit, differentiable
+parameterization is naturally compatible with online tracking
+and mapping [1]. However, in monocular outdoor navigation,
+which is the deployment scenario of practical interest, the
+3DGS SLAM suffers from an undetermined global scale and
+further exposes two concrete gaps that we identify below.
+Existing SLAM systems recover geometry through the
+2D–3D matching paradigm, in which 2D pixel observations
+∗are the corresponding authors.
+†Ziang Guo, Didar Seyidov, Ali Alridha Abdulkarim, and Dzmitry
+Tsetserukou
+are
+with
+the
+Intelligent
+Space
+Robotics
+Laboratory,
+Skolkovo
+Institute
+of
+Science
+and
+Technology,
+Moscow,
+Russia.,
+{ziang.guo, Didar.Seyidov, ali.abdulkarim,
+d.tsetserukou}@skoltech.ru
+◦Chen Min is with the Research Center for Intelligent Computing
+Systems, SKLP, Institute of Computing Technology, Chinese Academy of
+Sciences, Beijing, China., mincheng@ict.ac.cn
+§Yixiao
+Zhou
+is
+with
+the
+Department
+of
+Electrical
+and
+Electronic
+Engineering,
+The
+University
+of
+Hong
+Kong,
+China.,
+u3649491@connect.hku.hk
+‡Xuefeng Zhang is with SuZhou Automotive Research Institute, Ts-
+inghua University, China. Zufeng Zhang is with SuZhou Automo-
+tive Research Institute, Tsinghua University and the School of Vehi-
+cle and Mobility, Tsinghua University, China., osu_zxf@126.com,
+zhangzufeng@tsari.tsinghua.edu.cn
+are associated with 3D points [2]–[6]. The 2D–3D associ-
+ation is, however, intrinsically cross-dimensional. The 3D
+to 2D projection irreversibly discards depth, and the inverse
+recovery is a non-convex problem that is sensitive to outliers,
+reprojection noise, and mismatched feature scales. Under the
+conditions of outdoor monocular navigation, these sensitivi-
+ties compound. Within a modular SLAM architecture, track-
+ing errors from 2D–3D correspondences are absorbed into
+the 3D map, which then provides a degraded reference for
+the next round of matching, producing a slow but unbounded
+drift that is particularly hard to localize and correct.
+The 3DGS map becomes geometrically ambiguous while
+absorbing tracking errors. 3DGS is mainly optimized against
+a photometric loss for novel view synthesis, which admits
+multiple geometrically distinct Gaussian configurations that
+produce indistinguishable renderings. In outdoor sequences,
+this manifests as floating Gaussians, broken thin structures,
+and inconsistent surface normals [7]. These artifacts are toler-
+able for view synthesis but are directly harmful for navigation
+due to the pollution of depth information, where downstream
+tasks such as collision checking and traversability estimation
+consume the map.
+To mitigate these gaps in outdoor monocular condi-
+tions, we propose SG2SLAM, a 3DGS SLAM built on
+streaming spatial geometry and a monocular-depth-aware
+ray-conditioned 3DGS kernel, where the frontend streams
+poses, point maps, and per-pixel confidence from windows
+of frames to form chunking, with a metric depth network
+supervising the metric scale. Then, the backend refines the
+3DGS map, conditioning each primitive on the viewing ray
+with spatial geometric supervision and keeping the mapping
+consistent and aware under monocular camera conditions.
+Chunks are then fused by a joint global graph optimization
+over spatial geometry and poses. Our contribution is as
+follows:
+• We present a 3DGS SLAM built on streaming spatial
+geometry. Compared to the baselines based on pairwise
+2D pixel matching and cross-dimensional correspon-
+dences, our SG2SLAM improves both frontend tracking
+and backend mapping.
+• We render 3DGS through a ray-conditioned kernel in
+closed form, where the mean and covariance span a
+spatial block and a viewing-direction subspace, thus re-
+moving the blending at grazing angles that may produce
+floating primitives.
+• We fuse chunks through joint global graph optimization
+arXiv:2610.36312v1  [cs.RO]  26 Oct 2026
+
+
+over the spatial geometry and poses, which keeps the
+map and trajectory globally consistent and settles the
+fusion of all chunks in a single solve.
+II. RELATED WORK
+A. Classical and Learning-Based Monocular SLAM
+MonoSLAM [8] showed that a single camera is enough
+to track and map in real time with an extended Kalman
+filter, and PTAM [9] made keyframe-based bundle adjust-
+ment practical by running tracking and mapping in two
+parallel threads. The ORB-SLAM family [10]–[12] was built
+on this design using ORB features, a covisibility graph,
+and bag-of-words place recognition [13]. Methods such as
+LSD-SLAM [14] skip keypoints and minimize photometric
+error. DROID-SLAM [15] iterates dense optical flow up-
+dates through a differentiable bundle adjustment layer and
+generalizes well across datasets. DPVO [16] replaces dense
+flow with sparse patches to cut memory and runtime. All
+of these systems recover depth indirectly by associating 2D
+observations with 3D points, and the quality of representation
+determines both the accuracy and the cost of the association.
+B. SLAM with 3D Foundation Models
+Another direction uses 3D foundation models that regress
+3D structures directly from images. DUSt3R [17] predicts
+point maps for an image pair in a shared frame, with-
+out known intrinsics, and MASt3R [18] adds a matching
+head that provides dense and accurate correspondences.
+Spann3R [19] processes images pairwise and maintains a
+spatial memory in a recurrent state, allowing the whole video
+to be reconstructed online. VGGT [20] goes further and
+predicts cameras, depth maps, and point maps for multiple
+views in a single feed-forward pass. Several SLAM systems
+are built on these models. MASt3R-SLAM uses two-view
+MASt3R predictions for tracking and local fusion, and it runs
+in real time on uncalibrated video [4], [18]. SLAM3R [21]
+reconstructs dense scenes from monocular RGB with a
+sliding window of frames that are registered into a global
+map. VGGT-SLAM builds submaps with VGGT and aligns
+them with a 15 degree of freedom homography on the SL(4)
+manifold, since an uncalibrated reconstruction is only defined
+up to a projective transformation [20], [22]. VGGT-Long [23]
+targets kilometer-scale driving sequences by splitting the
+video into overlapping chunks, aligning neighboring chunks,
+and correcting the result with loop closure. This direction
+replaces correspondence with regression, predicting the 3D
+structures directly by the network rather than by the camera
+model. But such systems recover geometric similarity only
+after submap registration, sliding windows, or explicit align-
+ment in a pairwise manner.
+C. 3D Gaussian Splatting SLAM
+3D Gaussian Splatting [24] represents the scene with
+explicit anisotropic Gaussians that are rasterized at high
+frame rates, and it quickly became the preferred map for
+dense SLAM. MonoGS [25] optimizes camera poses directly
+against the Gaussian map and works with monocular or
+RGB-D input. SplaTAM [26] and GS-SLAM [27] rely on
+depth sensors, while Photo-SLAM [28] and CaRtGS [29]
+leave tracking to ORB-SLAM3 and spend the GPU budget
+on mapping. Splat-SLAM [30] and HI-SLAM2 [31] pair a
+learned dense tracker with monocular depth priors, and they
+deform the 3D Gaussians when the trajectory is corrected by
+global optimization. LoopSplat [32] closes loops by register-
+ing submaps made of 3D Gaussians directly. S3PO-GS [6]
+anchors MASt3R point maps to the Gaussian map, which
+keeps the scale consistent across frames and limits scale drift.
+GigaSLAM [2] stores 3D Gaussians in a hierarchical sparse
+voxel map, tracks with a metric depth network together with
+epipolar geometry, and corrects drift with bag-of-words loop
+closure. DiskChunGS [3] boosts performance by optimizing
+the I/O: it splits the scene into spatial chunks, keeps only the
+active ones on the GPU, and moves the rest to disk. KiloGS-
+SLAM [5] combines a multi-tier tracker with chunk-based
+densification and pruning of 3D Gaussians. Across these
+systems, the 3DGS map is dominated by image evidence
+rather than spatial geometry, so the cross-dimensional cost
+of 2D–3D matching persists beneath the recent progress.
+III. METHODOLOGY
+Our SG2SLAM couples streaming spatial geometry with
+monocular-depth-aware 3DGS based on ray-conditioned ker-
+nels to deliver globally consistent mapping and tracking
+in monocular outdoor navigation. The frontend provides a
+spatial geometry prior in the form of poses, point maps,
+and per-pixel confidence maps in local level chunks, paired
+with a metric depth prior that supplies the metric scale
+correction. The backend optimizes a monocular-depth-aware
+3DGS built on the frontend geometry prior for mapping
+and chunk fusion, where a ray-conditioned 3DGS kernel
+keeps the map consistent and aware as the viewing direction
+changes. Bundle adjustment combines a photometric loss
+with metric depth supervision, constraining scene scale and a
+point-consistency term, thus constraining pose drift. Across
+chunks, a joint Sim(3) optimization solves all chunk fusions
+in the global pose graph to mitigate the scale-induced drift
+accumulation that monocular SLAM suffers from along a
+sequence. The system is shown in Fig. 1.
+A. Streaming Spatial Geometry Prior
+The frontend integrates a frozen reconstruction network
+ΦΘ [33]. The network consumes a sliding window Vt of Nw
+consecutive frames, and for every frame i in the window, it
+predicts a local camera pose ˆTA
+i , a dense point map ˆXC
+i , and
+a per-pixel confidence ˆci(u), where each point is predicted
+on the normalized ray ˜u through the pixel u, with pixel
+coordinates (ux, uy) and pinhole intrinsics (fx, fy, cx, cy),
+and with the range ˆzi(u) factored in log space.
+˜u =
+h
+ux−cx
+fx
+,
+uy−cy
+fy
+, 1
+i⊤
+,
+ˆXC
+i (u) = ˆzi(u) ˜u,
+ˆzi(u) = exp
+ min(ℓi(u), ℓmax)
+
+,
+(1)
+where ℓi is the predicted log-range and ℓmax caps the range
+of a single point. Consecutive frames are linked by the
+
+
+Metric
+Depth
+Reconstruction
+...
+...
+...
+Confident
+Geometry
+RGB stream
+$$\{\mathbf{T}^{\mathcal{A},(m)}, \mathbf{X}^{(m)}, \bar{S}_k\}$$
+x x
+One factor dilates
+one chunk
+...
+...
+Streaming Spatial Geometry Prior
+Monocular-depth-aware 3DGS
+Ray-conditioned Kernel
+$$\mathbf{u}$$
+$$\hat{z}_i({\mathbf{u}})$$
+Normalized Ray \(\tilde{\mathbf{u}\)
+Photometric
+Metric Depth
+Relative Pose
+Point Consistency
+Map Optimization
+$$\Phi$$
+$$\Psi$$
+Joint Global Fusion
+Chunk map re-express under \(\{\mathbf{G}_k\}\)
+Chunk map \(\mathcal{M}_k\) after windowed BA
+Globally solve all \(\{\mathbf{G}_k\}\);
+Chunks appended
+\(\alpha_i(\mathbf{u})\)
+1
+\(\sigma_i(\mathbf{u})\)
+- Vanilla GS
+- Our GS
+...
+\(\{\mathbf{G}_1\}\)
+\(\{\mathbf{G}_2\}\)
+\(\{\mathbf{G}_3\}\)
+\(\{\mathbf{G}_k\}\)
+$$\sigma_k, \mathbf{R}_k\in SO(3), \mathbf{b}_k\in\mathbb{R}^3$$
+Weighted by  \(\gamma_{k}(t)\)
+$$\sigma_t, \mathbf{R}_t\in SO(3), \mathbf{b}_t\in\mathbb{R}^3$$
+Output 
+\(\mathcal{M}, \mathbf{T}_t\)
+Fig. 1.
+SG2SLAM system. Streaming spatial geometry prior breaks the limitations on a per-frame 2D-to-3D association, optimizing the drift accumulation
+from cross-dimensional association. 3DGS primitives are ray-conditioned and spatial-geometry-supervised, benefiting the map consistent and geometrically
+grounded under monocular camera condition. The chunk fusion is solved over the spatial geometry and poses via a global joint graph.
+predicted relative pose ˆ∆i,
+ˆ∆i =
+  ˆTA
+i+1
+−1 ˆTA
+i .
+(2)
+1) Chunking Setup: A sequence of Nfr input frames is
+covered by chunks of Nc frames overlapping by No at a
+stride of So = Nc −No, so sequences of any length receive
+identical coverage.
+Fk =
+h
+kSo, min
+ (k+1)Nc, Nfr
+i
+,
+(3)
+where Fk is the frame interval of chunk k. Each chunk is
+streamed by a forward call to ΦΘ, with attention restarting
+from the first frame of the chunk.
+2) Metric Scale Correction: Meanwhile, a metric depth
+network Ψ [34] is used to obtain the range dΨ
+i (u) and the
+validity mask maskΨ
+i for correcting the chunk’s local scale,
+where the depth ratio r(u) from two networks is the factor
+for scaling the chunk. Over the pixels where both networks
+are valid,
+V = {u : ˆzi(u) > 0, dΨ
+i (u) > 0, u ∈maskΨ
+i },
+r(u) = dΨ
+i (u)
+ˆzi(u) ,
+I =
+n
+u ∈V :
+r(u) −med(r)
+ < 3 · 1.4826 · MAD(r)
+o
+,
+¯sk = medu∈I r(u)
+(4)
+where V collects the pixels carrying a positive finite range
+from the prior, and I keeps the pixels with a ratio within a
+robust spread of the median. 1.4826 · MAD(·) converts the
+median absolute deviation (MAD) into the standard deviation
+of a Gaussian. An anchor scale ¯sk is obtained per chunk in
+the first frame of the chunk because every pose within the
+chunk is expressed against the first frame, and the same factor
+holds across the whole chunk.
+The scaling is then applied by conjugation with a uniform
+dilation Sk = diag(¯skI3, 1). The scaled relative pose ˆ∆(m)
+i
+,
+the absolute pose TA,(m)
+i
+, and the point cloud X(m) are
+marked throughout by the superscript (m).
+ˆ∆(m)
+i
+= Sk ˆ∆i S−1
+k ,
+TA,(m)
+i+1
+= TA,(m)
+i
+  ˆ∆(m)
+i
+−1,
+TA,(m)
+0
+= I4,
+X(m) = ¯sk ˆX.
+(5)
+Thus, the frontend provides a metric reconstruction for
+every chunk: the poses {TA,(m)
+k,i
+}, the point clouds {X(m)
+k,i }
+with the confidences ˆck,i, and the scaling anchor ¯sk.
+B. Monocular Depth-Aware 3DGS
+To ensure that the scene is aware of and consistent with
+the view change under monocular camera conditions, we
+represent the scene with an extended Gaussian primitive:
+Gi =
+(
+µi ∈R6,
+Σi ∈S6,
+oi ∈(0, 1),
+ζi ∈(0, ∞)3,
+ci ∈R3
+)
+,
+(6)
+whose mean µi and covariance Σi contain spatial dimen-
+sions and a conditioning viewing-direction subspace, with
+oi as the base opacity and ci as the base color. The joint
+covariance is parameterized by a block lower-triangular
+Cholesky factor Σi = LiL⊤
+i with
+Li =
+Ri diag(si,1:3)
+0
+Li,21
+Li,22
+
+,
+Ri = I3 + [ai]×,
+(7)
+where the spatial block combines a first-order rotation Ri
+obtained from the skew-symmetric map ai with anisotropic
+scales si, and the free sub-diagonal blocks couple the spatial
+and conditioning subspaces so that the primitive may encode
+view-dependent geometry. oi is the base opacity, while the
+colors ci are stored directly as base RGB, and the per-
+dimension shape parameter is activated as ζi = 4 exp(˜ζi),
+where ˜ζi = min(ζi/4, 1) are the damped exponents control-
+ling how strongly the primitive conditions affect the ray.
+
+
+1) Ray-Conditioned Kernel:
+At rendering time, each
+primitive is queried with the unit viewing ray from the
+camera center ocam.
+qi =
+µ(1)
+i
+−ocam
+µ(1)
+i
+−ocam
+
+2
+,
+(8)
+where µ(1)
+i
+and µ(2)
+i
+denote the spatial and conditioning
+blocks of µi. Partitioning the joint covariance with conformal
+blocks V.
+Σi =
+V11
+V12
+V21
+V22
+
+,
+(9)
+the primitive responds to the query through the regression
+coefficient Ai = V12V−1
+22 damped by ¯ζi = min(ζi/4, 1),
+yielding the conditional mean and covariance:
+µi(q) = µ(1)
+i
++ Ai diag(¯ζi)
+ q −µ(2)
+i
+
+,
+(10)
+Σi(q) = V11 −Ai diag(¯ζi) V21.
+(11)
+Equations (10) and (11) are the Schur-complement con-
+ditional statistics of the joint Gaussian, with the regression
+term attenuated by ¯ζi so that the primitive may interpolate
+between view-independent behavior (ζ →0) and fully con-
+ditioned behavior. In parallel, the base opacity is modulated
+by the whitened deviation of the actual ray yi from the
+conditioning mean,
+oi(q) = oi
+3
+Y
+k=1
+
+1 −tanh
+ y2
+i,k
+ζi,k, yi = L−1
+i,22
+ q −µ(2)
+i
+
+,
+(12)
+which acts as a smooth, compactly supported gate: a prim-
+itive remains opaque for viewing rays consistent with its
+conditioning subspace and vanishes smoothly otherwise. Be-
+cause the conditioning subspace is populated and supervised
+by the monocular spatial geometry prior above and the depth
+objective below, we refer to the resulting kernel as monocular
+depth-aware.
+2) Rasterization: The conditional mean and covariance
+are projected onto the image plane by the standard expo-
+nential moving average transform, yielding a 2D conic and
+the Mahalanobis distance σi(u) = 1
+2δ⊤Σ−1
+i,2D, δ ∈[0, 1) of
+pixel u from the projected center. Whereas classical 3DGS
+evaluates the Gaussian kernel αi = oi e−σi, we employ a
+ray-conditioned kernel.
+αi(u) = min
+
+αmax, oi(q)
+ 1 −σi(u)
+ζi
+,
+(13)
+which replaces the unbounded Gaussian tails with a polyno-
+mially decaying profile that vanishes at σi = 1, eliminating
+inter-primitive blending artifacts at grazing viewing angles
+while retaining a closed-form derivative with respect to ζi.
+Color and depth are composited front-to-back along each ray
+by alpha-blending.
+ˆC(u) =
+X
+i∈N (u)
+ci αi
+Y
+j<i
+(1 −αj),
+(14)
+ˆD(u) =
+X
+i∈N (u)
+¯zi αi
+Y
+j<i
+(1 −αj),
+(15)
+where N(u) is the depth-sorted primitive set hitting pixel
+u, and ¯zi is the camera-frame depth of µi(q). The expected
+depth ˆD is accumulated using the same weights as color and
+is fully differentiable through the kernel of Eq. (13).
+3) Map Optimization: Keyframes are selected within each
+chunk by scoring every frame based on the number of finite
+and confident points above the threshold. When a keyframe
+arrives, its metrically anchored point map is appended to
+the map, where an isotropic scale is initialized by the mean
+distance to its three nearest neighbors.
+si = meanj∈NN3(i)
+ ˆXC(ui) −ˆXC(uj)
+
+2,
+(16)
+so that primitive footprints match the local sampling density
+of the prior. Mapping then proceeds as windowed bundle
+adjustment over the sliding set of keyframes, jointly opti-
+mizing the primitive parameters and the keyframe poses Tk.
+The objective combines a photometric term against input
+images I, monocular metric depth supervision, and geomet-
+ric regularization edges with their corresponding weighting
+coefficients λ.
+Lmap = Lph + λdLdep + λpcLpc + λrLrel,
+(17)
+Lph = (1 −λssim)
+ ˆC −I
+
+1 + λssim
+ 1 −SSIM( ˆC, I)
+
+,
+(18)
+Ldep = 1
+|Ω|
+X
+u∈Ω
+φ(u) ρδd
+
+ˆD(u) −dΨ
+k (u)
+
+,
+(19)
+Lpc =
+1
+|Pk|
+X
+u∈Pk
+ρδp
+Xk
+
+2
+
+,
+(20)
+Lrel =
+RE −I3
+2
+F +
+tE
+2
+2,
+E = ˆTij ˆ∆−1
+ij ,
+(21)
+where ρδ is the Huber function, and the mask Ωis the set
+of pixels that the prior supports with confident geometry,
+and φ weights the depth residual by the validity intersection
+with the depth network’s own confidence. In the valid
+point set Pk, the pose and spatial geometry tie Xk(u) =
+ˆXW
+k (u) −Tk ˆXC
+k(u) pins the keyframe’s stored geometry to
+the world frame to prevent pose error from propagating into
+the built map, while the relative pose term Lrel penalizes
+the discrepancy E between the currently estimated inter-
+keyframe transform ˆTij = ˆT−1
+i
+ˆTj and its prior value.
+The mapping is cumulative, while a new chunk is opti-
+mized against both their input images and spatial geometry,
+refining a chunk’s geometry without disturbing the built
+maps. The global joint trajectory and chunk fusion are
+described below.
+C. Global Joint Trajectory and Chunk Fusion
+Every chunk produced by Sec. III-A and refined by
+Sec. III-B constitutes a self-consistent reconstruction in a
+local anchor frame, and we fuse every chunk beyond the
+initial chunk with a similarity to reach the global frame. Let
+chunk k take the similarity Gk ∈Sim(3),
+X(g) = σk Rk X(m) + bk,
+Gk =
+σk Rk
+bk
+0⊤
+1
+
+,
+G1 = I4,
+(22)
+
+
+(a) GT
+(b) GigaSLAM
+(c) S3PO-GS
+(d) DiskChunGS
+(e) Ours
+Fig. 2.
+Qualitative results of 3DGS rendered RGB image on the KITTI dataset. Our SG2SLAM renders better details both in foreground and background
+based on our monocular-depth-aware 3DGS kernel.
+where σk > 0 is the scale factor of the global placement
+similarity Gk, and Rk ∈SO(3), bk ∈R3 collect the
+scale, rotation, and translation for placing chunk k, and
+the superscript (g) marks the global frame. The constraint
+G1 = I4 fixes the seven degrees of freedom shared by the
+whole fusion, leaving 7(K−1) free parameters for K chunks
+to be optimized.
+We use a closed-form similarity fit between two matched
+point sets, which recovers the scale by,
+sfit =
+P
+n
+
+yn −¯y, R⋆(xn −¯x)
+
+P
+n
+xn −¯x
+2
+2
+,
+(23)
+where xn and yn are the n-th matched points of the two
+sets, ¯x and ¯y are the two centroids, and R⋆is the rotation
+that aligns the sets. Applied to two point clouds, Eq. (23)
+therefore returns a scale that carries the density ratio of the
+two matching spatial regions.
+1) Chain Constraints: Adjacent chunks A and B share
+the No frames of the overlap defined in Eq. (3), where the
+camera centers of the shared frames constrain the relative
+similarity. Let sov
+AB denote the scale that Eq. (23) returns on
+the shared camera centers of the two chunks, and let ¯sA and
+¯sB denote the metric anchors of the two chunks from Eq. (4).
+The edge scale combines the two using the geometric mean,
+ˆσAB =
+r
+sov
+AB · ¯sA
+¯sB
+.
+(24)
+Camera centers are free from the influence of sampling
+density because the spatial geometry prior reports a single
+center per frame, which leaves the chain scale independent
+of the density bias of Eq. (23).
+Rotation and translation are recovered by the spatial geom-
+etry across the shared window. Let ccam
+k,i
+denote the camera
+center of frame i as placed by chunk k, let OAB = FA ∩FB
+denote the shared frame set, and write
+¯ck =
+1
+|OAB|
+X
+i∈OAB
+ccam
+k,i ,
+˜ck,i = ccam
+k,i −¯ck,
+(25)
+the centroid over the shared frames and the calibrated center
+of frame i. The edge (A, B) carries the similarity mapping
+chunk B into the frame of chunk A, so the seed aligns the
+calibrated centers of B with the calibrated centers of A.
+R(0)
+AB = arg
+max
+R∈SO(3)
+X
+i∈OAB
+
+˜cA,i, R ˜cB,i
+
+,
+b(0)
+AB = ¯cA −R(0)
+AB ¯cB,
+(26)
+where the superscript (0) marks a seed later refined by
+Eq. (27).
+The refinement aims to align the point clouds of the shared
+frames. With C the trimmed correspondences between the
+two clouds, the refinement solves
+(RAB, bAB) = arg min
+R,b
+X
+(xA,xB)∈C
+ˆσAB R xA + b −xB
+2
+2,
+(27)
+over points xA of cloud A and xB of cloud B, with the scale
+of each correspondence pinned to ˆσAB. Pinning the scale
+leaves the refinement free to adjust rotation and translation
+alone.
+(a) GT
+(b) DiskChunGS
+(c) Ours
+Fig. 3.
+Qualitative results of 3DGS rendered depth image on the KITTI
+dataset. Our rendered depth effectively removes the floating primitives that
+are harmful to the downstream navigation.
+2) Loop Constraints:
+A revisit between non-adjacent
+chunks closes a cycle in the pose graph that a chain leaves
+open, which is what makes the drift accumulated between
+the two observations observable and correctable.
+Let dA
+an(p) denote the range predicted for pixel p of frame
+an in chunk A, and dB
+bn(p) denote the same quantity in chunk
+B. Let Qn hold the pixels where both ranges lie in the band
+that keeps the sky and far field out, where a predicted range
+is poorly conditioned. The edge scale takes the median of the
+per-pixel ratios inside a match and combines the matches by
+retrieval score.
+ρn = medp∈Qn
+dA
+an(p)
+dB
+bn(p) ,
+ˆσAB =
+P
+n γn ρn
+P
+n γn
+,
+γn = c2
+n.
+(28)
+with each pair (an, bn) scored by the normalized cross corre-
+lation cn ∈(0, 1] between the two thumbnail descriptors. The
+median runs over the pixels observing a single patch, which
+removes the density bias skewing cloud-to-cloud alignment:
+the patch is sampled densely from every direction at once,
+
+
+so the two clouds contribute comparable numbers of pixels
+to every region, leaving the ratio free of density bias.
+Rotation follows the same correspondences, with each
+pairing two views of a single physical camera. Let RA,an
+and RB,bn denote the orientations of the two frames; then
+the consensus rotation is defined as:
+ˆRAB =
+ PNm
+n=1 νn RA,anR⊤
+B,bn
+†
+,
+νn = c3
+n > 0, (29)
+where νn weights a match in the consensus, and (·)† denotes
+the orthogonal factor and keeps the output in SO(3). Eq. (23)
+applied to a set of near-coincident centers admits no scale
+to recover, so the rotation follows from the orientation
+consensus rather than from a center fit.
+Fig. 4.
+Per-frame computational cost of SG2SLAM.
+3) Joint Fusion and Optimization: Every measurement
+collected above enters a single solve. Let Ech and Elp denote
+the chain and loop edge sets, and let ˆSij = ⟨ˆσij, ˆRij, ˆbij⟩
+denote the similarity measured on edge (i, j). With G1 fixed,
+the unknowns form a global parameter vector p over the
+remaining chunks,
+pk =
+
+log σk, ωk, bk
+⊤∈R7,
+k = 2, . . . , K,
+p =
+
+p⊤
+2 , . . . , p⊤
+K
+⊤∈R7(K−1),
+(30)
+where ωk is the rotation vector of Rk, and the logarithm
+leaves the scale free of sign ambiguity. Define the predicted
+relative similarity Spred
+ij
+and the map ξ that transforms
+similarity into seven-coordinate vectors for the optimizer to
+work with unconstrained parameters.
+Spred
+ij
+= G−1
+i
+Gj,
+ξ(S) =
+
+log σS,
+ log RS
+∨, tS
+⊤,
+(31)
+where (·)∨is the axis-angle vector of RS, and (σS, RS, tS)
+are the similarity parameters of S. The residual on edge
+(i, j) ∈E whitens the discrepancy between prediction and
+measurement by the uncertainty of the measurement.
+rij = wij Ω−1/2
+ij
+ξ
+ ˆS−1
+ij Spred
+ij
+
+,
+(32)
+with Ωij the diagonal covariance of the seven measurement
+coordinates and wij > 0 is the uncertainty weight. Carrying
+log σ inside the residual allows a single loop edge to settle
+the scale error accumulated across every chain boundary
+preceding the revisit.
+Algorithm 1 SG2SLAM pipeline.
+Require: image stream {Vt}, intrinsics K
+Ensure: trajectory {Tt} and map M
+1: M ←∅, E ←∅
+2: for each chunk k over frames Fk, overlapping by No do
+▷Sec. III-A: spatial geometry prior
+3:
+ΦΘ(Vt) ⇒{ ˆ∆i, ˆXk,i, ˆck,i}
+▷rays, poses, points
+4:
+¯sk ←medu dΨ(u)/ˆzi(u)
+▷metric depth
+5:
+X(m)
+k,i ←¯sk ˆXk,i; {TA,(m)
+k,i
+}
+▷metric chunk
+▷Sec. III-B: ray-conditioned 3DGS
+6:
+Kk ←confident frames
+7:
+M ←M ∪{X(m)
+k,i }i∈Kk
+▷anchored in A
+8:
+(M, {TA,(m)
+k,i
+}) ←bundle adjustment over Kk
+▷Sec. III-C: joint global fusion
+9:
+ˆSk−1,k ←overlap frames, anchor ratio
+10:
+ˆSij ←revisits, if any
+11:
+{Gk}k≥2 ←pose graph over E
+12:
+M ←re-express under {Gk}; E ←∅
+13: end for
+14: return {Tt}, M
+A loop edge measures scale directly from ranges and
+receives a high weight, while a chain edge inherits the scale
+error of the two chunks and receives a low weight, so the
+objective of the solve is linear.
+p⋆= arg min
+p
+X
+(i,j)∈E
+wij r⊤
+ijrij,
+(33)
+where the minimization runs to convergence by Gauss-
+Newton iteration on global parameter vectors p.
+Finally, the solved placements return to the trajectory.
+Every frame t is observed by a set of chunks K(t), and for
+each chunk k covering t, the placed pose follows from Gk.
+Let rin
+k be the number of frames that chunk k shares with the
+previous chunk, and rout
+k
+the number shared with the next;
+let nk be the length of chunk k, and let i(t, k) index frame
+t within chunk k. The weight ramps across each overlap.
+γk(t) = i(t, k) + 1/2
+rin
+k
+· nk −i(t, k) −1/2
+rout
+k
+,
+wk(t) =
+γk(t)
+P
+k′∈K(t) γk′(t),
+(34)
+with either factor set to unity when the corresponding overlap
+is empty. A frame covered by a single chunk takes the placed
+pose unchanged; a frame covered by several chunks takes
+the weighted mean of the scales and translations, and the
+weighted chordal mean of the rotations.
+σt =
+X
+k
+wk σk,
+bt =
+X
+k
+wk bk,
+Rt =
+ P
+k wk Rk
+†
+,
+(35)
+where σk, Rk, and bk are read from Gk in global coordi-
+nates. Spreading the transition across the full overlap keeps
+consecutive frames inside the motion envelope implied by the
+neighboring poses, resulting in a continuous fused trajectory.
+The overall pipeline is summarized in Alg. 1.
+IV. EXPERIMENTAL RESULTS
+A. Datasets and Experimental Setup.
+Our experiments are conducted on the Nvidia RTX 5090
+GPU (32 GB VRAM) with 200 streaming frames per chunk
+
+
+TABLE I
+RENDERING PERFORMANCE ON KITTI [35] DATASET.
+LC = LOOP CLOSURE.
+OOM = GPU OUT OF MEMORY,
+— = TRACKING FAILURE.
+Methods
+Metrics
+00
+01
+02
+03
+04
+05
+06
+07
+08
+09
+10
+PSNR ↑
+10.09
+16.40
+8.78
+11.83
+17.43
+10.83
+12.66
+8.69
+6.90
+9.71
+8.66
+MonoGS [25]
+SSIM ↑
+0.43
+0.58
+0.31
+0.36
+0.55
+0.37
+0.43
+0.34
+0.27
+0.27
+0.32
+LPIPS ↓
+0.82
+0.66
+0.85
+0.82
+0.55
+0.84
+0.76
+0.86
+0.89
+0.81
+0.84
+PSNR ↑
+6.96
+13.94
+—
+14.95
+17.90
+—
+12.68
+—
+—
+11.03
+12.82
+S3PO-GS [30]
+SSIM ↑
+0.64
+0.55
+—
+0.39
+0.54
+—
+0.44
+—
+—
+0.33
+0.41
+LPIPS ↓
+0.90
+0.68
+—
+0.73
+0.57
+—
+0.75
+—
+—
+0.83
+0.78
+PSNR ↑
+OOM
+15.68
+OOM
+16.26
+15.72
+14.98
+14.96
+14.83
+OOM
+15.83
+16.09
+DiskChunGS [30]
+SSIM ↑
+OOM
+0.80
+OOM
+0.77
+0.68
+0.76
+0.79
+0.74
+OOM
+0.78
+0.79
+LPIPS ↓
+OOM
+0.82
+OOM
+0.79
+0.73
+0.81
+0.83
+0.79
+OOM
+0.78
+0.78
+PSNR ↑
+OOM
+23.69
+OOM
+23.03
+23.87
+21.89
+23.09
+22.46
+OOM
+21.95
+21.48
+GigaSLAM [30]
+SSIM ↑
+OOM
+0.80
+OOM
+0.81
+0.90
+0.85
+0.86
+0.83
+OOM
+0.88
+0.82
+LPIPS ↓
+OOM
+0.50
+OOM
+0.43
+0.40
+0.46
+0.49
+0.40
+OOM
+0.45
+0.42
+PSNR ↑
+22.66
+23.83
+20.32
+23.48
+23.99
+22.56
+23.18
+22.83
+22.57
+22.03
+22.27
+Ours
+SSIM ↑
+0.82
+0.86
+0.79
+0.89
+0.89
+0.86
+0.88
+0.89
+0.83
+0.88
+0.85
+LPIPS ↓
+0.36
+0.43
+0.39
+0.40
+0.40
+0.48
+0.46
+0.38
+0.39
+0.44
+0.40
+and 30 overlapping frames in the frontend. To evaluate our
+system in outdoor scenes, we use the KITTI and Waymo
+Open Dataset (WOD), which serve as standard benchmarks
+for large-scale monocular visual SLAM evaluation. For the
+KITTI Odometry Benchmark, we conduct experiments using
+the 11 training sequences (00–10), utilizing the monocular
+color camera stream. These sequences cover diverse subur-
+ban, highway, and urban environments, with highly accurate
+ground-truth trajectories [35]. From the WOD perception
+split, we select 9 representative sequences, utilizing the front-
+facing high-resolution camera to test our system against vary-
+ing illumination, high dynamic traffic, and complex highway
+geometries [36]. Additionally, we conduct tracking exper-
+iments without loop closure on our own driving sequence
+under an OMNIVISION OX03F10 automotive monocular
+camera, where the ground truth pose is recovered using a
+tightly-coupled sensor suite comprising a u-blox ZED-F9P
+multi-band RTK-GNSS receiver, a high-frequency IMU, a
+Velodyne VLP-32 3D LiDAR, and wheel encoders accessed
+via the vehicle CAN bus.
+We report our backend mapping performance through the
+rendering quality of 3DGS checkpoints on the keyframes
+in Tab. I. Extensive outdoor driving 3DGS mapping experi-
+ments are conducted on the challenging KITTI dataset.
+TABLE II
+TRACKING PERFORMANCE ON KITTI [35] DATASET (ATE RMSE IN
+METERS ↓).
+LC = LOOP CLOSURE.
+OOM = GPU OUT OF MEMORY,
+— = TRACKING FAILURE.
+Seq. LC MonoGS S3PO-GS DiskChunGS GigaSLAM Ours
+00
+✓
+200.92
+168.97
+OOM
+OOM
+5.42
+01
+×
+436.78
+214.88
+208.82
+209.17
+22.34
+02
+✓
+—
+—
+OOM
+OOM
+9.83
+03
+×
+25.63
+18.75
+1.34
+1.33
+1.77
+04
+×
+18.65
+5.99
+1.72
+1.69
+1.65
+05
+✓
+—
+—
+4.85
+4.54
+5.09
+06
+✓
+109.30
+69.18
+1.37
+1.41
+1.30
+07
+✓
+—
+—
+2.82
+2.67
+1.33
+08
+✓
+—
+—
+OOM
+OOM
+12.21
+09
+✓
+—
+118.09
+4.74
+4.70
+5.68
+10
+×
+—
+41.05
+2.11
+2.14
+1.98
+B. Experimental Results
+Following standard monocular SLAM evaluation proto-
+cols, the estimated trajectories are aligned with the ground
+truth using a Sim(3) Umeyama alignment to resolve the
+inherent monocular scale ambiguity. System performance is
+quantitatively measured using the Absolute Trajectory Error
+(ATE RMSE) in meters to evaluate overall global consistency
+TABLE III
+TRACKING PERFORMANCE ON WAYMO OPEN DATASET [36] DATASET
+(ATE RMSE IN METERS ↓).
+OOM = GPU OUT OF MEMORY,
+— = TRACKING FAILURE.
+Seq.
+MonoGS S3PO-GS DiskChunGS GigaSLAM Ours
+100613
+6.96
+0.66
+0.30
+0.36
+0.18
+106762
+18.01
+0.61
+0.12
+0.43
+0.20
+132384
+12.04
+1.54
+0.05
+1.23
+0.67
+13476
+3.30
+—
+0.45
+3.18
+0.92
+152706
+9.30
+0.96
+0.29
+0.63
+0.22
+153495
+5.99
+2.03
+—
+0.73
+0.55
+158686
+8.40
+1.04
+0.64
+0.66
+0.61
+163454
+11.21
+0.95
+0.55
+5.11
+1.60
+405841
+1.63
+0.49
+0.50
+0.79
+0.68
+after scale correction. In Tab. II and Tab. III, our SG2SLAM
+surpasses the existing baselines in the outdoor navigation
+task based on the chunking inference of the depth and
+geometry model, with an average ATE RMSE of 6.24 m
+on 11 KITTI sequences and 0.63 m on 9 WOD sequences.
+In Fig. 5, we show the comparison of tracking performance
+without loop closure, where our SG2SLAM achieves an
+average ATE of 4.62 m on KITTI Sequence 07 and our own
+real-world driving sequence, exceeding GigaSLAM by 21%
+because the streaming prior provides the backend with the
+spatial geometry in chunks, enabling the backend’s global
+solve to be well-conditioned, while a per-frame 2D–3D
+association incorporates the tracking error of every frame.
+On 3DGS rendering quality, we report the Peak Signal-
+to-Noise Ratio (PSNR), Structural Similarity Index Measure
+(SSIM), and Learned Perceptual Image Patch Similarity
+(LPIPS) from the baselines and our system, without post
+color refinement, on the challenging KITTI dataset with
+a panoramic aspect ratio in Tab. I, where our SG2SLAM
+reaches an average PSNR of 22.70 dB, an average SSIM of
+0.86, and an average LPIPS of 0.41.
+(a) DiskChunkGS
+(b) GigaSLAM
+(c) Ours
+Fig. 5.
+Tracking comparison on KITTI dataset and our own sequence
+without loop closure.
+Additionally, in Fig. 4, we show our system’s per-frame
+computational cost comparison on a logarithmic scale, where
+the chunk fusion loop in the backend dominates wall-clock
+time; the reconstruction model and metric depth model set
+the per-frame frontend budget.
+
+
+C. Qualitative Results
+We show the visual comparison of the 3DGS rendered
+RGB image and depth image in Fig. 2 and Fig. 3 from the
+challenging KITTI dataset without post color refinement after
+running the tracking and mapping. Our rendering quality
+displays the highest fidelity in photorealistic and depth
+information.
+TABLE IV
+ABLATION STUDY ON OUR DESIGN FOR THE MAIN MODULES AND THE
+EFFECTS OF DIFFERENT SETUPS.
+Ablations
+ATE RMSE ↓
+PSNR ↑
+SSIM ↑
+LPIPS ↓
+Vanilla 3DGS
+1.49
+22.12
+0.78
+0.50
+Our 3DGS
+1.49
+23.41
+0.89
+0.39
+Pair-wise Frontend
+2.65
+19.95
+0.67
+0.59
+Streaming Frontend
+1.49
+23.41
+0.89
+0.39
+200 frames / chunk
+1.49
+23.41
+0.89
+0.39
+300 frames / chunk
+1.92
+22.42
+0.80
+0.43
+500 frames / chunk
+2.42
+21.51
+0.79
+0.49
+D. Ablation Study
+In Tab. IV, we show the ablation results of our design
+for the main modules and the effects of different setups on
+tracking and rendering performance on the KITTI dataset,
+where we report the average metrics across Sequence 04 and
+Sequence 07. Our ray-conditioned 3DGS kernel improves
+mapping performance under monocular SLAM, as demon-
+strated by the improvements in PSNR, SSIM, and LPIPS.
+For the pair-wise frontend experiment, we feed the images in
+pairs to MASt3R [18] to obtain the estimated relative poses,
+while different frames in chunks determine the noise level
+of the fusion anchor and the initialization of 3DGS training.
+The ablations show that more tracking errors may accumulate
+frame-wise along the run, and the design of the chunk size
+affects both the frontend and backend due to how much prior
+noise propagates throughout the fusion and mapping.
+V. CONCLUSION
+This paper presents SG2SLAM, a 3DGS SLAM system
+built on streaming spatial geometry, which dispenses with
+the per-frame 2D–3D association and pairwise image match-
+ing. Our system introduces a novel paradigm that boosts
+monocular 3DGS SLAM by enabling joint 3D–3D associ-
+ation for both mapping and tracking in a streaming manner.
+Experiments on the KITTI, our own real-world driving, and
+Waymo Open Datasets show that our SG2SLAM exceeds
+existing paradigms in monocular outdoor navigation. Future
+work will focus on the robustness of perception quality under
+unstructured conditions, e.g., rainy nights and wild forests,
+to further improve the stability of our system.
+REFERENCES
+[1] G. Patle, N. Girgaonkar, N. Somraj, and R. Soundararajan, “Ad-gs:
+Alternating densification for sparse-input 3d gaussian splatting,” in
+Proceedings of the SIGGRAPH Asia 2025 Conference Papers, 2025,
+pp. 1–11.
+[2] K. Deng, Y. Zhang, J. Yang, and J. Xie, “GigaSLAM: Large-scale
+monocular SLAM with hierarchical gaussian splats,” in Proceedings
+of the SIGGRAPH Asia 2025 Conference Papers, 2025, pp. 1–10.
+[3] C. Feldmann, M. Wilder-Smith, V. Patil, M. Oechsle, M. Niemeyer,
+K. Tateno, and M. Hutter, “DiskChunGS: Large-scale 3D gaussian
+SLAM through chunk-based memory management,” IEEE Robotics
+and Automation Letters, vol. 11, no. 4, pp. 5009–5016, 2026.
+[4] R. Murai, E. Dexheimer, and A. J. Davison, “MASt3R-SLAM: Real-
+time dense SLAM with 3D reconstruction priors,” in IEEE/CVF
+Conference on Computer Vision and Pattern Recognition (CVPR),
+2025, pp. 16 695–16 705.
+[5] S. Yu, D. Shen, B. Zhao, G. Ding, and H. Wang, “Robust and efficient
+monocular 3d gaussian slam for kilometer-scale outdoor scenes,” in
+European Conference on Computer Vision (ECCV).
+Springer, 2026,
+pp. 164–182.
+[6] C. Cheng, S. Yu, Z. Wang, Y. Zhou, and H. Wang, “Outdoor monoc-
+ular SLAM with global scale-consistent 3D gaussian pointmaps,”
+in IEEE/CVF International Conference on Computer Vision (ICCV),
+2025, pp. 26 035–26 044.
+[7] B. Huang, Z. Yu, A. Chen, A. Geiger, and S. Gao, “2d gaussian splat-
+ting for geometrically accurate radiance fields,” in ACM SIGGRAPH
+2024 conference papers, 2024, pp. 1–11.
+[8] A. J. Davison, I. D. Reid, N. D. Molton, and O. Stasse, “MonoSLAM:
+Real-time single camera SLAM,” IEEE Transactions on Pattern Anal-
+ysis and Machine Intelligence, vol. 29, no. 6, pp. 1052–1067, 2007.
+[9] G. Klein and D. Murray, “Parallel tracking and mapping for small AR
+workspaces,” in IEEE and ACM International Symposium on Mixed
+and Augmented Reality (ISMAR), 2007, pp. 225–234.
+[10] R. Mur-Artal, J. M. M. Montiel, and J. D. Tardós, “ORB-SLAM: A
+versatile and accurate monocular SLAM system,” IEEE Transactions
+on Robotics, vol. 31, no. 5, pp. 1147–1163, 2015.
+[11] R. Mur-Artal and J. D. Tardós, “ORB-SLAM2: An open-source
+SLAM system for monocular, stereo, and RGB-D cameras,” IEEE
+Transactions on Robotics, vol. 33, no. 5, pp. 1255–1262, 2017.
+[12] C. Campos, R. Elvira, J. J. Gómez Rodríguez, J. M. M. Montiel,
+and J. D. Tardós, “ORB-SLAM3: An accurate open-source library for
+visual, visual-inertial, and multimap SLAM,” IEEE Transactions on
+Robotics, vol. 37, no. 6, pp. 1874–1890, 2021.
+[13] D. Gálvez-López and J. D. Tardós, “Bags of binary words for fast place
+recognition in image sequences,” IEEE Transactions on Robotics,
+vol. 28, no. 5, pp. 1188–1197, 2012.
+[14] J. Engel, T. Schöps, and D. Cremers, “LSD-SLAM: Large-scale direct
+monocular SLAM,” in European Conference on Computer Vision
+(ECCV), 2014, pp. 834–849.
+[15] Z. Teed and J. Deng, “Droid-slam: Deep visual slam for monocular,
+stereo, and rgb-d cameras,” Advances in Neural Information Process-
+ing Systems (NeurIPS), vol. 34, pp. 16 558–16 569, 2021.
+[16] Z. Teed, L. Lipson, and J. Deng, “Deep patch visual odometry,” Ad-
+vances in Neural Information Processing Systems (NeurIPS), vol. 36,
+pp. 39 033–39 051, 2023.
+[17] S. Wang, V. Leroy, Y. Cabon, B. Chidlovskii, and J. Revaud, “DUSt3R:
+Geometric 3D vision made easy,” in IEEE/CVF Conference on Com-
+puter Vision and Pattern Recognition (CVPR), 2024, pp. 20 697–
+20 709.
+[18] V. Leroy, Y. Cabon, and J. Revaud, “Grounding image matching in 3d
+with mast3r,” in European Conference on Computer Vision (ECCV).
+Springer, 2024, pp. 71–91.
+[19] H. Wang and L. Agapito, “3d reconstruction with spatial memory,” in
+2025 International Conference on 3D Vision (3DV).
+IEEE, 2025, pp.
+78–89.
+[20] J. Wang, M. Chen, N. Karaev, A. Vedaldi, C. Rupprecht, and
+D. Novotny, “Vggt: Visual geometry grounded transformer,” in
+IEEE/CVF Conference on Computer Vision and Pattern Recognition
+(CVPR), 2025, pp. 5294–5306.
+[21] Y. Liu, S. Dong, S. Wang, Y. Yin, Y. Yang, Q. Fan, and B. Chen,
+“SLAM3R: Real-time dense scene reconstruction from monocular
+RGB videos,” in IEEE/CVF Conference on Computer Vision and
+Pattern Recognition (CVPR), 2025, pp. 16 651–16 662.
+[22] D. Maggio, H. Lim, and L. Carlone, “Vggt-slam: Dense rgb slam
+optimized on the sl (4) manifold,” Advances in Neural Information
+Processing Systems (NeurIPS), vol. 38, pp. 129 839–129 867, 2026.
+[23] K. Deng, Z. Ti, J. Xu, J. Yang, and J. Xie, “Vggt-long: Chunk
+it, loop it, align it–pushing vggt’s limits on kilometer-scale long
+rgb sequences,” in IEEE International Conference on Robotics and
+Automation (ICRA), 2026, pp. 5446–5453.
+[24] B. Kerbl, G. Kopanas, T. Leimkühler, and G. Drettakis, “3D gaussian
+splatting for real-time radiance field rendering,” ACM Transactions on
+Graphics, vol. 42, no. 4, 2023.
+
+
+[25] H. Matsuki, R. Murai, P. H. Kelly, and A. J. Davison, “Gaussian
+splatting slam,” in IEEE/CVF Conference on Computer Vision and
+Pattern Recognition (CVPR), 2024, pp. 18 039–18 048.
+[26] N. Keetha, J. Karhade, K. M. Jatavallabhula, G. Yang, S. Scherer,
+D. Ramanan, and J. Luiten, “Splatam: Splat, track & map 3d gaussians
+for dense rgb-d slam,” in IEEE/CVF Conference on Computer Vision
+and Pattern Recognition (CVPR), 2024, pp. 21 357–21 366.
+[27] C. Yan, D. Qu, D. Xu, B. Zhao, Z. Wang, D. Wang, and X. Li, “Gs-
+slam: Dense visual slam with 3d gaussian splatting,” in IEEE/CVF
+Conference on Computer Vision and Pattern Recognition (CVPR),
+2024, pp. 19 595–19 604.
+[28] H. Huang, L. Li, H. Cheng, and S.-K. Yeung, “Photo-slam: Real-time
+simultaneous localization and photorealistic mapping for monocular,
+stereo, and rgb-d cameras,” in IEEE/CVF Conference on Computer
+Vision and Pattern Recognition (CVPR), 2024, pp. 21 584–21 593.
+[29] D. Feng, Z. Chen, Y. Yin, S. Zhong, Y. Qi, and H. Chen, “Cartgs:
+Computational alignment for real-time gaussian splatting slam,” IEEE
+Robotics and Automation Letters, vol. 10, no. 5, pp. 4340–4347, 2025.
+[30] E. Sandström, G. Zhang, K. Tateno, M. Oechsle, M. Niemeyer,
+Y. Zhang, M. Patel, L. Van Gool, M. Oswald, and F. Tombari,
+“Splat-slam: Globally optimized rgb-only slam with 3d gaussians,” in
+IEEE/CVF Conference on Computer Vision and Pattern Recognition
+(CVPR), 2025, pp. 1686–1697.
+[31] W. Zhang, Q. Cheng, D. Skuddis, N. Zeller, D. Cremers, and N. Haala,
+“HI-SLAM2: Geometry-aware gaussian SLAM for fast monocular
+scene reconstruction,” IEEE Transactions on Robotics, vol. 41, 2025.
+[32] L. Zhu, Y. Li, E. Sandström, S. Huang, K. Schindler, and I. Armeni,
+“Loopsplat: Loop closure by registering 3d gaussian splats,” in Inter-
+national Conference on 3D Vision (3DV).
+IEEE, 2025, pp. 156–167.
+[33] J. Han, J. Xiong, Y. Liu, L. Shi, C. Wu, N. Guo, M. Xu, H. Zhang,
+and M. Qian, “Revisiting local context for long-horizon streaming 3d
+reconstruction,” arXiv preprint arXiv:2608.27529, 2026.
+[34] L. Piccinelli, Y.-H. Yang, C. Sakaridis, M. Segu, S. Li, L. Van Gool,
+and F. Yu, “Unidepth: Universal monocular metric depth estimation,”
+in IEEE/CVF Conference on Computer Vision and Pattern Recognition
+(CVPR), 2024, pp. 10 106–10 116.
+[35] A. Geiger, P. Lenz, and R. Urtasun, “Are we ready for autonomous
+driving? the kitti vision benchmark suite,” in IEEE/CVF Conference
+on Computer Vision and Pattern Recognition (CVPR), 2012, pp. 3354–
+3361.
+[36] P. Sun, H. Kretzschmar, X. Dotiwalla, A. Chouard, V. Patnaik, P. Tsui,
+J. Guo, Y. Zhou, Y. Chai, B. Caine et al., “Scalability in perception for
+autonomous driving: Waymo open dataset,” in IEEE/CVF Conference
+on Computer Vision and Pattern Recognition (CVPR), 2020, pp. 2443–
+2451.
