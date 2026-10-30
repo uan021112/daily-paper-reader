@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-10-29</span>
+      <span class="dpr-home-dashboard-kicker">2026-10-30</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 10 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 20 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>6</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>4</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>10</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>10</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-10-29 23:29:20 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-30 23:35:50 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,9 +69,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>完成 10 篇论文推荐，精读 6 篇、速读 4 篇，聚焦机器人操作、感知与 3D 场景理解。</p>
-<p>最值得关注的是 LLM 驱动具身操作的鲁棒性评估，以及从力学驱动到数据驱动的触觉操作研究，两篇均获 9.0 分。</p>
-<p>普通读者可先读这两篇高分论文，了解机器人如何提升操作可靠性，以及触觉如何帮助它更好地与环境交互。</p>
+<p>今日共整理 20 篇论文，精读 10 篇、速读 10 篇，聚焦机器人自主与 3D 重建。</p>
+<p>最值得关注的是开放世界机器人自主（RobotAgentBench）和全视场 Gaussian Splatting 与网格提取（GOFish），两篇均获 9/10。</p>
+<p>下步可先读这两篇高分论文，再根据兴趣延伸到跨本体世界模型或离线到在线偏好学习。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -80,12 +80,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">6 篇</strong>
+    <strong class="dpr-home-dashboard-count">10 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Alpha: Systematic Fault Injection and Robustness Evaluation for LLM-Driven Embodied Manipulation">Alpha: Systematic Fault Injection and Robustness Evaluation for LLM-Driven Embodied Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Tactile-Based Robotic Manipulation: From Mechanics-Driven to Data-Driven Perspectives">Tactile-Based Robotic Manipulation: From Mechanics-Driven to Data-Driven Perspectives</span></li><li><span class="dpr-home-dashboard-paper-title" title="MMGNet: Multi-Modal 6-DoF Grasp Synthesis for Cluttered Scenes">MMGNet: Multi-Modal 6-DoF Grasp Synthesis for Cluttered Scenes</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="RobotAgentBench: Towards Open-world Robot Autonomy">RobotAgentBench: Towards Open-world Robot Autonomy</span></li><li><span class="dpr-home-dashboard-paper-title" title="GOFish: Full Field-of-View Gaussian Splatting and Mesh Extraction">GOFish: Full Field-of-View Gaussian Splatting and Mesh Extraction</span></li><li><span class="dpr-home-dashboard-paper-title" title="Skeleton-Guided Geometry-Aware Auto-Labeling for Robotic Grasping: From 4-DoF Learning to 6-DoF Execution">Skeleton-Guided Geometry-Aware Auto-Labeling for Robotic Grasping: From 4-DoF Learning to 6-DoF Execution</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>4</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>7</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -93,12 +93,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">4 篇</strong>
+    <strong class="dpr-home-dashboard-count">10 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Cut a Wall, See a Wall: Identity Substitution in Occluded Point-Cloud Perception for Construction Robots">Cut a Wall, See a Wall: Identity Substitution in Occluded Point-Cloud Perception for Construction Robots</span></li><li><span class="dpr-home-dashboard-paper-title" title="GaussianSpline: Adaptive Bézier Splines for Highly Dynamic 4D Gaussian Splatting">GaussianSpline: Adaptive Bézier Splines for Highly Dynamic 4D Gaussian Splatting</span></li><li><span class="dpr-home-dashboard-paper-title" title="3D-SceneQ: Empowering 3D LLM With Query-Guided Adaptive Pruning and Multi-Modal Feature Enhancement">3D-SceneQ: Empowering 3D LLM With Query-Guided Adaptive Pruning and Multi-Modal Feature Enhancement</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Continuous-Action World Models: Learning Cross-Embodiment Spatiotemporal Dynamics Priors">Continuous-Action World Models: Learning Cross-Embodiment Spatiotemporal Dynamics Priors</span></li><li><span class="dpr-home-dashboard-paper-title" title="PrefO2O: Zero-Shot Preference-Based Reinforcement Learning via Offline-to-Online Latent Preference Transfer">PrefO2O: Zero-Shot Preference-Based Reinforcement Learning via Offline-to-Online Latent Preference Transfer</span></li><li><span class="dpr-home-dashboard-paper-title" title="Joint Rigid Alignment and Morphable Reconstruction from Partial 3D Face Scans">Joint Rigid Alignment and Morphable Reconstruction from Partial 3D Face Scans</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>2</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>1</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>4</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>4</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>1</strong></span></div>
 </section>
 </div>
 
