@@ -1,0 +1,1336 @@
+Robust Single-Parameter Point Cloud Registration
+using Truncated Lp Functions
+Seong Hun Lee1, Patrick Vandewalle2 and Javier Civera3
+Abstract— We propose a novel method for robust point cloud
+registration with only one tunable parameter. Our method,
+dubbed TLP, uses truncated Lp functions with different values
+of p to assign priority scores to correspondences, select the
+hypothesis, and refine the final model. By leveraging the robust-
+ness of truncated functions, TLP effectively handles the high
+outlier rates commonly encountered in real-world 3D feature
+matching. We also exploit GPU parallelization to evaluate
+hypotheses efficiently, enabling registration from thousands of
+correspondences in under a second on average. With only one
+tunable parameter, our method offers greater practicality than
+multi-parameter methods that require dataset-specific tuning of
+several parameters. Evaluations on public benchmark datasets
+demonstrate that TLP achieves higher accuracy than state-of-
+the-art single-parameter methods. Furthermore, it outperforms
+two widely used multi-parameter methods on three of the four
+evaluated datasets while maintaining competitive runtime.
+I. INTRODUCTION
+Point cloud registration estimates the rotation and transla-
+tion needed to align point clouds captured from different
+viewpoints, enabling 3D reconstruction, localization, and
+robotic perception [1], [2]. A common pipeline first estab-
+lishes correspondences using local descriptors, such as hand-
+crafted FPFH [3] or learned FCGF [4], and then estimates
+the transformation. Correct correspondences allow the least-
+squares alignment to be computed in closed form [5], but
+partial overlap, ambiguous geometry, and noise can cause
+outliers to greatly outnumber inliers [6], [7]. Reliable regis-
+tration therefore requires identifying geometrically consistent
+correspondences among sets dominated by outliers.
+RANSAC addresses this problem by generating hypothe-
+ses from random minimal samples and evaluating their
+consensus [8], but its efficiency deteriorates as the probability
+of drawing an all-inlier sample decreases. Recent methods
+exploit compatibility graphs, correspondence rankings, and
+consistency filtering to make hypothesis generation more
+selective [6], [9], [2], [10]. Others combine robust objec-
+tives with specialized optimization or parameter search [7],
+[11], [1]. Together, these advances motivate a coordinated
+approach to correspondence scoring, hypothesis selection,
+and refinement.
+Coordinating these stages requires accounting for their
+different objectives: correspondence scoring should preserve
+degrees of geometric agreement, hypothesis selection should
+1,3 Seong Hun Lee and Javier Civera are with I3A, University
+of Zaragoza, 50018 Zaragoza, Spain. seonghunlee@unizar.es,
+jcivera@unizar.es
+2
+Patrick
+Vandewalle
+is
+with
+EAVISE,
+Department
+of
+Electri-
+cal
+Engineering,
+KU
+Leuven,
+2860
+Sint-Katelijne-Waver,
+Belgium.
+patrick.vandewalle@kuleuven.be
+reward a large consensus, and refinement should reduce
+alignment errors while limiting outlier influence. In practice,
+adapting such a pipeline to a new data domain can require
+tuning multiple interacting parameters, increasing develop-
+ment effort and complicating deployment.
+In this work, we propose TLP, a novel method that uses
+a common family of truncated Lp costs and complementary
+scores for correspondence ranking, hypothesis selection, and
+refinement while requiring users to tune a single parameter.
+For correspondence ranking, it combines the truncated L3
+compatibility score with the support aggregation introduced
+in HERE [1], preserving degrees of pairwise geometric
+agreement before aggregation. Hypothesis selection uses the
+limiting score as p →∞, equivalent to maximizing the
+inlier count, while refinement successively uses the costs
+corresponding to p = 2, the logarithmic endpoint p →0+,
+and p = 0.4. With fixed, stage-specific exponents and trun-
+cation thresholds derived from a single distance parameter,
+this formulation accommodates the different objectives of
+each stage in a unified manner.
+Our main contributions are as follows:
+• A robust point cloud registration framework that uses
+truncated Lp functions with different exponents for corre-
+spondence scoring, hypothesis selection, and refinement.
+• A correspondence scoring scheme that incorporates contin-
+uous truncated L3 compatibility into support aggregation,
+preserving the degree of pairwise agreement.
+• An efficient implementation combining deterministic hy-
+pothesis generation, parallel batch evaluation, and staged
+refinement, with only one user-tuned parameter.
+Our code is publicly available at https://github.com/
+sunghoon031/TLP.
+II. RELATED WORK
+A. Compatibility-Based Correspondence Scoring
+Pairwise distance consistency allows us to assess corre-
+spondence correctness without first estimating the rigid body
+transformation. ROBIN uses such invariants to construct
+compatibility graphs and reject outliers through graph prun-
+ing [12]. CLIPPER retains graded consistency in a weighted
+graph and seeks a dense, mutually consistent subset [13].
+SC2-PCR strengthens pairwise evidence through second-
+order spatial compatibility [6], whereas MAC extracts mul-
+tiple maximal cliques to generate transformation hypothe-
+ses [9]. HERE ranks correspondences by aggregating the
+support of their compatible neighbors [1]. In our method,
+we adopt this aggregation with continuous truncated L3
+arXiv:2610.34271v1  [cs.CV]  25 Oct 2026
+
+
+compatibility, retaining the degree of pairwise agreement
+when computing correspondence priorities.
+Learned estimators also exploit relations among matches.
+DGR predicts correspondence confidence using a 6D convo-
+lutional network [14], while PointDSC incorporates spatial
+consistency into learned outlier rejection [15]. Our method
+requires no estimator training and accepts both handcrafted
+and learned correspondences.
+B. Hypothesis Generation and Consensus Selection
+RANSAC estimates models from random minimal samples
+and selects them by consensus [8]. Subsequent methods
+improve different parts of this process. PROSAC exploits
+correspondence rankings by progressively enlarging the pool
+from which samples are drawn [16]. LO-RANSAC refines
+promising hypotheses through local optimization [17], and
+Graph-Cut RANSAC incorporates spatial coherence into
+this refinement through graph-cut-based inlier labeling [18].
+MAGSAC marginalizes over a range of noise scales to score
+and refine models, reducing dependence on a single inlier
+threshold [19].
+For point cloud registration, PCR-99 uses ranked cor-
+respondences to guide deterministic three-point hypothe-
+sis generation [2]. TCF improves the input to three-point
+RANSAC through successive length- and angle-based con-
+sistency filtering [10], while HERE uses selected correspon-
+dences to guide a decomposed parameter search [1]. Our
+method combines ranking-guided generation with GPU batch
+evaluation, inlier-count selection, and local refinement.
+C. Robust Objectives and Refinement
+Robust estimation controls the influence of incorrect cor-
+respondences through the residual objective. FGR uses a
+Geman–McClure penalty and graduated non-convexity to
+optimize alignment [20]. More generally, graduated non-
+convexity couples robust costs with non-minimal solvers by
+progressively introducing non-convexity [21]. TEASER uses
+truncated least squares [7], whereas TEAR minimizes trun-
+cated entry-wise absolute residuals through a decomposed
+search [11].
+Parameterized loss families, such as Barron’s [22], provide
+a complementary approach to robust estimation by contin-
+uously adjusting the shape of the penalty. IRLS optimizes
+robust objectives by solving a sequence of weighted least-
+squares problems, and its convergence has been studied in the
+context of non-smooth robust regression [23]. Our method
+unifies correspondence scoring, hypothesis selection, and
+refinement through a normalized, truncated, smoothed Lp
+family with fixed, stage-specific exponents.
+III. PRELIMINARIES
+A. Problem Definition
+Let {(ai, bi)}n
+i=1 be a set of putative correspondences
+between two 3D point clouds. The inlier correspondences
+are related by a rigid body transformation up to noise:
+Rai + t + ei = bi
+for
+i ∈I,
+(1)
+p → 0  (smoothed) 
++
+p = 0.4
+p = 2
+p = 3
+p = ∞
+(b) Truncated L   score
+(a) Truncated L   cost
+δ
+0
+1
+r
+δ
+0
+1
+r
+p
+p
+Fig. 1.
+Normalized, truncated, smoothed Lp costs and scores versus
+residual r. The truncation threshold is denoted by δ.
+where R ∈SO(3) and t ∈R3 denote the rotation and
+translation, respectively, ei ∈R3 represents noise, and I
+is the set of inlier indices. The remaining correspondences
+are considered outliers and need not satisfy this relation.
+The robust point cloud registration problem addressed in this
+work is to estimate (R, t) from the given correspondences
+when the inlier set I is unknown.
+B. Normalized, Truncated, Smoothed Lp Cost
+For a residual r ≥0, truncation threshold δ > 0, and
+a very small smoothing parameter ϵ > 0 (which is fixed to
+10−12 in this work and omitted from the function’s notation),
+we define the normalized, truncated, smoothed Lp cost as
+ρ(r; p, δ) = min
+(r2 + ϵ)p/2 −ϵp/2
+(δ2 + ϵ)p/2 −ϵp/2 , 1
+
+,
+0 < p < ∞.
+(2)
+This cost is nondecreasing in r, equals zero at r = 0, and
+saturates at one for r ≥δ. Its untruncated component is a
+smoothed, shifted, and scaled version of the pth power of
+the residual magnitude. We define the endpoint costs by the
+following pointwise limits:
+ρ(r; 0, δ) := lim
+p→0+ ρ(r; p, δ) = min
+log(1 + r2/ϵ)
+log(1 + δ2/ϵ), 1
+
+,
+(3)
+ρ(r; ∞, δ) := lim
+p→∞ρ(r; p, δ) =
+(
+0,
+r < δ,
+1,
+r ≥δ.
+(4)
+The derivations are provided in Appendix. Note that the zero
+endpoint is logarithmic for fixed ϵ > 0, rather than a count
+of nonzero residuals. For finite p > 0, letting ϵ →0+ leads
+to min{(r/δ)p, 1}.
+The complementary score of this cost is S(r; p, δ) = 1 −
+ρ(r; p, δ). For any fixed set of n residuals, maximizing the
+sum of scores is equivalent to minimizing the sum of costs,
+since their sums add to n. In particular, note that
+n
+X
+i=1
+S(ri; ∞, δ) = |{i : ri < δ}|.
+(5)
+Thus, maximizing this total score is equivalent to maximizing
+the number of inliers. Figure 1 illustrates both functions.
+
+
+c1
+c1
+c2
+c2
+c3
+c3
+c4
+c4
+c5
+c5
+c6
+c6
+c7
+c7
+c1
+c2
+c3
+c4
+c5
+c6
+c7
+c1
+1
+1.00 0.89 0.85
+0
+0
+0
+3.74
+16.20
+c2 1.00
+1
+1.00 0.99 0.93
+0
+0
+4.92
+20.00
+c3 0.89 1.00
+1
+0.97 1.00
+0
+0
+4.86
+19.72
+c4 0.85 0.99 0.97
+1
+0
+0
+0
+3.81
+16.55
+c5
+0
+0.93 1.00
+0
+1
+0
+0
+2.93
+12.37
+c6
+0
+0
+0
+0
+0
+1
+0.88
+1.88
+3.54
+c7
+0
+0
+0
+0
+0
+0.88
+1
+1.88
+3.54
+w = C1
+s = Cw
+Fig. 2.
+[Top] Correct (solid green) and incorrect (dashed red) corre-
+spondences. [Bottom left] Truncated L3 compatibility matrix (Sec. IV-
+B). Shaded cells indicate stronger agreement. Red outlines mark accidental
+compatibilities of c5 with c2 and c3. [Bottom right] Initial support w =
+C1 and aggregated scores s = Cw. Both rank all correct matches above
+the incorrect ones. Aggregation increases the ratio of mean inlier-to-outlier
+ratio from 1.9 to 2.28, improving their relative separation in this example.
+IV. METHOD
+A. Overview of TLP
+Alg. 1 summarizes the pipeline. TLP first ranks corre-
+spondences using truncated L3 compatibility and support
+aggregation. These rankings guide deterministic three-point
+hypothesis generation, and GPU batch evaluation selects the
+two hypotheses with the largest consensus (p →∞). Each
+undergoes L2 refinement followed by smoothed L0+ refine-
+ment via iteratively reweighted least squares (IRLS) [23][24,
+Chapter 9], with inlier sets updated between model fits. Batch
+processing continues until the stopping criterion is met, and
+the best model receives final L0.4 refinement. The distance
+threshold τ is the only dataset-dependent parameter; all other
+settings remain fixed.
+B. Correspondence Scoring
+We score each point correspondence based on how likely it
+is to be an inlier. Since a rigid transformation preserves pair-
+wise distances, we first measure the inconsistency between
+correspondences i and j by
+dij = |∥ai −aj∥2 −∥bi −bj∥2| .
+(6)
+Then, we construct n×n truncated L3 compatibility matrices
+in the following form:
+C(q)
+ij
+= max
+(
+1 −
+dij
+σq
+3
+, 0
+)
+with
+σq = 1.2qτ, (7)
+Algorithm 1: TLP
+Input: Corresponding 3D point sets {ai}n
+i=1 and
+{bi}n
+i=1, inlier distance threshold τ.
+Output: Rigid body transformation (R, t).
+/* Construct compatibility matrices and
+correspondence orderings
+*/
+1 dij ←|∥ai −aj∥2 −∥bi −bj∥2| for all (i, j);
+2 foreach q in (0.1, 0.2, 0.3, 0.4) do
+3
+σq ←1.2qτ;
+4
+C(q)
+ij
+←max
+n
+1 −(dij/σq)3 , 0
+o
+for all (i, j);
+5
+w(q) ←C(q)1;
+6
+s(q) ←C(q)w(q);
+7
+πq ←point indices sorted by descending s(q),
+with ranks indexed from 0;
+/* Generate and evaluate batches of 256
+hypotheses
+*/
+8 Nsufficient ←max{10, ⌊0.05n⌋};
+9 Nacceptable ←max{10, ⌊0.001n⌋};
+10 Nbest ←0, c ←0, B ←∅, S ←∅;
+11 for h ←3 to min{1000, 3n −6} do
+12
+imin ←max{0, h −(n −2) −(n −1)};
+13
+imax ←⌊(h −3)/3⌋;
+14
+for i ←imin to imax do
+15
+jmin ←max{i + 1, h −i −(n −1)};
+16
+jmax ←⌊(h −i −1)/2⌋;
+17
+for j ←jmin to jmax do
+18
+k ←h −i −j;
+19
+if Nbest ≥Nsufficient or
+(c ≥1500 and Nbest ≥Nacceptable)
+then
+20
+Exit all sampling loops;
+21
+foreach q in (0.1, 0.2, 0.3, 0.4) do
+22
+if (πq(i), πq(j), πq(k)) ∈S then
+23
+continue;
+24
+Add (πq(i), πq(j), πq(k)) to S;
+25
+Obtain (R, t) by aligning the
+corresponding 3-point sets indexed
+by (πq(i), πq(j), πq(k));
+26
+Add (R, t) to B;
+27
+if |B| = 256 then
+28
+Evaluate B (Alg. 2), updating the
+best hypothesis and its refined
+inlier count Nbest;
+29
+B ←∅;
+30
+c ←c + 1;
+31 if B̸ = ∅then
+32
+Evaluate B (Alg. 2), updating the best hypothesis
+and Nbest;
+33 (R, t) ←Refine the best hypothesis by minimizing a
+truncated L0.4 cost with truncation threshold τ,
+performing at most five inlier set updates (Alg. 3);
+34 return (R, t);
+
+
+Algorithm 2: Batched hypothesis evaluation
+Input: Corresponding 3D point sets {ai}n
+i=1 and
+{bi}n
+i=1, Inlier distance threshold τ, Batch of
+hypotheses B.
+Output: Rigid body transformation (R, t).
+1 Evaluate each hypothesis in the batch using the full
+set of correspondences and compute its inlier count;
+2 Refine the two hypotheses with the highest inlier
+counts by minimizing a truncated L2 cost with
+truncation threshold 1.2τ, performing at most 50
+inlier set updates (Alg. 3);
+3 Refine them again by minimizing a truncated L0+
+cost with truncation threshold 1.2τ, performing a
+single inlier set update (Alg. 3);
+4 (R, t) ←Select the hypothesis with the higher inlier
+count;
+5 return (R, t);
+Algorithm 3: Truncated Lp cost minimization
+Input: Corresponding 3D point sets {ai}n
+i=1 and
+{bi}n
+i=1, Batch of hypotheses B, Initial
+estimate (R0, t0), Initial inlier set I0,
+Truncation threshold δ, Maximum number of
+inlier set updates jmax, Parameter p of the Lp
+norm
+Output: Rigid body transformation (R, t), Inlier set
+I
+1 I ←I0, ϵ ←10−12
+2 Function Fit(I):
+3
+if p = 2 then
+4
+return arg
+min
+R∈SO(3), t
+X
+i∈I
+∥Rai + t −bi∥2
+2
+5
+wi ←1 for all i ∈I
+6
+for k ←1 to 10 do
+7
+(R, t) ←arg
+min
+R∈SO(3), t
+X
+i∈I
+wi∥Rai+t−bi∥2
+2
+8
+ewi ←
+ ∥Rai + t −bi∥2
+2 + ϵ
+p/2−1 for all
+i ∈I
+9
+γ ←∥ew −w∥2/(∥w∥2 + ϵ)
+10
+w ←ew
+11
+if γ < 0.03 then
+12
+break
+13
+return arg
+min
+R∈SO(3), t
+X
+i∈I
+wi∥Rai + t −bi∥2
+2
+14 for j ←1 to jmax do
+15
+(R, t) ←Fit(I)
+16
+I′ ←
+
+i ∈{1, . . . , n} : ∥Rai + t −bi∥2
+2 < δ2	
+17
+if |I′| < 3 or I′ = I then
+18
+return (R, t) and I
+19
+I ←I′
+20 (R, t) ←Fit(I)
+21 return (R, t) and I;
+where q ∈{0.1, 0.2, 0.3, 0.4}. Thus, correspondences
+with identical pairwise distances receive compatibility one,
+while discrepancies at or above σq receive zero. Intermediate
+discrepancies receive continuous weights rather than binary
+classifications, as used in [6], [1].
+We adopt the scoring approach of [1], replacing its binary
+compatibility matrix with our continuous one. For each q ∈
+{0.1, 0.2, 0.3, 0.4}, we compute
+w(q) = C(q)1,
+s(q) = C(q)w(q).
+(8)
+The first multiplication measures each correspondence’s total
+compatibility. The second weights its compatible neighbors
+by their own support, favoring correspondences that agree
+with other well-supported correspondences.
+Figure 2 illustrates how this two-stage scoring scheme
+ranks correct correspondences above incorrect ones, even
+when some incorrect correspondences exhibit high pairwise
+compatibility. Sorting s(q) in descending order produces a
+permutation πq of the correspondence indices. The four
+fixed values of q provide four orderings, allowing hypothesis
+generation to explore different compatibility neighborhoods
+without independently tuning four thresholds.
+C. Batched Hypothesis Generation
+We generate three-point samples deterministically from
+the score orderings. Each permutation πq
+maps ranks
+0, . . . , n−1 to the n point correspondence using the method
+proposed in [2]. This method enumerates triplets (i, j, k)
+satisfying 0 ≤i < j < k < n in increasing order of
+their index sum s = i + j + k. For each sum, i and then
+j are traversed in ascending order. The enumeration begins
+as follows:
+• All triplets with sum 3: (0, 1, 2).
+• All triplets with sum 4: (0, 1, 3).
+• All triplets with sum 5: (0, 1, 4), (0, 2, 3).
+• All triplets with sum 6: (0, 1, 5), (0, 2, 4), (1, 2, 3).
+• ...
+• Unless an early termination condition is met, enumera-
+tion continues up to an index sum of min(1000, 3n−6),
+reaching the final triplet (n −3, n −2, n −1) when
+3n −6 ≤1000.
+This visits combinations of highly ranked correspondences
+first. For each rank triplet and each q ∈{0.1, 0.2, 0.3, 0.4},
+we form the correspondence sample (πq(i), πq(j), πq(k)).
+Samples containing the same three original correspondence
+indices are evaluated only once, even if they arise from
+different orderings. We collect 256 distinct samples per batch
+and estimate and evaluate their transformations in parallel.
+For each sample, a relative transformation is obtained
+by aligning local frames constructed from the ordered
+source and target triplets. Given the ordered sample indices
+(i1, i2, i3), the source frame is defined as
+u = ai2 −ai1,
+v = ai3 −ai1,
+(9)
+f1 = ν(u),
+f2 = ν(u × v),
+(10)
+f3 = ν(f1 × f2),
+Fa = [f1 f2 f3],
+(11)
+
+
+where ν(z) = z/
+p
+max(∥z∥2
+2, ϵ) with ϵ = 10−12 provides
+numerically safeguarded normalization. The target frame Fb
+is constructed analogously from (bi1, bi2, bi3). The rotation
+and translation are then
+Rh = FbFT
+a,
+th = ¯bh −Rh¯ah,
+(12)
+where ¯ah and ¯bh denote the source and target triplet cen-
+troids, respectively. For nondegenerate triplets, the frames
+are orthonormal and yield a rigid transformation.
+After processing each batch using the selection and re-
+finement procedure below, we retain the largest consensus
+found across all batches. Let n⋆be its size and let m count
+the rank triplets visited. We define
+nsuff = max{10, ⌊0.05n⌋},
+nacc = max{10, ⌊0.001n⌋}.
+(13)
+Generation stops when n⋆≥nsuff, or when m ≥1500
+and n⋆≥nacc. Any remaining partial batch is processed
+before final refinement.
+D. Truncated Lp Cost Minimization
+Let ri(R, t) = ∥Rai + t −bi∥2. Using the cost defined
+in Section III-B, the proposed refinement seeks to minimize
+min
+R∈SO(3), t
+n
+X
+i=1
+ρ(ri(R, t); p, δ).
+(14)
+To this end, we alternate model fitting on the current inlier set
+I and thresholding all residuals to update I. Residuals above
+the threshold incur a constant cost of one, so model fitting
+considers only the untruncated cost of the current inliers.
+For fixed p and δ, the normalization and additive offset
+in (2) do not affect the fitted model. Differentiating the
+untruncated cost with respect to the squared residual and
+dropping the common factor, we get the following IRLS
+weights:
+wi = (r2
+i + ϵ)p/2−1,
+i ∈I.
+(15)
+Each IRLS step solves a weighted rigid least-squares prob-
+lem and recomputes the weights from the resulting residuals.
+For p = 2, the weights are constant and a single least-squares
+fit suffices.
+Algorithm 3 details our implementation. We use p = 2
+followed by p = 0+ with δ = 1.2τ during batch evaluation
+(see Alg. 2), and p = 0.4 with δ = τ for final refinement
+(see Alg. 1).
+V. RESULTS
+A. Experimental Setup
+We compare our method, TLP, against five state-of-the-art
+single-parameter methods (TEASER++ [7]1, TEAR [11]2,
+HERE
+[1]3,
+PCR-99
+[2]4
+and
+TCF
+[10]5)
+and
+two
+1We use the C++ version: https://github.com/MIT-SPARK/
+TEASER-plusplus
+2https://github.com/tyhuang98/TEAR-release
+3https://github.com/tyhuang98/HERE-release
+4We use the Python version (with GPU parallelization): https://
+github.com/sunghoon031/PCR-99-python
+5https://github.com/ShiPC-AI/TCF
+TABLE I
+SELECTED DISTANCE THRESHOLDS FOR EACH DATASET–DESCRIPTOR
+CONFIGURATION, TUNED BY MAXIMIZING MAA AT 15◦. N/A DENOTES
+AN UNAVAILABLE SETTING.
+3DMatch
+KITTI
+Method
+FPFH
+FCGF
+FPFH
+FCGF
+TEASER++
+0.04
+N/A
+0.45
+N/A
+TEAR
+0.07
+0.07
+0.4
+2.1
+HERE (w/o scaling)
+0.07
+0.07
+0.7
+1.8
+HERE (with scaling)
+0.07
+0.07
+0.7
+1.7
+PCR-99
+0.02
+0.01
+0.25
+0.4
+TCF
+0.045
+0.03
+0.3
+1.2
+TLP (Ours)
+0.09
+0.07
+0.9
+1.8
+widely used multi-parameter methods (SC2-PCR [6]6 and
+MAC [9]7). For HERE [1], we evaluate two variants: with
+and without global scaling of the point clouds. Among
+the evaluated methods, TLP, SC2-PCR, and PCR-99 are
+implemented in Python, while the remaining methods are
+implemented in C++. All experiments are conducted on a
+laptop equipped with an Intel Core i7-7700HQ CPU, an
+NVIDIA Quadro M1200 GPU, and 16 GB of RAM.
+We evaluate all methods on the 3DMatch [25] and
+KITTI [26] datasets using FPFH [3] and FCGF [4] descrip-
+tors. We obtain the 3D–3D correspondence data using the
+same processing pipeline as SC2-PCR [6]. As a result, the
+3DMatch and KITTI datasets contain 1,623 and 555 point-
+cloud pairs, respectively, for each descriptor setting. Regis-
+tration is performed on these precomputed correspondences.
+For the two multi-parameter methods, SC2-PCR [6] and
+MAC [9], we use the parameter settings recommended by
+their authors. For the single-parameter methods, we tune
+the thresholds separately for each dataset–descriptor config-
+uration by maximizing mAA at 15◦(see Sec. V-B for the
+definition of this metric). Table I lists the threshold values
+we use.
+B. Evaluation Metric
+We evaluate point cloud registration accuracy using the
+mean average accuracy (mAA) of the estimated rotations
+[27]:
+mAA at K◦=
+1
+KNp
+K◦
+X
+θ=1◦
+Np
+X
+i=1
+f(θ, ei),
+K ∈{5, 10, 15},
+(16)
+where Np is the number of point cloud pairs (1,623 for
+3DMatch and 555 for KITTI datasets), ei is the rotation error
+(in degrees) with respect to the ground truth for pair i, and
+6https://github.com/ZhiChen902/SC2-PCR
+7We use the C++ version in Linux folder: https://github.com/
+zhangxy0517/3d-registration-with-maximal-cliques
+
+
+Fig. 3.
+Qualitative comparison on five point-cloud pairs from 3DMatch using FPFH descriptors. The two point clouds are shown in blue and orange.
+TLP produces alignments closely matching the ground truth, while the single-parameter baselines exhibit varying degrees of misalignment. Red circles
+highlight selected alignment errors.
+TABLE II
+ROTATION-BASED REGISTRATION ACCURACY (MAA) ACROSS DIFFERENT DATASETS AND FEATURES. HIGHER VALUES INDICATE BETTER
+PERFORMANCE, WITH A MAXIMUM OF 1. THE BEST AVAILABLE RESULT IN EACH ROW IS HIGHLIGHTED IN BLUE AND BOLD.
+Multi-Parameter
+Single-Parameter
+Dataset
+Metric
+SC2-PCR
+MAC
+TEASER++
+TEAR
+HERE
+(with scaling)
+HERE
+(w/o scaling)
+PCR-99
+TCF
+TLP
+(Ours)
+3DMatch
++ FPFH
+mAA at 5◦
+0.5861
+Out of
+memory
+0.5503
+0.3257
+0.4731
+0.4734
+0.5110
+0.5540
+0.5879
+mAA at 10◦
+0.7129
+0.6747
+0.3835
+0.5587
+0.5596
+0.6316
+0.6808
+0.7002
+mAA at 15◦
+0.7649
+0.7272
+0.4118
+0.5968
+0.5979
+0.6848
+0.7321
+0.7456
+3DMatch
++ FCGF
+mAA at 5◦
+0.6612
+0.6662
+Excessive
+runtime
+(some > 2 h)
+0.5569
+0.6430
+0.6442
+0.6237
+0.6295
+0.6818
+mAA at 10◦
+0.7955
+0.7977
+0.6734
+0.7622
+0.7631
+0.7619
+0.7619
+0.8048
+mAA at 15◦
+0.8468
+0.8475
+0.7213
+0.8056
+0.8070
+0.8174
+0.8107
+0.8517
+KITTI
++ FPFH
+mAA at 5◦
+0.9870
+Out of
+memory
+0.9867
+0.6908
+0.9712
+0.9712
+0.9521
+0.9845
+0.9899
+mAA at 10◦
+0.9935
+0.9933
+0.7281
+0.9800
+0.9793
+0.9735
+0.9923
+0.9950
+mAA at 15◦
+0.9957
+0.9956
+0.7540
+0.9837
+0.9826
+0.9813
+0.9948
+0.9966
+KITTI
++ FCGF
+mAA at 5◦
+0.9859
+0.9852
+Excessive
+runtime
+(often > 0.5 h)
+0.9744
+0.9885
+0.9881
+0.9874
+0.9892
+0.9924
+mAA at 10◦
+0.9885
+0.9881
+0.9791
+0.9924
+0.9923
+0.9919
+0.9928
+0.9944
+mAA at 15◦
+0.9893
+0.9891
+0.9810
+0.9938
+0.9936
+0.9934
+0.9940
+0.9951
+
+
+TABLE III
+RUNTIME COMPARISON. THE FASTEST RESULT ON EACH DATASET IS SHOWN IN BLUE AND BOLD.
+Multi-Parameter
+Single-Parameter
+Dataset
+SC2-PCR
+MAC
+TEASER++
+TEAR
+HERE
+(with scaling)
+HERE
+(w/o scaling)
+PCR-99
+TCF
+TLP
+(Ours)
+3DMatch
++ FPFH
+0.24 s
+Out of
+memory
+1.45 s
+1.64 s
+1.87 s
+2.21 s
+0.68 s
+0.30 s
+0.36 s
+3DMatch
++ FCGF
+0.24 s
+11.46 s
+Sometimes
+> 2 h
+0.99 s
+1.06 s
+1.49 s
+0.22 s
+2.68 s
+0.20 s
+KITTI
++ FPFH
+0.71 s
+Out of
+memory
+1.46 s
+3.53 s
+2.02 s
+4.80 s
+0.19 s
+0.10 s
+0.65 s
+KITTI
++ FCGF
+0.73 s
+22.46 s
+Often
+> 0.5 h
+0.29 s
+1.19 s
+3.21 s
+0.18 s
+39.33 s
+0.40 s
+TABLE IV
+ABLATION STUDY: EACH VARIANT REMOVES THE INDICATED SETTING OR REFINEMENT STEP FROM THE DEFAULT CONFIGURATION. PERFORMANCE
+IS MEASURED BY ROTATION-BASED REGISTRATION ACCURACY (MAA). HIGHER VALUES INDICATE BETTER PERFORMANCE, WITH A MAXIMUM OF 1.
+THE BEST AVAILABLE RESULT IN EACH ROW IS HIGHLIGHTED IN BLUE AND BOLD.
+Dataset
+Metric
+TLP
+(Default)
+Without 1.2
+factor for τ
+Without
+q = 0.1
+Without
+q = 0.2
+Without
+q = 0.3
+Without
+q = 0.4
+Without L2
+refinement
+Without L0+
+refinement
+Without L0.4
+refinement
+3DMatch
++ FPFH
+mAA at 5◦
+0.5879
+0.5813
+0.5875
+0.5845
+0.5864
+0.5850
+0.5809
+0.5774
+0.5791
+mAA at 10◦
+0.7002
+0.6958
+0.6962
+0.6952
+0.6988
+0.6966
+0.6944
+0.6861
+0.6948
+mAA at 15◦
+0.7456
+0.7420
+0.7405
+0.7397
+0.7441
+0.7413
+0.7401
+0.7299
+0.7416
+3DMatch
++ FCGF
+mAA at 5◦
+0.6818
+0.6792
+0.6817
+0.6819
+0.6821
+0.6822
+0.6812
+0.6826
+0.6764
+mAA at 10◦
+0.8048
+0.8032
+0.8047
+0.8046
+0.8047
+0.8044
+0.8033
+0.8052
+0.8017
+mAA at 15◦
+0.8517
+0.8506
+0.8516
+0.8515
+0.8516
+0.8512
+0.8495
+0.8518
+0.8497
+KITTI
++ FPFH
+mAA at 5◦
+0.9899
+0.9899
+0.9899
+0.9896
+0.9899
+0.9899
+0.9896
+0.9867
+0.9892
+mAA at 10◦
+0.9950
+0.9941
+0.9942
+0.9939
+0.9950
+0.9950
+0.9942
+0.9915
+0.9946
+mAA at 15◦
+0.9966
+0.9954
+0.9962
+0.9953
+0.9966
+0.9966
+0.9962
+0.9932
+0.9964
+KITTI
++ FCGF
+mAA at 5◦
+0.9924
+0.9924
+0.9924
+0.9924
+0.9924
+0.9924
+0.9924
+0.9924
+0.9921
+mAA at 10◦
+0.9944
+0.9944
+0.9944
+0.9944
+0.9944
+0.9944
+0.9944
+0.9944
+0.9942
+mAA at 15◦
+0.9951
+0.9951
+0.9951
+0.9951
+0.9951
+0.9951
+0.9951
+0.9951
+0.9950
+f(·) is the indicator function, i.e.,
+f(θ, ei) =
+(
+1,
+if ei < θ
+0,
+otherwise.
+(17)
+Thus, mAA averages accuracy over integer angular thresh-
+olds from 1◦to K◦, rewarding smaller errors within this
+range without penalizing the magnitude of errors beyond
+it. As a result, mAA reflects both estimation accuracy and
+robustness to outliers while reducing dependence on any
+single evaluation threshold. The score lies in [0, 1] and
+is independent of point cloud scale, allowing the same
+thresholds across datasets. The main limitation of rotation-
+based mAA is that it does not measure translation accuracy:
+a high score alone does not guarantee correct alignment.
+In practice, however, accurate rotation estimates tend to be
+strongly correlated with accurate translation estimates. Thus,
+rotation-based mAA serves as a useful, scale-independent
+proxy for overall registration quality.
+C. Registration Accuracy
+Table II summarizes the registration accuracy results.
+Some baseline evaluations could not be completed under our
+experimental conditions. MAC ran out of memory for both
+FPFH configurations. TEASER incurred excessive runtimes
+with FCGF, exceeding two hours for some 3DMatch pairs
+and frequently exceeding half an hour for KITTI pairs. These
+entries are reported as unavailable, and the corresponding
+TEASER threshold entries are marked N/A in Table I.
+Among the available results, TLP achieves the highest
+mAA in 10 of the 12 dataset–descriptor–cutoff combinations.
+It consistently outperforms all evaluated single-parameter
+baselines. It also outperforms all evaluated multi-parameter
+baselines, except on 3DMatch with FPFH at the 10◦and 15◦
+cutoffs, where SC2-PCR achieves higher accuracy. Fig. 3
+presents five examples from 3DMatch with FPFH, where
+TLP achieves more accurate alignment than the evaluated
+single-parameter baselines.
+
+
+D. Ablation Study
+Table IV summarizes the results of our ablation study. It
+shows that the default configuration achieves the highest or
+joint-highest mAA in 9 of the 12 settings. Removing indi-
+vidual components generally reduces accuracy on 3DMatch
+with FPFH, whereas the effects on KITTI are small.
+E. Runtime
+Table III reports the runtimes. Among the nine methods,
+TLP ranks third, first, third, and third in runtime across
+the four dataset–descriptor combinations, respectively. Thus,
+TLP consistently ranks among the three fastest methods
+while achieving superior accuracy in most evaluated settings.
+VI. CONCLUSION
+We presented TLP, a robust point cloud registration
+method that uses truncated Lp functions with different expo-
+nents for correspondence scoring, hypothesis selection, and
+refinement. By combining continuous compatibility scores
+with deterministic hypothesis generation, parallel batch eval-
+uation, and staged refinement, TLP requires only one user-
+tuned distance threshold, with all other settings fixed across
+datasets. Experiments on 3DMatch and KITTI with FPFH
+and FCGF descriptors show that TLP achieves the highest
+rotation-based mAA in 10 of the 12 evaluated settings among
+the available baseline results, while ranking among the three
+fastest methods in all four dataset–descriptor configurations.
+These results demonstrate that the proposed combination
+provides accurate and efficient registration with limited pa-
+rameter tuning.
+APPENDIX: ENDPOINT LIMITS OF THE TRUNCATED Lp
+COST
+Fix r ≥0, δ > 0, and ϵ > 0, and write
+A = 1 + r2/ϵ,
+B = 1 + δ2/ϵ.
+(18)
+Then A ≥1, B > 1, and division by ϵp/2 in (2) gives
+ρ(r; p, δ) = min
+Ap/2 −1
+Bp/2 −1, 1
+
+.
+(19)
+As p →0+, the expansion ex = 1 + x + O(x2) yields
+Ap/2 −1
+Bp/2 −1 = (p/2) log A + O(p2)
+(p/2) log B + O(p2) −→log A
+log B .
+(20)
+Since log B > 0, substituting this into (19) proves (3).
+For p →∞and r < δ, we have A/B < 1 and
+Ap/2 −1
+Bp/2 −1 = (A/B)p/2 −B−p/2
+1 −B−p/2
+−→0.
+(21)
+If r = δ, the ratio is exactly one for every p > 0. If r > δ,
+the ratio exceeds one and truncation makes the cost exactly
+one. These cases prove (4).
+REFERENCES
+[1] T. Huang, H. Li, L. Peng, Y. Liu, and Y.-H. Liu, “Efficient and Robust
+Point Cloud Registration via Heuristics-Guided Parameter Search,”
+IEEE Trans. Pattern Anal. Mach. Intell., vol. 46, no. 10, pp. 6966–
+6984, 2024.
+[2] S. H. Lee, J. Civera, and P. Vandewalle, “PCR-99: A Practical Method
+for Point Cloud Registration with 99 Percent Outliers,” in Eur. Conf.
+Comput. Vis. Workshop, 2024, pp. 14–29.
+[3] R. B. Rusu, N. Blodow, and M. Beetz, “Fast Point Feature Histograms
+(FPFH) for 3D registration,” in IEEE Int. Conf. Robot. Automat., 2009,
+pp. 3212–3217.
+[4] C. Choy, J. Park, and V. Koltun, “Fully Convolutional Geometric
+Features,” in IEEE Int. Conf. Comput. Vis., 2019, pp. 8957–8965.
+[5] B. K. P. Horn, “Closed-form solution of absolute orientation using
+unit quaternions,” Journal of the Optical Society of America A, vol. 4,
+no. 4, pp. 629–642, 1987.
+[6] Z. Chen, K. Sun, F. Yang, and W. Tao, “SC2-PCR: A Second
+Order Spatial Compatibility for Efficient and Robust Point Cloud
+Registration,” in IEEE Conf. Comput. Vis. Pattern Recog., 2022, pp.
+13 211–13 221.
+[7] H. Yang, J. Shi, and L. Carlone, “TEASER: Fast and Certifiable Point
+Cloud Registration,” IEEE Trans. Robot., vol. 37, no. 2, pp. 314–333,
+2021.
+[8] M. A. Fischler and R. C. Bolles, “Random Sample Consensus: A
+Paradigm for Model Fitting with Applications to Image Analysis and
+Automated Cartography,” Communications of the ACM, vol. 24, no. 6,
+pp. 381–395, 1981.
+[9] X. Zhang, J. Yang, S. Zhang, and Y. Zhang, “3D Registration With
+Maximal Cliques,” in IEEE Conf. Comput. Vis. Pattern Recog., 2023,
+pp. 17 745–17 754.
+[10] P. Shi, S. Yan, Y. Xiao, X. Liu, Y. Zhang, and J. Li, “RANSAC
+Back to SOTA: A Two-Stage Consensus Filtering for Real-Time 3D
+Registration,” IEEE Robot. Automat. Lett., vol. 9, no. 12, pp. 11 881–
+11 888, 2024.
+[11] T. Huang, L. Peng, R. Vidal, and Y.-H. Liu, “Scalable 3D Registration
+via Truncated Entry-Wise Absolute Residuals,” in IEEE Conf. Comput.
+Vis. Pattern Recog., 2024, pp. 27 467–27 477.
+[12] J. Shi, H. Yang, and L. Carlone, “ROBIN: A Graph-Theoretic Ap-
+proach to Reject Outliers in Robust Estimation Using Invariants,” in
+IEEE Int. Conf. Robot. Automat., 2021, pp. 13 820–13 827.
+[13] P. C. Lusk, K. Fathian, and J. P. How, “CLIPPER: A Graph-Theoretic
+Framework for Robust Data Association,” in IEEE Int. Conf. Robot.
+Automat., 2021, pp. 13 828–13 834.
+[14] C. Choy, W. Dong, and V. Koltun, “Deep Global Registration,” in
+IEEE Conf. Comput. Vis. Pattern Recog., 2020.
+[15] X. Bai, Z. Luo, L. Zhou, H. Chen, L. Li, Z. Hu, H. Fu, and C.-L.
+Tai, “PointDSC: Robust Point Cloud Registration Using Deep Spatial
+Consistency,” in IEEE Conf. Comput. Vis. Pattern Recog., 2021, pp.
+15 859–15 869.
+[16] O. Chum and J. Matas, “Matching with PROSAC—Progressive Sam-
+ple Consensus,” in IEEE Conf. Comput. Vis. Pattern Recog., vol. 1,
+2005, pp. 220–226.
+[17] O. Chum, J. Matas, and J. Kittler, “Locally Optimized RANSAC,” in
+Pattern Recognition (DAGM).
+Springer, 2003, pp. 236–243.
+[18] D. Barath and J. Matas, “Graph-Cut RANSAC,” in IEEE Conf.
+Comput. Vis. Pattern Recog., 2018, pp. 6733–6741.
+[19] D. Barath, J. Matas, and J. Noskova, “MAGSAC: Marginalizing
+Sample Consensus,” in IEEE Conf. Comput. Vis. Pattern Recog., 2019,
+pp. 10 197–10 205.
+[20] Q.-Y. Zhou, J. Park, and V. Koltun, “Fast Global Registration,” in Eur.
+Conf. Comput. Vis., 2016.
+[21] H. Yang, P. Antonante, V. Tzoumas, and L. Carlone, “Graduated Non-
+Convexity for Robust Spatial Perception: From Non-Minimal Solvers
+to Global Outlier Rejection,” IEEE Robot. Automat. Lett., vol. 5, no. 2,
+pp. 1127–1134, 2020.
+[22] J. T. Barron, “A General and Adaptive Robust Loss Function,” in IEEE
+Conf. Comput. Vis. Pattern Recog., 2019.
+[23] L. Peng, C. K¨ummerle, and R. Vidal, “Global Linear and Local Su-
+perlinear Convergence of IRLS for Non-Smooth Robust Regression,”
+in Int. Conf. on Neural Information Processing Systems, 2022.
+[24] S. H. Lee, “Why Do We Optimize What We Optimize in Multiple
+View Geometry?” Ph.D. dissertation, Universidad de Zaragoza, 2023.
+[25] A. Zeng, S. Song, M. Niessner, M. Fisher, J. Xiao, and T. Funkhouser,
+“3DMatch: Learning Local Geometric Descriptors from RGB-D Re-
+constructions,” in IEEE Conf. Comput. Vis. Pattern Recog., 2017, pp.
+199–208.
+[26] A. Geiger, P. Lenz, and R. Urtasun, “Are We ready for Autonomous
+Driving? The KITTI Vision Benchmark Suite,” in IEEE Conf. Comput.
+Vis. Pattern Recog., 2012, pp. 3354–3361.
+[27] S. H. Lee, P. Vandewalle, and J. Civera, “Non-Minimal Sam-
+pling and Consensus for Prohibitively Large Datasets,” arXiv, vol.
+abs/2604.22518, 2026.
