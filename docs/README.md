@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-11-01</span>
+      <span class="dpr-home-dashboard-kicker">2026-11-03</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 12 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 0 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>5</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>0</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>0</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-11-01 23:01:11 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-11-03 01:35:02 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,9 +69,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>11 月 1 日精选 12 篇研究，覆盖机器人操作、移动操控与多模态空间理解。</p>
-<p>最值得关注的是高分精读中的可变形物体操作策略 PS-DLO，以及面向腿式机器人的全身控制框架 ThinkLocoManip，均获 9 分。</p>
-<p>建议先读这两篇把握机器人操控进展，再按兴趣浏览移动操作、毫米波雷达与三维几何检索方向。</p>
+<p>今日无新推荐，系统未产出可展示论文。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -80,12 +78,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">7 篇</strong>
+    <strong class="dpr-home-dashboard-count">0 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="PS-DLO: Property- and Spatially Aware Deformable Linear Object Manipulation Policy">PS-DLO: Property- and Spatially Aware Deformable Linear Object Manipulation Policy</span></li><li><span class="dpr-home-dashboard-paper-title" title="ThinkLocoManip: A Whole-Body Control Agentic Harness for Legged Loco-Manipulation">ThinkLocoManip: A Whole-Body Control Agentic Harness for Legged Loco-Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="SceneAgent: An Agentic Pipeline from 3D and 4D Captures to Simulation Environments">SceneAgent: An Agentic Pipeline from 3D and 4D Captures to Simulation Environments</span></li></ul>
+<p class="dpr-home-dashboard-empty">今日暂无推荐。</p>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>1</strong></span></div>
+
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -93,12 +91,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">5 篇</strong>
+    <strong class="dpr-home-dashboard-count">0 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="On Shaky Ground: Characterising Non-Rigid Base Effects in Mobile Manipulation">On Shaky Ground: Characterising Non-Rigid Base Effects in Mobile Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="3D Occupancy-Language Fields from mmWave Radar">3D Occupancy-Language Fields from mmWave Radar</span></li><li><span class="dpr-home-dashboard-paper-title" title="Can One Hear Geometry? Gauge-Invariant Spectral Descriptors for Text-to-B-rep Retrieval">Can One Hear Geometry? Gauge-Invariant Spectral Descriptors for Text-to-B-rep Retrieval</span></li></ul>
+<p class="dpr-home-dashboard-empty">今日暂无推荐。</p>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">embodied-ai <strong>1</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>1</strong></span></div>
+
 </section>
 </div>
 
