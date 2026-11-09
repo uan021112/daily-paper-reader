@@ -296,8 +296,8 @@ def fetch_category_in_windows(
 ) -> datetime | None:
     """
     按时间窗口抓取单个大类。
-    - 失败粒度降为“单窗口失败”，不会丢掉整个分类；
-    - 若窗口仍然过大导致 500，可继续在上层按更小窗口重试（可选）。
+    - 大窗口失败时按现有深度限制二分重试；
+    - 仍未恢复的窗口错误向上传播，禁止将不完整结果写盘或推进水位线。
     """
     max_published_new: datetime | None = None
 
@@ -353,7 +353,7 @@ def fetch_category_in_windows(
 
             log(f"   ✅ Finished {category} (win {idx}/{len(windows)}): Got {count} new papers.")
         except Exception as e:
-            # 单个窗口失败不影响其他窗口/分类
+            # 仅在所有子窗口都成功时，才可将该窗口视为抓取完成。
             log(f"   ❌ Error fetching category {category} (win {idx}/{len(windows)}): {e}")
             # 回退：如果窗口仍然很大，尝试把该窗口再二分（仅一层，避免过度递归）
             if split_on_error_depth > 0 and (win_end - win_start) >= timedelta(days=2):
@@ -386,6 +386,8 @@ def fetch_category_in_windows(
                 for candidate in (cat_max_left, cat_max_right):
                     if candidate and (max_published_new is None or candidate > max_published_new):
                         max_published_new = candidate
+            else:
+                raise
             time.sleep(5)
         finally:
             group_end()

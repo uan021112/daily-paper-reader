@@ -69,7 +69,7 @@ def resolve_multi_source_vector_backend(config: Dict[str, Any], queries: List[di
   backends = []
   for source_key in all_sources:
     backend = get_source_backend(config, source_key)
-    if not backend:
+    if not backend or not backend.get("enabled"):
       return None
     backends.append(backend)
   if not backends:
@@ -450,6 +450,8 @@ def load_paper_pool(path: str) -> List[Paper]:
 
   with open(path, "r", encoding="utf-8") as f:
     raw = json.load(f)
+  if not isinstance(raw, list):
+    raise ValueError(f"论文池必须是 JSON 数组：{path}")
 
   papers: List[Paper] = []
   for item in raw:
@@ -472,6 +474,8 @@ def load_paper_pool(path: str) -> List[Paper]:
         papers.append(p)
     except Exception as e:
       log(f"[WARN] 解析论文条目失败，将跳过：{e}")
+  if raw and not papers:
+    raise ValueError(f"论文池没有可用的论文条目：{path}")
 
   log(f"[INFO] 从 {path} 读取到 {len(papers)} 篇论文。")
   return papers
@@ -909,7 +913,7 @@ def rank_papers_for_queries(
       )[0]  # 形状为 (D,)
 
     # 相似度 = 归一化向量的点积
-    sims = np.dot(paper_embeddings, q_emb)  # 形状 (N,)
+    sims = np.dot(paper_embeddings, q_emb) if papers else np.empty(0, dtype=np.float32)
 
     # 从大到小排序，取前 top_k
     if top_k <= 0 or top_k > sims.shape[0]:
@@ -966,7 +970,7 @@ def rank_papers_for_queries_via_supabase(
   rpc_name = str(rpc_name_override or supabase_conf.get("vector_rpc") or "match_arxiv_papers").strip()
   schema = str(supabase_conf.get("schema") or "public").strip()
   if not url or not api_key:
-    return {"queries": [], "papers": {}, "total_hits": 0}
+    raise RuntimeError("Supabase 向量召回缺少 url 或 anon_key。")
 
   q_embs: List[np.ndarray] = []
   missing_indices: List[int] = []
@@ -1047,10 +1051,8 @@ def rank_papers_for_queries_via_supabase(
       )
     log(f"[Supabase Vector:{rpc_mode}] {msg} | tag={q.get('tag') or ''}")
 
-    # 语句超时（57014）是服务端配置限制，后续批次也会超时，直接跳过
-    if not rows and "57014" in msg:
-      log(f"[Supabase Vector:{rpc_mode}] 检测到数据库语句超时，跳过剩余批次。")
-      break
+    if not msg.startswith(("rpc 查询成功", "rpc 分片查询成功")) or "partial_failures" in msg:
+      raise RuntimeError(f"Supabase 向量召回失败：{msg}")
 
     sim_scores: Dict[str, Dict[str, float | int]] = {}
     for rank_idx, row in enumerate(rows, start=1):
@@ -1222,7 +1224,10 @@ def main() -> None:
     log("[ERROR] 未能从订阅配置中解析到 Embedding 查询，退出。")
     return
 
-  multi_source_backend = resolve_multi_source_vector_backend(config, queries) if multi_source_rpc_enabled() else None
+  multi_source_backend = (
+    resolve_multi_source_vector_backend(config, queries)
+    if multi_source_rpc_enabled() and not args.disable_supabase_vector else None
+  )
 
   # 使用 EmbeddingCoarseFilter 类进行粗筛（模型只加载一次）
   coarse_filter = None
@@ -1261,8 +1266,7 @@ def main() -> None:
     if source_key == ARXIV_SOURCE_KEY:
       continue
     if not get_source_backend(config, source_key):
-      log(f"[ERROR] 词条引用了论文源「{source_key}」，但未配置 source_backends.{source_key}。")
-      return
+      raise RuntimeError(f"词条引用了论文源「{source_key}」，但未配置 source_backends.{source_key}。")
 
   def run_supabase_vector_recall_for_source(
     output_path: str,
@@ -1284,6 +1288,8 @@ def main() -> None:
       if source_key == ARXIV_SOURCE_KEY:
         return None
       raise RuntimeError(f"论文源「{source_key}」未配置可用的向量 RPC。")
+    if not str(backend_conf.get("url") or "").strip() or not str(backend_conf.get("anon_key") or "").strip():
+      raise RuntimeError(f"论文源「{source_key}」的向量 RPC 缺少 url 或 anon_key。")
 
     label = os.path.basename(output_path)
     if isinstance(top_k, int) and top_k > 0:
@@ -1314,8 +1320,7 @@ def main() -> None:
         or "match_papers_exact"
       ).strip()
       if not exact_rpc:
-        log("[WARN] Supabase 向量召回未配置可用 RPC。")
-        return None
+        raise RuntimeError("Supabase 向量召回未配置可用 RPC。")
 
       mode = "exact"
       rpc_name = exact_rpc
@@ -1337,8 +1342,8 @@ def main() -> None:
       avg_hits_per_query = (float(total_hits) / float(query_total)) if query_total > 0 else 0.0
 
       if total_hits <= 0:
-        log(f"[WARN] Supabase 向量召回无命中（mode={mode} rpc={rpc_name}）。")
-        return None
+        log(f"[INFO] Supabase 向量召回无命中（mode={mode} rpc={rpc_name}）。")
+        return result_sb
 
       log(
         f"[INFO] Supabase 向量召回命中 {total_hits} 条。"
@@ -1354,7 +1359,6 @@ def main() -> None:
       raise
     finally:
       group_end()
-    return None
 
   def run_multi_source_vector_recall(output_path: str, source_queries: List[dict]) -> dict | None:
     if not multi_source_backend:
@@ -1387,9 +1391,9 @@ def main() -> None:
       total_hits = int(result_sb.get("total_hits") or 0)
       if total_hits > 0:
         log(f"[INFO] Multi-source 向量召回命中 {total_hits} 条。")
-        return result_sb
-      log("[WARN] Multi-source 向量召回未命中。")
-      return None
+      else:
+        log("[INFO] Multi-source 向量召回未命中。")
+      return result_sb
     finally:
       group_end()
 
@@ -1397,7 +1401,9 @@ def main() -> None:
     merged_results: List[dict] = []
     if multi_source_backend:
       multi_source_result = run_multi_source_vector_recall(output_path, queries)
-      if multi_source_result:
+      if multi_source_result and (
+        int(multi_source_result.get("total_hits") or 0) > 0 or not os.path.isfile(input_path)
+      ):
         save_tagged_results(multi_source_result, output_path)
         return
     arxiv_queries = query_groups.get(ARXIV_SOURCE_KEY) or []
@@ -1408,7 +1414,7 @@ def main() -> None:
       top_k=args.top_k,
     )
     arxiv_hits = int((arxiv_supabase_result or {}).get("total_hits") or 0)
-    if arxiv_supabase_result and arxiv_hits > 0:
+    if arxiv_supabase_result is not None and (arxiv_hits > 0 or not os.path.isfile(input_path)):
       merged_results.append(arxiv_supabase_result)
 
     for source_key, source_queries in query_groups.items():
@@ -1423,11 +1429,28 @@ def main() -> None:
       if result_sb:
         merged_results.append(result_sb)
 
-    need_local_arxiv = bool(arxiv_queries) and arxiv_hits <= 0
+    need_local_arxiv = bool(arxiv_queries) and (
+      arxiv_supabase_result is None or (arxiv_hits <= 0 and os.path.isfile(input_path))
+    )
     if need_local_arxiv:
-      papers = load_paper_pool(input_path)
+      try:
+        papers = load_paper_pool(input_path)
+      except (OSError, ValueError, TypeError) as e:
+        if arxiv_supabase_result is None:
+          raise
+        log(f"[WARN] 本地论文池不可用，保留成功的 Supabase 查询结果：{e}")
+        papers = []
       if not papers:
-        log(f"[ERROR] 论文池为空，且 arxiv 查询无法从 Supabase 命中：{input_path}")
+        if arxiv_supabase_result is not None:
+          merged_results.append(arxiv_supabase_result)
+        else:
+          merged_results.append(rank_papers_for_queries(
+            model=None,
+            papers=[],
+            paper_embeddings=np.empty((0, 0), dtype=np.float32),
+            queries=arxiv_queries,
+            top_k=0,
+          ))
       else:
         total_papers = len(papers)
         if args.top_k is None or args.top_k <= 0:
@@ -1472,8 +1495,7 @@ def main() -> None:
 
     merged = merge_pipeline_results(merged_results)
     if not merged.get("queries"):
-      log(f"[WARN] 当前文件没有产出任何 Embedding 结果：{input_path}")
-      return
+      raise RuntimeError(f"当前文件没有产出任何 Embedding 查询结果：{input_path}")
     save_tagged_results(merged, output_path)
 
   # 决定处理哪些输入文件：
@@ -1483,9 +1505,6 @@ def main() -> None:
     input_path = args.input
     if not os.path.isabs(input_path):
       input_path = os.path.abspath(os.path.join(ROOT_DIR, input_path))
-    if not os.path.exists(input_path):
-      log(f"[ERROR] 指定的输入文件不存在：{input_path}")
-      return
 
     if args.output:
       output_path = args.output
@@ -1507,25 +1526,8 @@ def main() -> None:
 
     if not raw_files:
       output_path = os.path.join(FILTERED_DIR, f"arxiv_papers_{TODAY_STR}.embedding.json")
-      if multi_source_backend:
-        multi_source_result = run_multi_source_vector_recall(output_path, queries)
-        if multi_source_result:
-          save_tagged_results(multi_source_result, output_path)
-          return
-      merged_results: List[dict] = []
-      for source_key, source_queries in query_groups.items():
-        result_sb = run_supabase_vector_recall_for_source(
-          output_path,
-          source_key,
-          source_queries,
-          top_k=args.top_k,
-        )
-        if result_sb:
-          merged_results.append(result_sb)
-      if merged_results:
-        save_tagged_results(merge_pipeline_results(merged_results), output_path)
-      else:
-        log("[WARN] 无本地原始文件，且没有任何 source backend 返回向量结果。")
+      input_path = os.path.join(RAW_DIR, f"arxiv_papers_{TODAY_STR}.json")
+      process_single_file(input_path, output_path)
       return
 
     log(f"[INFO] 批量模式：将在 {RAW_DIR} 下处理 {len(raw_files)} 个 JSON 文件。")

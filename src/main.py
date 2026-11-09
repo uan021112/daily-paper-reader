@@ -10,8 +10,12 @@ from typing import Any
 
 try:
     from source_config import get_source_backend, load_config_with_source_migration
+    from subscription_plan import build_pipeline_inputs
+    from supabase_source import fetch_papers_by_date_range
 except Exception:  # pragma: no cover - 兼容 package 导入路径
     from src.source_config import get_source_backend, load_config_with_source_migration
+    from src.subscription_plan import build_pipeline_inputs
+    from src.supabase_source import fetch_papers_by_date_range
 
 try:
     import yaml  # type: ignore
@@ -65,6 +69,51 @@ def should_skip_fetch(config: dict | None = None) -> bool:
     if not sb.get("url") or not sb.get("anon_key"):
         return False
     return True
+
+
+def _prepare_daily_fetch(config: dict, requested_skip: bool | None) -> bool:
+    if requested_skip is not None:
+        return requested_skip
+    if not should_skip_fetch(config):
+        return False
+
+    plan = build_pipeline_inputs(config)
+    arxiv_queries = (
+        query
+        for lane in ("bm25_queries", "embedding_queries")
+        for query in plan.get(lane) or []
+        if "arxiv" in (query.get("paper_sources") or ["arxiv"])
+    )
+    if next(arxiv_queries, None) is None:
+        return True
+
+    backend = get_source_backend(config, "arxiv")
+    end_dt = datetime.now(timezone.utc)
+    _, status = fetch_papers_by_date_range(
+        url=backend["url"],
+        api_key=backend["anon_key"],
+        papers_table=backend["papers_table"],
+        schema=backend["schema"],
+        start_dt=end_dt - timedelta(days=1),
+        end_dt=end_dt,
+        max_rows=1,
+        timeout=10,
+    )
+    if status.startswith("papers 查询成功"):
+        return True
+
+    print(
+        f"[WARN] arXiv 数据库不可用：{status}\n"
+        "[WARN] 本轮改用 arXiv 官方 API 抓取和本地候选检索；"
+        "embedding/reranker 仍遵循原云端模型配置，订阅和数据库配置不变。",
+        flush=True,
+    )
+    os.environ.update(
+        DPR_ARXIV_ENABLED="0",
+        DPR_ARXIV_USE_BM25_RPC="0",
+        DPR_ARXIV_USE_VECTOR_RPC="0",
+    )
+    return False
 
 
 def build_sidebar_date_label(days: int) -> str:
@@ -633,12 +682,7 @@ def main() -> None:
             [python, os.path.join(SRC_DIR, "0.enrich_config_queries.py")],
         )
 
-    # 判断是否跳过 Step 1（全量数据拉取）
-    if args.skip_fetch is None:
-        # 自动检测：Supabase 已完全接管检索时跳过
-        skip_fetch = should_skip_fetch()
-    else:
-        skip_fetch = args.skip_fetch
+    skip_fetch = _prepare_daily_fetch(_load_full_config(), args.skip_fetch)
 
     if skip_fetch:
         print(

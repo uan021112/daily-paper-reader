@@ -549,6 +549,8 @@ def load_paper_pool(path: str) -> List[Paper]:
 
   with open(path, "r", encoding="utf-8") as f:
     raw = json.load(f)
+  if not isinstance(raw, list):
+    raise ValueError(f"论文池必须是 JSON 数组：{path}")
 
   papers: List[Paper] = []
   for item in raw:
@@ -568,6 +570,8 @@ def load_paper_pool(path: str) -> List[Paper]:
         papers.append(p)
     except Exception as e:
       log(f"[WARN] 解析论文条目失败，将跳过：{e}")
+  if raw and not papers:
+    raise ValueError(f"论文池没有可用的论文条目：{path}")
 
   log(f"[INFO] 从 {path} 读取到 {len(papers)} 篇论文。")
   return papers
@@ -605,7 +609,7 @@ def resolve_multi_source_bm25_backend(config: Dict[str, Any], queries: List[dict
   backends = []
   for source_key in all_sources:
     backend = get_source_backend(config, source_key)
-    if not backend:
+    if not backend or not backend.get("enabled"):
       return None
     backends.append(backend)
   if not backends:
@@ -657,7 +661,7 @@ def rank_papers_for_queries_via_supabase(
   rpc_name = str(supabase_conf.get("bm25_rpc") or "match_arxiv_papers_bm25").strip()
   schema = str(supabase_conf.get("schema") or "public").strip()
   if not url or not api_key:
-    return {"queries": [], "papers": {}, "total_hits": 0}
+    raise RuntimeError("Supabase BM25 召回缺少 url 或 anon_key。")
 
   id_to_paper: Dict[str, Paper] = {}
   results_per_query: List[dict] = []
@@ -696,6 +700,8 @@ def rank_papers_for_queries_via_supabase(
       filter_sources=normalize_source_list(q.get("paper_sources")) if query_filter_sources else None,
     )
     log(f"[Supabase BM25] {msg} | tag={q.get('tag') or ''}")
+    if not msg.startswith(("rpc 查询成功", "rpc 分片查询成功")) or "partial_failures" in msg:
+      raise RuntimeError(f"Supabase BM25 召回失败：{msg}")
 
     sim_scores: Dict[str, Dict[str, float | int]] = {}
     for rank_idx, row in enumerate(rows, start=1):
@@ -1028,9 +1034,11 @@ def main() -> None:
     if source_key == ARXIV_SOURCE_KEY:
       continue
     if not get_source_backend(config, source_key):
-      log(f"[ERROR] 词条引用了论文源「{source_key}」，但未配置 source_backends.{source_key}。")
-      return
-  multi_source_backend = resolve_multi_source_bm25_backend(config, queries) if multi_source_rpc_enabled() else None
+      raise RuntimeError(f"词条引用了论文源「{source_key}」，但未配置 source_backends.{source_key}。")
+  multi_source_backend = (
+    resolve_multi_source_bm25_backend(config, queries)
+    if multi_source_rpc_enabled() and not args.disable_supabase_bm25 else None
+  )
 
   def run_supabase_rank_for_source(output_path: str, source_key: str, source_queries: List[dict]) -> dict | None:
     backend_conf = supabase_conf if source_key == ARXIV_SOURCE_KEY else get_source_backend(config, source_key)
@@ -1045,6 +1053,8 @@ def main() -> None:
       if source_key == ARXIV_SOURCE_KEY:
         return None
       raise RuntimeError(f"论文源「{source_key}」未配置可用的 BM25 RPC。")
+    if not str(backend_conf.get("url") or "").strip() or not str(backend_conf.get("anon_key") or "").strip():
+      raise RuntimeError(f"论文源「{source_key}」的 BM25 RPC 缺少 url 或 anon_key。")
 
     label = os.path.basename(output_path)
     if args.top_k is None or args.top_k <= 0:
@@ -1119,9 +1129,9 @@ def main() -> None:
       total_hits = int(result_sb.get("total_hits") or 0)
       if total_hits > 0:
         log(f"[INFO] Multi-source BM25 命中 {total_hits} 条。")
-        return result_sb
-      log("[WARN] Multi-source BM25 未命中。")
-      return None
+      else:
+        log("[INFO] Multi-source BM25 未命中。")
+      return result_sb
     finally:
       group_end()
 
@@ -1129,14 +1139,16 @@ def main() -> None:
     merged_results: List[dict] = []
     if multi_source_backend:
       multi_source_result = run_multi_source_supabase_rank(output_path, queries)
-      if multi_source_result:
+      if multi_source_result and (
+        int(multi_source_result.get("total_hits") or 0) > 0 or not os.path.isfile(input_path)
+      ):
         save_tagged_results(multi_source_result, output_path)
         return
 
     arxiv_queries = query_groups.get(ARXIV_SOURCE_KEY) or []
     arxiv_supabase_result = run_supabase_rank_for_source(output_path, ARXIV_SOURCE_KEY, arxiv_queries)
     arxiv_hits = int((arxiv_supabase_result or {}).get("total_hits") or 0)
-    if arxiv_supabase_result and arxiv_hits > 0:
+    if arxiv_supabase_result is not None and (arxiv_hits > 0 or not os.path.isfile(input_path)):
       merged_results.append(arxiv_supabase_result)
 
     for source_key, source_queries in query_groups.items():
@@ -1146,11 +1158,27 @@ def main() -> None:
       if result_sb:
         merged_results.append(result_sb)
 
-    need_local_arxiv = bool(arxiv_queries) and arxiv_hits <= 0
+    need_local_arxiv = bool(arxiv_queries) and (
+      arxiv_supabase_result is None or (arxiv_hits <= 0 and os.path.isfile(input_path))
+    )
     if need_local_arxiv:
-      papers = load_paper_pool(input_path)
+      try:
+        papers = load_paper_pool(input_path)
+      except (OSError, ValueError, TypeError) as e:
+        if arxiv_supabase_result is None:
+          raise
+        log(f"[WARN] 本地论文池不可用，保留成功的 Supabase 查询结果：{e}")
+        papers = []
       if not papers:
-        log(f"[ERROR] 论文池为空，且 arxiv 查询无法从 Supabase 命中：{input_path}")
+        if arxiv_supabase_result is not None:
+          merged_results.append(arxiv_supabase_result)
+        else:
+          merged_results.append(rank_papers_for_queries(
+            bm25=build_bm25_index([], k1=float(args.k1), b=float(args.b)),
+            papers=[],
+            queries=arxiv_queries,
+            top_k=0,
+          ))
       else:
         total_papers = len(papers)
         if args.top_k is None or args.top_k <= 0:
@@ -1183,17 +1211,13 @@ def main() -> None:
 
     merged = merge_pipeline_results(merged_results)
     if not merged.get("queries"):
-      log(f"[WARN] 当前文件没有产出任何 BM25 结果：{input_path}")
-      return
+      raise RuntimeError(f"当前文件没有产出任何 BM25 查询结果：{input_path}")
     save_tagged_results(merged, output_path)
 
   if args.input:
     input_path = args.input
     if not os.path.isabs(input_path):
       input_path = os.path.abspath(os.path.join(ROOT_DIR, input_path))
-    if not os.path.exists(input_path):
-      log(f"[ERROR] 指定的输入文件不存在：{input_path}")
-      return
 
     if args.output:
       output_path = args.output
@@ -1214,20 +1238,8 @@ def main() -> None:
 
     if not raw_files:
       output_path = os.path.join(FILTERED_DIR, f"arxiv_papers_{TODAY_STR}.bm25.json")
-      if multi_source_backend:
-        multi_source_result = run_multi_source_supabase_rank(output_path, queries)
-        if multi_source_result:
-          save_tagged_results(multi_source_result, output_path)
-          return
-      merged_results: List[dict] = []
-      for source_key, source_queries in query_groups.items():
-        result_sb = run_supabase_rank_for_source(output_path, source_key, source_queries)
-        if result_sb:
-          merged_results.append(result_sb)
-      if merged_results:
-        save_tagged_results(merge_pipeline_results(merged_results), output_path)
-      else:
-        log("[WARN] 无本地原始文件，且没有任何 source backend 返回结果。")
+      input_path = os.path.join(RAW_DIR, f"arxiv_papers_{TODAY_STR}.json")
+      process_single_file(input_path, output_path)
       return
 
     log(f"[INFO] 批量模式：将在 {RAW_DIR} 下处理 {len(raw_files)} 个 JSON 文件。")
