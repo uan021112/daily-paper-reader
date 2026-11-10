@@ -380,27 +380,6 @@
       baseUrl: normalizeBaseUrlForStorage(wasLocal ? profile.baseUrl : (reranker.baseUrl || profile.baseUrl || '')),
     };
   };
-  const buildConnectivityTestPayload = (baseUrl, model) => {
-    const utils = getLLMUtils();
-    if (typeof utils.buildConnectivityTestPayload === 'function') {
-      return utils.buildConnectivityTestPayload({ baseUrl, model });
-    }
-    return {
-      model: normalizeText(model || ''),
-      messages: [
-        {
-          role: 'system',
-          content: 'Reply with exactly: hello world',
-        },
-        {
-          role: 'user',
-          content: 'hello world',
-        },
-      ],
-      temperature: 0,
-      max_tokens: 256,
-    };
-  };
   const extractChatResponseText = (data) => {
     const normalizeContentPart = (part) => {
       if (typeof part === 'string') return normalizeText(part);
@@ -462,7 +441,7 @@
           statusEl.style.color = '#666';
         }
 
-        const payload = buildConnectivityTestPayload(baseUrl, model);
+        const payload = utils.buildConnectivityTestPayload({ baseUrl, model, provider: entry.provider });
 
         const headers = {
           'Content-Type': 'application/json',
@@ -483,18 +462,8 @@
           throw typeof utils.browserRequestError === 'function'
             ? utils.browserRequestError(endpoint, error) : error;
         }
-        if (!resp.ok && payload.max_completion_tokens != null) {
-          const text = await resp.text().catch(() => '');
-          if (resp.status === 400 && /max_completion_tokens/i.test(text)) {
-            const fallbackPayload = { ...payload };
-            delete fallbackPayload.max_completion_tokens;
-            resp = await doFetch(fallbackPayload);
-          } else {
-            resp._dprErrorPreview = text;
-          }
-        }
         if (!resp.ok) {
-          const text = resp._dprErrorPreview || await resp.text().catch(() => '');
+          const text = await resp.text().catch(() => '');
           throw new Error(
             `${model} 请求失败：HTTP ${resp.status} ${resp.statusText}${text ? ` - ${text.slice(0, 160)}` : ''}`,
           );
@@ -1572,6 +1541,7 @@
         return models.map(model => ({
           apiKey: draft.summaryApiKey,
           baseUrl: draft.summaryBaseUrl,
+          provider: draft.providerType,
           model,
         }));
       };

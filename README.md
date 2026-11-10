@@ -151,9 +151,11 @@
 - 📝 完成注册 / 登录
 - 🔐 充值并创建密钥
 
-#### 可选：OpenAI-compatible 网关（包括 Sub2API）
+#### 可选：OpenAI 官方 API / OpenAI-compatible 网关（包括 Sub2API）
 
 在密钥配置向导中选择 **OpenAI-compatible（Sub2API）**，填写网关的 Base URL、API Key 与原始模型 ID。聊天可以填写多个模型；总结、过滤和查询改写模型可以独立选择。原有 DeepSeek 选项继续可用，切换提供商不改变论文阅读状态。
+
+同一选项也支持 **OpenAI 官方 API**：Base URL 填 `https://api.openai.com/v1`，模型填写账户实际有权限使用的原始 ID（例如 `gpt-5.6-luna`）。OpenAI API 单独计费，不使用 ChatGPT 订阅额度；不要把 API Key 填入 Reranker 的独立密钥栏。
 
 本地后台也可以通过 `.env` 配置：
 
@@ -167,6 +169,8 @@ LLM_REWRITE_MODEL=
 ```
 
 将示例域名替换为自己的网关，填写真实 Key 和网关可用的模型 ID；过滤/改写模型留空时复用 `LLM_MODEL`。通用配置优先于原有 `DEEPSEEK_*` / `SUMMARY_*` 配置。网关默认输出上限为 16384 tokens，本地可用 `LLM_MAX_OUTPUT_TOKENS` 按实际模型能力覆盖。
+
+GPT-5 及更新版本、o1/o3/o4 系列推理模型会自动使用 `max_completion_tokens`，并省略不兼容的固定采样参数；普通模型和 DeepSeek 保持原有请求参数。推理模型的输出预算同时包含推理 token 和可见正文，连接测试也会预留推理空间，不需要在配置界面手动填写这些参数。
 
 配置向导写入同名 GitHub Secrets；日常、会议论文、专题研究和入门包工作流均读取这些通用配置。网关必须能被 GitHub Actions runner 访问。不要将 Key 写进 `config.yaml`、源码或公开日志。
 

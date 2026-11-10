@@ -161,6 +161,33 @@
     }
     return profile === 'openai-compatible' ? 16384 : null;
   };
+  const usesCompletionTokenBudget = ({ baseUrl, model, provider } = {}) => {
+    if (inferChatApiProfile(baseUrl, model, provider) === 'deepseek') return false;
+    const modelId = normalizeText(model).toLowerCase();
+    const gptVersion = /^gpt-(\d+)(?:[.-]|$)/.exec(modelId);
+    return (gptVersion !== null && Number(gptVersion[1]) >= 5)
+      || /^o[134](?:[.-]|$)/.test(modelId);
+  };
+
+  const buildChatCompletionPayload = ({ baseUrl, model, provider, ...parameters }) => {
+    const payload = { ...parameters, model: normalizeText(model) };
+    if (payload.max_tokens == null && payload.max_completion_tokens == null) {
+      const maxTokens = resolveMaxOutputTokens({ baseUrl, model, provider });
+      if (maxTokens) payload.max_tokens = maxTokens;
+    }
+    if (usesCompletionTokenBudget({ baseUrl, model, provider })) {
+      if (payload.max_completion_tokens == null && payload.max_tokens != null) {
+        payload.max_completion_tokens = payload.max_tokens;
+      }
+      delete payload.max_tokens;
+      delete payload.temperature;
+      delete payload.top_p;
+      delete payload.frequency_penalty;
+      delete payload.presence_penalty;
+    }
+    return payload;
+  };
+
 
 
   const browserRequestError = (endpoint, error, pageUrl) => {
@@ -204,22 +231,20 @@
   };
 
   const buildStreamingChatPayload = ({ baseUrl, model, provider, messages }) => {
-    const payload = {
-      model: normalizeText(model),
+    return buildChatCompletionPayload({
+      baseUrl,
+      model,
+      provider,
       messages: Array.isArray(messages) ? messages : [],
       stream: true,
-    };
-    const maxTokens = resolveMaxOutputTokens({ baseUrl, model, provider });
-    if (maxTokens) {
-      payload.max_tokens = maxTokens;
-    }
-    return payload;
+    });
   };
 
-  const buildConnectivityTestPayload = ({ baseUrl, model }) => {
-    const normalizedModel = normalizeText(model);
-    return {
-      model: normalizedModel,
+  const buildConnectivityTestPayload = ({ baseUrl, model, provider }) => {
+    return buildChatCompletionPayload({
+      baseUrl,
+      model,
+      provider,
       messages: [
         {
           role: 'system',
@@ -231,8 +256,8 @@
         },
       ],
       temperature: 0,
-      max_tokens: 256,
-    };
+      max_tokens: usesCompletionTokenBudget({ baseUrl, model, provider }) ? 4096 : 256,
+    });
   };
 
   return {
@@ -251,6 +276,8 @@
     resolveJsonResponseMode,
     isDeepSeekV4Model,
     resolveMaxOutputTokens,
+    usesCompletionTokenBudget,
+    buildChatCompletionPayload,
     buildStreamingChatPayload,
     buildConnectivityTestPayload,
     browserRequestError,

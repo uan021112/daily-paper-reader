@@ -108,26 +108,6 @@ window.PrivateDiscussionChat = (function () {
     });
     return models;
   };
-	  const buildStreamingChatPayload = (baseUrl, model, messages, provider) => {
-	    const utils = window.DPRLLMConfigUtils || {};
-	    if (typeof utils.buildStreamingChatPayload === 'function') {
-	      return utils.buildStreamingChatPayload({ baseUrl, model, messages, provider });
-	    }
-	    const payload = {
-	      model,
-	      messages,
-	      stream: true,
-	    };
-	    const normalizedModel = String(model || '').trim().toLowerCase();
-	    const normalizedBaseUrl = String(baseUrl || '').trim().toLowerCase();
-	    if (
-	      (normalizedModel === 'deepseek-v4-flash' || normalizedModel === 'deepseek-v4-pro')
-	      && /(^|\/\/)(api\.)?deepseek\.com(?:$|\/)/i.test(normalizedBaseUrl)
-	    ) {
-	      payload.max_tokens = 393216;
-	    }
-	    return payload;
-	  };
 
   let chatDbPromise = null;
 
@@ -1217,21 +1197,15 @@ window.PrivateDiscussionChat = (function () {
       let resp = null;
 
       const baseUrl = (modelEntry && modelEntry.baseUrl ? modelEntry.baseUrl : '').trim();
-	      const primaryPayload = buildStreamingChatPayload(baseUrl, model, messages, modelEntry && modelEntry.provider);
-          const utils = window.DPRLLMConfigUtils || {};
+      const utils = window.DPRLLMConfigUtils || {};
+      const primaryPayload = utils.buildStreamingChatPayload({
+        baseUrl, model, messages, provider: modelEntry && modelEntry.provider,
+      });
           const browserBlock = typeof utils.browserRequestError === 'function' ? utils.browserRequestError(endpoint) : null;
           if (browserBlock) {
             clearTimeout(timerId);
             throw browserBlock;
           }
-	      const fallbackPayload = {
-	        model,
-	        messages,
-	        stream: true,
-	      };
-	      if (primaryPayload && primaryPayload.max_tokens) {
-	        fallbackPayload.max_tokens = primaryPayload.max_tokens;
-	      }
 
       const doChatFetch = async (payload) => fetch(endpoint, {
           method: 'POST',
@@ -1245,30 +1219,6 @@ window.PrivateDiscussionChat = (function () {
 
       try {
         resp = await doChatFetch(primaryPayload);
-        if (
-          resp
-          && !resp.ok
-          && (
-            JSON.stringify(primaryPayload).includes('"reasoning"')
-            || JSON.stringify(primaryPayload).includes('"extra_body"')
-            || JSON.stringify(primaryPayload).includes('"thinking"')
-          )
-        ) {
-          let retryText = '';
-          try {
-            retryText = await resp.text();
-          } catch {
-            retryText = '';
-          }
-          if (
-            resp.status === 400
-            && /reasoning|extra_body|return_reasoning|thinking/i.test(retryText)
-          ) {
-            resp = await doChatFetch(fallbackPayload);
-          } else {
-            resp._dprErrorPreview = retryText;
-          }
-        }
       } catch (error) {
         throw typeof utils.browserRequestError === 'function'
           ? utils.browserRequestError(endpoint, error) : error;
@@ -1279,7 +1229,7 @@ window.PrivateDiscussionChat = (function () {
       if (!resp.ok) {
         let errorText = '';
         try {
-          errorText = resp._dprErrorPreview || await resp.text();
+          errorText = await resp.text();
         } catch {
           errorText = '';
         }

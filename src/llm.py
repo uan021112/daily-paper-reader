@@ -542,7 +542,7 @@ class LLMClient:
         }
         # 仅透传 OpenAI Chat Completions 兼容字段，避免提供商拒绝未知参数
         allowed_keys = {
-            'max_tokens', 'temperature', 'top_p', 'n', 'stream',
+            'max_tokens', 'max_completion_tokens', 'temperature', 'top_p', 'n', 'stream',
             'presence_penalty', 'frequency_penalty', 'stop', 'logprobs',
             'tools', 'tool_choice', 'logit_bias',
             'response_format',
@@ -556,6 +556,10 @@ class LLMClient:
         if response_format is not None:
             payload['response_format'] = response_format
 
+        # 显式 completion 预算优先；角色仍可使用内部 max_tokens，不修改调用方配置。
+        if 'max_completion_tokens' in payload:
+            payload['max_tokens'] = payload.pop('max_completion_tokens')
+
         # 角色调用的输出预算不能超过当前提供商的配置上限。
         try:
             max_output_tokens = self.output_token_limit()
@@ -563,6 +567,17 @@ class LLMClient:
                 payload['max_tokens'] = max_output_tokens
         except Exception:
             pass
+
+        gpt_version = re.match(r"gpt-(\d+)(?:[.-]|$)", model_name.strip(), re.IGNORECASE)
+        reasoning_model = self.provider != "deepseek" and (
+            (gpt_version is not None and int(gpt_version.group(1)) >= 5)
+            or re.match(r"o[134](?:[.-]|$)", model_name.strip(), re.IGNORECASE) is not None
+        )
+        if reasoning_model:
+            if 'max_tokens' in payload:
+                payload['max_completion_tokens'] = payload.pop('max_tokens')
+            for key in ('temperature', 'top_p', 'frequency_penalty', 'presence_penalty'):
+                payload.pop(key, None)
 
         start_time = time.time()
         request_bases = self._iter_retry_bases(total_attempts=6)
