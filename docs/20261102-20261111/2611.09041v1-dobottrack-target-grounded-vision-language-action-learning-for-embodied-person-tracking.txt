@@ -1,0 +1,1580 @@
+DobotTrack: Target-Grounded
+Vision-Language-Action Learning for Embodied
+Person Tracking
+Shengjun Deng1, Yinghan Zhang2,*, Chengrui Wei3, Liu Liang3, Songyuan Liu3
+Pengkun Zheng3,†, Yajun Zheng3, Ying Zhang3, Yuan Tian3, Xi Li3, Teng Wang4*
+1Foshan University
+2Tsinghua University
+3Dobot Robotics
+4The University of Hong Kong
+*Corresponding authors: tengwang@connect.hku.hk, yinghan-24@mails.tsinghua.edu.cn
+†Project Lead
+Abstract—Language-guided embodied person tracking re-
+quires a mobile agent to identify a target from a referring
+description and consistently follow the target under egocen-
+tric observations. We present DobotTrack, a target-grounded
+vision-language-action (VLA) framework that integrates auxil-
+iary grounding supervision with efficient temporal modeling. We
+systematically investigate five auxiliary tasks—person segmenta-
+tion, bounding-box grounding, visual-spatial classification (VSC),
+future DINO feature prediction, and future-frame prediction—
+and adopt complementary mask and bounding-box supervision
+to enhance target delineation and localization. We introduce
+Q-identity, a target-conditioned historical visual compression
+module that leverages target-grounding predictions to selectively
+preserve identity-discriminative appearance features and spatial
+cues in compact historical tokens. On EVT-Bench, our 0.8B-
+parameter model achieves an average success rate of 77.9%,
+exceeding OmTrackVLA by 16.9 percentage points across the
+three tasks. We further construct a real-world person-tracking
+dataset collected using a quadruped robot, comprising 126
+episodes and 596,323 mask-annotated frames. The target masks
+enable automatic derivation of bounding boxes and visual-spatial
+labels encoding horizontal position and apparent image scale,
+providing additional grounding supervision without separate
+manual annotation of these labels. Together, our framework and
+annotation pipeline support learning target-grounded tracking
+policies from simulated and real-world data. Code is available at
+https://github.com/Dobot-Team/dobot_track.
+I. INTRODUCTION
+Tracking a person specified in natural language requires an
+embodied agent to determine whom to track while continually
+deciding how to move. Unlike tracking in a recorded video, the
+agent’s actions change its viewpoint and the target’s visibility,
+coupling visual recognition with motion generation [1], [2].
+Appearance variation, occlusion, and nearby distractors make
+this coupling particularly important: a plausible trajectory is
+insufficient if the agent tracks the wrong person. Language-
+guided embodied tracking therefore calls for representations
+that connect the referring description, the intended target’s
+image location and the agent’s future motion.
+Vision–language–action models provide a way to learn these
+capabilities within a shared model. Uni-NaVid unifies several
+embodied navigation tasks, including person tracking [3],
+while TrackVLA shares a language-model backbone between
+target recognition and trajectory planning [4]. Subsequent
+work introduces explicit spatial reasoning, target-identification
+memory, and image-grounded referring decisions [5], [6]. Dur-
+ing sustained tracking, changes in illumination and viewpoint
+can substantially alter the same person’s visual appearance,
+making target association and re-identification after occlu-
+sion difficult [7], [8]. These variations motivate retaining
+target-discriminative information across observations. These
+challenges, illustrated in Fig. 1, raise two complementary
+questions. First, how can a tracking policy be encouraged to
+represent the specified target explicitly, rather than relying on
+trajectory imitation alone? Second, how can historical visual
+observations be efficiently compressed while preserving target-
+discriminative appearance cues and scene context essential for
+reliable person tracking?
+We address these questions through target-centric percep-
+tual supervision and identity-aware history compression. We
+present DobotTrack, a target-grounded VLA framework built
+on InternVL3 [9]. We systematically investigate person seg-
+mentation, bounding-box grounding, visual-spatial classifica-
+tion, future DINO feature prediction, and future-frame pre-
+diction as auxiliary tasks to improve tracking policy learning.
+The final model combines mask and box supervision to couple
+fine-grained foreground delineation with explicit target local-
+ization. Building on this grounding, Q-identity compresses
+historical observations into compact tokens that retain identity-
+discriminative appearance and spatial context. The language
+model captures temporal dependencies for trajectory predic-
+tion from the chronological sequence of compressed historical
+and current-frame tokens.
+The model processes an appearance-based instruction to-
+gether with a temporal window of RGB observations. The
+learned mask token and box token precede the waypoint
+tokens in the causal sequence, allowing the waypoint states
+to attend to their target-related representations. Task-specific
+heads decode the resulting hidden states into the target mask,
+bounding box, and future trajectory in one forward pass.
+A second consideration is the alignment between policy-
+arXiv:2611.09041v1  [cs.RO]  6 Nov 2026
+
+
+"... wearing a dark, 
+armored outfit with 
+metal accents."
+Distractor
+Distractor
+target
+target
+"... wearing a dark,
+armored outfit with
+metal accents."
+...
+Historical observations
+ViT features
+Dense input
+Pooling
+LLM
+LLM
+High latency
+Target cue loss
+(a) Visual distraction
+(b) Redundant history
+92
+128
+256
+368
+512
+2048
+Total input tokens (log scale)
+0
+50
+100
+150
+200
+Inference latency (ms)
+Latency
+Avg. SR
+60
+65
+70
+75
+80
+Avg. SR (%)
+DobotTrack
+NVIDIA Jetson Orin Nano
+DobotTrack: 368 tokens
+93.4 ms / 77.9% Avg. SR
+(c) On-device efficiency and tracking performance
+Fig. 1. Challenges in language-guided embodied person tracking. (a) Distractors and occlusion complicate target grounding in the robot’s limited field
+of view. (b) Dense visual histories increase inference cost, while indiscriminate pooling can discard target-specific cues. (c) Median inference latency on an
+NVIDIA Jetson Orin Nano (FP16, batch size 1, including the visual encoder; 90 measurements per point) increases with the total input token count. Reducing
+the token count from 2048 to 256 lowers latency by approximately 52%, motivating target-conditioned history compression for on-device deployment.
+learning objectives and real-world annotations. EVT-Bench
+supports simulated embodied-tracking research [4], and TPT-
+Bench provides robot-egocentric tracking sequences with tar-
+get boxes and synchronized sensor streams, including odom-
+etry [10]. Complementing these resources, we construct a
+quadruped-collected dataset with 126 tracking episodes and
+596,323 mask-annotated RGB frames. The recordings com-
+bine target descriptions, visual observations, and robot motion
+information. Target masks yield boxes and structured VSC
+labels, while temporally continuous recordings provide obser-
+vation histories and future waypoint supervision. Episode-level
+partitioning keeps samples from the same recorded episode
+within a single data subset.
+This report makes three contributions:
+• A target-grounded tracking framework with sys-
+tematic auxiliary supervision analysis. We develop
+DobotTrack, a vision-language-action framework for em-
+bodied person tracking, and systematically investigate
+five auxiliary tasks: person segmentation, bounding-box
+grounding, visual-spatial classification, future DINO fea-
+ture prediction, and future-frame prediction. Based on our
+empirical findings, we adopt complementary mask and
+box supervision to improve target delineation and spatial
+localization.
+• Identity-aware historical visual compression. We in-
+troduce Q-identity, a target-conditioned historical visual
+compression module that leverages target-grounding pre-
+dictions to preserve identity-discriminative appearance
+information and essential spatial cues in compact visual
+tokens, providing target-aware temporal context for sub-
+sequent trajectory prediction.
+• A real-world tracking dataset and annotation pipeline.
+We
+construct
+a
+quadruped-collected
+person-tracking
+dataset comprising 126 episodes and 596,323 mask-
+annotated frames. We develop an annotation pipeline that
+derives bounding boxes and structured VSC labels for
+horizontal target position and apparent image scale from
+target masks, and organize the data into temporally struc-
+tured learning samples with episode-level partitioning.
+II. RELATED WORK
+A. Language-Guided Embodied Visual Tracking
+Embodied visual tracking couples target perception with
+active motion control. Follow Anything integrates open-set
+detection and tracking into a robotic following system [1].
+RSPT learns a structure-aware representation by reconstructing
+the surroundings and predicting target motion [2], while Zhong
+et al. combine visual foundation models for target segmenta-
+tion with offline reinforcement learning for control [11]. These
+methods establish the importance of target-aware representa-
+tions for active tracking.
+Recent VLA approaches learn language-conditioned per-
+ception and action within shared models. Uni-NaVid supports
+multiple navigation tasks, including person tracking [3]. Track-
+VLA couples recognition-oriented language modeling with an
+anchor-based diffusion trajectory decoder [4]. TrackVLA++
+introduces Polar-CoT spatial reasoning and a gated Target
+Identification Memory [5]. ReferTrack selects the referred
+target from indexed candidate boxes, predicts waypoints con-
+ditioned on this decision, and injects historical box information
+into visual context [6]. Our work systematically examines
+target-centric auxiliary tasks for tracking policy learning and
+combines mask supervision for learning target representations
+with box supervision for spatial localization. We further inves-
+tigate how target-grounding predictions can guide historical
+visual compression for subsequent action prediction.
+
+
+B. Visual Grounding and Target-Centric Supervision
+Visual grounding associates language with image regions.
+Grounding DINO uses language-conditioned visual represen-
+tations for open-set detection [12], while Kosmos-2 represents
+grounded text with location tokens [13]. At pixel resolu-
+tion, SAM 2 supports promptable segmentation in images
+and videos [14]. LISA connects a segmentation token in a
+multimodal language model to mask prediction through an
+embedding-as-mask formulation [15]. These works provide
+relevant foundations for language-conditioned localization and
+segmentation; token-conditioned mask decoding is not specific
+to embodied tracking.
+DobotTrack uses grounding as supervision for a tracking
+policy, rather than treating localization as the final task. Mask
+prediction and box regression supervise the spatial extent of
+the referred person, while waypoint regression supervises the
+agent’s motion. The real-world structured VSC labels further
+express box-derived position and scale as categorical labels.
+Because these annotations originate from the same masks, their
+role is to provide different learning objectives over shared
+target information, not to introduce independent geometric
+measurements. We compare these auxiliary objectives under
+a shared tracking framework and combine mask and box
+supervision in the final model.
+C. Identity-Preserving Temporal Memory
+Maintaining target identity over time is essential for person
+tracking, particularly when pedestrians cross paths, undergo
+appearance changes, or temporarily disappear. Visual tracking
+and video segmentation provide relevant mechanisms for tem-
+poral association. Online person re-identification [8] addresses
+appearance changes and distractors during robot following.
+MOTR [16] propagates and updates track queries across
+frames to represent individual objects over time. XMem [17]
+combines memory stores operating at different temporal scales
+and consolidates working-memory features into compact long-
+term representations. SAM 2 [14] uses streaming memory to
+support object segmentation in videos. While these methods
+primarily address temporal consistency at the perception level,
+embodied tracking additionally requires historical target infor-
+mation to inform the agent’s movement.
+Recent embodied models incorporate several forms of tem-
+poral memory. TrackVLA++ [5] maintains target identity
+through gated memory updates, ReferTrack [6] embeds his-
+torical target boxes into visual context, and VLingNav [18]
+combines linguistic summaries with visual features in persis-
+tent memory. These developments motivate further investiga-
+tion into which information should be retained under a lim-
+ited memory budget. For long-video understanding, LLaMA-
+VID [19] represents each frame with compact context and
+content tokens, while LongVU [20] adaptively reduces spatial
+and temporal visual redundancy. BLIP-2 [21] provides a
+query-based mechanism, Q-Former, for extracting compact
+visual representations. Building on query-based compression,
+Q-identity places target conditioning within the formation
+of compact historical visual tokens. Target-region features
+condition learned compression queries, which also aggregate
+full-image context under a fixed token budget. The module is
+designed to retain target appearance and spatial cues together
+with scene context, while the language model performs tempo-
+ral reasoning over the chronological sequence of compressed
+frames.
+D. Real-World Data for Person Tracking
+The data associated with TrackVLA and EVT-Bench sup-
+port large-scale simulated tracking and recognition learn-
+ing [4]. TPT-Bench complements simulation with long-term,
+robot-egocentric target-person tracking sequences collected
+using a sensor-equipped cart [10]. In addition to target boxes, it
+includes odometry and other synchronized modalities, making
+it relevant to both temporal perception and robot-following
+research.
+Our dataset is collected with a quadruped and is organized
+around sequence-level VLA supervision: observation histories
+and target descriptions are paired with future robot waypoints
+and current-frame grounding annotations.
+III. METHOD
+A. Problem Formulation and Overview
+Problem formulation. We consider language-guided embod-
+ied person tracking [4], [6], where a mobile agent follows a
+person identified by an appearance-based language instruction
+ℓusing a forward-facing RGB camera. At each time step t, the
+agent receives a temporal window of H = 8 RGB observations
+sampled at 5Hz, denoted by Ot = (ot−7∆, . . . , ot−∆, ot),
+where ∆= 0.2 s is the observation sampling interval. Given
+ℓand Ot, the agent predicts a sequence of P = 8 future
+waypoints, ˆ
+W = { ˆwp}P
+p=1, at a frequency of 10Hz, yielding
+a prediction horizon of 0.8s. Each waypoint ˆwp = (ˆxp, ˆyp, ˆθp)
+specifies the agent’s future planar pose in its current egocentric
+coordinate frame.
+Model overview. As shown in Fig. 2, our model builds on the
+InternVL3 [9] vision-language backbone. The visual encoder
+and multimodal projector map each RGB observation ot to
+visual tokens Xt ∈RN×d, where N is the number of visual
+tokens per frame and d is the language-model embedding
+dimension. Q-identity compresses historical tokens by jointly
+exploiting target-region cues and full-image context. The
+compressed representations are concatenated chronologically
+with current-frame tokens and processed with the instruction
+ℓby the language model to integrate temporal and linguis-
+tic information. A learned mask token and a bounding-box
+grounding token precede P waypoint tokens, in that order, al-
+lowing trajectory prediction to attend to both target-supervised
+representations through causal attention. Task-specific heads
+jointly predict the current target mask, bounding box, visibility,
+and future egocentric waypoints in a single forward pass.
+During online inference, cached historical box and visibility
+predictions guide target-region selection for subsequent visual
+history compression.
+
+
+(a) DobotTrack VLA
+Track the person
+with <description>
+Past observations ×7
+Current observation
+Frozen ViT + trainable multimodal projector
+Text embedding
+Q-identity
+16 tokens / past frame
+Cached
+past boxes
+Current-frame tokens
+256 tokens
+Instruction
+History (7 × 16)
+Current (256)
+Mask
+Trajectory queries ×8
+BBox
+DobotTrack VLA language model
+SAM2 decoder
+Action head
+Grounding head
+(b) Q-identity
+Projected visual tokens Xτ
+256 × d
+Input projection
++ 2D position embedding
+Full-image features Fτ
+Cached target box bτ
+BBox patch selection
+Target context Tτ
+(or no-target token)
+16 learned queries
+Concat [Qτ ; Tτ]
+Full-image cross-attention
+K, V
+Feed-forward network
+LayerNorm + output projection
+Compressed tokens Cτ   (16 × d)
+Target-conditioned self-attention
+×3
+×16
+Fig. 2. Overview of DobotTrack and Q-identity. Left: the VLA processes a target description, current-frame visual tokens, and compressed historical tokens
+to predict target grounding and future waypoints. Target-grounding predictions guide historical visual compression for subsequent decisions. Right: Q-identity
+aggregates target-region features and full-image context through joint query–target self-attention, full-image cross-attention, and feed-forward updates. The
+resulting compact historical tokens are fed back into the VLA’s visual input.
+B. Target-Centric Supervision and Trajectory Prediction
+We systematically investigate five auxiliary tasks: person
+segmentation, bounding-box grounding, visual-spatial classi-
+fication, future DINO feature prediction, and future-frame
+prediction. The final model jointly learns person segmentation,
+bounding-box grounding, and trajectory prediction. Segmen-
+tation supervision delineates the target representation, while
+box supervision captures its overall location and extent. These
+complementary objectives encourage the shared backbone to
+capture the target’s appearance and spatial extent for trajec-
+tory prediction. In this section, we focus on two auxiliary
+tasks: person segmentation and bounding-box grounding. The
+remaining auxiliary tasks are introduced and comparatively
+evaluated in the ablation study section.
+Person segmentation. Let hmask denote the contextualized
+hidden state of the mask token. The segmentation head com-
+bines this state with the dense current-frame features to predict
+the referred person’s foreground probability map:
+ˆmt = σ(fmask(Xt, hmask)) ,
+(1)
+where fmask consists of trainable visual and prompt projec-
+tions followed by a pretrained SAM2 mask decoder [14], and σ
+denotes the sigmoid function. The projections map the dense
+current-frame features and the mask-token hidden state into
+image embeddings and a sparse prompt, respectively. This
+branch provides explicit pixel-level supervision for the target
+representation used by subsequent waypoint tokens.
+Bounding-box grounding. For the bounding-box grounding
+task, a box head maps the grounding token’s hidden state hbox
+to normalized image-space coordinates:
+ˆbt = fbox(hbox),
+(2)
+where ˆbt = (ˆcx, ˆcy, ˆw, ˆh) represents the normalized box cen-
+ter, width, and height. The head also predicts target visibility.
+This task supervises the referred person’s location and spatial
+extent.
+Trajectory prediction. The action head maps the hidden state
+hp of the p-th waypoint token to its corresponding egocentric
+waypoint:
+ˆwp = fact(hp),
+p = 1, . . . , P.
+(3)
+The current target mask, bounding box, and future waypoints
+are obtained in the same forward pass.
+C. Q-identity: Target-Conditioned Visual History Compres-
+sion
+Visual history supports target association and motion rea-
+soning, but retaining dense tokens from every frame increases
+the language model’s input length. Motivated by compact
+video representations [19], [20] and query-based compres-
+sion [21], we introduce Q-identity, which compresses each his-
+torical frame into Nq target-conditioned tokens. The compres-
+
+
+sor first incorporates localized target features through target–
+conditioned self-attention, then aggregates full-image features
+through cross-attention. This design gives the compressed
+representation access to both target appearance and location
+cues and the scene context needed for planning.
+Target context construction. Let τ index a historical frame,
+and let Xτ
+∈RN×d denote its visual features after the
+visual encoder and multimodal projector. We linearly project
+these features into dc dimensions and add spatial embeddings
+derived from normalized 2D grid coordinates, obtaining full-
+image features Fτ ∈RN×dc.
+During training, target regions are determined from per-
+turbed ground-truth boxes; at inference, we use cached box
+and visibility predictions from earlier decisions. The visual
+tokens corresponding to each selected region form the target
+context Tτ, providing target-specific appearance and spatial
+cues, while Fτ retains the surrounding scene information.
+When no valid target region is available, we use a learned
+no-target token.
+Target-conditioned aggregation. Each historical frame ini-
+tializes Nq query tokens from the same learned embed-
+dings, which are updated independently through successive
+attention blocks. Within each block, the query states Zτ ∈
+RNq×dc are concatenated with target-region features to form
+Uτ = [Zτ; Tτ]. Linear projections of the normalized Uτ
+produce queries Qtgt
+τ , keys Ktgt
+τ , and values Vtgt
+τ
+for target-
+conditioned self-attention:
+Atgt
+τ
+= softmax
+Qtgt
+τ (Ktgt
+τ )⊤
+√dh
+
+Vtgt
+τ .
+(4)
+Only the first Nq positions of Atgt
+τ
+are retained to update
+the query states through a residual connection; target-region
+features remain fixed across blocks. The updated query states
+Zτ are normalized and linearly projected into queries Qctx
+τ ,
+while the full-image features Fτ are projected into keys Kctx
+τ
+and values Vctx
+τ
+for cross-attention:
+Actx
+τ
+= softmax
+Qctx
+τ (Kctx
+τ )⊤
+√dh
+
+Vctx
+τ .
+(5)
+Here, dh denotes the per-head dimension, and the equations
+omit the multi-head formulation for clarity. These two at-
+tention stages integrate target-specific cues and global scene
+context into the learned queries. Residual connections and
+a feed-forward network complete each block. After three
+blocks, normalization and projection yield compressed tokens
+Cτ ∈RNq×d.
+We use Nq = 16, dc = 512, and eight attention heads.
+Frames are compressed independently with shared parameters,
+and their outputs are concatenated chronologically with the
+current-frame tokens for temporal reasoning by the language
+model. For a window of eight frames, including the current
+frame, the visual-token count decreases from 8 × 256 = 2048
+to 7 × 16 + 256 = 368.
+D. Training Objective and Online Inference
+The model jointly learns trajectory prediction, current-frame
+person segmentation, and bounding-box grounding:
+L = Ltraj + λsegLseg + λboxLbox,
+(6)
+where λseg = 0.001 and λbox = 0.01.
+Trajectory prediction. For ground-truth waypoints wp =
+(xp, yp, θp), the trajectory objective is
+Ltraj = 1
+P
+P
+X
+p=1
+X
+k∈{x,y,θ}
+αk ( ˆwp,k −wp,k)2 ,
+(7)
+with (αx, αy, αθ) = (1, 3, 2). Here, θ denotes yaw.
+Person segmentation. The mask objective combines segmen-
+tation supervision with intersection over union (IoU) score
+regression and object-presence classification:
+Lseg = LBCE + LDice + LIoU-score + Lobj.
+(8)
+Predicted mask logits are bilinearly resized to the ground-truth
+resolution before computing pixelwise binary cross-entropy
+and Dice loss [22]. Dice loss uses a smoothing constant of
+1. The IoU-score term is a mean squared error against the
+detached IoU of the thresholded predicted mask and ground
+truth. The object-presence term is binary cross-entropy, with
+a positive label when the ground-truth mask is nonempty.
+Bounding-box grounding. The grounding head predicts a
+normalized bounding box (cx, cy, w, h) and target visibility.
+Its objective is
+Lbox = βregLSmoothL1 + βiouLGIoU + βvisLvis.
+(9)
+The loss weights are set to (βreg, βiou, βvis) = (5, 2, 1).
+Coordinate regression and generalized IoU loss are averaged
+over samples with visible targets. Visibility is supervised using
+binary cross-entropy across the batch, with labels determined
+by whether the target mask is nonempty. Trajectory and mask
+objectives are averaged over the batch.
+We freeze the visual encoder and jointly optimize the
+multimodal projector, language model, Q-identity, mask head,
+grounding head, and action head. During training, input boxes
+are perturbed with probability 0.8, using center offsets pro-
+portional to box size and multiplicative size perturbations with
+scale 0.1. We also compress the current frame with probability
+0.3, using a box derived from its ground-truth mask. The
+mask decoder always receives the uncompressed current-frame
+features.
+Online inference. At each decision step, the model receives
+the instruction and an updated RGB window. Past frames
+are compressed using their cached bounding-box predictions,
+while the current frame retains its dense visual tokens. One for-
+ward pass predicts future waypoints, the current target mask,
+bounding box, and visibility. The current box and visibility
+prediction are then cached for use when that observation
+becomes a historical frame in a later decision. Predictions
+with visibility below 0.5, and frames without a cached pre-
+diction, use the no-target fallback. This ordering ensures that
+compression uses only predictions available before the current
+decision.
+
+
+Fig. 3.
+Overview of the real-world tracking dataset. (A) Dataset composition. The dataset contains approximately 10.2 hours of real-world human-tracking
+data collected in indoor and outdoor environments under both STT and DT conditions. The annotations include RGB observations, target masks, bounding
+boxes, structured VSC labels, and future robot trajectories. The dataset contains 33 target appearance profiles, including 24 female and 9 male profiles.
+(B) Representative qualitative examples from indoor STT, outdoor STT, and outdoor DT sequences. Each example shows the natural-language instruction
+describing the target and two frames from the same tracking sequence. Green overlays denote the target segmentation masks, green rectangles indicate the
+corresponding bounding boxes, and the blue curve visualizes the 8-step ground-truth future robot trajectory.
+IV. DATASET
+Our training data combine simulation data with a real-world
+robot-tracking dataset. The two sources are complementary:
+simulation provides large-scale and controllable supervision
+over diverse tracking conditions, while the real-world data
+expose the model to realistic human appearances, illumination
+changes, occlusions, distractors and camera motion. Both
+sources provide trajectory, segmentation-mask, and bounding-
+box annotations, along with structured visual-spatial classifi-
+cation labels. These annotations and labels support multi-task
+VLA training.
+A. Simulation Dataset
+Data source. Our simulation data are derived from EVT-
+Bench [4], which is built on Habitat 3.0 using indoor scenes
+from HM3D and Matterport3D. Animated human avatars serve
+as tracking targets and distractors. We use the three tracking
+settings defined by EVT-Bench: Single-Target Tracking (STT),
+Distracted Tracking (DT), and Ambiguous Tracking (AT). The
+resulting simulation training set contains approximately 1.8
+million sequence samples with an STT:DT:AT ratio of 1 : 2 :
+1. Each sample provides forward-facing RGB observations,
+an appearance-based target instruction, an egocentric expert
+trajectory, and target-centric auxiliary annotations.
+Target-centric annotation. Target masks are extracted from
+simulator panoptic observations using the semantic identifier
+of the tracked person. Bounding boxes are the tightest axis-
+aligned rectangles enclosing visible foreground masks, nor-
+malized as (cx, cy, w, h). Bounding boxes are used to derive
+left/center/right and small/medium/large VSC labels, using
+horizontal center thresholds of 1/3 and 2/3 and normalized
+area thresholds of 0.05 and 0.20, respectively. Valid metadata
+yield near/medium/far distance labels at 1.5 and 3.0 m. Binary
+visibility labels indicate whether the target is visible in the
+current camera view.
+B. Real-World Dataset
+Real-world robot data collection. To reduce the sim-to-real
+gap, we construct a real-world human-tracking dataset using
+a quadruped mobile robot operating in indoor offices, outdoor
+open environments, and public pedestrian areas. The dataset
+contains approximately 10.2 hours of synchronized robot-
+following data, including 596,669 original RGB frames. After
+pose alignment and trajectory preprocessing, these recordings
+produce 565,994 final training samples. The dataset comprises
+126 person-tracking episodes. We use the rectified front-facing
+RGB stream at a resolution of 960 × 540. Robot-following
+motions are generated through both human teleoperation and
+an expert model. RGB observations are timestamp-aligned
+with robot states and poses. Future egocentric trajectories are
+recovered from the aligned robot motion. Each sequence is
+additionally associated with a natural-language description of
+the designated tracking target, including appearance attributes
+such as clothing, hairstyle, and carried objects. The dataset
+contains 33 distinct target appearance profiles captured under
+diverse tracking conditions.
+Fig. 3 summarizes the composition of the real-world dataset
+and presents representative tracking samples with target-
+centric annotations and future trajectory supervision.
+
+
+TABLE I
+EVT-BENCH RESULTS (%). MULTI-CAMERA METHODS ARE EXTERNAL REFERENCES AND EXCLUDED FROM SINGLE-VIEW RANKING. RESULTS AND
+PROTOCOL LABELS FOLLOW THE CITED PAPERS AND THE COMPARISONS IN REFERTRACK AND COMATRACK. RL: ✓INDICATES REINFORCEMENT
+LEARNING, ✗INDICATES NO REINFORCEMENT LEARNING; DASHES DENOTE UNAVAILABLE ENTRIES. ∗: CO-TRAINED WITH GENERAL NAVIGATION DATA;
+†: GROUNDINGDINO DETECTOR; ‡: SOM + GPT-4O PERCEPTION. DOBOTTRACK USES MASK AND BOX SUPERVISION, SIMULATION AND REAL-WORLD
+TRAINING DATA, AND 16 HISTORICAL TOKENS PER FRAME.
+Method
+Size RL
+STT
+DT
+AT
+SR ↑TR ↑CR ↓
+SR ↑TR ↑CR ↓
+SR ↑TR ↑CR ↓
+Multi-camera references
+ABot-N0∗[23]
+4B
+✗
+86.9
+87.6
+8.5
+66.7
+75.4
+11.6
+67.3
+79.5
+7.1
+CoMaTrack∗[24]
+3B
+✓
+92.1
+90.3
+0.9
+74.2
+80.5
+2.1
+57.5
+73.4
+12.0
+NavFoM∗[25]
+7B
+✗
+88.4
+80.7
+–
+62.0
+67.9
+–
+–
+–
+–
+TrackVLA++ [5]
+7B
+✗
+90.9
+82.7
+1.5
+74.0
+73.7
+3.5
+55.9
+63.8
+15.1
+Single-view methods
+IBVS† [26]
+–
+✗
+42.9
+56.2
+3.8
+10.6
+28.4
+6.1
+15.2
+39.5
+4.9
+PoliFormer† [27]
+–
+✓
+4.7
+15.5
+40.1
+2.6
+13.2
+44.5
+3.0
+15.4
+41.5
+EVT [11]
+–
+✓
+24.4
+39.1
+42.5
+3.2
+11.2
+47.9
+17.4
+21.1
+45.6
+EVT‡ [11]
+–
+✓
+32.5
+49.9
+40.5
+15.7
+35.7
+53.3
+18.3
+21.0
+44.9
+Uni-NaVid∗[3]
+7B
+✗
+53.3
+67.2
+12.6
+31.9
+50.1
+21.3
+15.8
+41.5
+26.5
+NavFoM∗[25]
+7B
+✗
+85.0
+80.5
+–
+61.4
+68.2
+–
+–
+–
+–
+VLingNav∗[18]
+7B
+✓
+88.4
+81.2
+2.1
+67.7
+73.5
+5.5
+–
+–
+–
+LightNav-0 [28]
+4B
+✓
+91.7
+87.7
+1.9
+82.6
+80.1
+4.6
+–
+–
+–
+Qwen-RobotNav [29]
+4B
+–
+77.4
+90.0
+6.4
+–
+–
+–
+–
+–
+–
+Qwen-RobotNav [29]
+8B
+–
+78.6
+89.7
+5.7
+–
+–
+–
+–
+–
+–
+OmTrackVLA [30]
+1B
+✗
+81.4
+82.8
+5.1
+41.5
+58.8
+11.3
+60.0
+73.9
+7.6
+TrackVLA [4]
+7B
+✗
+85.1
+78.6
+1.7
+57.6
+63.2
+5.8
+50.2
+63.7
+17.1
+TrackVLA++ [5]
+7B
+✗
+86.0
+81.0
+2.1
+66.5
+68.8
+4.7
+51.2
+63.4
+15.9
+ReferTrack [6]
+4B
+✗
+89.4
+92.5
+1.6
+73.3
+81.8
+7.6
+74.1
+85.7
+7.7
+Our models
+Baseline (trajectory only) 0.8B
+✗
+79.2
+91.4
+9.5
+55.9
+83.6
+16.5
+52.4
+83.6
+15.5
+DobotTrack
+0.8B
+✗
+90.2
+92.3
+3.6
+72.5
+83.3
+8.3
+70.9
+85.5
+6.6
+Diverse real-world tracking conditions. The real-world
+dataset covers four representative tracking conditions: indoor
+single-person tracking, indoor tracking with occlusion, outdoor
+open-area tracking, and complex outdoor street tracking. The
+dataset includes approximately 5.68 hours of indoor recordings
+and 4.53 hours of outdoor recordings.
+Of these recordings, approximately 1 hour contains nearby
+or visually similar distractors. These recordings introduce
+challenging cases such as partial occlusion, people crossing
+paths, temporary target ambiguity, and target re-identification.
+Together with the dedicated occlusion and complex-street
+scenarios, these data expose the model to realistic visual and
+behavioral variations that are difficult to reproduce faithfully
+in simulation.
+Target-centric annotation. We construct dense target-centric
+annotations for the real-world recordings using a semi-
+automatic annotation pipeline. Qwen3.5 [31] is first used to
+localize the described target and generate a target bounding
+box, which is then provided as a prompt to SAM3 [32] to
+obtain the corresponding segmentation mask. The generated
+annotations are then manually reviewed and corrected to
+address localization and segmentation errors.
+The final annotations provide 596,323 dense target masks
+and corresponding bounding boxes. Bounding boxes are rep-
+resented in the same normalized (cx, cy, w, h) format as in the
+simulation data.
+We further derive lightweight structured VSC supervision
+from the target annotations. Horizontal position is categorized
+as left, center, or right, and apparent target scale as small,
+medium, or large using the same definitions as in the simu-
+lation dataset. Metric target distance is not reliably available
+in the real-world recordings. Real-world VSC supervision is
+restricted to horizontal position and apparent scale.
+V. EXPERIMENTS
+A. Experimental Setup
+Benchmarks and data. We evaluate language-guided person
+tracking on EVT-Bench [4], using its STT, DT, and AT settings
+to assess single-target tracking, resistance to distractors, and
+target disambiguation, respectively. Training uses the simula-
+tion and real-world data described in Sec. IV.
+Evaluation metrics. Following the EVT-Bench protocol [4],
+we report success rate (SR), tracking rate (TR), and collision
+rate (CR) separately for each setting. SR measures the fraction
+of episodes ending with the agent facing the target at a dis-
+tance of 1–3 m. TR measures the fraction of simulation steps
+satisfying the benchmark’s tracking condition. CR measures
+the fraction of episodes terminated by a collision with the
+target person. Higher SR and TR and lower CR indicate better
+performance.
+Implementation details. The policy takes an appearance-
+based instruction and H = 8 RGB observations sampled
+at an interval of ∆= 0.2 s and resized to 448 × 448.
+It predicts P
+= 8 future egocentric waypoints at 10 Hz,
+spanning 0.8 s. Each frame supplies N = 256 visual tokens;
+the target-conditioned compressor uses three attention blocks
+
+
+Fig. 4. Real-world robotic platform and onboard sensors.
+to retain Nq = 16 tokens per historical frame. The target-
+conditioned ablation holds all settings except guidance fixed;
+the token-budget comparison evaluates 256-token pooling, 16-
+token pooling, and 16-token Q-identity. Dense current-frame
+features remain available to the mask head. We train for about
+28,000 optimization steps on eight NVIDIA B300 GPUs with
+a global batch size of 256 (32 per GPU), using AdamW and
+BF16 mixed precision. The visual encoder is frozen, while
+the multimodal projector, language model, Q-identity, and task
+heads are jointly optimized. We use peak learning rates of
+2 × 10−5 for the language model and SAM2 mask decoder,
+and 4 × 10−5 for the remaining trainable parameters, with
+a weight decay of 10−3. Learning rates follow a one-cycle
+schedule with 100 warmup steps and cosine annealing.
+Real-world
+deployment. The real-world platform is a
+quadruped robot equipped with front-facing cameras, a LiDAR
+sensor, and an onboard Orin Nano computer, as shown in
+Fig. 4. The tracking policy uses an RGB observation window
+and a target description to predict egocentric waypoints for the
+robot’s motion controller.
+B. Simulation Benchmark Results
+Table I compares DobotTrack with published results on
+EVT-Bench. Our 0.8B model achieves SRs of 90.2%, 72.5%,
+and 70.9% on STT, DT, and AT, respectively. Compared with
+the 1B OmTrackVLA, DobotTrack raises SR by 8.8, 31.0, and
+10.9 percentage points and records lower collision rates across
+all three tasks. These results suggest that target-grounded
+TABLE II
+AUXILIARY-TASK ABLATION ON DT (%) WITH THE 0.8B MODEL. ALL
+VARIANTS INCLUDE TRAJECTORY SUPERVISION.
+Auxiliary task
+DT
+SR ↑
+TR ↑
+CR ↓
+Trajectory only
+55.9
+83.6
+16.5
++ Box
+59.6
+84.6
+14.7
++ VSC
+59.6
+83.8
+13.1
++ Mask
+61.3
+81.5
+12.0
++ Box & Mask
+63.7
+84.5
+13.2
++ Future prediction
+60.9
+80.9
+13.9
++ DINO Future prediction
+58.9
+80.6
+15.9
+supervision benefits a compact policy under distractors and
+appearance ambiguity.
+DobotTrack also performs favorably against larger single-
+view policies. It exceeds TrackVLA++ by 4.2, 6.0, and 19.7
+SR points on STT, DT, and AT, respectively, although its
+collision rates remain higher on STT and DT. Compared
+with ReferTrack, which uses an external detector, DobotTrack
+achieves higher STT SR and lower AT CR, while its DT and
+AT SR remain lower. LightNav-0 [28], which uses a residual
+vector-quantized (RVQ) action tokenizer and RL post-training,
+achieves SRs of 91.7% on STT and 82.6% on DT, exceeding
+DobotTrack by 1.5 and 10.1 percentage points, respectively;
+AT results are not reported.
+Multi-camera methods provide additional references. Rela-
+tive to the RL-trained CoMaTrack, DobotTrack achieves 13.4
+points higher AT SR and 5.4 points lower AT CR, while its
+STT and DT SR remain lower. Because these methods use dif-
+ferent camera inputs and training protocols, these comparisons
+provide context rather than controlled evaluations.
+Fig. 5 provides qualitative comparisons on DT, STT, and
+AT. In these examples, the trajectory-only baseline loses the
+target under occlusion or interference from other pedestrians,
+whereas DobotTrack continues tracking the target.
+C. Ablation Study
+We examine the auxiliary supervision, target-conditioned
+historical compression, and real-world training data used in
+DobotTrack. Unless otherwise stated, experiments use the 0.8B
+backbone and 16 tokens per historical frame.
+Auxiliary supervision. We evaluate five auxiliary tasks pro-
+viding different forms of spatial and temporal supervision.
+VSC classifies spatial attributes of the target person, including
+image-plane position (left, center, or right) and distance to
+the agent (near, medium, or far). Future DINO feature pre-
+diction regresses visual representations extracted by a frozen
+DINO encoder from future observations, providing feature-
+level supervision for anticipating scene changes. Future frame
+prediction reconstructs future RGB observations, providing
+pixel-level supervision of future visual appearance. Each task
+is evaluated as an auxiliary objective alongside trajectory pre-
+diction. Table II compares auxiliary tasks for tracking policy
+learning. Structured VSC improves DT SR over trajectory-
+only training, showing that categorical target attributes provide
+useful supervision. Box grounding achieves the same SR as
+VSC, while mask supervision yields higher SR and lower
+CR. Joint mask and box supervision further raises SR to
+63.7%, supporting their complementary roles in learning target
+representations and spatial localization.
+Motivated by latent-space video prediction in DINO-
+world [33], we also evaluate DINO future-feature prediction.
+It improves SR over the trajectory-only baseline, but achieves
+a lower SR and a higher collision rate than the model trained
+with joint mask and box supervision. This comparison sug-
+gests that explicit target-level supervision is more effective
+than self-supervised future-feature prediction in our tracking
+setting.
+
+
+TABLE III
+ABLATION OF AUXILIARY SUPERVISION AND TARGET CONDITIONING WITH THE 0.8B MODEL AND 16-TOKEN Q-IDENTITY (%). THE FIRST TWO ROWS
+ISOLATE TARGET CONDITIONING UNDER MASK SUPERVISION. BOLD MARKS THE HIGHEST SR VALUES.
+Auxiliary tasks
+Target conditioned
+STT
+DT
+AT
+SR ↑TR ↑CR ↓
+SR ↑TR ↑CR ↓
+SR ↑TR ↑CR ↓
+Mask
+✗
+79.2
+90.6
+13.5
+55.3
+79.0
+22.5
+57.7
+84.0
+17.6
+Mask
+✓
+84.8
+90.0
+4.5
+67.6
+82.0
+10.3
+65.6
+83.6
+7.6
+Mask & Box
+✓
+87.6
+91.4
+5.6
+69.0
+83.4
+13.1
+67.8
+85.6
+11.5
+TABLE IV
+REPRESENTATION AND TOKEN-BUDGET COMPARISON WITH THE 0.8B MASK-SUPERVISED MODEL. AVG. SR IS THE MEAN OVER THE THREE TASKS.
+BOLD MARKS THE HIGHEST SR VALUES. WE REPORT THE 95TH-PERCENTILE (P95) INFERENCE LATENCY MEASURED ON ORIN NANO.
+Compression Tokens
+STT
+DT
+AT
+Avg. SR ↑P95 latency
+(ms) ↓
+SR ↑TR ↑CR ↓
+SR ↑TR ↑CR ↓
+SR ↑TR ↑CR ↓
+Pooling
+256
+86.6
+89.7
+4.7
+61.5
+77.5
+13.2
+59.7
+82.4
+12.7
+69.3
+203.9
+Pooling
+16
+84.6
+88.6
+6.8
+61.3
+81.5
+12.0
+57.0
+81.9
+11.5
+67.6
+91.0
+Q-identity
+16
+84.8
+90.0
+4.5
+67.6
+82.0
+10.3
+65.6
+83.6
+7.6
+72.7
+93.4
+0.0 s
+6.4 s
+9.1 s
+9.1 s
+14.9 s
+22.8 s
+0.0 s
+1.3 s
+8.5 s
+8.5 s
+14.3 s
+22.1 s
+0.0 s
+2.5 s
+5.1 s
+5.1 s
+7.0 s
+9.2 s
+BASELINE
+OURS
+DT
+Start
+Occlusion
+Failure
+Same time
+Tracks on
+Last model frame
+Lost · TR 6.6%
+Success · TR 91.7%
+STT
+Start
+Occlusion
+Failure
+Same time
+Tracks on
+Last model frame
+Lost · TR 11.8%
+Success · TR 93.7%
+AT
+Start
+Occlusion
+Failure
+Same time
+Tracks on
+Last model frame
+Lost · TR 45.1%
+Success · TR 89.2%
+Fig. 5.
+Qualitative tracking comparisons in simulation. Rows show DT, STT, and AT episodes. Left: trajectory-only baseline observations from the start
+through occlusion to tracking failure. Right: DobotTrack observations at the baseline failure time and subsequent timesteps. Timestamps indicate elapsed
+episode time; TR values are episode-level results for the illustrated runs.
+Compressor effectiveness. The first two rows of Table III
+isolate target conditioning under mask supervision. Target
+conditioning raises DT and AT SR by 12.3 and 7.9 points, re-
+spectively, and reduces collisions across all three tasks. These
+results suggest that target appearance and spatial priors reduce
+the burden of identifying relevant features during historical
+compression. With joint mask and box supervision, guided
+Q-identity reaches SRs of 87.6%, 69.0%, and 67.8% on STT,
+DT, and AT, respectively, although its collision rates are higher
+than those of the mask-supervised guided variant.
+Table IV compares compression methods and token budgets
+under mask supervision. At the same 16-token budget, Q-
+identity maintains similar STT SR while increasing DT and AT
+SR by 6.3 and 8.6 points, respectively, and reducing CR across
+all three tasks. Compared with 256-token pooling, it achieves a
+higher mean SR using one-sixteenth as many historical tokens.
+
+
+1
+2
+3
+Fig. 6.
+Test on real-world system. DobotTrack follows the designated
+person in an outdoor pedestrian scene; the predicted mask, bounding box,
+and egocentric trajectory are overlaid on the robot-centric view.
+Inference efficiency. To examine the computational challenge
+illustrated in Fig. 1 (b), we additionally report deployment la-
+tency in Table IV. With seven historical frames and one current
+frame, reducing the historical budget from 256 to 16 tokens
+decreases the visual input from 2048 to 368 tokens. In an
+optimized deployment on Orin Nano, 256-token pooling, 16-
+token pooling, and the 16-token target-conditioned compressor
+have P95 inference latencies of 203.9, 91.0, and 93.4 ms,
+respectively. The compact joint architecture is 2.18× faster
+than 256-token pooling, with a 2.4 ms overhead over 16-token
+pooling.
+Effectiveness of real-world training data. Table V reports
+results for the compact model trained with mask and box su-
+pervision and Q-identity. The simulation-only model achieves
+SRs of 87.6%, 69.0%, and 67.8% on STT, DT, and AT,
+respectively. With simulation and real-world training data, the
+corresponding SRs reach 90.2%, 72.5%, and 70.9%. These
+results suggest that incorporating real-world tracking data
+improves tracking success rates in simulated environments.
+TABLE V
+EFFECT OF REAL-WORLD TRAINING DATA ON EVT-BENCH SR (%).
+Training data
+STT ↑
+DT ↑
+AT ↑
+Simulation only
+87.6
+69.0
+67.8
+Simulation + real
+90.2
+72.5
+70.9
+D. Real-World Qualitative Evaluation
+We further evaluate DobotTrack on a quadruped robot in
+real-world environments. As shown in Fig. 6, the robot follows
+the designated person in an outdoor pedestrian environment
+while predicting target masks, bounding boxes, and egocentric
+trajectories. These results illustrate the feasibility of deploying
+the unified perception-and-action framework on a physical
+robot.
+Fig. 7 provides qualitative comparisons with the trajectory-
+only baseline in two challenging real-world sequences. Under
+Ours
+Baseline
+Ours
+Baseline
+t+1.6s
+t+1.2s
+t+0.8s
+t+0.4s
+t
+Fig. 7.
+Real-world qualitative comparison between DobotTrack and the trajectory-only baseline in two challenging target-tracking sequences. For each
+sequence, the upper and lower rows show our method and the baseline, respectively, with frames sampled at 0.4 s intervals. Green masks and yellow bounding
+boxes indicate target segmentation and localization, while cyan curves represent predicted egocentric trajectories. All visualized predictions are generated by
+the models. The examples illustrate improved target localization and trajectory prediction under partial visibility and temporary target disappearance.
+
+
+partial visibility and temporary target disappearance, Dobot-
+Track maintains more consistent target localization and trajec-
+tory predictions. These observations are consistent with target-
+centric supervision and Q-identity: mask and box supervision
+strengthen target grounding, while Q-identity preserves target-
+specific appearance and spatial cues from historical obser-
+vations to support temporal reasoning when current visual
+evidence is limited.
+VI. CONCLUSION
+We
+presented
+DobotTrack,
+a
+target-grounded
+vision-
+language-action
+framework
+for
+language-guided
+embod-
+ied person tracking. The framework combines mask and
+bounding-box supervision with Q-identity, which uses target-
+region cues and full-image context to compress historical ob-
+servations for trajectory prediction. On EVT-Bench, our 0.8B
+model achieves success rates of 90.2%, 72.5%, and 70.9%
+on STT, DT, and AT, respectively. Under mask supervision
+and the same budget of 16 tokens per historical frame, Q-
+identity improves DT and AT success rates over pooling by
+6.3 and 8.6 percentage points, with a 2.4 ms increase in
+P95 inference latency on Orin Nano. We also construct a
+quadruped-collected dataset comprising 126 person-tracking
+episodes and 596,323 mask-annotated frames; incorporating
+these real-world data further improves tracking success on the
+simulation benchmark. These findings support target-centric
+supervision and target-conditioned history compression as
+effective components of compact embodied tracking policies.
+The current design relies on the quality of cached grounding
+predictions and a finite observation window. Future work will
+investigate robustness to incorrect target associations and pro-
+longed occlusion, and quantify closed-loop performance across
+a broader range of real-world scenes and target identities.
+ACKNOWLEDGMENTS
+We sincerely thank all members of our robotics research
+team for their dedication, valuable discussions, and contri-
+butions throughout this project. In particular, we are deeply
+grateful to the team members who devoted considerable time
+and effort to collecting real-world tracking data, often working
+outdoors for extended periods under the intense summer heat.
+Their dedication and careful work in data collection and
+quality control were essential to the construction of our real-
+world dataset and the experiments presented in this paper.
+We also thank Dobot for providing the robotic platform,
+computational resources, and technical support that made
+this research possible. We further acknowledge the broader
+robotics research community, whose advances in vision-
+language-action models, visual tracking, and embodied nav-
+igation have inspired and informed our work.
+REFERENCES
+[1] A. Maalouf, N. Jadhav, K. M. Jatavallabhula, M. Chahine, D. M.
+Vogt, R. J. Wood, A. Torralba, and D. Rus, “Follow Anything:
+Open-set detection, tracking, and following in real-time,” arXiv preprint
+arXiv:2308.05737, 2023. [Online]. Available: https://arxiv.org/abs/2308.
+05737
+[2] F. Zhong, X. Bi, Y. Zhang, W. Zhang, and Y. Wang, “RSPT: Reconstruct
+surroundings and predict trajectories for generalizable active object
+tracking,” arXiv preprint arXiv:2304.03623, 2023. [Online]. Available:
+https://arxiv.org/abs/2304.03623
+[3] J. Zhang, K. Wang, S. Wang, M. Li, H. Liu, S. Wei, Z. Wang,
+Z.
+Zhang,
+and
+H.
+Wang,
+“Uni-NaVid:
+A
+Video-based
+Vision-
+Language-Action Model for Unifying Embodied Navigation Tasks,”
+arXiv preprint arXiv:2412.06224, 2024. [Online]. Available: https:
+//arxiv.org/abs/2412.06224
+[4] S. Wang, J. Zhang, M. Li, J. Liu, A. Li, K. Wu, F. Zhong, J. Yu,
+Z. Zhang, and H. Wang, “TrackVLA: Embodied Visual Tracking in
+the Wild,” arXiv preprint arXiv:2505.23189, 2025. [Online]. Available:
+https://arxiv.org/abs/2505.23189
+[5] J. Liu, Y. Qi, J. Zhang, M. Li, S. Wang, K. Wu, H. Ye, H. Zhang,
+Z. Chen, F. Zhong, Z. Zhang, and H. Wang, “TrackVLA++: Unleashing
+Reasoning and Memory Capabilities in VLA Models for Embodied
+Visual Tracking,” arXiv preprint arXiv:2510.07134, 2025. [Online].
+Available: https://arxiv.org/abs/2510.07134
+[6] H. Ye, T. Zeng, J. Zhang, S. Wang, Z. Zhang, W. Situ, Y. Zhou,
+Y. Ling, and H. Zhang, “ReferTrack: Referring Then Tracking for
+Embodied Visual Tracking,” arXiv preprint arXiv:2607.20061, 2026.
+[Online]. Available: https://arxiv.org/abs/2607.20061
+[7] Z. Zeng, Z. Wang, Z. Wang, Y. Zheng, Y.-Y. Chuang, and S. Satoh,
+“Illumination-Adaptive Person Re-Identification,” IEEE Transactions on
+Multimedia, vol. 22, no. 12, pp. 3064–3074, 2020. [Online]. Available:
+https://www.csie.ntu.edu.tw/~cyy/publications/papers/Zeng2020IAP.pdf
+[8] H. Ye, J. Zhao, Y. Zhan, W. Chen, L. He, and H. Zhang, “Person
+re-identification for robot person following with online continual
+learning,” arXiv preprint arXiv:2309.11727, 2023. [Online]. Available:
+https://arxiv.org/abs/2309.11727
+[9] J. Zhu, W. Wang, Z. Chen, Z. Liu, S. Ye, L. Gu, H. Tian, Y. Duan,
+W. Su, J. Shao, Z. Gao, E. Cui, X. Wang, Y. Cao, Y. Liu, X. Wei,
+H. Zhang, H. Wang, W. Xu, H. Li, J. Wang, N. Deng, S. Li,
+Y. He, T. Jiang, J. Luo, Y. Wang, C. He, B. Shi, X. Zhang,
+W. Shao, J. He, Y. Xiong, W. Qu, P. Sun, P. Jiao, H. Lv, L. Wu,
+K. Zhang, H. Deng, J. Ge, K. Chen, L. Wang, M. Dou, L. Lu,
+X. Zhu, T. Lu, D. Lin, Y. Qiao, J. Dai, and W. Wang, “InternVL3:
+Exploring Advanced Training and Test-Time Recipes for Open-Source
+Multimodal Models,” arXiv preprint arXiv:2504.10479, 2025. [Online].
+Available: https://arxiv.org/abs/2504.10479
+[10] H. Ye, Y. Zhan, W. Situ, G. Chen, J. Yu, Z. Zhao, K. Cai,
+A. Ajoudani, and H. Zhang, “TPT-Bench: A Large-Scale, Long-
+Term and Robot-Egocentric Dataset for Benchmarking Target Person
+Tracking,” arXiv preprint arXiv:2505.07446, 2025. [Online]. Available:
+https://arxiv.org/abs/2505.07446
+[11] F. Zhong, K. Wu, H. Ci, C. Wang, and H. Chen, “Empowering
+embodied visual tracking with visual foundation models and offline
+RL,” arXiv preprint arXiv:2404.09857, 2024. [Online]. Available:
+https://arxiv.org/abs/2404.09857
+[12] S. Liu, Z. Zeng, T. Ren, F. Li, H. Zhang, J. Yang, Q. Jiang,
+C. Li, J. Yang, H. Su, J. Zhu, and L. Zhang, “Grounding DINO:
+Marrying DINO with Grounded Pre-Training for Open-Set Object
+Detection,” arXiv preprint arXiv:2303.05499, 2023. [Online]. Available:
+https://arxiv.org/abs/2303.05499
+[13] Z. Peng, W. Wang, L. Dong, Y. Hao, S. Huang, S. Ma, and F. Wei,
+“Kosmos-2: Grounding Multimodal Large Language Models to the
+World,” arXiv preprint arXiv:2306.14824, 2023. [Online]. Available:
+https://arxiv.org/abs/2306.14824
+[14] N. Ravi, V. Gabeur, Y.-T. Hu, R. Hu, C. Ryali, T. Ma, H. Khedr,
+R. Rädle, C. Rolland, L. Gustafson, E. Mintun, J. Pan, K. V. Alwala,
+N. Carion, C.-Y. Wu, R. Girshick, P. Dollár, and C. Feichtenhofer,
+“SAM 2: Segment Anything in Images and Videos,” arXiv preprint
+arXiv:2408.00714, 2024. [Online]. Available: https://arxiv.org/abs/2408.
+00714
+[15] X. Lai, Z. Tian, Y. Chen, Y. Li, Y. Yuan, S. Liu, and J. Jia, “LISA:
+Reasoning segmentation via large language model,” arXiv preprint
+arXiv:2308.00692, 2023. [Online]. Available: https://arxiv.org/abs/2308.
+00692
+[16] F. Zeng, B. Dong, Y. Zhang, T. Wang, X. Zhang, and Y. Wei,
+“MOTR: End-to-End Multiple-Object Tracking with Transformer,”
+arXiv preprint arXiv:2105.03247, 2021. [Online]. Available: https:
+//arxiv.org/abs/2105.03247
+[17] H. K. Cheng and A. G. Schwing, “XMem: Long-Term Video
+Object Segmentation with an Atkinson-Shiffrin Memory Model,”
+
+
+arXiv preprint arXiv:2207.07115, 2022. [Online]. Available: https:
+//arxiv.org/abs/2207.07115
+[18] S. Wang, Y. Luo, X. Chen, A. Luo, D. Li, C. Liu, S. Chen, Y. Zhang, and
+J. Yu, “VLingNav: Embodied Navigation with Adaptive Reasoning and
+Visual-Assisted Linguistic Memory,” arXiv preprint arXiv:2601.08665,
+2026. [Online]. Available: https://arxiv.org/abs/2601.08665
+[19] Y. Li, C. Wang, and J. Jia, “LLaMA-VID: An image is worth 2 tokens
+in large language models,” arXiv preprint arXiv:2311.17043, 2023.
+[Online]. Available: https://arxiv.org/abs/2311.17043
+[20] X. Shen, Y. Xiong, C. Zhao, L. Wu, J. Chen, C. Zhu, Z. Liu,
+F. Xiao, B. Varadarajan, F. Bordes, Z. Liu, H. Xu, H. J. Kim,
+B.
+Soran,
+R.
+Krishnamoorthi,
+M.
+Elhoseiny,
+and
+V.
+Chandra,
+“LongVU:
+Spatiotemporal
+adaptive
+compression
+for
+long
+video-
+language
+understanding,”
+arXiv
+preprint
+arXiv:2410.17434,
+2024.
+[Online]. Available: https://arxiv.org/abs/2410.17434
+[21] J. Li, D. Li, S. Savarese, and S. Hoi, “BLIP-2: Bootstrapping
+Language-Image Pre-training with Frozen Image Encoders and Large
+Language Models,” arXiv preprint arXiv:2301.12597, 2023. [Online].
+Available: https://arxiv.org/abs/2301.12597
+[22] F. Milletari, N. Navab, and S.-A. Ahmadi, “V-Net: Fully Convolutional
+Neural
+Networks
+for
+Volumetric
+Medical
+Image
+Segmentation,”
+arXiv preprint arXiv:1606.04797, 2016. [Online]. Available: https:
+//arxiv.org/abs/1606.04797
+[23] AMAP
+CV
+Lab,
+“ABot-N0:
+Technical
+Report
+on
+the
+VLA
+Foundation
+Model
+for
+Versatile
+Embodied
+Navigation,”
+arXiv
+preprint
+arXiv:2602.11598,
+2026.
+[Online].
+Available:
+https://arxiv.org/abs/2602.11598
+[24] Y. Liu, L. Gao, L. Liu, M. Lv, and Y. Cai, “CoMaTrack: Competitive
+Multi-Agent Game-Theoretic Tracking with Vision-Language-Action
+Models,” arXiv preprint arXiv:2603.22846, 2026. [Online]. Available:
+https://arxiv.org/abs/2603.22846
+[25] J. Zhang, A. Li, Y. Qi, M. Li, J. Liu, S. Wang et al., “Embodied
+Navigation Foundation Model,” arXiv preprint arXiv:2509.12129, 2025.
+[Online]. Available: https://arxiv.org/abs/2509.12129
+[26] M. Gupta, S. Kumar, L. Behera, and V. K. Subramanian, “A novel vision-
+based tracking algorithm for a human-following mobile robot,” IEEE
+Transactions on Systems, Man, and Cybernetics: Systems, vol. 47, no. 7,
+pp. 1415–1427, 2017.
+[27] K.-H. Zeng, Z. Zhang, K. Ehsani, R. Hendrix, J. Salvador, A. Herrasti,
+R. Girshick, A. Kembhavi, and L. Weihs, “PoliFormer: Scaling
+On-Policy RL with Transformers Results in Masterful Navigators,”
+arXiv preprint arXiv:2406.20083, 2024. [Online]. Available: https:
+//arxiv.org/abs/2406.20083
+[28] S. Wang, A. Luo, F. Huang, J. Xu, X. Wang, Y. Wang, Q. Ma,
+F. Yang, R. Mei, J. Wei, J. Hu, X. Liu, H. Chen, Y. Shao, Y. Lin,
+Z. Li, L. Pan, X. Liu, Y. Ma, and T. Fan, “LightNav-0: Eliciting
+VLM
+Spatial
+Intelligence
+for
+Generalist
+Embodied
+Navigation,”
+arXiv preprint arXiv:2608.30935, 2026. [Online]. Available: https:
+//arxiv.org/abs/2608.30935
+[29] J. Zhang, G. Zhou, H. Yin, Y. Huang, Z. Lei, Q. Peng et al., “Qwen-
+RobotNav Technical Report: A Scalable Navigation Model Designed
+for an Agentic Navigation System,” arXiv preprint arXiv:2606.18112,
+2026. [Online]. Available: https://arxiv.org/abs/2606.18112
+[30] K. Lee, H. Ying, and T. Zhao, “OmTrackVLA: Open-Source Visual
+Language
+Action
+Model
+for
+Visual
+Navigation
+and
+Following,”
+GitHub repository, 2025, accessed: 2026-10-15. [Online]. Available:
+https://github.com/om-ai-lab/OmTrackVLA
+[31] Qwen Team, “Qwen3.5: Towards native multimodal agents,” Feb. 2026.
+[Online]. Available: https://qwen.ai/blog?id=qwen3.5
+[32] N. Carion, L. Gustafson, Y.-T. Hu, S. Debnath, R. Hu, D. Suris,
+C. Ryali, K. V. Alwala, H. Khedr, A. Huang, J. Lei, T. Ma, B. Guo,
+A. Kalla, M. Marks, J. Greer, M. Wang, P. Sun, R. Rädle, T. Afouras,
+E. Mavroudi, K. Xu, T.-H. Wu, Y. Zhou, L. Momeni, R. Hazra,
+S. Ding, S. Vaze, F. Porcher, F. Li, S. Li, A. Kamath, H. K. Cheng,
+P. Dollár, N. Ravi, K. Saenko, P. Zhang, and C. Feichtenhofer, “SAM
+3: Segment Anything with Concepts,” arXiv preprint arXiv:2511.16719,
+2025. [Online]. Available: https://arxiv.org/abs/2511.16719
+[33] F. Baldassarre, M. Szafraniec, B. Terver, V. Khalidov, F. Massa,
+Y. LeCun, P. Labatut, M. Seitzer, and P. Bojanowski, “Back to
+the Features: DINO as a Foundation for Video World Models,”
+arXiv preprint arXiv:2507.19468, 2025. [Online]. Available: https:
+//arxiv.org/abs/2507.19468

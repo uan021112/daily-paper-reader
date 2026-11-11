@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-10-31 ~ 2026-11-09</span>
+      <span class="dpr-home-dashboard-kicker">2026-11-02 ~ 2026-11-11</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 41 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 52 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>26</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>37</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>15</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-11-09 02:10:57 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-11-11 01:06:41 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,9 +69,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>10天精读速读41篇，聚焦三维重建、视觉定位与机器人运动规划。</p>
-<p>最值得关注的是地面与卫星影像的跨视角3D重建，以及面向室内重建的隐式高斯SLAM。</p>
-<p>下步可先读两篇高分精读，了解跨视角重建与室内场景建模的思路。</p>
+<p>今日完成52篇论文筛选，其中37篇精读、15篇速读，重点聚焦具身智能与机器人学习。</p>
+<p>最值得关注的是智能体具身化与长期导航，以及统一3D建模、视角鲁棒操作等方向。</p>
+<p>下一步可优先阅读《Toward the Era of Agentic Embodied Intelligence》和《HSGNav》，先建立对前沿脉络的整体认识。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -80,12 +80,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">26 篇</strong>
+    <strong class="dpr-home-dashboard-count">37 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Georeferenced Cross-View 3D Reconstruction from Ground and Satellite Images">Georeferenced Cross-View 3D Reconstruction from Ground and Satellite Images</span></li><li><span class="dpr-home-dashboard-paper-title" title="DrawSplat: Atlanta World-Guided Implicit Gaussian SLAM for Indoor Reconstruction">DrawSplat: Atlanta World-Guided Implicit Gaussian SLAM for Indoor Reconstruction</span></li><li><span class="dpr-home-dashboard-paper-title" title="When the Past Shapes Action: Understanding Embodied Memory">When the Past Shapes Action: Understanding Embodied Memory</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Toward the Era of Agentic Embodied Intelligence">Toward the Era of Agentic Embodied Intelligence</span></li><li><span class="dpr-home-dashboard-paper-title" title="HSGNav: Hypothesis Scene Graphs for Multi-Scale Lifelong Navigation under Object Relocation">HSGNav: Hypothesis Scene Graphs for Multi-Scale Lifelong Navigation under Object Relocation</span></li><li><span class="dpr-home-dashboard-paper-title" title="3R-Adapter: Retrieval, Rewiring, and Refinement for Efficient Adaptation of 3D Reconstruction Model">3R-Adapter: Retrieval, Rewiring, and Refinement for Efficient Adaptation of 3D Reconstruction Model</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>15</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>6</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>3</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>29</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>5</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -96,9 +96,9 @@
     <strong class="dpr-home-dashboard-count">15 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="FlowMoDE: Coarse-to-fine Flow Matching for Detail-aware Sim-to-Real Monocular Depth Estimation">FlowMoDE: Coarse-to-fine Flow Matching for Detail-aware Sim-to-Real Monocular Depth Estimation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Cross-Embodiment Motion Planning by Coupling Body-Agnostic World Model with Differentiable Ego-Dynamics">Cross-Embodiment Motion Planning by Coupling Body-Agnostic World Model with Differentiable Ego-Dynamics</span></li><li><span class="dpr-home-dashboard-paper-title" title="PGGT-Loc: Primitive-Grounded Geometry Transformer for Feed-Forward Camera Localization">PGGT-Loc: Primitive-Grounded Geometry Transformer for Feed-Forward Camera Localization</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="OmniLatent: Unified Latent for 3D Part Modeling">OmniLatent: Unified Latent for 3D Part Modeling</span></li><li><span class="dpr-home-dashboard-paper-title" title="ForeAct: Geometry-Guided Action Learning from World Representations">ForeAct: Geometry-Guided Action Learning from World Representations</span></li><li><span class="dpr-home-dashboard-paper-title" title="PAIR: Proprioception-Aligned Image-Ray Representations for Viewpoint-Robust Manipulation">PAIR: Proprioception-Aligned Image-Ray Representations for Viewpoint-Robust Manipulation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">part-seg <strong>6</strong></span><span class="dpr-home-dashboard-tag">embodied-ai <strong>5</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>3</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>5</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>4</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>3</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>3</strong></span></div>
 </section>
 </div>
 

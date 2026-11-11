@@ -1,0 +1,1593 @@
+DAC-MACE: Context-Conditioned Expert Routing
+for Compact Scene Coordinate Regression in
+Camera Relocalization
+Dingying Fan1,†, Mingkai Liu2,†, Haohua Que1,3,†, Haojia Gao4, Xianliang Huang5, Qian Zhang1,3,
+Xueqian Wang4, and Fei Qiao1,∗
+Abstract—A camera becomes an absolute pose sensor when
+its images can be relocalized against a prebuilt map of the
+scene. On mobile robots and augmented-reality devices, that map
+must be small and quick to build. Scene coordinate regression
+(SCR) stores the scene in a compact network that predicts a 3D
+coordinate for every pixel, and mixture-of-experts (MoE) variants
+extend its capacity to larger outdoor scenes. In existing MoE-
+based SCR, however, the router assigns each pixel to an expert
+from the same local descriptor that the experts regress from,
+so repeated facades and windows at different locations receive
+similar routing inputs. We present DAC-MACE, which conditions
+soft expert routing on recalibrated and contextualized features.
+A residual context adapter (RCA) reweights the channels and
+locations of frozen encoder features, a global context encoder
+(GCE) mixes them with multi-scale self-attention, and an image-
+level pooled descriptor is added to the router input. A dual-
+threshold RANSAC–Levenberg–Marquardt estimator recovers
+the pose. On Cambridge Landmarks, DAC-MACE attains a
+mean per-scene median translation error of 13.0 cm over three
+seeds, the lowest among the RGB-only SCR methods compared
+(GLACE 13.6 cm, MACE 14.4 cm), and reduces the error on
+the largest scene from 24 to 19 cm relative to MACE. In a
+cumulative study, the MoE head, GCE, RCA, and the dual-
+threshold estimator lower the mean error from 17.0 cm to 14.4,
+14.0, 13.6, and 13.0 cm. On 7-Scenes, adding GCE to a single
+ACE head raises Recall@(5 cm, 5◦) from 86.56% to 87.60%.
+Index Terms—Camera relocalization, image sensors, mixture
+of experts, robust pose estimation, scene coordinate regression,
+self-attention, visual localization.
+I. INTRODUCTION
+A
+calibrated camera is the most widely deployed exte-
+roceptive sensor on mobile robots, vehicles, and head-
+mounted devices. Visual relocalization turns it into an absolute
+pose sensor: given a single query image, it estimates the six-
+degree-of-freedom (6-DoF) camera pose with respect to a
+This work has been submitted to the IEEE for possible publication.
+Copyright may be transferred without notice, after which this version may
+no longer be accessible.
+This work was supported by the National Natural Science Foundation
+of China (U25A20489, 62334006), the Beijing Natural Science Foundation
+(L253009), the National Science and Technology Major Project Fund of
+China (2025ZD0215600), the National Key Technologies R&D Program
+of China (2025YFF1500600), and the Fundamental Research Program of
+Shanxi Province (202403021212166, 202303021211153). †Equal contribu-
+tion. ∗Corresponding author: Fei Qiao (e-mail: qiaofei@tsinghua.edu.cn).
+1Sense Lab, Dept. of Electronic Engineering, Tsinghua University, Beijing
+100084, China. 2School of Software and Microelectronics, Peking University,
+Beijing 102600, China. 3Infinity Robotics, Beijing, China. 4Tsinghua Shen-
+zhen International Graduate School, Tsinghua University, Shenzhen 518055,
+China. 5PICO, ByteDance Inc., Beijing, China.
+previously mapped scene [1], [2]. Such absolute fixes bound
+the drift of visual–inertial odometry and substitute for satellite
+positioning where it is unavailable or degraded, for example
+indoors and between tall buildings. Accuracy is not the only
+requirement in these deployments. The scene representation
+must fit into device memory, it must be rebuilt quickly when
+a site is remapped, and the per-query computation must fit the
+platform budget.
+Structure-based pipelines match local features against a
+structure-from-motion (SfM) point cloud [3], [4] and are accu-
+rate, but their maps occupy hundreds of megabytes (Table II).
+Scene coordinate regression (SCR) stores the scene implicitly
+in a network that predicts a 3D scene coordinate for every
+pixel; the pose then follows from the 2D–3D correspondences
+with RANSAC and a perspective-n-point (PnP) solver [5]–[7].
+ACE [8] reduced SCR mapping to minutes and the map to
+4 MB by training only a small regression head on the features
+of a frozen, scene-agnostic encoder. The capacity of a single
+head is shared by the entire scene, however, and on Cambridge
+Landmarks [1] the median translation error of ACE grows
+from 5 cm on the smallest scene to 43 cm on the largest.
+Partitioning the scene and assigning a regressor to each part
+raises capacity. ESAC [9] and the Poker ensemble of ACE [8]
+rely on fixed partitions, while MACE [10] learns a router that
+weights ACE experts pretrained on spatial clusters. In all three,
+the routing decision is computed from the same local encoder
+descriptor the experts regress from. Each descriptor covers an
+81×81-pixel receptive field, so repeated facades, windows,
+and weakly textured surfaces at different locations produce
+similar descriptors and hence similar routing inputs [11]. We
+refer to this as perceptual routing ambiguity. It differs from
+expert-load collapse, in which assignments concentrate on a
+few experts [12], [13]. Load balancing regularizes the marginal
+usage of the experts, but it does not tell the router which expert
+is geometrically appropriate for a given pixel.
+This paper studies whether conditioning the router on infor-
+mation beyond the local descriptor improves MoE-based SCR.
+We propose DAC-MACE (Dynamic Attention-driven Context
+MACE, Fig. 1). Two lightweight trainable modules are placed
+between the frozen ACE encoder and the experts: a residual
+context adapter (RCA) that rescales the channels and locations
+of the encoder features, and a global context encoder (GCE)
+that mixes features with multi-scale self-attention. An image-
+level pooled descriptor is further added to the router input,
+and the pose is recovered with a dual-threshold RANSAC–
+1
+arXiv:2611.10263v1  [cs.CV]  6 Nov 2026
+
+
+LM estimator. The design keeps the buffer-based training of
+ACE, which bounds the mapping time; Section III-G states
+precisely what context RCA and GCE observe under this
+training scheme.
+The contributions of this paper are as follows.
+• A context-conditioned soft MoE for SCR that keeps the
+encoder frozen and the ACE training pipeline intact,
+together with an explicit account of the context each
+module observes during training and at test time.
+• A dual-threshold RANSAC–LM pose stage with an inter-
+pretable selection rule, evaluated on fixed trained models
+and analyzed through per-scene branch statistics.
+• An evaluation on Cambridge Landmarks and 7-Scenes
+covering three-seed accuracy, a component-wise analysis,
+qualitative trajectory and feature-response diagnostics,
+expert usage, and model complexity. Among the RGB-
+only SCR methods compared, DAC-MACE has the low-
+est mean of per-scene median translation errors, every
+added component lowers that mean, and the largest gain
+over MACE is on the largest scene (Great Court, 24 to
+19 cm).
+II. RELATED WORK
+A. Structure-Based Localization and Retrieval
+Feature-matching pipelines establish 2D–3D correspon-
+dences between query keypoints and an SfM model [3], [4],
+[14], often after image retrieval narrows the search [11],
+[15]. InLoc [16] extends this to indoor scenes with dense
+matching, CAMNet [17] combines coarse-to-fine retrieval with
+relative pose estimation, and PixLoc [18] aligns learned feature
+maps directly. These methods are accurate but store descrip-
+tors for every 3D point; compression [19] or descriptor-free
+matching [20] reduces the map at a large cost in accuracy
+(Table II). Absolute pose regressors [1], [21], [22] are compact
+but considerably less accurate.
+B. Scene Coordinate Regression
+The DSAC family [6], [7], [23] learns per-pixel scene coor-
+dinates end to end with differentiable RANSAC. HSCNet [24]
+and HSCNet++ [25] predict coordinates hierarchically, first
+classifying the scene region and then regressing within it,
+and HSCNet++ adds transformer-based conditioning across
+levels. SRC [26] replaces regression with few-shot region
+classification, and SANet [27] regresses coordinates in a scene-
+agnostic manner. ACE [8] trains a scene-specific head on a
+buffer of frozen encoder features and maps a scene in about
+five minutes. GLACE [28] concatenates a pretrained image-
+retrieval descriptor to every local feature and predicts coordi-
+nates through a position decoder over clustered camera centers,
+which lets a single head scale to larger scenes. R-SCoRe [29]
+revisits the training of SCR for large-scale benchmarks such
+as Aachen Day–Night [2]. The image-level residual of our
+router is close in spirit to the global descriptor of GLACE; it
+differs in that it pools the scene-adapted features rather than a
+separately pretrained retrieval feature, and in that it conditions
+the router rather than the regressor.
+C. Partitioned and Mixture-of-Experts Regression
+ESAC [9] combines a gating network with expert regres-
+sors and samples hypotheses across experts. Poker [8] trains
+independent ACE heads on spatial clusters and selects the
+pose with the most inliers. MACE [10], the direct predecessor
+of this work, pretrains ACE experts on clusters of mapping-
+camera positions, routes features with a Gumbel-softmax
+gate [30], and balances the experts with an auxiliary-loss-free
+bias update [31]. DAC-MACE retains the experts, the position
+decoder, and the bias update of MACE. It changes the router
+input (RCA, GCE, and the pooled residual), adds a standard-
+deviation penalty on mean expert usage, evaluates all experts
+with soft weights at test time, and replaces the pose stage. In
+the broader MoE literature, load imbalance is countered with
+auxiliary losses [12], [13], [32]; routing ambiguity caused by
+uninformative router inputs has received less attention in SCR.
+D. Robust Pose Estimation
+RANSAC [33] remains the standard for PnP with outliers.
+LO-RANSAC [34] interleaves local optimization with hypoth-
+esis sampling, MAGSAC++ [35] marginalizes over the inlier
+threshold, and graduated non-convexity [36] solves robust
+estimation without sampling. DSAC* [7] and ACE score
+hypotheses with a soft inlier count and refine the best one
+iteratively. Our dual-threshold stage is a lightweight heuristic
+in this space that targets the varying coordinate accuracy of
+SCR predictions.
+III. METHOD
+A. Problem Formulation and Overview
+Given a grayscale query image I ∈RH×W from a cal-
+ibrated camera with intrinsics Kcam, we estimate its pose
+P = (R, t) ∈SE(3). SCR learns a mapping f from each
+pixel p to a scene coordinate yp ∈R3 and obtains the pose
+robustly from the correspondences,
+yp = f(I, p),
+P = PnP
+ {(p, yp)}, Kcam
+
+.
+(1)
+In large outdoor scenes, repeated structures make local de-
+scriptors ambiguous and increase the risk of coordinate out-
+liers. DAC-MACE therefore consists of a frozen encoder,
+RCA, GCE, a context-conditioned router with K experts, and
+a dual-threshold pose stage (Fig. 1). Table I summarizes the
+notation; each symbol has a single meaning throughout the
+paper.
+B. Frozen Encoder
+We use the pretrained ACE encoder [8], a fully convolu-
+tional ResNet-style network with stride 8, and keep it frozen:
+Fraw = E(I) ∈RC×H′×W ′,
+C = 512.
+(2)
+Each output vector has an 81×81-pixel receptive field in the
+input image. Freezing the encoder preserves its scene-agnostic
+representation and allows its features to be precomputed once
+into a training buffer, which is the basis of the short mapping
+time of ACE.
+2
+
+
+Fig. 1.
+DAC-MACE pipeline. The frozen ACE encoder produces Fraw. RCA recalibrates channels and locations (Frca), and GCE adds multi-scale self-
+attention context (Fg). The router receives Fg plus an image-level pooled residual and predicts per-pixel soft weights over K position-aware expert heads
+E1, . . . , EK, whose fused scene coordinates are passed to the dual-threshold RANSAC–LM pose stage. Training uses the reprojection loss Lsc and the
+load-balancing term Lbal.
+TABLE I
+NOTATION
+Symbol
+Meaning
+C, H′×W ′
+feature channels (512), feature-map size (H/8×W/8)
+Fraw, Frca, Fg
+encoder, RCA, and GCE features
+K, k
+number of experts, expert index
+gk(p)
+routing weight of expert k at pixel p
+γr, γr, γf
+RCA gate; GCE branch and fusion LayerScales
+r ∈{1, 2}
+GCE pooling scale
+η
+weight of the router’s pooled residual
+M, ck,m
+number of stored centers per expert, centers
+B
+number of buffer features per training step
+ω(t)
+soft-clamp threshold of the reprojection loss
+τs, τl
+strict and loose RANSAC inlier thresholds (px)
+ρ(P, τ)
+threshold-normalized support of hypothesis P
+C. Residual Context Adapter
+The encoder is trained once for all scenes, so its channels
+are not tuned to any particular one. RCA is a per-scene adapter
+that reweights them before routing. Following CBAM [37], a
+channel gate and a spatial gate are applied in sequence,
+Mc = σ
+ ϕ(AvgPool(Fraw)) + ϕ(MaxPool(Fraw))
+
+∈RC,
+(3)
+Fc = Mc ⊙Fraw,
+(4)
+Ms = σ
+ κ7×7 ∗[AvgC(Fc); MaxC(Fc)]
+
+∈RH′×W ′,
+(5)
+where ϕ is a shared two-layer MLP with reduction ratio 16,
+AvgC and MaxC pool over channels, κ7×7 is a 7×7 convo-
+lution, and σ is the sigmoid. Because a randomly initialized
+multiplicative gate applied to frozen features can destabilize
+the early iterations, the output is blended with a learnable
+scalar,
+Frca = Fraw + γr
+ Ms ⊙Fc −Fraw
+
+,
+γ(0)
+r
+= 0.01, (6)
+so that RCA starts close to the identity and keeps the randomly
+initialized adapter near the frozen feature distribution at the
+beginning of training. The channel gate emphasizes encoder
+channels that are informative for the mapped scene, and the
+spatial gate scales each feature vector according to its channel-
+pooled response, attenuating weak or uninformative responses
+before they reach the router.
+D. Global Context Encoder
+RCA does not enlarge the receptive field, so a feature
+on a repeated window is still described only by its 81×81-
+pixel neighborhood. GCE lets every feature attend to all other
+features of the image through content-based self-attention
+without positional encoding [38], [39]. For scale r, the input
+Frca is average-pooled by r×r, flattened to Xr ∈RNr×C,
+and processed by a pre-normalized eight-head attention block,
+Ar = Xr + γr ⊙MHA
+ LN(Xr)
+
+,
+r ∈{1, 2},
+(7)
+where MHA computes, for each head,
+Attention(Q, Ka, V) = softmax
+ QK⊤
+a /
+√
+d
+
+V,
+(8)
+with head dimension d = C/8 and Q, Ka, V linear projec-
+tions of LN(Xr). The scale-2 output is bilinearly upsampled
+to H′×W ′, and the branches are fused as
+Fg = Frca + γf ⊙ψ
+ [A1; Up(A2)]
+
+,
+(9)
+where ψ is a 1×1 convolution with batch normalization and
+ReLU. The convolution weights of ψ are initialized to zero
+and all LayerScale vectors [40] to 0.01, so GCE initially
+3
+
+
+passes Frca through unchanged. Attention dropout of 0.1
+and stochastic depth [41] regularize the per-scene training.
+The scale-1 branch relates individual features, whereas the
+scale-2 branch attends over 2×2-pooled features, which are
+four times fewer and summarize larger regions; the two-scale
+construction follows ASpanFormer [42].
+E. Context-Conditioned Router and Position-Aware Experts
+A single regression head has limited capacity in large
+scenes [10], while fixed, pre-partitioned ensembles such as
+Poker [8] inherit the boundaries of the initial clustering. We
+therefore use a dynamic MoE with K experts and a context-
+aware router.
+Router. The router receives the GCE features plus an image-
+level residual,
+Frouter = Fg + η GAP(Fg),
+η(0) = 0,
+(10)
+where GAP denotes global average pooling over the spatial di-
+mensions, broadcast back to every location. A four-layer MLP
+with hidden widths 512, 512, and 256, layer normalization,
+ReLU, and dropout 0.05 predicts K logits z(p) per pixel, to
+which a per-expert bias b is added. Training uses the Gumbel-
+softmax relaxation [30] with temperature 1, and inference uses
+the softmax, yielding weights g(p) on the probability simplex.
+The resulting weights define a continuous partition of the
+scene.
+Experts. Each expert is an ACE regression head [8] with the
+position decoder of GLACE and MACE [10], [28]: it predicts
+softmax weights ak(p) over M = 50 stored scene centers
+{ck,m} and adds a coordinate residual uk(p),
+ˆyk
+p = uk(p) +
+M
+X
+m=1
+ak,m(p) ck,m.
+(11)
+When an expert predicts homogeneous coordinates, the output
+is dehomogenized before fusion. Following MACE, expert k
+is initialized from an ACE head trained on the k-th cluster of
+mapping-camera positions. All experts take Fg as input, and
+the final coordinate is the routing-weighted sum
+yp =
+K
+X
+k=1
+gk(p) ˆyk
+p.
+(12)
+Because routing is soft, all K experts are evaluated at every
+pixel; DAC-MACE thus increases capacity without sparse-
+compute savings, and its cost is analyzed in Section IV-H.
+Number of experts. We use K=2 for the two Cambridge
+scenes with the smallest mapped area, Shop Facade (875 m2)
+and Old Hospital (2,000 m2), and K=4 for King’s College
+(5,600 m2), St Mary’s Church (4,800 m2), and Great Court
+(8,000 m2); the areas are those given in [1].
+F. Training Objective
+Following ACE, valid predictions are supervised with the
+dynamic-tanh reprojection loss. For a pixel with reprojection
+error ep at training step t of T,
+Lrepro(ep, t) = ω(t) tanh
+ ep/ω(t)
+
+,
+(13)
+where the soft-clamp threshold decreases from ωmax = 50 px
+to ωmin = 1 px as
+ω(t) = ωmin +
+
+1 −
+p
+1 −(t/T)2
+
+(ωmax −ωmin).
+(14)
+Invalid predictions (behind the camera, too far, or with a
+reprojection error above a hard clamp) receive an ℓ1 penalty
+Linvalid toward a fixed-depth target in camera coordinates [7],
+[8]. A small penalty on the spread of mean expert usage is
+added,
+L = Lrepro + Linvalid
+|
+{z
+}
+Lsc
++λ stdk
+ ¯gk
+
+|
+{z
+}
+Lbal
+,
+¯gk = 1
+B
+X
+p
+gk(p),
+(15)
+with λ = 0.01. In addition, the router bias is updated without
+gradients after every step, as in the auxiliary-loss-free scheme
+of MACE [10], [31]: an exponential moving average ¯uk of ¯gk
+(momentum 0.9) shifts bk ←bk −0.1 (¯uk −1/K). No routing-
+entropy term is optimized; routing entropy is computed only
+as a diagnostic (Section IV-G).
+G. Training Protocol
+We keep the two-step, buffer-based protocol of ACE [8].
+1) Buffer fill. The frozen encoder is run in evaluation mode
+without gradients over the augmented mapping images.
+For each image, 1,024 valid feature vectors are written,
+together with their pixel coordinates, inverse camera
+pose, and intrinsics, into a shuffled CPU buffer of 64 M
+entries; features are stored in 16-bit precision. The buffer
+holds raw encoder features, i.e., before RCA and GCE.
+2) Context-routing stage. Each training step draws B =
+163,840 buffer entries, reshapes them into B/512 blocks
+of 16×32 features, and applies RCA, GCE, the router,
+and the experts. The experts are trained sequentially: for
+each k, expert k, the router, RCA, and GCE are updated
+for 16 epochs while the encoder and the other experts
+stay frozen.
+We use AdamW with weight decay 10−4 and no gradient
+clipping, a one-cycle learning-rate schedule with peak rates
+of 5×10−3 for the active expert, RCA, and GCE and 5×10−4
+for the router, and mixed precision. Apart from K, all training
+and pose-estimation settings are shared across scenes; Table IV
+lists them.
+What context the modules observe. The 16×32 blocks in
+step 2 are not image regions: their 512 entries are drawn
+from different mapping images and locations. During training,
+therefore, the channel gate of RCA pools statistics over a
+random set of scene features; the spatial gate and the 2×2
+pooling of the scale-2 GCE branch combine unrelated neigh-
+bors; and scale-1 attention, which is permutation-equivariant
+because it has no positional encoding, aggregates over features
+from many images. At test time, the same operators act on the
+coherent feature map of one image. GCE is therefore trained
+as a content-based aggregation over sets of scene features and
+applied within a single view at test time. This preserves the fast
+buffer-based training, and the results in Section IV show that
+the resulting modules improve accuracy on average; a training
+scheme with image-coherent feature windows is left to future
+work (Section IV-J).
+4
+
+
+TABLE II
+CAMBRIDGE LANDMARKS: MEDIAN TRANSLATION (CM) / ROTATION (◦) ERRORS. AVG. IS THE MEAN OF THE FIVE PER-SCENE MEDIANS, COMPUTED
+FROM THE VALUES LISTED. BOLD MARKS THE BEST RGB-ONLY SCR TRANSLATION ERROR PER COLUMN. MAPPING TIMES COME FROM DIFFERENT
+IMPLEMENTATIONS AND HARDWARE AND ARE INDICATIVE ONLY. †EXCLUDES PRE-CLUSTERING TIME. ‡ROUTING STAGE, EXCLUDING THE ACE
+PRETRAINING OF THE CLUSTER EXPERTS. §EXPERT HEADS; FOR DAC-MACE, K=4 (5 MB FOR K=2), WITH THE CONTEXT MODULES LISTED IN
+TABLE X. THE DAC-MACE ROW IS THE MEAN OVER THREE SEEDS.
+Method
+Mesh/
+Depth
+Mapping
+time
+Map
+size
+Great
+Court
+King’s
+College
+Old
+Hospital
+Shop
+Facade
+St Mary’s
+Church
+Avg.
+(cm/◦)
+FM
+AS (SIFT) [3]
+No
+–
+∼200 MB
+24/0.1
+13/0.2
+20/0.4
+4/0.2
+8/0.3
+13.8/0.24
+hLoc (SP+SG) [4], [14]
+No
+–
+∼800 MB
+16/0.1
+12/0.2
+15/0.3
+4/0.2
+7/0.2
+10.8/0.20
+PixLoc [18]
+No
+∼35 min
+∼600 MB
+30/0.1
+14/0.2
+16/0.3
+5/0.2
+10/0.3
+15.0/0.22
+GoMatch [20]
+No
+–
+∼12 MB
+N/A
+25/0.6
+283/8.1
+48/4.8
+335/9.9
+N/A
+HybridSC [19]
+No
+–
+∼1 MB
+N/A
+81/0.6
+75/1.0
+19/0.5
+50/0.5
+N/A
+APR
+PoseNet17 [21]
+No
+4–24 h
+50 MB
+683/3.5
+88/1.0
+320/3.3
+88/3.8
+157/3.3
+267.2/2.98
+MS-Transformer [22]
+No
+∼7 h
+∼18 MB
+N/A
+83/1.5
+181/2.4
+86/3.1
+162/4.0
+N/A
+SCR+D
+DSAC* (Full) [7]
+Yes
+15 h
+28 MB
+49/0.3
+15/0.3
+21/0.4
+5/0.3
+13/0.4
+20.6/0.34
+SANet [27]
+Yes
+∼1 min
+∼260 MB
+328/2.0
+32/0.5
+32/0.5
+10/0.5
+16/0.6
+83.6/0.82
+SRC [26]
+Yes
+2 min†
+40 MB
+81/0.5
+39/0.7
+38/0.5
+19/1.0
+31/1.0
+41.6/0.74
+SCR (RGB only)
+DSAC* (Full) [7]
+No
+15 h
+28 MB
+34/0.2
+18/0.3
+21/0.4
+5/0.3
+15/0.6
+18.6/0.36
+DSAC* (Tiny) [7]
+No
+11 h
+4 MB
+98/0.5
+27/0.4
+33/0.6
+11/0.5
+56/1.8
+45.0/0.76
+ACE [8]
+No
+5 min
+4 MB
+43/0.2
+28/0.4
+31/0.6
+5/0.3
+18/0.6
+25.0/0.42
+Poker [8]
+No
+20 min
+16 MB
+28/0.1
+18/0.3
+25/0.5
+5/0.3
+9/0.3
+17.0/0.30
+GLACE [28]
+No
+80 min
+13 MB
+19/0.1
+19/0.3
+17/0.4
+4/0.2
+9/0.3
+13.6/0.26
+MACE [10]
+No
+30 min‡
+5 MB§
+24/0.2
+15/0.3
+19/0.4
+5/0.2
+9/0.3
+14.4/0.28
+DAC-MACE (ours)
+No
+35 min‡
+10 MB§
+19/0.1
+15/0.3
+18/0.4
+5/0.2
+8/0.3
+13.0/0.26
+10
+100
+1000
+Map Size (MB, log scale)
+10
+20
+30
+40
+50
+60
+70
+80
+90
+Average Position Error (cm)
+Feature Matching (FM)
+SCR with Depth
+SCR (RGB only)
+DAC-MACE (ours)
+AS (SIFT)
+[ECCV2012]
+hLoc (SP+SG)
+[CVPR2019]
+PixLoc
+[CVPR2021]
+DSAC* (w/Depth)
+[TPAMI2022]
+SRC (w/Depth)
+[3DV2022]
+SANet (w/Depth)
+[ICCV2019]
+DSAC* (SCR)
+[TPAMI2022]
+DSAC* (Tiny)
+[TPAMI2022]
+ACE
+[CVPR2023]
+Poker (ACE x4)
+[CVPR2023]
+GLACE
+[CVPR2024]
+MACE
+[arXiv2025]
+DAC-MACE (ours)
+Fig. 2. Memory–accuracy trade-off on Cambridge Landmarks: map size versus the mean of per-scene median translation errors (values of Table II). DAC-
+MACE has the lowest error among the RGB-only SCR methods. Plotted method/value pairs: AS (200 MB, 13.8 cm), hLoc (800, 10.8), PixLoc (600, 15.0),
+DSAC* with depth (28, 20.6), SRC with depth (40, 41.6), SANet with depth (260, 83.6), RGB-only DSAC* (28, 18.6), DSAC* Tiny (4, 45.0), ACE (4, 25.0),
+Poker (16, 17.0), GLACE (13, 13.6), MACE (5, 14.4), and DAC-MACE (10, 13.0).
+H. Dual-Threshold Pose Estimation
+Coordinate accuracy varies across scenes and images: a
+strict inlier threshold yields precise hypotheses when coor-
+dinates are accurate, whereas a loose threshold retains enough
+support when they are noisy. Given the dense prediction
+{(p, yp)}, we therefore run two RANSAC searches with
+thresholds τs < τl, each with 256 hypotheses from mini-
+mal PnP samples and soft-inlier scoring as in DSAC* [7],
+yielding Ps and Pl. A looser threshold admits more inliers
+by construction, so the two hypotheses are compared by the
+threshold-normalized support
+ρ(P, τ) = |I(P, τ)|/τ,
+(16)
+where I(P, τ) is the set of correspondences with reprojection
+error below τ, and the hypothesis with the larger support
+is selected. The rule selects the loose hypothesis only if
+|I(Pl, τl)| > (τl/τs) |I(Ps, τs)|, i.e., if it gathers at least
+τl/τs
+= 1.67 times as many inliers. The rule does not
+assume that inlier counts grow linearly with the threshold;
+it fixes the exchange rate between precision and support so
+that the strict hypothesis is preferred unless the loose one
+is substantially better supported. The selected pose is refined
+by Levenberg–Marquardt (LM) [43] on the reprojection error,
+first over inliers at 12 px and then at 5 px, with at least
+50 correspondences required before each round. Like LO-
+RANSAC [34], the procedure combines hypothesis search
+with local optimization; unlike it, the two operating points are
+5
+
+
+searched independently and the local optimization is applied
+only to the selected hypothesis. The constants of both branches
+are listed in Table IV.
+IV. EXPERIMENTS
+A. Datasets, Reference Poses, and Metrics
+Cambridge Landmarks [1] contains five outdoor scenes with
+SfM reference poses; the numbers of mapping and query
+images are listed in Table VIII. Images are rescaled to a
+height of 480 px. 7-Scenes [5] contains seven indoor scenes
+(Chess, Fire, Heads, Office, Pumpkin, Red Kitchen, and Stairs)
+recorded at 640×480. For 7-Scenes we use the original D-
+SLAM (KinectFusion) reference poses for all methods in
+Table V; methods evaluated against SfM pseudo ground truth
+are not directly comparable [44]. We report per-scene median
+translation and rotation errors. For Cambridge, “Avg.” is the
+arithmetic mean of the five per-scene medians, not a pooled
+median, and is given with one decimal because the differences
+between the strongest methods are about 1 cm; for 7-Scenes
+we also report the fraction of queries within (5 cm, 5◦).
+B. Implementation Details
+DAC-MACE is implemented on top of ACE [8]; all settings
+are listed in Table IV. The Cambridge results of DAC-
+MACE are means over three training seeds; per-scene standard
+deviations are below 0.5 cm and 0.05◦. All models are trained
+on a single NVIDIA GPU with mixed precision. Following
+MACE [10], the mapping time is the wall-clock time of the
+routing stage, from the first buffer write to the saved model,
+and excludes the ACE pretraining of the cluster experts; the
+map size counts the expert heads in 16-bit precision, with
+1 MB = 220 bytes. The context modules (RCA, GCE, and
+the router) add 3.32 M scene-specific parameters, which are
+reported separately in Table X. Baseline accuracies are those
+reported in the original papers.
+C. Comparison on Cambridge Landmarks
+Table II compares DAC-MACE with feature-matching
+(FM), absolute pose regression (APR), and SCR methods.
+Among the RGB-only SCR methods, DAC-MACE has the
+lowest mean translation error, 13.0 cm, against 13.6 cm for
+GLACE and 14.4 cm for MACE, and it is the best or tied
+best on Great Court, King’s College, and St Mary’s Church.
+The largest improvement is on Great Court, the largest scene,
+where the error falls from 24 cm (MACE) to 19 cm, matching
+GLACE; GLACE remains better on Old Hospital and Shop
+Facade by 1 cm. Relative to the RGB-only DSAC* (18.6 cm),
+whose mapping takes 15 h, DAC-MACE lowers the mean error
+by 5.6 cm with 35 min of mapping. The ranking does not
+depend on the pose stage: with the single-threshold stage of
+ACE and MACE, DAC-MACE averages 13.4 cm (Table VII),
+still below GLACE and MACE.
+Fig. 2 places the methods in the map-size–accuracy plane.
+The expert heads of DAC-MACE occupy 10 MB for K=4,
+between MACE (5 MB) and GLACE (13 MB) and 20–80
+times less than the structure-based methods, which reach 10.8–
+15.0 cm with 200–800 MB. Among the compact representa-
+tions below 50 MB, DAC-MACE gives the lowest error.
+Fig. 3. Trajectory visualization on Great Court. (a) Mapping-camera centers
+(blue squares) and all 760 estimated query camera centers (pink) over the
+sparse SfM point cloud. (b) The same query estimates colored by translation
+error; values of 20 cm and above saturate the color scale. The point cloud is
+thinned for display, while every query is shown. Camera centers are drawn
+without frustums, so the visualization does not depend on a camera-forward
+convention.
+Fig. 4.
+Trajectory visualization on St Mary’s Church. Left: mapping and
+estimated query camera positions over the SfM point cloud. Right: estimated
+query positions colored by translation error.
+D. Qualitative Trajectory Analysis
+Figs. 3 and 4 show where in the scene DAC-MACE localizes
+the query images. On Great Court, Fig. 3b shows how the
+translation errors of the reference run are distributed over the
+court; 172 of the 760 queries (22.6%) are localized within
+10 cm. Fig. 4 gives the corresponding visualization for St
+Mary’s Church, whose long facade contains repeated windows.
+These visualizations localize failures spatially; the benchmark
+medians in Table II remain the quantitative result.
+E. Component Analysis
+Table III adds the components one at a time, and Table VI
+lists the per-scene change contributed by each. Replacing
+the fixed Poker ensemble with the learned MoE of MACE
+gives the largest single reduction, from 17.0 to 14.4 cm, with
+gains on Great Court, King’s College, and Old Hospital.
+Conditioning the router on GCE features lowers the mean to
+14.0 cm; the gain comes from Great Court, the largest and most
+repetitive scene, where the error drops from 24 to 21 cm, while
+King’s College changes by +1 cm. Adding RCA lowers the
+mean to 13.6 cm through King’s College, Old Hospital, and
+St Mary’s Church, two of which are dominated by repeated
+window patterns, at the cost of 1 cm on Great Court. The
+dual-threshold pose stage then brings Great Court to 19 cm
+6
+
+
+TABLE III
+CUMULATIVE COMPONENT ANALYSIS ON CAMBRIDGE LANDMARKS: MEDIAN TRANSLATION (CM) / ROTATION (◦). EACH ROW ADDS ONE
+COMPONENT TO THE PREVIOUS ROW. THE FIRST TWO ROWS ARE THE POKER AND MACE CONFIGURATIONS WITH THE VALUES REPORTED IN [8],
+[10]; THE GCE, RCA, AND DUAL-THRESHOLD ROWS ARE THE REFERENCE RUN (SEED 2089); THE LAST ROW IS THE THREE-SEED MEAN OF THE
+FULL MODEL. ∆AVG. IS THE CHANGE IN MEAN TRANSLATION ERROR WITH RESPECT TO THE PREVIOUS ROW.
+Variant
+Great Court
+King’s College
+Old Hospital
+Shop Facade
+St Mary’s
+Avg.
+∆Avg.
+ACE Poker [8]
+28/0.1
+18/0.3
+25/0.5
+5/0.3
+9/0.3
+17.0/0.30
+–
++ MoE (MACE configuration) [10]
+24/0.2
+15/0.3
+19/0.4
+5/0.2
+9/0.3
+14.4/0.28
+−2.6
++ GCE
+21/0.1
+16/0.3
+19/0.4
+5/0.2
+9/0.3
+14.0/0.26
+−0.4
++ RCA
+22/0.1
+15/0.3
+18/0.4
+5/0.2
+8/0.3
+13.6/0.26
+−0.4
++ Dual-threshold pose stage
+19/0.1
+15/0.3
+18/0.4
+5/0.2
+8/0.4
+13.0/0.28
+−0.6
+DAC-MACE, mean of three seeds
+19/0.1
+15/0.3
+18/0.4
+5/0.2
+8/0.3
+13.0/0.26
+TABLE IV
+TRAINING AND POSE-ESTIMATION SETTINGS, SHARED BY ALL SCENES
+Item
+Setting
+Mapping data
+Augmentation
+grayscale; brightness/contrast ±10%; rotation ±15◦;
+scale [0.67, 1.5]
+Buffer
+64 M features, 1,024 per image, 16-bit
+Batch
+163,840 features (320 × 16 × 32)
+Optimization
+Schedule
+16 epochs per expert, sequential over experts
+Optimizer
+AdamW, weight decay 10−4, no gradient clipping
+Peak learning rate
+5×10−3 (expert, RCA, GCE); 5×10−4 (router); one-
+cycle
+Reprojection loss
+dynamic tanh, ωmax = 50 px, ωmin = 1 px
+Load balancing
+λ = 0.01; bias EMA momentum 0.9, step 0.1
+Seeds
+2089, 2090, 2091
+Network
+RCA
+reduction 16, 7×7 kernel, γ(0)
+r
+= 0.01
+GCE
+8 heads, scales {1, 2}, attention dropout 0.1, stochastic
+depth ≤0.1, LayerScale 0.01
+Router
+MLP 512–512–256, LayerNorm, dropout 0.05, Gumbel
+τ = 1
+Experts
+K ∈{2, 4}, M = 50 centers each
+Pose estimation
+Strict branch
+256 hypotheses, τs = 6 px, sharpness 140, clamp 80 px
+Loose branch
+256 hypotheses, τl = 10 px, sharpness 100, clamp
+100 px
+LM refinement
+12 px then 5 px, ≥50 correspondences, stride 2, ≤
+12,000 points
+and the mean to 13.0 cm. Every component therefore lowers
+the mean error, by 0.4–0.6 cm for each of the three proposed
+components and 0.8 cm for RCA and GCE together, and the
+per-scene effects are complementary: GCE acts mainly on the
+largest scene and RCA on facade scenes. As the intermediate
+rows come from a single seed at 1-cm resolution, per-scene
+changes of 1 cm are indicative only; the five-scene mean,
+which the three-seed run of the full model reproduces, is the
+more reliable quantity.
+F. Pose-Stage Analysis
+Table VII keeps the trained networks fixed and changes
+only the pose stage, from the single-threshold stage of ACE
+and MACE (one RANSAC search at 10 px followed by LM
+refinement) to the dual-threshold stage. The mean translation
+error falls from 13.4 to 13.0 cm, with improvements on Great
+Court (20 to 19 cm) and King’s College (16 to 15 cm) and
+no change on the other scenes at the displayed precision.
+Table VIII shows how often each branch is selected. Over
+Fig. 5. Qualitative feature-response diagnostic on a repetitive Old Hospital
+facade. Left: query image; the red cross marks the query location. Middle:
+cosine similarity between the query feature and every feature of the image
+before GCE. Right: the same after GCE. Each map is min–max normalized
+to [0, 1] independently and bilinearly upsampled, so colors indicate spatial
+concentration rather than calibrated confidence.
+Fig. 6.
+Hard expert-selection ratios (%) of DAC-MACE on Cambridge
+Landmarks, without (left) and with (right) load balancing, i.e., the standard-
+deviation penalty in (15) and the router-bias update. Crossed cells mark experts
+that do not exist in the K=2 models.
+all 1,918 Cambridge queries, the strict branch is selected for
+82.9% and the loose branch for 17.1%, and the split depends
+strongly on the scene. On King’s College and Old Hospital
+the strict branch is selected almost always, so the gain on
+King’s College comes from the strict 6-px operating point and
+the two-round refinement. On Great Court, about one query
+in five is better supported at the loose threshold. On Shop
+Facade, the smallest scene, 97.1% of the queries select the
+loose branch without loss of accuracy, which indicates that a
+single threshold is not optimal for all scenes.
+G. Routing Analysis
+The router is analyzed with respect to the two failure modes
+of Section I.
+Perceptual routing ambiguity. For a fixed query location
+on a repetitive Old Hospital facade, we compute the cosine
+similarity between its feature and every feature of the image,
+before and after GCE (Fig. 5). Before GCE, the response
+7
+
+
+TABLE V
+7-SCENES WITH D-SLAM REFERENCE POSES: MEDIAN TRANSLATION (CM) / ROTATION (◦) AND RECALL@(5 CM, 5◦) IN %. “SCR+D” DENOTES
+SCR METHODS TRAINED WITH DEPTH OR GEOMETRY. ACE AND ACE+GCE WERE TRAINED BY US WITH IDENTICAL SETTINGS; ACE+GCE HAS A
+SINGLE HEAD AND NO MOE. THE ORACLE RECALL IS REPRODUCED FROM [18]. BOLD: BEST ROTATION ERROR AND RECALL PER COLUMN, AND
+BEST TRANSLATION ERROR WHERE IT IS UNIQUE AT 1-CM RESOLUTION.
+Method
+Chess
+Fire
+Heads
+Office
+Pumpkin
+Red Kitchen
+Stairs
+Recall (%)
+FM
+DenseVLAD [11]
+21/12.5
+33/13.8
+15/14.9
+28/11.2
+31/11.3
+30/12.3
+25/15.8
+N/A
+Oracle [18]
+16/12.3
+26/13.6
+12/14.7
+20/11.5
+19/14.0
+18/15.0
+17/18.1
+0.17
+AS [3]
+3/0.87
+2/1.01
+1/0.82
+4/1.15
+7/1.69
+5/1.72
+4/1.01
+68.7
+InLoc [16]
+3/1.05
+3/1.07
+2/1.16
+3/1.05
+5/1.55
+4/1.31
+9/2.47
+66.3
+hLoc [4], [14]
+2/0.85
+2/0.94
+1/0.75
+3/0.92
+5/1.30
+4/1.40
+5/1.47
+73.1
+PixLoc [18]
+2/0.80
+2/0.73
+1/0.82
+3/0.82
+4/1.21
+3/1.20
+5/1.30
+75.7
+PixLoc + oracle prior [18]
+2/0.80
+2/0.70
+1/0.78
+3/0.80
+4/1.13
+3/1.14
+4/1.08
+81.7
+CAMNet [17]
+4/1.73
+3/1.74
+5/1.98
+4/1.62
+4/1.64
+4/1.63
+4/1.51
+N/A
+SCR+D
+DSAC* [7]
+2/1.10
+2/1.24
+1/1.82
+3/1.15
+4/1.34
+4/1.68
+3/1.16
+85.2
+HSCNet [24]
+2/0.70
+2/0.90
+1/0.90
+3/0.80
+4/1.00
+4/1.20
+3/0.80
+84.8
+SANet [27]
+3/0.88
+3/1.08
+2/1.48
+3/1.00
+5/1.32
+4/1.40
+16/4.59
+68.2
+SCR
+ACE [8] (our run)
+2/0.71
+2/0.81
+1/0.68
+3/0.86
+4/1.11
+4/1.31
+4/1.07
+86.56
+ACE + GCE (ours)
+2/0.55
+2/0.76
+1/0.65
+2/0.83
+3/1.14
+3/1.05
+13/2.50
+87.60
+TABLE VI
+PER-SCENE CHANGE IN MEDIAN TRANSLATION ERROR (CM)
+CONTRIBUTED BY EACH COMPONENT, DERIVED FROM CONSECUTIVE
+ROWS OF TABLE III. NEGATIVE VALUES DENOTE IMPROVEMENT.
+Scene
+MoE
+GCE
+RCA
+Dual-threshold
+Great Court
+−4
+−3
++1
+−3
+King’s College
+−3
++1
+−1
+0
+Old Hospital
+−6
+0
+−1
+0
+Shop Facade
+0
+0
+0
+0
+St Mary’s Church
+0
+0
+−1
+0
+Avg.
+−2.6
+−0.4
+−0.4
+−0.6
+TABLE VII
+POSE-STAGE ABLATION ON THE FIXED TRAINED DAC-MACE MODELS
+(MEAN OF THREE SEEDS): MEDIAN TRANSLATION (CM) / ROTATION (◦).
+ONLY THE INFERENCE-TIME POSE STAGE IS CHANGED.
+Scene
+Single-threshold
+PnP+LM
+Dual-threshold
+RANSAC+LM
+Great Court
+20/0.1
+19/0.1
+King’s College
+16/0.3
+15/0.3
+Old Hospital
+18/0.4
+18/0.4
+Shop Facade
+5/0.2
+5/0.2
+St Mary’s Church
+8/0.3
+8/0.3
+Avg.
+13.4/0.26
+13.0/0.26
+is diffuse: features across the repeated facade are similar to
+the query feature, so a router operating on them cannot tell
+the repetitions apart. After GCE, the response is spatially
+more concentrated. This qualitative diagnostic illustrates how
+context mixing changes the router input; its effect on accuracy
+is given by the component analysis in Table III.
+Expert-load collapse. Fig. 6 and Table IX report hard expert-
+selection ratios and three statistics derived from them. Without
+load balancing, the K=2 models route every pixel to a single
+expert, and the K=4 models effectively use two or three
+experts (Neff of 1.98–2.98). With balancing, the normalized
+entropy exceeds 0.94 in every scene, the effective number
+of experts reaches 3.70–3.95 of 4 for the large scenes, and
+the largest expert share falls in every scene. These statistics
+TABLE VIII
+CAMBRIDGE DATA SPLIT AND DUAL-THRESHOLD BRANCH SELECTION.
+STRICT AND LOOSE COUNTS SUM TO EACH SCENE’S NUMBER OF QUERY
+IMAGES.
+Scene
+Mapping
+Strict, 6 px
+Loose, 10 px
+Query
+Great Court
+1,531
+617 (81.2%)
+143 (18.8%)
+760
+King’s College
+1,220
+343 (100.0%)
+0 (0.0%)
+343
+Old Hospital
+895
+179 (98.4%)
+3 (1.6%)
+182
+Shop Facade
+231
+3 (2.9%)
+100 (97.1%)
+103
+St Mary’s Church
+1,487
+448 (84.5%)
+82 (15.5%)
+530
+All scenes
+5,364
+1,590 (82.9%)
+328 (17.1%)
+1,918
+TABLE IX
+EXPERT-USAGE STATISTICS DERIVED FROM FIG. 6, WITHOUT/WITH
+LOAD BALANCING (LB). WITH HARD SELECTION RATIOS pk,
+Hnorm = −P
+k pk log pk/ log K AND Neff = exp(−P
+k pk log pk);
+MAX: LARGEST EXPERT SHARE (%).
+Hnorm
+Neff
+Max (%)
+Scene
+K
+w/o
+w/
+w/o
+w/
+w/o
+w/
+Shop Facade
+2
+0.000
+0.986
+1.00
+1.98
+100.0
+56.9
+Old Hospital
+2
+0.000
+0.997
+1.00
+2.00
+100.0
+53.4
+King’s College
+4
+0.494
+0.977
+1.98
+3.88
+56.3
+32.9
+St Mary’s Church
+4
+0.532
+0.943
+2.09
+3.70
+51.8
+41.7
+Great Court
+4
+0.787
+0.990
+2.98
+3.95
+37.2
+30.1
+quantify how evenly the capacity is used, i.e., expert-load
+collapse rather than routing correctness.
+H. Model Complexity
+Table X lists the parameters and operations of each com-
+ponent, counted from the network definition. Besides the four
+expert heads (5.36 M parameters, 10 MB in 16-bit precision),
+the context modules add 3.32 M scene-specific parameters
+(6.3 MB). Per query, DAC-MACE needs about 2.6 times the
+operations of ACE. Scale-1 attention over the 6,420 feature
+tokens accounts for 98 GFLOPs, more than all four experts
+together; its attention matrices occupy about 0.6 GB in 16-bit
+precision unless a memory-efficient attention kernel is used.
+The scale-2 branch costs less than a tenth of the scale-1 branch,
+8
+
+
+TABLE X
+PARAMETERS AND FLOATING-POINT OPERATIONS OF DAC-MACE
+(K=4) FOR A 480×853 CAMBRIDGE QUERY (60×107 FEATURES),
+COMPUTED ANALYTICALLY FROM THE NETWORK DEFINITION. LAST
+COLUMN: SCENE-SPECIFIC PARAMETERS (M).
+Component
+Params (M)
+GFLOPs
+Scene (M)
+ACE encoder (frozen)
+5.57
+78.1
+–
+RCA
+0.03
+<0.1
+0.03
+GCE, scale-1 branch
+1.05
+97.9
+1.05
+GCE, scale-2 branch
+1.05
+8.5
+1.05
+GCE, fusion
+0.53
+6.7
+0.53
+Router
+0.66
+8.4
+0.66
+Experts (4×)
+5.36
+68.7
+5.36
+DAC-MACE total
+14.25
+268.3
+8.68
+ACE (encoder + one head)
+7.67
+105.0
+2.10
+so restricting GCE to the pooled scale, or using windowed or
+linear attention, is the most direct way to reduce the query
+cost for embedded deployment.
+I. Results on 7-Scenes
+7-Scenes is small and indoor, so we use it to test whether the
+context module also helps a single ACE head without MoE
+(Table V). Adding GCE to ACE raises the aggregate recall
+from 86.56% to 87.60%, the highest in the table and above
+the depth-supervised DSAC* (85.2%) and HSCNet (84.8%).
+It lowers the median translation error on Office, Pumpkin, and
+Red Kitchen (by 1 cm each), lowers the median rotation error
+on Chess (0.71 to 0.55◦) and Red Kitchen (1.31 to 1.05◦), and
+keeps or improves the remaining errors except the Pumpkin
+rotation (1.11 to 1.14◦) and Stairs. On Stairs, the median
+translation error rises from 4 to 13 cm. Stairs consists largely of
+identical steps, and content-based attention without positional
+encoding can aggregate features of different steps that look
+alike. The context module therefore transfers to small indoor
+scenes, with repetitive geometry of near-identical appearance
+as its failure mode.
+J. Limitations
+The full system is evaluated on Cambridge Landmarks,
+whose scenes span up to about 8,000 m2; city-scale bench-
+marks such as Aachen Day–Night [2] and LaMAR [45],
+together with a comparison to R-SCoRe [29] on them, are
+left to future work, as are changing illumination and seasons.
+The component analysis is cumulative, and its intermediate
+rows come from a single seed. The dual-threshold stage was
+evaluated on DAC-MACE against the single-threshold stage of
+ACE, but it was not applied to the baselines or compared with
+LO-RANSAC [34] or MAGSAC++ [35]. Routing ambiguity
+is illustrated qualitatively (Fig. 5) rather than measured; its
+reduction is inferred from the accuracy changes in Table III.
+RCA and GCE are trained on shuffled features (Section III-G);
+training on image-coherent feature windows may let the spatial
+operators learn genuine image-space context. Finally, soft
+routing evaluates every expert, and the complexity in Table X
+is computed analytically rather than measured on embedded
+hardware; sparse top-1 inference and lighter attention would
+reduce the query cost.
+V. CONCLUSION
+DAC-MACE conditions the expert routing of scene coor-
+dinate regression on recalibrated, context-mixed, and image-
+pooled features instead of on the local descriptor alone, and
+recovers the camera pose with a dual-threshold RANSAC–LM
+stage. On Cambridge Landmarks it obtains the lowest mean of
+per-scene median translation errors among the RGB-only SCR
+methods compared, 13.0 cm, with 10 MB of expert parameters
+and 35 min of routing-stage mapping, and reduces the error on
+the largest scene from 24 to 19 cm relative to MACE. Each
+proposed component lowers the mean error, GCE mainly on
+the largest scene and RCA on facade scenes, and the pose
+stage adapts its operating point to the scene. On 7-Scenes,
+the context module raises the recall of a single ACE head
+and lowers or keeps its median translation error on six of
+seven scenes. These properties make context-conditioned SCR
+a compact option for camera-based relocalization on mobile
+platforms; evaluation on city-scale and long-term benchmarks
+and a lighter attention design for embedded processors are the
+next steps.
+ACKNOWLEDGMENT
+The authors used an AI writing assistant (Claude, An-
+thropic) for language polishing of this manuscript. All techni-
+cal content, experimental data, and conclusions were produced
+and verified by the authors, who take full responsibility for the
+content of this article.
+REFERENCES
+[1] A. Kendall, M. Grimes, and R. Cipolla, “PoseNet: A convolutional
+network for real-time 6-DOF camera relocalization,” in Proc. IEEE Int.
+Conf. Comput. Vis. (ICCV), 2015, pp. 2938–2946.
+[2] T. Sattler, W. Maddern, C. Toft, A. Torii, L. Hammarstrand, E. Stenborg,
+D. Safari, M. Okutomi, M. Pollefeys, J. Sivic, F. Kahl, and T. Pajdla,
+“Benchmarking 6DOF outdoor visual localization in changing condi-
+tions,” in Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit. (CVPR),
+2018, pp. 8601–8610.
+[3] T. Sattler, B. Leibe, and L. Kobbelt, “Improving image-based localiza-
+tion by active correspondence search,” in Proc. Eur. Conf. Comput. Vis.
+(ECCV), 2012, pp. 752–765.
+[4] P.-E. Sarlin, C. Cadena, R. Siegwart, and M. Dymczyk, “From coarse to
+fine: Robust hierarchical localization at large scale,” in Proc. IEEE/CVF
+Conf. Comput. Vis. Pattern Recognit. (CVPR), 2019, pp. 12 716–12 725.
+[5] J. Shotton, B. Glocker, C. Zach, S. Izadi, A. Criminisi, and A. Fitzgib-
+bon, “Scene coordinate regression forests for camera relocalization in
+RGB-D images,” in Proc. IEEE Conf. Comput. Vis. Pattern Recognit.
+(CVPR), 2013, pp. 2930–2937.
+[6] E. Brachmann, A. Krull, S. Nowozin, J. Shotton, F. Michel, S. Gumhold,
+and C. Rother, “DSAC – differentiable RANSAC for camera localiza-
+tion,” in Proc. IEEE Conf. Comput. Vis. Pattern Recognit. (CVPR), 2017,
+pp. 6684–6692.
+[7] E. Brachmann and C. Rother, “Visual camera re-localization from RGB
+and RGB-D images using DSAC,” IEEE Trans. Pattern Anal. Mach.
+Intell., vol. 44, no. 9, pp. 5847–5865, 2022.
+[8] E. Brachmann, T. Cavallari, and V. A. Prisacariu, “Accelerated coordi-
+nate encoding: Learning to relocalize in minutes using RGB and poses,”
+in Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit. (CVPR), 2023,
+pp. 5044–5053.
+[9] E. Brachmann and C. Rother, “Expert sample consensus applied to
+camera re-localization,” in Proc. IEEE/CVF Int. Conf. Comput. Vis.
+(ICCV), 2019, pp. 7525–7534.
+[10] M. Liu, D. Fan, H. Que, H. Gao, X. Liu, S. Peng, M. Lin, S. Gu, R. Ye,
+W. Qiu, H. Yao, R. Zhang, and X. Huang, “MACE: Mixture-of-experts
+accelerated coordinate encoding for large-scale scene localization and
+rendering,” arXiv:2510.14251, 2025.
+9
+
+
+[11] A. Torii, R. Arandjelovi´c, J. Sivic, M. Okutomi, and T. Pajdla, “24/7
+place recognition by view synthesis,” in Proc. IEEE Conf. Comput. Vis.
+Pattern Recognit. (CVPR), 2015, pp. 1808–1817.
+[12] N. Shazeer, A. Mirhoseini, K. Maziarz, A. Davis, Q. Le, G. Hinton,
+and J. Dean, “Outrageously large neural networks: The sparsely-gated
+mixture-of-experts layer,” in Proc. Int. Conf. Learn. Represent. (ICLR),
+2017.
+[13] W. Fedus, B. Zoph, and N. Shazeer, “Switch transformers: Scaling to
+trillion parameter models with simple and efficient sparsity,” J. Mach.
+Learn. Res., vol. 23, no. 120, pp. 1–39, 2022.
+[14] P.-E. Sarlin, D. DeTone, T. Malisiewicz, and A. Rabinovich, “Super-
+Glue: Learning feature matching with graph neural networks,” in Proc.
+IEEE/CVF Conf. Comput. Vis. Pattern Recognit. (CVPR), 2020, pp.
+4938–4947.
+[15] R. Arandjelovi´c, P. Gronat, A. Torii, T. Pajdla, and J. Sivic, “NetVLAD:
+CNN architecture for weakly supervised place recognition,” in Proc.
+IEEE Conf. Comput. Vis. Pattern Recognit. (CVPR), 2016, pp. 5297–
+5307.
+[16] H. Taira, M. Okutomi, T. Sattler, M. Cimpoi, M. Pollefeys, J. Sivic,
+T. Pajdla, and A. Torii, “InLoc: Indoor visual localization with dense
+matching and view synthesis,” in Proc. IEEE/CVF Conf. Comput. Vis.
+Pattern Recognit. (CVPR), 2018, pp. 7199–7209.
+[17] M. Ding, Z. Wang, J. Sun, J. Shi, and P. Luo, “CamNet: Coarse-to-
+fine retrieval for camera re-localization,” in Proc. IEEE/CVF Int. Conf.
+Comput. Vis. (ICCV), 2019, pp. 2871–2880.
+[18] P.-E. Sarlin, A. Unagar, M. Larsson, H. Germain, C. Toft, V. Larsson,
+M. Pollefeys, V. Lepetit, L. Hammarstrand, F. Kahl, and T. Sattler, “Back
+to the feature: Learning robust camera localization from pixels to pose,”
+in Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit. (CVPR), 2021,
+pp. 3247–3257.
+[19] F. Camposeco, A. Cohen, M. Pollefeys, and T. Sattler, “Hybrid scene
+compression for visual localization,” in Proc. IEEE/CVF Conf. Comput.
+Vis. Pattern Recognit. (CVPR), 2019, pp. 7653–7662.
+[20] Q. Zhou, S. Agostinho, A. Oˇsep, and L. Leal-Taix´e, “Is geometry enough
+for matching in visual localization?” in Proc. Eur. Conf. Comput. Vis.
+(ECCV), 2022, pp. 407–425.
+[21] A. Kendall and R. Cipolla, “Geometric loss functions for camera pose
+regression with deep learning,” in Proc. IEEE Conf. Comput. Vis. Pattern
+Recognit. (CVPR), 2017, pp. 5974–5983.
+[22] Y. Shavit, R. Ferens, and Y. Keller, “Learning multi-scene absolute pose
+regression with transformers,” in Proc. IEEE/CVF Int. Conf. Comput.
+Vis. (ICCV), 2021, pp. 2733–2742.
+[23] E. Brachmann and C. Rother, “Learning less is more – 6D camera
+localization via 3D surface regression,” in Proc. IEEE/CVF Conf.
+Comput. Vis. Pattern Recognit. (CVPR), 2018, pp. 4654–4662.
+[24] X. Li, S. Wang, Y. Zhao, J. Verbeek, and J. Kannala, “Hierarchical
+scene coordinate classification and regression for visual localization,” in
+Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit. (CVPR), 2020,
+pp. 11 983–11 992.
+[25] S. Wang, Z. Laskar, I. Melekhov, X. Li, Y. Zhao, G. Tolias, and
+J. Kannala, “HSCNet++: Hierarchical scene coordinate classification and
+regression for visual localization with transformer,” Int. J. Comput. Vis.,
+vol. 132, no. 7, pp. 2530–2550, 2024.
+[26] S. Dong, S. Wang, Y. Zhuang, J. Kannala, M. Pollefeys, and B. Chen,
+“Visual localization via few-shot scene region classification,” in Proc.
+Int. Conf. 3D Vis. (3DV), 2022, pp. 393–402.
+[27] L. Yang, Z. Bai, C. Tang, H. Li, Y. Furukawa, and P. Tan, “SANet:
+Scene agnostic network for camera localization,” in Proc. IEEE/CVF
+Int. Conf. Comput. Vis. (ICCV), 2019, pp. 42–51.
+[28] F. Wang, X. Jiang, S. Galliani, C. Vogel, and M. Pollefeys, “GLACE:
+Global local accelerated coordinate encoding,” in Proc. IEEE/CVF Conf.
+Comput. Vis. Pattern Recognit. (CVPR), 2024, pp. 21 562–21 571.
+[29] X. Jiang, F. Wang, S. Galliani, C. Vogel, and M. Pollefeys, “R-SCoRe:
+Revisiting scene coordinate regression for robust large-scale visual
+localization,” in Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit.
+(CVPR), 2025, pp. 11 536–11 546.
+[30] E. Jang, S. Gu, and B. Poole, “Categorical reparameterization with
+Gumbel-Softmax,” in Proc. Int. Conf. Learn. Represent. (ICLR), 2017.
+[31] L. Wang, H. Gao, C. Zhao, X. Sun, and D. Dai, “Auxiliary-loss-free load
+balancing strategy for mixture-of-experts,” arXiv:2408.15664, 2024.
+[32] C. Riquelme, J. Puigcerver, B. Mustafa, M. Neumann, R. Jenatton,
+A. Susano Pinto, D. Keysers, and N. Houlsby, “Scaling vision with
+sparse mixture of experts,” in Proc. Adv. Neural Inf. Process. Syst.
+(NeurIPS), 2021, pp. 8583–8595.
+[33] M. A. Fischler and R. C. Bolles, “Random sample consensus: A
+paradigm for model fitting with applications to image analysis and
+automated cartography,” Commun. ACM, vol. 24, no. 6, pp. 381–395,
+1981.
+[34] O. Chum, J. Matas, and J. Kittler, “Locally optimized RANSAC,” in
+Proc. DAGM Symp. Pattern Recognit., 2003, pp. 236–243.
+[35] D. Barath, J. Noskova, M. Ivashechkin, and J. Matas, “MAGSAC++, a
+fast, reliable and accurate robust estimator,” in Proc. IEEE/CVF Conf.
+Comput. Vis. Pattern Recognit. (CVPR), 2020, pp. 1304–1312.
+[36] H. Yang, P. Antonante, V. Tzoumas, and L. Carlone, “Graduated non-
+convexity for robust spatial perception: From non-minimal solvers to
+global outlier rejection,” IEEE Robot. Autom. Lett., vol. 5, no. 2, pp.
+1127–1134, 2020.
+[37] S. Woo, J. Park, J.-Y. Lee, and I. S. Kweon, “CBAM: Convolutional
+block attention module,” in Proc. Eur. Conf. Comput. Vis. (ECCV), 2018,
+pp. 3–19.
+[38] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N. Gomez,
+Ł. Kaiser, and I. Polosukhin, “Attention is all you need,” in Proc. Adv.
+Neural Inf. Process. Syst. (NeurIPS), 2017, pp. 5998–6008.
+[39] X. Wang, R. Girshick, A. Gupta, and K. He, “Non-local neural
+networks,” in Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit.
+(CVPR), 2018, pp. 7794–7803.
+[40] H. Touvron, M. Cord, A. Sablayrolles, G. Synnaeve, and H. J´egou,
+“Going deeper with image transformers,” in Proc. IEEE/CVF Int. Conf.
+Comput. Vis. (ICCV), 2021, pp. 32–42.
+[41] G. Huang, Y. Sun, Z. Liu, D. Sedra, and K. Q. Weinberger, “Deep
+networks with stochastic depth,” in Proc. Eur. Conf. Comput. Vis.
+(ECCV), 2016, pp. 646–661.
+[42] H. Chen, Z. Luo, L. Zhou, Y. Tian, M. Zhen, T. Fang, D. McKinnon,
+Y. Tsin, and L. Quan, “ASpanFormer: Detector-free image matching with
+adaptive span transformer,” in Proc. Eur. Conf. Comput. Vis. (ECCV),
+2022, pp. 20–36.
+[43] D. W. Marquardt, “An algorithm for least-squares estimation of nonlinear
+parameters,” J. Soc. Ind. Appl. Math., vol. 11, no. 2, pp. 431–441, 1963.
+[44] E. Brachmann, M. Humenberger, C. Rother, and T. Sattler, “On the
+limits of pseudo ground truth in visual camera re-localisation,” in Proc.
+IEEE/CVF Int. Conf. Comput. Vis. (ICCV), 2021, pp. 6218–6228.
+[45] P.-E. Sarlin, M. Dusmanu, J. L. Sch¨onberger, P. Speciale, L. Gruber,
+V. Larsson, O. Miksik, and M. Pollefeys, “LaMAR: Benchmarking
+localization and mapping for augmented reality,” in Proc. Eur. Conf.
+Comput. Vis. (ECCV), 2022, pp. 686–704.
+10
