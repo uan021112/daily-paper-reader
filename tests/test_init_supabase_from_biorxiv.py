@@ -9,7 +9,8 @@ def _load_module(module_name: str, path: pathlib.Path):
     spec = importlib.util.spec_from_file_location(module_name, path)
     mod = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
-    spec.loader.exec_module(mod)
+    with patch.object(sys, "path", [str(path.parent), str(path.parent.parent), *sys.path]):
+        spec.loader.exec_module(mod)
     return mod
 
 
@@ -18,8 +19,6 @@ class InitSupabaseFromBioRxivTest(unittest.TestCase):
     def setUpClass(cls):
         root = pathlib.Path(__file__).resolve().parents[1]
         src_dir = root / "src"
-        if str(src_dir) not in sys.path:
-            sys.path.insert(0, str(src_dir))
         cls.mod = _load_module(
             "init_biorxiv_supabase_mod",
             src_dir / "maintain" / "init_biorxiv.py",

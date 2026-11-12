@@ -253,7 +253,7 @@ Zotero       ←── 浏览器 Connector 抓取 citation meta
 - **Python 测试**：`pytest`（`pytest.ini`），~38 个测试文件覆盖大部分 Python 模块
 - **JS 测试**：6 个 `test_*.js` 覆盖前端纯函数（subscriptions、zotero、gist、llm-config）
 - **运行**：`pytest` 或 `python -m pytest`（根目录）
-- **测试导入隔离**：维护模块测试使用 `from src.maintain import ...`，不得在测试收集阶段把 `src/maintain` 插入全局 `sys.path`，避免其中的 `arxiv.py` 遮蔽第三方 `arxiv` SDK。
+- **测试导入隔离**：维护模块测试使用 `from src.maintain import ...`，不得在测试收集阶段把 `src/maintain` 插入全局 `sys.path`，避免其中的 `arxiv.py` 遮蔽第三方 `arxiv` SDK。独立脚本的测试可在导入期间临时加入脚本目录，但必须通过上下文在导入后还原 `sys.path`，不得依赖其他测试留下的路径。
 - **覆盖较好的链路**：订阅规划、LLM 结构化输出、reranker API、各源初始化/fetch
 - **覆盖薄弱的链路**：RRF 融合逻辑、SQL/RPC、端到端编排、filter.py
 
