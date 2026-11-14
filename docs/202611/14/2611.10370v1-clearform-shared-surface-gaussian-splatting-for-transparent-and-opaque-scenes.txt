@@ -1,0 +1,2069 @@
+ClearForm: Shared-Surface Gaussian Splatting
+for Transparent and Opaque Scenes
+Hajeong Lee
+Jong-Il Park*
+Hanyang University, Seoul, Republic of Korea
+hajeonglee25@hanyang.ac.kr
+jipark@hanyang.ac.kr
+*Corresponding author
+Figure 1: ClearForm on Ref-DL3DV. The rendering preserves the appearance of the transparent vessels while the recon-
+structed mesh shows their surfaces. From left to right: reference RGB, ClearForm rendering, normals, and reconstructed mesh.
+The scene is from the Ref-DL3DV subset of DL3DV-10K [10, 42].
+Abstract
+Transparent-interface reconstruction must recover glass sur-
+faces even when most observed color comes from the scene
+behind them.
+We present ClearForm, a shared-planar-
+Gaussian method for jointly reconstructing transparent in-
+terfaces and the appearance seen through them. We iden-
+tify and analyze the Geometry–Appearance Compositing
+Dilemma (GACD): when the same transparency-dependent
+alpha controls both color and geometry, revealing the back-
+ground can weaken a transparent surface’s contribution to
+geometric reconstruction. We derive its effect on plane-
+based depth estimation, identify a mechanism that can
+weaken geometric learning, and quantify the loss of in-
+terface support through controlled comparisons.
+To ad-
+dress this conflict, we develop geometry-preserving dual-
+opacity surface reconstruction. Shared planar Gaussians
+retain interface contributions in geometry compositing while
+modeling transmission and sparse reflection in RGB, sup-
+ported by transparency-aware geometric constraints. To man-
+age the different primitive-visibility requirements of these
+compositors, we introduce Dual-Evidence Lifecycle (DEL),
+which retains Gaussians supported by multi-view geome-
+try or RGB reconstruction evidence.
+On 3D-FRONT-T,
+ClearForm achieves 27.05 mm Chamfer distance (CD) and
+0.928 F1, compared with 59.18 mm CD for our PGSR re-
+production and the reported 34 mm CD and 0.836 F1 for
+GLINT. On TransLab, it achieves 1.65 mm CD, 0.963 F1,
+and 40.14 dB PSNR. In matched ablations, dual-opacity com-
+positing reduces CD from 59.25 to 27.09 mm, while DEL
+improves PSNR by 2.06 dB. Our project page is available at
+https://hajeongx.github.io/clearform/.
+1
+Introduction
+Glass transmits light while introducing a physical boundary
+between materials. We call this boundary a transparent inter-
+face. Along a camera ray, the near-side interface lies before
+the scene surfaces visible through the glass, which we call
+background geometry. The appearance of these background
+surfaces as seen through the interface constitutes transmitted
+appearance. Reconstruction must therefore recover interface
+geometry while preserving the observed appearance.
+3D Gaussian Splatting (3DGS) [1] renders color through
+front-to-back alpha compositing, where each Gaussian is
+weighted by its opacity and the transmittance remaining af-
+ter nearer Gaussians. Surface-oriented methods improve
+geometry through surface alignment, planar primitives, or
+opacity-field extraction [2–5]. Planar-based Gaussian Splat-
+ting (PGSR) [5] also uses these compositing weights to blend
+plane normals and distances for depth estimation. When
+the same alpha is reduced to reveal background appearance
+through a transparent interface, its geometric contribution is
+reduced as well.
+We call this conflict the Geometry–Appearance Composit-
+ing Dilemma (GACD). For a single plane, its alpha weight
+cancels out in PGSR’s depth calculation. However, when
+transparent interfaces and background surfaces contribute to
+the same pixel, transparency changes their relative weights
+and can shift the estimated depth. It can also weaken a
+geometric gradient pathway and cause small interface con-
+tributions to be skipped during rendering. We derive these
+effects and measure how shared alpha reduces support for
+the ground-truth first surface. Separate training ablations
+assess whether geometry-preserving compositing improves
+reconstruction accuracy.
+Guided by this analysis, we develop geometry-preserving
+dual-opacity surface reconstruction over shared planar Gaus-
+sians. The geometry path blends plane attributes without
+1
+arXiv:2611.10370v1  [cs.CV]  7 Nov 2026
+
+
+transparency attenuation, while the appearance path reveals
+background color through learned transparency and repre-
+sents sparse reflection on the same surface. Transparency-
+aware depth–normal consistency and multi-view geometric
+constraints then supervise the interface without requiring it
+to block transmitted color in RGB. Together, these compo-
+nents reconstruct transparent-interface geometry, transmitted
+appearance, and reflection.
+Dual-opacity compositing also separates the visibility con-
+ditions for geometry and RGB. A transparent interface can
+contribute strongly to geometric rendering while allowing
+background color to pass through. It may therefore occlude
+background Gaussians in the geometry pass even though
+they remain useful for transmitted RGB. If their learned
+opacity becomes small during optimization, conventional
+opacity-based pruning can remove them; a geometry-only
+visibility test likewise misses their appearance contribution.
+We introduce Dual-Evidence Lifecycle (DEL), which retains
+Gaussians supported by geometry-pass visibility or positive
+RGB-loss contribution across distinct camera views, and
+maintains evidence across cloning and splitting.
+At a fixed Gaussian state, changing only the geometry
+alpha rule raises ground-truth first-hit coverage from 7.08%
+to 14.70%. In the cumulative 3D-FRONT-T ablation, dual-
+opacity compositing reduces Chamfer distance (CD) from
+59.25 to 27.09 mm; DEL then raises PSNR from 32.05 to
+34.11 dB while retaining similar mesh accuracy. The com-
+plete model achieves 27.05 mm CD and 0.928 F1 on 3D-
+FRONT-T, and 1.65 mm CD and 0.963 F1 on TransLab.
+Our contributions are summarized as follows:
+• Geometry–Appearance Compositing Dilemma. We an-
+alyze how transparency-dependent alpha can weaken the
+geometric contributions of transparent interfaces while re-
+vealing the background, including its effects when different
+surfaces overlap along a ray. We derive the consequences
+for depth rendering and geometric optimization and quan-
+tify the loss of first-surface support.
+• Geometry-preserving dual-opacity surface reconstruc-
+tion. We formulate separate geometry and appearance
+compositing over shared planar Gaussians so transparent
+interfaces can contribute to surface reconstruction without
+obscuring transmitted color. Transparency-aware PGSR
+regularization constrains interface geometry, while learned
+transparency and sparse reflection reproduce the observed
+appearance.
+• Dual-Evidence Lifecycle. We introduce a multi-view
+Gaussian survival criterion that addresses the geometry–
+RGB visibility mismatch in dual-opacity reconstruction.
+By retaining primitives supported by geometry-pass vis-
+ibility or positive RGB-loss contribution across distinct
+cameras, DEL helps preserve transparent interfaces and
+appearance-useful background Gaussians with different
+rendering roles.
+2
+Related Work
+Surface reconstruction with neural and Gaussian rep-
+resentations.
+Neural surface methods including VolSDF,
+NeuS, and Neuralangelo [11–13] extend radiance-field op-
+timization [14] with surface structure or geometric regu-
+larization.
+Gaussian methods offer efficient alternatives:
+SuGaR aligns Gaussians to surfaces [2], 2DGS uses ori-
+ented disks [3], Gaussian Opacity Fields extracts surfaces
+from opacity [4], and PGSR estimates depth from alpha-
+blended plane normals and distances while enforcing single-
+and multi-view constraints [5]. GS-2DGS adds learned ge-
+ometric guidance for reflective objects [15]. In ClearForm,
+PGSR’s plane representation provides the surface attributes
+for a distinct geometry-compositing path.
+Reflective and refractive appearance.
+Ref-NeRF, NeR-
+FReN, and NeRO address non-Lambertian appearance
+through directional representations, radiance decomposition,
+and geometry/material estimation [16–18]. GlassGaussian
+models glass reflectance [19]; Ref-GS and EnvGS capture
+view-dependent reflections [20, 21], and GUS-IR combines
+forward and deferred shading [22]. Other methods model
+refractive transport: Eikonal Fields traces curved rays [23],
+NU-NeRF reconstructs nested transparent objects [24], and
+TransparentGS uses deferred refraction [25]. ClearForm in-
+stead uses straight-ray splatting and learned view-dependent
+appearance without explicitly modeling refracted light paths
+or estimating refractive indices.
+Transparent surfaces and depth extraction.
+TSGS [9]
+separates geometry learning from transparency-aware appear-
+ance refinement using normal and de-lighting priors and a
+first-surface depth rule. TSPE-GS [26] and UniGS [27] rep-
+resent multiple depths per ray; G-GSTR [28] and TSTR [29]
+add geometric or specular constraints. ClearForm focuses on
+how transparency changes the interface’s geometric contribu-
+tion during plane-based rendering and optimization.
+Geometry–appearance factorization and scene decom-
+position.
+RT-Splatting [8] factorizes geometric occupancy
+and optical opacity for surface-attribute aggregation in de-
+ferred reflection and volumetric transmission. GLINT [10]
+represents interface, transmission, and reflection using sepa-
+rate Gaussian components and secondary-ray transport. Al-
+phaSurf and Car-GS also distinguish geometric from op-
+tical roles [6, 7]; related appearance methods include TR-
+Gaussians, RT-GS, and TransmissiveGS [30–32]. Clear-
+Form investigates the geometric consequences of sharing
+transparency-dependent alpha, including the depth shift
+caused by overlapping interface and background planes. We
+derive the associated gradient and rasterization effects and
+quantify interface support using fixed-Gaussian comparisons.
+Our geometry-preserving dual-opacity formulation combines
+transparency-independent plane compositing, transmitted ap-
+pearance, and sparse reflection on shared planar Gaussians
+with transparency-aware PGSR constraints.
+Gaussian pruning.
+LightGaussian and PUP 3D-GS prune
+by significance or reconstruction sensitivity [33, 34],
+while MaskGaussian preserves gradients for masked prim-
+itives [35]. FastGS and birth–death structural learning use
+multi-view reconstruction signals [36, 37]. RT-Splatting [8]
+prunes by geometric occupancy to preserve transparent sur-
+faces. In dual-opacity reconstruction, a geometry-visible
+transparent interface can occlude background Gaussians in
+the geometry pass even though they contribute to transmitted
+2
+
+
+RGB. Opacity-based pruning may discard such Gaussians
+when their learned opacity is low, while geometry-only vis-
+ibility cannot capture their RGB usefulness. ClearForm’s
+Dual-Evidence Lifecycle (DEL) instead retains primitives
+supported by geometry-pass visibility or positive first-order
+RGB-loss contribution across distinct cameras. Lineage ag-
+gregation and temporary evidence inheritance extend this
+criterion to clone/split children.
+3
+Geometry–Appearance Composit-
+ing Dilemma
+GACD arises when the same transparency-dependent alpha
+is used for both appearance rendering and geometric com-
+positing. Reducing a transparent interface’s alpha reveals
+background appearance but also weakens its contribution
+to geometric rendering. We analyze this conflict in PGSR,
+which estimates depth from alpha-blended plane normals and
+distances. Specifically, we examine how shared alpha affects
+blended-plane depth, a local geometric gradient pathway,
+and the inclusion of interface contributions during rasteri-
+zation. Figure 2 illustrates the corresponding interface and
+background contributions.
+3.1
+Standard 3D Gaussian Splatting
+In 3DGS [1], Gaussian i has world-space center µi ∈R3,
+rotation Ri, positive axis scales si, opacity ρi ∈(0, 1), and
+view-dependent color ci evaluated for the current viewing
+direction. Its world-space covariance is Σi = Ri diag(s2
+i )R⊤
+i .
+Let Q and t be the world-to-camera rotation and translation,
+and Ji the 2 × 3 Jacobian of perspective projection at the
+Gaussian center. The projected covariance is
+Σi,2D = JiQΣiQ⊤J⊤
+i .
+(1)
+Let ui be the projected center. The screen-space footprint
+Gi(p) measures the influence of Gaussian i at pixel p before
+opacity:
+Gi(p) = exp
+h
+−1
+2(p −ui)⊤Σ−1
+i,2D(p −ui)
+i
+.
+(2)
+With Gaussians sorted front to back by camera-space depth,
+alpha compositing uses
+ai(p) = ρiGi(p),
+Ti(p) =
+Y
+j<i
+[1 −a j(p)],
+wi(p) = Ti(p)ai(p),
+(3)
+to obtain the Gaussian color contributions
+bI(p) =
+X
+i
+wi(p)ci.
+(4)
+Here ai is the pixel-dependent blending opacity, Ti is the
+incoming transmittance, and wi is the Gaussian’s contribution
+weight. PGSR also uses these weights to aggregate plane
+attributes.
+Standard 3DGS also adapts its representation during train-
+ing: density control clones or splits primitives with large
+screen-space position gradients, prunes primitives with low
+learned opacity, and periodically resets opacity [1]. This
+opacity-based pruning does not separately evaluate useful-
+ness for geometry or RGB reconstruction. A Gaussian can
+contribute to either task despite low opacity. Alpha blending
+determines how a retained Gaussian contributes to the ren-
+dered result, whereas density control determines whether it
+remains in the representation.
+3.2
+From RGB weights to PGSR surface ge-
+ometry
+PGSR [5] encourages local planarity by penalizing the small-
+est Gaussian axis scale: a flattened 3D ellipsoid approximates
+a surface patch, and the corresponding shortest-axis direction
+defines its normal. Let µcam
+i
+= Qµi + t be the camera-space
+center and ni the oriented unit normal in that frame. The
+signed plane offset di = n⊤
+i µcam
+i
+defines the plane n⊤
+i x = di.
+PGSR uses the alpha-compositing weights in Equation (3) to
+blend plane normals and offsets at each pixel:
+N(p) =
+X
+i
+wi(p)ni,
+D(p) =
+X
+i
+wi(p)di.
+(5)
+Following PGSR, the ray intersects the plane specified by
+these blended attributes at
+Z(p) =
+D(p)
+N(p)⊤r(p),
+r(p) = K−1ep.
+(6)
+Here K denotes the current camera intrinsics, ep = (px, py, 1)⊤
+is the homogeneous pixel, and r is the unnormalized camera-
+space ray. Thus Z is the optical-axis depth of the ray–plane
+intersection, not the alpha-weighted average of Gaussian cen-
+ter depths. The accumulated normal N is not unit-normalized;
+the ratio removes any common scale in (N, D). Plane normals
+are oriented toward the camera; the renderer uses an equiva-
+lent sign-adjusted plane-distance convention. PGSR regular-
+izes these geometric quantities across pixels and views.
+3.3
+Geometric effects of shared alpha
+Shared-alpha formulation.
+Consider a transparency-
+aware extension of PGSR in which material transparency
+τi ∈[0, 1] attenuates the same alpha used for both RGB and
+geometric compositing:
+ashared
+i
+(p) = ρi(1 −τi)Gi(p).
+(7)
+Increasing τi reduces the interface’s contribution to RGB
+compositing, allowing background color to pass through.
+However, because the same alpha also determines geometric
+compositing weights, it reduces the interface’s contribution
+to geometry and changes the transmittance to background
+planes. When multiple planes contribute to a pixel, these
+changes can shift the estimated depth.
+Gradient through projected Gaussian weights.
+Let Lgeo
+be a differentiable loss on rendered geometry, and let θi de-
+note the center, rotation, or scale parameters. Its gradient
+decomposes as
+∇θiLgeo =
+X
+p
+∂Lgeo
+∂ai(p) ρi(1 −τi)
+|     {z     }
+∂ai/∂Gi
+∇θiGi(p) + Ri.
+(8)
+3
+
+
+Figure 2: Geometry–Appearance Compositing Dilemma. (a) Shared transparency-dependent alpha can weaken the interface
+in geometry compositing while revealing transmitted appearance. (b) Separate geometry and RGB alpha retain the interface in
+plane-attribute rendering while preserving transmitted appearance.
+The loss derivative ∂Lgeo/∂ai includes effects on later trans-
+mittance and the rendered geometric attributes.
+The re-
+mainder Ri contains other geometric derivatives, including
+changes to plane distance and normal. Only the local pathway
+through the projected Gaussian weight Gi has the explicit
+factor 1 −τi. Compensating by increasing ρi also increases
+base RGB opacity, coupling geometric support to optical
+attenuation.
+Sensitivity of plane depth to alpha weights.
+For a sin-
+gle valid plane, alpha cancels in Equation (6), giving Z =
+di/(n⊤
+i r). When interface and background planes contribute
+to one pixel, changing their relative weights shifts the blended
+plane and hence the estimated depth. Thus alpha composit-
+ing can change multi-plane depth even when single-plane
+depth is invariant; Equation (8) concerns a local derivative
+path rather than the complete update. Appendix A gives the
+corresponding depth derivative.
+Per-pixel alpha thresholding.
+Rasterization skips Gaus-
+sian contributions whose per-pixel alpha falls below a thresh-
+old αmin. At a fixed footprint, an interface satisfying
+ρiGi(p) ≥αmin > ρi(1 −τi)Gi(p)
+(9)
+can contribute to geometry blending with unattenuated alpha
+but is rejected under the shared-alpha rule in Equation (7).
+The left-hand side is the unattenuated Gaussian alpha and
+the right-hand side is its transparency-attenuated counter-
+part. Passing the cutoff does not guarantee visibility after
+preceding Gaussians occlude the ray.
+The three mechanisms play different roles: competing
+planes change the depth estimate, Equation (8) identifies a
+locally transparency-scaled geometric derivative, and Equa-
+tion (9) can remove interface contributions altogether. Thus
+a surface that transmits RGB can receive reduced weight
+in geometry rendering. The fixed-state measurements in
+Section 5.4 quantify the compositing and threshold effects,
+without isolating the contribution of the gradient pathway to
+training.
+4
+ClearForm
+To prevent transmission from suppressing interface plane
+contributions as analyzed in Section 3, ClearForm separates
+geometry and appearance compositing over shared planar
+Gaussians (Section 4.1). Transparency-aware PGSR con-
+straints supervise the interface geometry (Section 4.2), while
+RGB rendering preserves transmitted color and sparse reflec-
+tion. DEL addresses the complementary survival require-
+ments of interface and background Gaussians (Section 4.3).
+Figure 3 summarizes the pipeline.
+4.1
+Shared geometry and dual-opacity com-
+positing
+Our inputs are calibrated multi-view RGB images, per-view
+surface normal priors, and soft transparency masks. We re-
+construct transparent-interface geometry and view-dependent
+appearance alongside opaque scene geometry. Gaussian i
+carries (µi, Ri, si, ρi, τi, hb
+i ), where hb
+i are base-color spherical-
+harmonic (SH) coefficients. Selected Gaussians additionally
+carry reflection opacity βi ∈(0, 1) and independent SH coef-
+ficients hr
+i. The base and reflection components share center,
+rotation, and scale. The shared coefficient ρi is a splatting
+opacity, not physical density; τi attenuates only base RGB
+alpha. Superscripts g, b, r, and c denote geometry, base color,
+reflection, and combined color.
+Geometry compositor.
+Both paths use the front-to-back
+alpha blending in Equation (3); they differ in per-pixel alpha
+and the attributes being blended. The geometry pass retains
+PGSR’s alpha for plane attributes, whereas the RGB pass
+attenuates it according to transparency. The geometry-pass
+alpha and contribution weights are
+ag
+i (p) = ρiGi(p),
+wg
+i (p) = ag
+i (p)
+Y
+j<i
+[1 −ag
+j(p)].
+(10)
+4
+
+
+Figure 3: Overview of ClearForm. Shared planar Gaussians feed separate geometry and appearance compositors, preserving
+the transparent interface in geometric rendering while reproducing transmitted color and reflection. Transparency-aware
+PGSR constraints and priors supervise geometry; image losses supervise appearance. Dual-Evidence Lifecycle (DEL) uses
+visibility in geometric rendering and estimated RGB-loss changes across distinct recently sampled camera views to guide
+primitive survival.
+Front-to-back blending yields accumulated geometric opacity
+Ag, rendered transparencybτ, and plane attributes N, D:
+Ag =
+X
+i
+wg
+i ,
+bτ =
+X
+i
+wg
+i τi,
+(11)
+N =
+X
+i
+wg
+i ni,
+D =
+X
+i
+wg
+i di.
+(12)
+Depth is obtained with Equation (6). The rendered trans-
+parencybτ is a coverage-weighted sum, not normalized by Ag.
+Its prior therefore constrains τi together with geometric opac-
+ity and footprint support. At fixed geometry and opacity, this
+geometry compositor does not attenuate interface normals or
+plane offsets when τi increases.
+Appearance rendering and sparse reflection.
+The base
+appearance alpha is
+ab
+i (p) = ρi(1 −τi)Gi(p).
+(13)
+χr
+i ∈{0, 1} indicates whether Gaussian i’s reflection com-
+ponent is active at the current iteration. The corresponding
+reflection alpha is
+ar
+i(p) = χr
+iβiGi(p).
+(14)
+Independent SH coefficients define view-dependent base
+color cb
+i and reflection color cr
+i, evaluated for the current
+viewing direction. At each Gaussian, base color is alpha-
+blended first and reflection uses the remaining transmittance:
+T c
+i =
+Y
+j<i
+(1 −ab
+j)(1 −ar
+j),
+(15)
+bI =
+X
+i
+T c
+i
+h
+ab
+i cb
+i + (1 −ab
+i )ar
+icr
+i
+i
+.
+(16)
+The effective alpha aeff
+i
+= 1 −(1 −ab
+i )(1 −ar
+i) accounts for
+base color and reflection without directly adding their alphas;
+reflection can also attenuate transmitted appearance. Reflec-
+tion opacity is not multiplied by 1 −τi, allowing reflection
+from highly transparent surfaces.
+We add reflection parameters to Gaussians with sufficient
+transparency and geometric opacity unless their observed
+mean mask support indicates an opaque region. Once se-
+lected, a reflection component is retained, but its rendering
+activation χr
+i additionally requires current transparency sup-
+port; Appendix B specifies these conditions.
+4.2
+Transparency-aware PGSR regularization
+Building on PGSR’s geometric regularization [5], we adapt
+surface supervision to transparent regions, where observed
+RGB texture may originate from background surfaces. Fol-
+lowing PGSR [5], we encourage planar Gaussians by penal-
+izing their smallest axis scale: Lflat = meani∈V minℓ∈{1,2,3} siℓ,
+where V denotes the visible Gaussians.
+5
+
+
+Normal prior.
+We supervise the rendered normal N with
+a predicted normal prior n⋆. Following the prior-rejection
+strategy used in TSGS [9], we exclude inconsistent priors
+after an initial warm-up. Let VNP(p) indicate valid prior
+pixels, additionally requiring N(p)⊤n⋆(p) > θNP after warm-
+up. With the PGSR-style image-edge weight ωO(p) = (1 −
+gRGB(p))2, we use
+LNP =
+P
+p VNP(p)ωO(p)
+N(p) −n⋆(p)
+1
+P
+p VNP(p) + ϵNP
+.
+(17)
+Here gRGB is the normalized RGB gradient magnitude, and
+ϵNP > 0 stabilizes the denominator. Unlike a cosine-based
+normal loss, this formulation compares the unnormalized,
+alpha-composited normal N with the prior; the acceptance
+test likewise uses their raw inner product.
+Single-view depth–normal consistency.
+PGSR encour-
+ages agreement between rendered normals and normals de-
+rived from neighboring depth samples, using image gradients
+to reduce regularization near edges. However, RGB edges
+in transparent regions may come from background texture
+rather than the interface. We therefore replace the RGB
+edge weight with a transparency-mask edge weight in these
+regions.
+Let m be the transparency prior, gm its normalized gradient
+magnitude, and M(p) = 1[m(p) > θm], with θm = 0.5. The
+resulting weights are
+ωT = (1 −gm)2,
+(18)
+ω = (1 −M)ωO + MωT.
+(19)
+Using the depth-derived normal nD, we define
+LSV = meanp ω(p)
+sg(Ag(p))nD(p) −N(p)
+1 .
+(20)
+The detached geometric coverage sg(Ag) matches the scale
+of the unnormalized rendered normal N. This adaptation
+reduces the influence of transmitted texture on interface ge-
+ometry regularization.
+Multi-view regularization.
+Following PGSR [5], we com-
+pute multi-view geometric consistency using round-trip re-
+projection error e(p):
+LMV = meanp∈C sg(exp[−e(p)])e(p).
+(21)
+Here C excludes invalid depth and reprojection errors above
+θrep, and sg denotes stop-gradient. Transparent pixels remain
+eligible for geometric consistency.
+For photometric consistency, we use PGSR’s plane-
+induced homography and normalized cross-correlation loss
+LNCC, but restrict matching to low-transparency regions:
+CNCC = {p ∈C : bτ(p) < θT ∧m(p) ≤θm}.
+(22)
+We use θT = 0.5. This restriction avoids matching back-
+ground texture as if it belonged to the transparent interface.
+Image and material constraints.
+We use the standard
+RGB reconstruction objective
+LRGB = (1 −λSSIM)
+bI −I
+1
++ λSSIM[1 −SSIM(bI, I)].
+(23)
+The image loss covers all pixels, including transmitted back-
+ground appearance.
+We supervise rendered transparency bτ using the scaled
+mask target m⋆= clip(κmm, 0, 1):
+LT = uT(k)[1 −SSIM(bτ, m⋆)].
+(24)
+Here uT(k) = min(1, k/Twarm) gradually activates the trans-
+parency prior. The original mask m, rather than m⋆, is used
+for geometric weighting and NCC masking. Gradients from
+LT to Gaussian geometry and densification are separately
+scaled.
+We additionally apply a boundary-weighted RGB gradient
+loss LE to improve appearance consistency near transparency
+boundaries. Its formulation and optimization schedule are
+provided in Appendix B.
+4.3
+Dual-Evidence Lifecycle
+Dual-opacity compositing creates different contribution
+weights for geometry and RGB rendering. A transparent
+interface can contribute strongly to geometry compositing,
+reducing the accumulated transmittance to background Gaus-
+sians. Consequently, these Gaussians may receive small
+geometry-pass weights while remaining useful for transmit-
+ted RGB, where interface alpha is attenuated by transparency.
+Geometry-based visibility criteria may therefore overlook
+their appearance contribution, while conventional opacity-
+based pruning can remove them when their learned opacity
+is low. We introduce Dual-Evidence Lifecycle (DEL), which
+determines Gaussian survival using geometry-pass visibility
+or positive RGB-loss contribution across distinct cameras.
+Geometry-pass visibility.
+We identify Gaussians suffi-
+ciently visible under the current geometry-pass alpha. Let
+T g
+i (p) = Q
+j<i[1 −ag
+j(p)] be the incoming geometric trans-
+mittance at pixel p, distinct from the color transmittance T c
+i
+in Equation (16). Gaussian i is geometry-visible in camera
+v if some pixel has both a non-negligible geometric alpha
+ag
+i (p) and sufficient incoming transmittance T g
+i (p). The first
+condition requires a supported footprint; the second excludes
+contributions substantially occluded by earlier Gaussians. We
+record the camera whenever such an observation occurs. This
+is a visibility criterion under the current reconstruction, not a
+test of surface accuracy or multi-view depth consistency.
+Signed first-order RGB contribution.
+Let ob
+i = ρi(1 −τi)
+denote the base-color opacity coefficient before footprint eval-
+uation. For camera v, we estimate Gaussian i’s contribution
+to RGB reconstruction as
+∆v
+i = −ob
+i
+∂Lv
+RGB
+∂ob
+i
+−βi
+∂Lv
+RGB
+∂βi
+.
+(25)
+The signed first-order estimate ∆v
+i in Equation (25) approx-
+imates the RGB loss change when the Gaussian’s base and
+reflection opacity coefficients are reduced to zero. A positive
+value predicts a loss increase, while a negative value predicts
+a decrease. The estimate holds the other parameters fixed but
+includes downstream compositing effects in its derivatives.
+Inactive reflection contributes zero. We evaluate only the
+RGB reconstruction loss, excluding geometry, material-prior,
+and boundary penalties.
+6
+
+
+Figure 4: 3D-FRONT-T comparison. ClearForm recovers the glass interface in depth and normals while preserving the
+transmitted scene appearance. Columns show ground truth, PGSR, TSGS, GLINT, RT-Splatting, and ClearForm; rows show
+RGB, depth, and normals.
+Table 1: 3D-FRONT-T reconstruction and novel-view synthesis. Five-scene means. Unstarred baseline scores are quoted
+from GLINT [10]; ∗denotes a local reproduction.
+Method
+Normal
+Depth
+Mesh
+Novel View
+MAE↓11.25◦↑22.5◦↑AbsRel↓RMSE↓δ < 1.25 ↑CD (dm)↓
+F1↑PSNR↑SSIM↑LPIPS↓
+2DGS [3]
+25.97
+52.19
+64.55
+0.200
+0.240
+76.71
+0.85 0.688
+32.26
+0.940
+0.080
+PGSR∗[5]
+26.01
+57.17
+66.23
+0.198
+0.251
+77.18
+0.59 0.786
+32.25
+0.949
+0.065
+Ref-GS [20]
+41.55
+18.61
+36.79
+0.280
+0.360
+57.52
+1.29 0.408
+32.30
+0.940
+0.090
+EnvGS [21]
+14.37
+68.22
+80.23
+0.130
+0.160
+86.10
+0.87 0.640
+33.71
+0.940
+0.070
+TSGS [9]
+9.89
+86.29
+92.24
+0.080
+0.120
+95.56
+0.52 0.798
+28.80
+0.870
+0.140
+GLINT [10]
+7.96
+86.37
+92.28
+0.040
+0.070
+98.32
+0.34 0.836
+34.50
+0.960
+0.050
+RT-Splatting∗[8]
+18.43
+59.00
+76.04
+0.046
+0.084
+97.98
+0.57 0.691
+35.23
+0.959
+0.050
+ClearForm
+7.41
+87.28
+92.27
+0.027
+0.074
+98.40
+0.27 0.928
+34.14
+0.956
+0.054
+Let F denote a clone/split lineage and ORGB
+v
+the Gaus-
+sians eligible for RGB evidence in camera v. Eligibility
+is determined using the incoming base-color transmittance
+T b
+i (p) = Q
+j<i(1 −ab
+j(p)), rather than the combined color
+transmittance T c
+i ; the RGB-loss score itself includes both
+base color and reflection. We aggregate signed loss-change
+estimates over the eligible lineage members:
+∆v
+F =
+X
+i∈F ∩ORGB
+v
+∆v
+i .
+(26)
+An observed Gaussian i ∈ORGB
+v
+receives RGB evidence
+when the lineage sum ∆v
+F is positive. Negative contributions
+are retained in the sum, so the test reflects the lineage’s net
+predicted effect on RGB reconstruction.
+Recent distinct-camera support.
+For each Gaussian, we
+track camera-specific geometry and RGB evidence over a
+recent window of W iterations. Let Eg
+i and ERGB
+i
+contain the
+distinct cameras whose latest recorded observation within
+that window supports the Gaussian in each pass. A later
+unsupported observation from the same camera revokes its
+earlier evidence. After an initial grace period, Gaussian i
+survives a pruning step if
+Eg
+i ∪ERGB
+i
+ ≥Kmin.
+(27)
+Here Kmin is the distinct-camera threshold; a camera observed
+by both paths counts once. This union allows an interface
+to be supported by geometry observations and an occluded
+appearance-bearing primitive to be supported by RGB, while
+requiring evidence across views rather than from a single
+image. New Gaussians receive an initial grace period, and an
+observation-condition change permits a short deferral while
+additional cameras are sampled. Clone/split children receive
+provisional inherited evidence that expires unless replaced
+by their own observations; repeated splitting cannot extend
+this support indefinitely.
+Opacity-threshold culling is disabled while DEL is active:
+pruning follows the distinct-camera evidence criterion, with
+temporary protection for newly created Gaussians. Opacity-
+reset protection is a separate, stricter rule for supported trans-
+parent Gaussians (Appendix B).
+4.4
+Training objective and optimization
+We optimize the weighted objective
+L = LRGB + λflatLflat + λNPLNP + λSVLSV
++ λMVLMV + λNCCLNCC + λT LT
++ λτLτ + λELE,
+(28)
+The coefficients λ balance surface and material constraints,
+while LRGB uses the image-term mixture defined above.
+Both datasets are trained for 30,000 iterations at half in-
+put resolution. Normal guidance starts immediately, with
+the inner-product acceptance test added after iteration 3,000.
+7
+
+
+Figure 5: TransLab comparison. ClearForm preserves transparent appearance while reconstructing coherent vessel surface
+normals. Columns show ground truth, PGSR, TSGS, RT-Splatting, and ClearForm; rows show RGB and normals.
+Single-view geometry, multi-view geometry, and NCC begin
+after iteration 7,000. Reflection candidates are considered
+every 100 iterations from iteration 7,000 to 15,000. Densifica-
+tion and evidence-based pruning end before iteration 15,000,
+followed by continuous optimization of the retained primi-
+tives. Appendix B reports additional optimization settings
+and DEL implementation details.
+5
+Experiments
+5.1
+Experimental setup
+Datasets and implementation.
+We evaluate five 3D-
+FRONT-T indoor scenes [10] and eight TransLab glassware
+scenes [9]. The former contains scene-scale transparent in-
+terfaces and opaque contents with ground-truth (GT) RGB
+and geometry; the latter is a Blender-rendered benchmark
+of laboratory glassware with thin and curved surfaces. Our
+implementation builds on the official PGSR codebase [39].
+On both datasets, PGSR∗denotes our reproduction using
+the unmodified official implementation. We precompute nor-
+mal priors using StableNormal [40] and transparency masks
+using SAM 3 [41] with the fixed text prompt “transparent
+glass”. These priors remain fixed during optimization and
+are used for both benchmark and real-scene experiments. GT
+geometry and transparent-region annotations are reserved for
+evaluation. On TransLab, the supplied foreground alpha is
+used to mask normal supervision and composite GT RGB
+onto a black background. It is not used as a transparency
+prior, and RGB training includes all pixels. For qualitative
+evaluation, we use Ref-DL3DV, the reflective and transpar-
+ent DL3DV-10K subset used by GLINT [10, 42]. These
+scenes have no GT geometry. Additional held-out views are
+presented in Appendix F.
+Evaluation.
+We follow the benchmark evaluation protocols
+of GLINT [10] for 3D-FRONT-T and TSGS [9] for TransLab.
+On 3D-FRONT-T, we evaluate surface normals using mean
+angular error (MAE) and angular accuracy at 11.25◦and
+22.5◦, depth using AbsRel, normalized RMSE, and δ < 1.25,
+and mesh reconstruction using Chamfer distance (CD) and
+F1. Depth evaluation follows GLINT’s per-view median
+scale alignment. On TransLab, we evaluate mesh recon-
+struction using CD and F1, following TSGS. The F1 distance
+thresholds are 5 cm for 3D-FRONT-T and 5 mm for TransLab.
+For both datasets, novel-view synthesis is evaluated using
+PSNR, SSIM, and LPIPS [38, 43]. Published baseline re-
+sults are taken from GLINT on 3D-FRONT-T and TSGS
+on TransLab. The ∗symbol denotes our local reproductions
+using official implementations. Our meshes are extracted
+from geometry-pass depth using PGSR’s TSDF fusion [39],
+with voxel sizes of 0.01 m and 0.002 m for 3D-FRONT-T
+and TransLab, respectively. While the benchmark evaluation
+protocols are shared, methods may differ in their training
+priors and reconstruction pipelines.
+Table 2: TransLab reconstruction and novel-view synthe-
+sis. Eight-scene means. Published baseline scores are quoted
+from TSGS [9]; ∗denotes a local reproduction. PGSR∗RGB
+uses the common foreground-masked full-frame evaluation.
+Method
+Mesh
+Novel View
+CD (mm)↓
+F1↑PSNR↑SSIM↑LPIPS↓
+SuGaR [2]
+17.27 0.440
+23.03
+0.941
+0.123
+2DGS [3]
+3.55 0.840
+36.91
+0.924
+0.167
+GOF [4]
+8.04 0.660
+24.06
+0.931
+0.131
+PGSR∗[5]
+7.11 0.867
+36.66
+0.988
+0.017
+TSGS [9]
+1.85 0.950
+39.08
+0.989
+0.020
+RT-Splatting∗[8]
+2.64 0.900
+38.28
+0.990
+0.014
+ClearForm
+1.65 0.963
+40.14
+0.991
+0.014
+5.2
+Benchmark comparisons
+3D-FRONT-T.
+ClearForm reduces CD from 59.18 to
+27.05 mm (0.59 to 0.27 dm in Table 1) and raises F1 from
+0.786 to 0.928 relative to our PGSR reproduction. Compared
+with the reported GLINT results, CD decreases from 0.34
+to 0.27 dm and F1 rises from 0.836 to 0.928. Against our
+8
+
+
+Figure 6: Cumulative ablation on 3D-FRONT-T. Dual-opacity compositing restores the transparent interface left distorted
+by transparency and reflection modeling under shared opacity. From left to right, the columns progress from ground truth and
+PGSR to the full model; rows show RGB, depth, and normals.
+Table 3: Cumulative ablation on 3D-FRONT-T. Each row adds one component to the preceding configuration. MAE is in
+degrees, accuracies in percent, and CD in mm.
+Configuration
+Normal
+Depth
+Mesh
+Novel View
+MAE↓
+11.25◦↑
+22.5◦↑
+AbsRel↓
+RMSE↓
+δ < 1.25 ↑
+CD (mm)↓
+F1↑
+PSNR↑
+SSIM↑
+LPIPS↓
+PGSR∗
+26.01
+57.17
+66.23
+0.198
+0.251
+77.18
+59.18
+0.786
+32.25
+0.949
+0.065
++ Normal prior
+21.84
+65.13
+72.44
+0.195
+0.249
+78.05
+59.24
+0.794
+32.22
+0.949
+0.066
++ Transparency and reflection
+21.20
+66.24
+74.02
+0.216
+0.272
+72.36
+59.25
+0.794
+33.05
+0.951
+0.063
++ Dual-opacity compositing
+7.43
+87.43
+92.24
+0.026
+0.074
+98.33
+27.09
+0.925
+32.05
+0.941
+0.079
++ Dual-Evidence Lifecycle
+7.42
+87.40
+92.30
+0.027
+0.074
+98.33
+27.15
+0.925
+34.11
+0.957
+0.053
++ Boundary RGB loss (full)
+7.41
+87.28
+92.27
+0.027
+0.074
+98.40
+27.05
+0.928
+34.14
+0.956
+0.054
+local RT-Splatting reproduction, CD decreases from 0.57 to
+0.27 dm and normal MAE from 18.43◦to 7.41◦, although
+RT-Splatting achieves higher PSNR (35.23 vs. 34.14 dB).
+Figure 4 shows the interface in a matched view.
+TransLab.
+On TransLab, ClearForm obtains 1.65 mm CD,
+0.963 F1, and 40.14 dB PSNR (Table 2), compared with
+1.85 mm, 0.950, and 39.08 dB for TSGS. Relative to our
+local RT-Splatting reproduction, CD decreases from 2.64
+to 1.65 mm while PSNR increases from 38.28 to 40.14 dB.
+The RGB and normal maps in Figure 5 show transparent
+appearance alongside coherent vessel surfaces. PGSR∗has
+a large CD outlier in scene 06; Appendix C gives all scene-
+level comparisons.
+5.3
+Ablation study
+Table 3 and Figure 6 trace the cumulative changes from
+PGSR to the full method in geometry and rendering.
+Normal guidance and shared-opacity appearance.
+Nor-
+mal guidance lowers MAE from 26.01◦to 21.84◦, but mesh
+CD remains approximately 59.2 mm. Adding transparency
+and reflection improves PSNR to 33.05 dB while CD remains
+59.25 mm and AbsRel increases to 0.2164. Improved image
+fitting alone therefore does not resolve interface geometry in
+this shared-opacity configuration.
+Dual-opacity compositing.
+Separating geometry and base
+RGB opacity reduces AbsRel from 0.2164 to 0.0263, normal
+MAE from 21.20◦to 7.43◦, and CD from 59.25 to 27.09 mm.
+F1 increases from 0.794 to 0.925. This is the largest re-
+duction in CD and normal MAE in the cumulative ablation,
+linking the geometry-specific alpha rule to substantially im-
+proved surface reconstruction under matched supervision.
+PSNR falls to 32.05 dB, so geometry improvement alone
+does not guarantee better RGB. As this is a training abla-
+tion, it includes both the compositing rule and its effects
+on the learned representation. The matched view shows a
+more coherent transparent interface in depth and normals
+(Figure 6).
+Dual-Evidence Lifecycle.
+Adding DEL raises PSNR by
+2.06 dB and reduces LPIPS from 0.0787 to 0.0529, while
+CD changes only from 27.09 to 27.15 mm and F1 remains
+approximately 0.925. This gain is consistent with DEL pre-
+serving RGB-useful Gaussians behind geometrically visible
+interfaces under dual-opacity rendering, while maintaining
+similar aggregate surface accuracy. The cumulative ablation
+evaluates the complete lifecycle; it does not directly identify
+individual pruning events or isolate the effects of its evidence
+and lineage components.
+Boundary RGB loss.
+The boundary term yields small
+changes in PSNR (34.11 to 34.14 dB) and CD (27.15 to
+27.05 mm). Appendix E separately examines the transparent-
+region geometry terms by leaving one out at a time.
+5.4
+Effect of shared alpha on interface support
+The preceding ablation shows that training with decoupled
+geometry compositing substantially improves surface recon-
+struction. To examine the compositing effect separately from
+changes in the learned representation, we evaluate the shared-
+and decoupled-alpha geometry rules on the same Gaussian
+checkpoint.
+9
+
+
+Using ground-truth first-surface depth, we identify Gaus-
+sians whose planes intersect near the interface and measure
+their geometric contribution weights and pixel coverage.
+Decoupled geometry compositing increases mean first-hit
+weight from 0.0179 to 0.0401 and coverage from 7.08%
+to 14.70%. Under shared alpha, 44.95% of first-hit pixel–
+Gaussian pairs active under decoupled alpha fall below the
+per-pixel alpha threshold. These results directly quantify the
+loss of interface support caused by shared alpha at a fixed
+Gaussian representation.
+Appendix D defines these measurements and reports a
+supplementary cross-evaluation of shared- and decoupled-
+trained checkpoints. This comparison distinguishes immedi-
+ate compositing-rule effects from differences between trained
+representations, without isolating individual gradient mecha-
+nisms.
+6
+Conclusion and Discussion
+ClearForm analyzes and addresses the loss of transparent-
+interface geometry when the same transparency-dependent al-
+pha controls appearance and geometric compositing. GACD
+explains why alpha affects mixed-plane depth despite can-
+celling for an isolated plane, identifies a local geometric gra-
+dient pathway and per-pixel threshold effects, and quantifies
+interface support with ground-truth first-hit measurements.
+Geometry-preserving dual-opacity reconstruction then re-
+tains plane contributions from transparent interfaces while
+representing transmitted appearance and sparse reflection on
+shared planar Gaussians under transparency-aware PGSR
+constraints.
+Dual-opacity compositing also exposes different survival
+requirements: transparent interfaces can occlude background
+Gaussians in the geometry pass while allowing their RGB
+contributions to pass through. DEL addresses this mismatch
+using geometry-pass visibility or predicted positive RGB-loss
+contribution across distinct recent views. The matched ab-
+lation shows that dual-opacity compositing gives the largest
+geometric gain, while DEL gives the largest subsequent ren-
+dering gain. These findings establish complementary roles
+for the reconstruction and lifecycle components, not a causal
+attribution to any single gradient path. Strong reflections
+and missing transparency guidance can degrade interface re-
+construction, and single-depth mesh fusion can spuriously
+cap open containers. Across 3D-FRONT-T and TransLab,
+ClearForm improves transparent-surface reconstruction while
+preserving transmitted appearance and view-dependent re-
+flection.
+Acknowledgments
+This research was supported by the PoliceLab 3.0 Program
+through the Korea Institute of Police Technology (KIPoT),
+funded by the Korean National Police Agency (KNPA)
+(No. RS-2025-25441773).
+References
+[1] Bernhard Kerbl, Georgios Kopanas, Thomas Leimküh-
+ler, and George Drettakis. 3D Gaussian Splatting for
+real-time radiance field rendering. ACM Transactions
+on Graphics, 42(4), 2023. doi: 10.1145/3592433.
+[2] Antoine Guédon and Vincent Lepetit. SuGaR: Surface-
+aligned gaussian splatting for efficient 3D mesh recon-
+struction and high-quality mesh rendering. In Proceed-
+ings of the IEEE/CVF Conference on Computer Vision
+and Pattern Recognition, pages 5354–5363, 2024.
+[3] Binbin Huang, Zehao Yu, Anpei Chen, Andreas Geiger,
+and Shenghua Gao. 2D Gaussian Splatting for geomet-
+rically accurate radiance fields. In ACM SIGGRAPH
+2024 Conference Papers, 2024.
+[4] Zehao Yu, Torsten Sattler, and Andreas Geiger. Gaus-
+sian opacity fields: Efficient adaptive surface recon-
+struction in unbounded scenes. ACM Transactions on
+Graphics, 43(6), 2024.
+[5] Danpeng Chen, Hai Li, Weicai Ye, Yifan Wang, Wei-
+jian Xie, Shangjin Zhai, Nan Wang, Haomin Liu, Hu-
+jun Bao, and Guofeng Zhang. PGSR: Planar-based
+Gaussian splatting for efficient and high-fidelity surface
+reconstruction. IEEE Transactions on Visualization
+and Computer Graphics, 31(9):6100–6111, 2025. doi:
+10.1109/TVCG.2024.3494046.
+[6] Tianhao Walter Wu, Hanxue Liang, Fangcheng Zhong,
+Gernot Riegler, Shimon Vainer, Jiankang Deng, and
+Cengiz Oztireli. AlphaSurf: Implicit surface reconstruc-
+tion for semi-transparent and thin objects with decou-
+pled geometry and opacity. In International Conference
+on 3D Vision, 2025.
+[7] Congcong Li, Jin Wang, Xiaomeng Wang, Xingchen
+Zhou, Wei Wu, Yuzhi Zhang, and Tongyi Cao. Car-
+GS: Addressing reflective and transparent surface
+challenges in 3D car reconstruction. arXiv preprint
+arXiv:2501.11020, 2025.
+[8] Ji Shi, Xianghua Ying, Bowei Xing, Ruohao Guo,
+and Wenzhen Yue.
+RT-Splatting: Joint reflection-
+transmission modeling with gaussian splatting. In Pro-
+ceedings of the IEEE/CVF Conference on Computer Vi-
+sion and Pattern Recognition, pages 4870–4880, 2026.
+[9] Mingwei Li, Pu Pang, Hehe Fan, Hua Huang, and
+Yi Yang. TSGS: Improving gaussian splatting for trans-
+parent surface reconstruction via normal and de-lighting
+priors. In Proceedings of the ACM International Con-
+ference on Multimedia, pages 7220–7229, 2025. doi:
+10.1145/3746027.3754548.
+[10] Youngju Na, Jaeseong Yun, Soohyun Ryu, Hyunsu
+Kim, Sung-Eui Yoon, and Suyong Yeon. GLINT: Mod-
+eling scene-scale transparency via gaussian radiance
+transport. In Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition, pages
+7256–7265, 2026.
+[11] Lior Yariv, Jiatao Gu, Yoni Kasten, and Yaron Lip-
+man. Volume rendering of neural implicit surfaces. In
+Advances in Neural Information Processing Systems,
+2021.
+10
+
+
+[12] Peng Wang, Lingjie Liu, Yuan Liu, Christian Theobalt,
+Taku Komura, and Wenping Wang. NeuS: Learning
+neural implicit surfaces by volume rendering for multi-
+view reconstruction. In Advances in Neural Information
+Processing Systems, 2021.
+[13] Zhaoshuo Li, Thomas Müller, Alex Evans, Russell H.
+Taylor, Mathias Unberath, Ming-Yu Liu, and Chen-
+Hsuan Lin. Neuralangelo: High-fidelity neural surface
+reconstruction. In Proceedings of the IEEE/CVF Con-
+ference on Computer Vision and Pattern Recognition,
+pages 8456–8465, 2023.
+[14] Ben Mildenhall, Pratul P. Srinivasan, Matthew Tancik,
+Jonathan T. Barron, Ravi Ramamoorthi, and Ren Ng.
+NeRF: Representing scenes as neural radiance fields for
+view synthesis. In European Conference on Computer
+Vision, 2020.
+[15] Jinguang Tong, Xuesong Li, Fahira Afzal Maken, Sun-
+daram Muthu, Lars Petersson, Chuong Nguyen, and
+Hongdong Li. GS-2DGS: Geometrically supervised
+2DGS for reflective object reconstruction. In Proceed-
+ings of the IEEE/CVF Conference on Computer Vision
+and Pattern Recognition, pages 21547–21557, 2025.
+[16] Dor Verbin, Peter Hedman, Ben Mildenhall, Todd Zick-
+ler, Jonathan T. Barron, and Pratul P. Srinivasan. Ref-
+NeRF: Structured view-dependent appearance for neu-
+ral radiance fields. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recogni-
+tion, pages 5491–5500, 2022.
+[17] Yuan-Chen Guo, Di Kang, Linchao Bao, Yu He, and
+Song-Hai Zhang. NeRFReN: Neural radiance fields
+with reflections. In Proceedings of the IEEE/CVF Con-
+ference on Computer Vision and Pattern Recognition,
+pages 18409–18418, 2022.
+[18] Yuan Liu, Peng Wang, Cheng Lin, Xiaoxiao Long,
+Jiepeng Wang, Lingjie Liu, Taku Komura, and Wenping
+Wang. NeRO: Neural geometry and BRDF reconstruc-
+tion of reflective objects from multiview images. ACM
+Transactions on Graphics, 42(4), 2023.
+[19] Junming Cao, Jiadi Cui, and Sören Schwertfeger. Glass-
+Gaussian: Extending 3D Gaussian Splatting for realistic
+imperfections and glass materials. IEEE Access, 2025.
+doi: 10.1109/ACCESS.2025.3541856.
+[20] Youjia Zhang, Anpei Chen, Yumin Wan, Zikai Song,
+Junqing Yu, Yawei Luo, and Wei Yang. Ref-GS: Di-
+rectional factorization for 2D Gaussian Splatting. In
+Proceedings of the IEEE/CVF Conference on Computer
+Vision and Pattern Recognition, pages 26483–26492,
+2025.
+[21] Tao Xie, Xi Chen, Zhen Xu, Yiman Xie, Yudong Jin,
+Yujun Shen, Sida Peng, Hujun Bao, and Xiaowei Zhou.
+EnvGS: Modeling view-dependent appearance with en-
+vironment gaussian. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recogni-
+tion, pages 5742–5751, 2025.
+[22] Zhihao Liang, Hongdong Li, Kui Jia, Kailing Guo,
+and Qi Zhang. GUS-IR: Gaussian splatting with uni-
+fied shading for inverse rendering. IEEE Transactions
+on Pattern Analysis and Machine Intelligence, 47(10):
+8364–8378, 2025. doi: 10.1109/TPAMI.2025.3578416.
+[23] Mojtaba Bemana, Karol Myszkowski, Jeppe Revall
+Frisvad, Hans-Peter Seidel, and Tobias Ritschel.
+Eikonal fields for refractive novel-view synthesis. In
+ACM SIGGRAPH 2022 Conference Proceedings, 2022.
+[24] Jia-Mu Sun, Tong Wu, Ling-Qi Yan, and Lin Gao. NU-
+NeRF: Neural reconstruction of nested transparent ob-
+jects with uncontrolled capture environment.
+ACM
+Transactions on Graphics, 43(6), 2024.
+[25] Letian Huang, Dongwei Ye, Jialin Dan, Chengzhi Tao,
+Huiwen Liu, Kun Zhou, Bo Ren, Yuanqi Li, Yanwen
+Guo, and Jie Guo. TransparentGS: Fast inverse ren-
+dering of transparent objects with gaussians.
+ACM
+Transactions on Graphics, 44(4), 2025.
+[26] Zhiyuan Xu, Nan Min, Yuhang Guo, and Tong Wei.
+TSPE-GS: Probabilistic depth extraction for semi-
+transparent surface reconstruction via 3D Gaussian
+Splatting. In Proceedings of the AAAI Conference on
+Artificial Intelligence, volume 40, pages 11478–11486,
+2026. doi: 10.1609/aaai.v40i14.38130.
+[27] Nan Min, Zhiyuan Xu, Yuhang Guo, Wei Jiang, and
+Mofei Song. UniGS: Unified geometry reconstruction
+for specular and semi-transparent surfaces via 3D Gaus-
+sian Splatting. The Visual Computer, 42:218, 2026. doi:
+10.1007/s00371-026-04423-z.
+[28] Chenyu Tian, Wentao Hu, Zhiwei Zhang, Long Wen,
+and Huafeng Ding. Geometry-aware gaussian splatting
+of transparent object reconstruction. Engineering Ap-
+plications of Artificial Intelligence, 167:113787, 2026.
+doi: 10.1016/j.engappai.2026.113787.
+[29] Chenyu Tian, Wentao Hu, Long Wen, and Huafeng
+Ding.
+Specular-suppressed three-dimensional gaus-
+sian splatting for transparent object reconstruction. En-
+gineering Applications of Artificial Intelligence, 182:
+116128, 2026. doi: 10.1016/j.engappai.2026.116128.
+[30] Yong Liu, Keyang Ye, Tianjia Shao, and Kun Zhou. TR-
+Gaussians: High-fidelity real-time rendering of planar
+transmission and reflection with 3D Gaussian Splatting.
+arXiv:2511.13009, 2025.
+[31] Kunnong Zeng,
+Chensheng Peng,
+Yichen Xie,
+Masayoshi Tomizuka, and Cem Yuksel. RT-GS: Gaus-
+sian splatting with reflection and transmittance primi-
+tives. arXiv:2604.00509, 2026.
+[32] Zhenyu Liang, Xiao Zhang, Tianchao Li, Jack
+C. P. Cheng, and Chi-Keung Tang.
+Transmis-
+siveGS: Residual-guided disentangled gaussian splat-
+ting for transmissive scene reconstruction and rendering.
+arXiv:2605.10705, 2026.
+[33] Zhiwen Fan, Kevin Wang, Kairun Wen, Zehao Zhu,
+Dejia Xu, and Zhangyang Wang. LightGaussian: Un-
+bounded 3D Gaussian compression with 15x reduction
+11
+
+
+and 200+ FPS. In Advances in Neural Information
+Processing Systems, volume 37, 2024.
+[34] Alex Hanson, Allen Tu, Vasu Singla, Mayuka Jayaward-
+hana, Matthias Zwicker, and Tom Goldstein. PUP 3D-
+GS: Principled uncertainty pruning for 3D Gaussian
+Splatting. In Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition, pages
+5949–5958, 2025.
+[35] Yifei Liu, Zhihang Zhong, Yifan Zhan, Sheng Xu, and
+Xiao Sun. MaskGaussian: Adaptive 3D Gaussian rep-
+resentation from probabilistic masks. In Proceedings
+of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition, pages 681–690, 2025.
+[36] Shiwei Ren, Tianci Wen, Yongchun Fang, and Biao
+Lu. FastGS: Training 3D Gaussian Splatting in 100
+seconds. In Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition, pages
+26094–26103, 2026.
+[37] Quan Tran Hong, Long Nguyen-Chi, and Binh T.
+Nguyen. Birth-death structural learning for 3D Gaus-
+sian Splatting, 2026.
+URL https://arxiv.org/
+abs/2610.34344. Preprint.
+[38] Zhou Wang, Alan C. Bovik, Hamid R. Sheikh, and
+Eero P. Simoncelli. Image quality assessment: From er-
+ror visibility to structural similarity. IEEE Transactions
+on Image Processing, 13(4):600–612, 2004.
+[39] Danpeng Chen et al. PGSR official implementation.
+https://github.com/zju3dv/PGSR, 2024.
+[40] Chongjie Ye, Lingteng Qiu, Xiaodong Gu, Qi Zuo,
+Yushuang Wu, Zilong Dong, Liefeng Bo, Yuliang Xiu,
+and Xiaoguang Han. StableNormal: Reducing diffusion
+variance for stable and sharp normal. ACM Transactions
+on Graphics, 43(6), 2024.
+[41] Nicolas Carion, Laura Gustafson, Yuan-Ting Hu,
+Shoubhik Debnath, Ronghang Hu, Didac Suris Coll-
+Vinent, Chaitanya Ryali, Kalyan Vasudev Alwala,
+Haitham Khedr, Andrew Huang, et al. SAM 3: Segment
+anything with concepts. In International Conference
+on Learning Representations, 2026.
+[42] Lu Ling, Yichen Sheng, Zhi Tu, Wentian Zhao, Cheng
+Xin, Kun Wan, Lantao Yu, Qianyu Guo, Zixun Yu,
+Yawen Lu, et al. DL3DV-10K: A large-scale scene
+dataset for deep learning-based 3D vision. In Proceed-
+ings of the IEEE/CVF Conference on Computer Vision
+and Pattern Recognition, pages 22160–22169, 2024.
+[43] Richard Zhang, Phillip Isola, Alexei A. Efros, Eli
+Shechtman, and Oliver Wang. The unreasonable ef-
+fectiveness of deep features as a perceptual metric. In
+Proceedings of the IEEE Conference on Computer Vi-
+sion and Pattern Recognition, pages 586–595, 2018.
+12
+
+
+Appendices
+A
+GACD: Compositing and Plane-
+Depth Sensitivity
+We derive the local sensitivity terms underlying the GACD
+analysis of Section 3.
+A.1
+Gradient through projected Gaussian
+weights
+At a fixed camera and pixel, let F = P
+j w j fj compos-
+ite an attribute fj using the 3DGS weights.
+If F>i
+=
+P
+j>i a j fj
+Q
+i<ℓ< j(1 −aℓ) is the composite behind primitive i,
+differentiation with fixed attributes and ordering gives
+∂F
+∂ai
+= Ti( fi −F>i).
+(A1)
+The suffix term accounts for the effect of ai on contributions
+behind Gaussian i. Under shared alpha, ∂ai/∂Gi = ρi(1 −τi),
+so the projected-weight gradient pathway is attenuated without
+implying that the entire geometry gradient decreases by the
+same factor.
+A.2
+Alpha-weight sensitivity of PGSR plane
+depth
+For PGSR plane depth Z = D/(N⊤r), let D>i and N>i denote
+the suffix composites of plane distance and normal. Applying
+Equation (A1) and the quotient rule gives
+∂Z
+∂ai
+= Ti[(di −D>i) −Z(ni −N>i)⊤r]
+N⊤r
+.
+(A2)
+For a single contributing plane, its alpha weight cancels in
+the depth ratio. With two parallel planes at depths z f and zb,
+however, Z = (w f z f + wbzb)/(w f + wb); reducing the interface
+weight moves the estimate toward the background depth.
+B
+Implementation Details
+Optimization.
+The
+weights
+in
+Equation
+(28)
+are
+(λflat, λNP, λSV, λMV, λNCC)
+=
+(100, 0.01, 0.015, 0.03, 0.15)
+and (λT, λτ, λE, λSSIM) = (1, 10−4, 0.05, 0.2). For LT, geome-
+try/opacity gradients are scaled by 0.01 (TransLab: 0.1) and
+densification-statistic gradients by 0.005 (TransLab: 0.05); τi
+gradients are unaffected. TransLab normal priors are reversed.
+After 3,000 iterations, the normal-acceptance threshold is
+0.3; mask/transparency thresholds are 0.5, and reprojection
+tolerance is one pixel.
+Material and boundary losses.
+With mean observed mask
+support ¯mi, the low-support transparency penalty is
+Lτ = uT(k) meani[κO1[ ¯mi < θO]τi],
+(B1)
+where (θO, κO) = (0.1, 10) and uT(k) = min(1, k/Twarm), with
+Twarm = 5,000. The transparency target is scaled by κm = 1.5.
+Let h denote normalized RGB gradient magnitude. The
+boundary loss uses a detached spatial weight WE informed
+by transparency-mask boundaries, rendered geometry, and
+depth–normal variation:
+LE = uE(k)
+P
+p WE(p)|h(bI)(p) −h(I)(p)|
+P
+p WE(p) + ϵ
+,
+(B2)
+where ϵ > 0 and uE(k) = clip((k−3,500)/3,500, 0, 1). The loss
+updates Gaussian parameters, including SH coefficients, but
+does not contribute to the screen-space densification statistic.
+Sparse reflection.
+Candidates require τi ≥0.1, ρi ≥0.005,
+and no confirmed low-mask support (< 0.1). Reflection opacity
+starts at βi = 0.02. Selected parameters persist, with activation
+checked during rendering.
+Dual-Evidence Lifecycle.
+Geometry evidence requires
+min(0.99, ag
+i ) ≥1/255 and T g
+i > 0.5; RGB evidence uses
+base-color T b
+i > 0.5. Each pass stores at most two camera
+records. DEL prunes every 1,000 iterations using evidence
+from at least two distinct cameras within a 3,000-iteration
+window; opacity-threshold pruning is disabled. New Gaus-
+sians have 3,000-iteration probation, and inherited clone/split
+evidence expires without revalidation. Supported transparent
+Gaussians with positive RGB evidence, validated geometry,
+or provisional transparent lineage are protected from opacity
+reset. Otherwise, opacity is reset to at most 0.05 and low-mask
+Gaussians reset τi to 0.001; split children inherit τi only when
+the parent has τi > 0.1.
+C
+Per-Scene Results and Evaluation
+Tables C1 and C2 report per-scene TransLab geometry and
+rendering results, with equal weighting across scenes.
+Table C1: TransLab surface reconstruction by scene.
+PGSR∗and RT-Splatting∗are local reproductions; other base-
+line scores are quoted from TSGS [9].
+Method
+Scene 1 Scene 2 Scene 3 Scene 4 Scene 5 Scene 6 Scene 7 Scene 8 Average
+Chamfer Distance (mm)↓
+SuGaR
+37.17
+10.34
+8.01
+6.48
+8.55
+46.15
+14.01
+7.44
+17.27
+2DGS
+2.50
+8.63
+2.24
+2.14
+4.80
+2.12
+2.12
+3.86
+3.55
+GOF
+4.79
+10.38
+2.72
+3.14
+10.03
+18.39
+9.97
+4.88
+8.04
+PGSR∗
+1.83
+5.31
+2.47
+2.99
+5.13
+29.49
+2.37
+7.27
+7.11
+TSGS
+1.68
+2.42
+1.57
+1.60
+1.75
+1.54
+2.05
+2.23
+1.85
+RT-Splat.∗
+2.70
+2.71
+2.05
+2.15
+2.56
+3.20
+2.67
+3.10
+2.64
+ClearForm
+1.61
+2.06
+1.49
+1.61
+1.59
+1.31
+1.53
+2.03
+1.65
+F1 Score↑
+SuGaR
+0.25
+0.49
+0.59
+0.56
+0.57
+0.26
+0.34
+0.46
+0.44
+2DGS
+0.91
+0.55
+0.90
+0.89
+0.69
+0.98
+0.97
+0.84
+0.84
+GOF
+0.83
+0.65
+0.86
+0.84
+0.57
+0.58
+0.36
+0.60
+0.66
+PGSR∗
+0.94
+0.79
+0.87
+0.85
+0.88
+0.86
+0.94
+0.82
+0.87
+TSGS
+0.97
+0.91
+0.96
+0.95
+0.97
+0.98
+0.96
+0.94
+0.95
+RT-Splat.∗
+0.90
+0.91
+0.92
+0.91
+0.93
+0.81
+0.94
+0.89
+0.90
+ClearForm
+0.97
+0.94
+0.96
+0.95
+0.97
+0.98
+0.99
+0.95
+0.96
+Table C2: TransLab novel-view synthesis by scene. PGSR∗
+uses our common-view RGB evaluation; RT-Splatting∗is a
+local reproduction, and published baseline scores are quoted
+from TSGS [9].
+Method
+Scene 1 Scene 2 Scene 3 Scene 4 Scene 5 Scene 6 Scene 7 Scene 8 Average
+PSNR (dB)↑
+SuGaR
+23.27
+23.21
+22.20
+21.81
+22.83
+23.44
+24.34
+23.14
+23.03
+2DGS
+38.94
+30.12
+38.74
+37.68
+34.60
+36.07
+41.45
+37.68
+36.91
+GOF
+24.13
+24.73
+23.78
+23.72
+23.99
+24.57
+23.57
+24.01
+24.06
+PGSR∗
+37.71
+35.13
+36.94
+35.90
+34.24
+35.21
+41.18
+36.94
+36.66
+TSGS
+41.02
+36.58
+40.34
+38.37
+35.41
+37.37
+45.72
+37.83
+39.08
+RT-Splat.∗
+40.12
+36.84
+38.93
+37.64
+35.52
+36.36
+42.49
+38.37
+38.28
+ClearForm
+40.84
+37.47
+41.81
+39.99
+35.90
+38.44
+46.69
+40.00
+40.14
+SSIM↑
+SuGaR
+0.946
+0.941
+0.933
+0.921
+0.935
+0.944
+0.961
+0.945
+0.941
+2DGS
+0.962
+0.702
+0.953
+0.952
+0.944
+0.960
+0.961
+0.955
+0.924
+GOF
+0.937
+0.930
+0.930
+0.928
+0.920
+0.935
+0.934
+0.930
+0.931
+PGSR∗
+0.994
+0.980
+0.992
+0.989
+0.977
+0.986
+0.997
+0.989
+0.988
+TSGS
+0.996
+0.980
+0.995
+0.992
+0.978
+0.985
+0.997
+0.987
+0.989
+RT-Splat.∗
+0.995
+0.986
+0.994
+0.992
+0.980
+0.987
+0.997
+0.990
+0.990
+ClearForm
+0.996
+0.984
+0.996
+0.994
+0.980
+0.990
+0.998
+0.991
+0.991
+LPIPS↓
+SuGaR
+0.114
+0.133
+0.144
+0.157
+0.130
+0.110
+0.081
+0.111
+0.123
+2DGS
+0.130
+0.338
+0.165
+0.160
+0.156
+0.113
+0.139
+0.137
+0.167
+GOF
+0.123
+0.137
+0.132
+0.133
+0.144
+0.118
+0.130
+0.131
+0.131
+PGSR∗
+0.010
+0.036
+0.011
+0.012
+0.031
+0.017
+0.006
+0.015
+0.017
+TSGS
+0.010
+0.038
+0.013
+0.015
+0.032
+0.025
+0.006
+0.019
+0.020
+RT-Splat.∗
+0.008
+0.024
+0.010
+0.011
+0.026
+0.015
+0.005
+0.012
+0.014
+ClearForm
+0.008
+0.028
+0.009
+0.010
+0.027
+0.013
+0.005
+0.012
+0.014
+13
+
+
+Figure E1: Transparent-region geometric ablation. Removing the transparent-region single-view constraint makes the glass
+top and edges less coherent in the normal map; the multi-view omission has a subtler local effect. Columns show ground truth,
+the two omissions, and full ClearForm; rows show depth and normals.
+Table E1: Transparent-region regularization on 3D-FRONT-T. Each omission removes only the transparent-region single-
+view (SV) or multi-view (MV) contribution; the opaque-region constraints remain active.
+Configuration
+Normal
+Depth
+Mesh
+Novel View
+MAE↓11.25◦↑22.5◦↑AbsRel↓RMSE↓δ < 1.25 ↑CD (dm)↓
+F1↑PSNR↑SSIM↑LPIPS↓
+w/o SV Geo. Trans.
+8.33
+86.54
+91.54
+0.027
+0.07
+98.31
+0.28 0.922
+34.08
+0.956
+0.053
+w/o MV Geo. Trans.
+7.44
+87.37
+92.24
+0.025
+0.07
+98.38
+0.26 0.930
+34.14
+0.956
+0.053
+Full
+7.41
+87.28
+92.27
+0.027
+0.07
+98.40
+0.27 0.928
+34.14
+0.956
+0.054
+D
+Controlled GACD Diagnostics
+We evaluate GT first-hit attribution in 3D-FRONT-T scenes
+01–05, independently of DEL. GT transparency masks are
+eroded by three pixels; view means are averaged per scene,
+then across scenes.
+Table D1: Checkpoint/rule cross-evaluation (3D-FRONT-
+T). Both 30k-iteration checkpoints are evaluated under both
+geometry-alpha rules. Five-scene means; no DEL or bound-
+ary RGB loss.
+Training / alpha rule
+MAE↓AbsRel↓CD (mm)↓
+F1↑
+Shared / shared
+21.20
+0.2164
+59.25 0.794
+Shared / decoupled
+15.70
+0.0623
+52.47 0.775
+Decoupled / shared
+21.36
+0.2014
+92.57 0.746
+Decoupled / decoupled
+7.43
+0.0263
+27.09 0.925
+For each sampled pixel p in camera v, Gaussian i has its
+own plane-intersection depth, distinct from the blended depth
+in Equation (6). Here we restore the view index: dv
+i , nv
+i , and
+rv(p) denote the camera-v instances of di, ni, and r(p) defined
+above:
+zv
+i (p) =
+dv
+i
+(nv
+i )⊤rv(p).
+(D1)
+After per-view scale alignment, zv
+⋆(p) denotes the GT first-
+surface depth. For each sampled (v, p), we suppress v in the
+following sets and weights and define F(p) = {i : |zv
+i (p) −
+zv
+⋆(p)| < 2 cm} and B(p) = {i : zv
+i (p) > zv
+⋆(p)}. The latter
+includes all deeper planes, not a second GT depth layer; the
+sets can overlap near the GT depth. Under each alpha rule,
+Af (p) = P
+i∈F(p) wi(p) and Ab(p) = P
+i∈B(p) wi(p). First-hit
+coverage is the fraction of sampled transparent-region pixels
+with Af (p) > 0.05.
+Alpha-threshold rejection (αmin = 1/255) is measured
+over first-hit pixel–Gaussian pairs active under decoupled
+alpha. In Section 5.4, only the compositing rule changes at
+the common 10,000-iteration state.
+Supplementary cross-compositing diagnosis.
+With the
+shared-trained checkpoint fixed, decoupled geometry alpha
+improves AbsRel (0.2164 to 0.0623) but lowers F1 (0.794
+to 0.775; Table D1). Under the decoupled rule, decoupled
+training reduces CD from 52.47 to 27.09 mm and transparent-
+region normal MAE from 32.67◦to 2.62◦; opaque-region
+MAE changes from 8.71◦to 8.40◦. Both alpha rule and
+learned representation matter, but no individual gradient
+mechanism is isolated.
+E
+Additional Ablation Studies
+We ablate transparent-region single-view (SV) and multi-
+view (MV) geometry terms, retaining opaque-region super-
+vision (Table E1 and Figure E1). Removing SV degrades
+interface-normal accuracy; omitting MV has a smaller effect
+and slightly improves CD and F1, so a consistent MV benefit
+is not established.
+F
+Additional Real-Scene Results
+Figure F1 provides held-out Ref-DL3DV views, evaluated
+qualitatively because GT geometry is unavailable.
+G
+Representative Failure Cases
+Figure G1 illustrates limitations due to inaccurate trans-
+parency priors and single-depth mesh extraction: missed
+reflective interfaces, incomplete glass geometry, and artifi-
+cially capped open containers.
+14
+
+
+Figure F1: Additional Ref-DL3DV real-scene results. Three held-out views illustrate glass display cases and doors. Columns
+show reference RGB, ClearForm rendering, depth, and normals.
+Figure G1: Representative failure cases. (a) Strong reflection in an opaque-labeled region biases depth. (b) Missing
+transparency guidance weakens the glass surface. (c) Single-depth fusion caps an open transparent container.
+15

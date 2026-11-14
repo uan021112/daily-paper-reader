@@ -48,7 +48,7 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-11-12</span>
+      <span class="dpr-home-dashboard-kicker">2026-11-14</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
     <strong class="dpr-home-dashboard-count">共 25 篇</strong>
@@ -58,7 +58,7 @@
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>10</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>15</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-11-13 00:10:45 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-11-14 00:54:17 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -70,8 +70,8 @@
   </div>
   <div class="dpr-home-dashboard-body">
 <p>今日共生成 25 篇推荐（精读 10 篇，速读 15 篇）</p>
-<p>精读：《Learning to Live: A Step Toward Lifelong Embodied Intelligence》（8.0/10）, 《SceneBound: How Much Should a Streaming 3D Reconstruction Model Remember?》（8.0/10）</p>
-<p>速读：《QVR3D: Query-Guided Visual Reasoning for Training-Free 3D Grounding》（8.0/10）, 《SCOUT: Planning under Occlusion via Object-Centric World Model Rollouts》（8.0/10）, 《MMCoT$^3$: Empowering 3D Scene Understanding with 3D-Text Interleaved Multi-Modal Chain-of-Thought Reasoning》（8.0/10）</p>
+<p>精读：《Trainspotting: Learning Object-Centric 3D Reconstruction from Found Photos》（8.0/10）, 《Gaussians Can Subtract: Neural Dissolve Fields for Hybrid Scene Rendering》（8.0/10）</p>
+<p>速读：《XM4D: 4D Reconstruction through Certifiable Geometric Optimization》（8.0/10）, 《Rotation Is Token-Blind: A Structural Criterion for Post-Training Quantization of Feed-Forward Geometry Transformers》（8.0/10）, 《Hierarchical Incremental Beta Splatting for Online Reconstruction》（8.0/10）</p>
 <p>这些结果覆盖了当下较热的方向，建议先看精读区论文的关键问题与方法。</p>
   </div>
 </section>
@@ -84,7 +84,7 @@
     <strong class="dpr-home-dashboard-count">10 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Learning to Live: A Step Toward Lifelong Embodied Intelligence">Learning to Live: A Step Toward Lifelong Embodied Intelligence</span></li><li><span class="dpr-home-dashboard-paper-title" title="SceneBound: How Much Should a Streaming 3D Reconstruction Model Remember?">SceneBound: How Much Should a Streaming 3D Reconstruction Model Remember?</span></li><li><span class="dpr-home-dashboard-paper-title" title="Embodied AI for Radio Mapping: From Solo to Swarm">Embodied AI for Radio Mapping: From Solo to Swarm</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Trainspotting: Learning Object-Centric 3D Reconstruction from Found Photos">Trainspotting: Learning Object-Centric 3D Reconstruction from Found Photos</span></li><li><span class="dpr-home-dashboard-paper-title" title="Gaussians Can Subtract: Neural Dissolve Fields for Hybrid Scene Rendering">Gaussians Can Subtract: Neural Dissolve Fields for Hybrid Scene Rendering</span></li><li><span class="dpr-home-dashboard-paper-title" title="DC-SQEM: Medial Mesh Extraction by Dual Contouring with Spherical Quadric Error Metric">DC-SQEM: Medial Mesh Extraction by Dual Contouring with Spherical Quadric Error Metric</span></li></ul>
   </div>
   <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>3</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
 </section>
@@ -97,9 +97,9 @@
     <strong class="dpr-home-dashboard-count">15 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="QVR3D: Query-Guided Visual Reasoning for Training-Free 3D Grounding">QVR3D: Query-Guided Visual Reasoning for Training-Free 3D Grounding</span></li><li><span class="dpr-home-dashboard-paper-title" title="SCOUT: Planning under Occlusion via Object-Centric World Model Rollouts">SCOUT: Planning under Occlusion via Object-Centric World Model Rollouts</span></li><li><span class="dpr-home-dashboard-paper-title" title="MMCoT$^3$: Empowering 3D Scene Understanding with 3D-Text Interleaved Multi-Modal Chain-of-Thought Reasoning">MMCoT$^3$: Empowering 3D Scene Understanding with 3D-Text Interleaved Multi-Modal Chain-of-Thought Reasoning</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="XM4D: 4D Reconstruction through Certifiable Geometric Optimization">XM4D: 4D Reconstruction through Certifiable Geometric Optimization</span></li><li><span class="dpr-home-dashboard-paper-title" title="Rotation Is Token-Blind: A Structural Criterion for Post-Training Quantization of Feed-Forward Geometry Transformers">Rotation Is Token-Blind: A Structural Criterion for Post-Training Quantization of Feed-Forward Geometry Transformers</span></li><li><span class="dpr-home-dashboard-paper-title" title="Hierarchical Incremental Beta Splatting for Online Reconstruction">Hierarchical Incremental Beta Splatting for Online Reconstruction</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>8</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>4</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>1</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>5</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>3</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span></div>
 </section>
 </div>
 

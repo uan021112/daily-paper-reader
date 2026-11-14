@@ -1,0 +1,1790 @@
+Gaussians Can Subtract: Neural Dissolve Fields for Hybrid Scene Rendering
+Yiyan Wang1,∗
+Haohan Liu2,∗
+Tetsuo Shibuya1
+1The University of Tokyo, Japan
+2Fuzhou University, China
+∗Equal contribution
+5770716834@utac.u-tokyo.ac.jp
+852203208@fzu.edu.cn
+tshibuya@hgc.jp
+Abstract
+Hybrid Mesh–Gaussian rendering combines compact tex-
+tured surfaces with flexible 3D Gaussian primitives, offer-
+ing an efficient alternative to purely Gaussian scene rep-
+resentations for structured environments. Existing scene-
+reconstruction hybrids commonly follow an additive for-
+mulation, where Gaussian residuals compensate for errors
+left by the mesh. However, not every Mesh–Gaussian con-
+flict is caused by missing content: residual geometry errors,
+occlusion mismatch, texture-projection artifacts, and view-
+dependent appearance can make the same mesh content con-
+sistent in one view but inconsistent in another. We therefore
+formulate hybrid rendering as a multi-view inconsistency
+problem and present Gaussolve, a subtract-and-refill frame-
+work that selectively dissolves inconsistent mesh content
+before residual Gaussians refill the revealed regions. We
+introduce a lightweight Neural Dissolve Field, parameter-
+ized by scalar spherical-harmonic Gaussians, to learn where
+and from which viewing directions mesh content should be
+dissolved. A continuous transmittance fusion rule progres-
+sively exposes residual Gaussians behind the dissolved mesh,
+preserving their reconstruction gradients and avoiding hard
+visibility discontinuities. Experiments on structured and
+semi-structured scenes demonstrate higher visual fidelity
+with fewer Gaussian primitives and faster rendering. Project
+page: https://ooosn.github.io/gaussians-can-subtract/
+1. Introduction
+3D Gaussian Splatting (3DGS) has become a strong represen-
+tation for real-time novel-view synthesis due to explicit prim-
+itives and efficient differentiable rasterization [17]. How-
+ever, practical environments contain broad regular structures,
+such as road surfaces with lane markings and large architec-
+tural surfaces [15]. Representing these large regular regions
+purely with Gaussian primitives can require a large primitive
+budget, increasing storage and rasterization cost [8, 15, 20].
+Textured meshes provide a complementary representation:
+they compactly anchor broad regular surfaces, while Gaus-
+sians remain effective for thin structures, local residual geom-
+etry, and view-dependent appearance [6, 15, 17]. However,
+existing hybrid scene-reconstruction pipelines still inherit
+limitations in both how the mesh is constructed and how the
+two representations are combined.
+First, we revisit how the textured mesh is constructed. Ex-
+isting methods typically extract the mesh from a previously
+optimized NeRF or Gaussian representation and then bake
+the reconstructed appearance onto the mesh [6, 15], making
+the resulting texture inherit the constraints of such recon-
+struction. In particular, enforcing cleaner and more regular
+geometry can reduce the flexibility of these representations
+to fit the observed appearance, leading to a trade-off between
+geometric alignment and rendering quality [6, 14, 45]. In-
+stead, we reconstruct the geometry independently and project
+the training images directly onto the mesh, thereby preserv-
+ing the observed appearance when the geometry is reliable.
+More importantly, we revisit how the mesh and Gaussians
+are combined. Even with such a textured mesh, the funda-
+mental Mesh–Gaussian conflict remains. Conceptually, exist-
+ing hybrids largely follow an additive formulation: the mesh
+accounts for the regular scene content, while Gaussians com-
+pensate for what the mesh fails to represent. But not every
+Mesh–Gaussian conflict is caused by missing content. Such
+conflicts may arise from residual geometry errors, occlusion
+mismatch, texture-projection artifacts, or view-dependent ap-
+pearance, and importantly, the same mesh content can agree
+with one view while becoming inconsistent with another. We
+therefore reinterpret the remaining Mesh–Gaussian conflict
+as a multi-view inconsistency problem, which requires se-
+lectively suppressing inconsistent mesh content rather than
+only adding Gaussian residuals.
+This reformulation exposes a fundamental mismatch be-
+tween the problem and existing conflict-handling strategies.
+Existing mesh–Gaussian hybrids often resolve representa-
+tion conflicts through hard visibility or assignment decisions.
+For example, prior methods remove inaccurate mesh regions
+to make room for Gaussians [15], enforce hard assignments
+between mesh and Gaussian representations [19], or discard
+Gaussians occluded by an opaque mesh surface [6, 19]. Al-
+though these designs differ in implementation, they reduce
+the conflict to fixed removal, hard assignment, or binary
+arXiv:2611.07049v1  [cs.CV]  4 Nov 2026
+
+
+Figure 1. Gaussians Can Subtract. Existing hybrids primarily compensate for mesh errors by adding Gaussian residuals. Gaussolve
+instead introduces a subtractive Neural Dissolve Field that selectively dissolves inconsistent mesh content and lets residual Gaussians refill
+the revealed regions. This explicit subtract-and-refill decomposition improves visual quality while retaining a compact hybrid representation.
+Compared with existing methods, Gaussolve achieves a more favorable quality–compactness trade-off by allowing meshes and Gaussians to
+cooperate rather than compete.
+visibility, none of which captures inconsistencies that vary
+across viewpoints. In particular, hard visibility allows the
+mesh to completely suppress residual Gaussians behind it.
+When the mesh conflicts with the current observation, this
+suppression also blocks the reconstruction gradients required
+for the Gaussian branch to correct the inconsistency. More-
+over, small depth changes can abruptly switch the mesh–
+Gaussian visibility state.
+We propose Gaussolve, a hybrid Mesh–Gaussian frame-
+work that resolves these inconsistencies through a subtract-
+and-refill process (Fig. 1). Instead of treating the mesh
+as a fixed explanation and only adding Gaussian residuals
+around it, Gaussolve allows inconsistent mesh content to be
+selectively dissolved before residual Gaussians refill the re-
+vealed regions. To this end, we introduce a Neural Dissolve
+Field parameterized by scalar spherical-harmonic Gaussians,
+which learns where and from which viewing directions the
+mesh should be attenuated under the visual reconstruction
+objective. We further integrate mesh dissolution and Gaus-
+sian accumulation through continuous transmittance-based
+fusion, so that suppressing the mesh progressively exposes
+the residual Gaussians behind it rather than abruptly switch-
+ing visibility. This preserves their reconstruction gradients
+and allows them to correct the inconsistencies exposed by
+mesh dissolution, while mesh regions that remain consistent
+with the current view are preserved.
+Our contributions are summarized as follows:
+• We reformulate hybrid Mesh–Gaussian rendering as a
+multi-view inconsistency problem, moving beyond the
+purely additive formulation by selectively subtracting in-
+consistent mesh content before Gaussian refill.
+• We introduce a view-dependent Neural Dissolve Field that
+learns where and from which viewing directions mesh
+content should be dissolved, while preserving it in views
+where it remains consistent.
+• We propose a continuous transmittance fusion rule that
+avoids hard visibility discontinuities, preserves reconstruc-
+tion gradients for residual Gaussians, and enables them to
+refill the content revealed by mesh dissolution.
+• We introduce a progressive optimization curriculum with
+loss-driven dual densification, further improving optimiza-
+tion stability and performance.
+2. Related Work
+2.1. 3D Gaussian Splatting
+3D Gaussian Splatting (3DGS) [17] represents scenes using
+explicit 3D Gaussian primitives and achieves efficient opti-
+mization and rendering via differentiable rasterization, offer-
+ing a strong quality–speed trade-off for novel-view synthe-
+sis. Subsequent works improve the Gaussian-only pipeline
+through densification, pruning, sorting, compression, or re-
+duced memory footprints (e.g., StopThePop [26], Revising
+Densification [29], Taming 3DGS [23], LightGaussian [8],
+Mini-Splatting [9], Scaffold-GS [22], Octree-GS [27], and
+Reduced 3DGS [24]), and recent surveys summarize these
+branches [2].
+2.2. Mesh Priors and Surface Reconstruction
+SfM–MVS pipelines such as COLMAP [31, 32], as well as
+LiDAR and photogrammetry workflows, are widely used to
+produce point clouds, depth maps, and mesh priors for down-
+stream rendering, editing, and interaction. Surface recon-
+struction from these inputs (e.g., Poisson reconstruction [16])
+
+
+∑
+Mesh Hit Point
+Input
+Sparse Point Cloud
+Reconstructed Mesh
+Formulation
+INPUT & EXTRACTION
+HYBRID REPRESENTATION
+UNIFIED TRANSMITTANCE FUSION
+Neural Dissolve Field
+Projection-Textured Mesh
+Residual RGB Gaussians
+Learnable Tex. (Fixed Geo.) 
+Camera Ray
+Scalar SH (View-Dependent) 
+Correction (Color & Geo.) 
+𝑻𝒇
+𝑪𝒇
+Mesh 𝑪𝒎
+𝑪𝒈
+𝑪𝒃
+𝑻𝒇(𝟏−𝜶𝒎
+𝒆𝒇𝒇)
+Mesh--Image Conflicts
+Figure 2. Overview of Gaussolve. The projection-textured mesh represents broad regular content, while the Neural Dissolve Field selectively
+suppresses mesh content that becomes inconsistent across views. Residual Gaussians refill the revealed regions, and all components are
+combined through continuous transmittance fusion.
+remains standard engineering practice, but real-world cap-
+ture conditions (noise, occlusions, non-uniform sampling)
+inevitably introduce local geometric errors and topological
+inconsistencies. As a result, reconstructed meshes often con-
+tain holes, self-intersections, or non-manifold connections,
+which mesh-repair methods have long targeted [1]. Such
+mesh priors can still disagree with image observations due to
+geometry errors, occlusion mismatch, or appearance incon-
+sistencies. We therefore treat the mesh as a useful structural
+prior but not a perfect and strict occluder.
+2.3. Hybrid Mesh–Gaussian Rendering
+Hybrid representations typically employ a surface mesh to
+anchor large-scale structures and use Gaussians or surfels
+to capture thin geometry and appearance residuals. Such
+designs have been explored for general scene rendering
+(e.g., MeshGS [6], CityGo [21], HybridMeshGS [15], Mesh-
+Splats [35], OMeGa [4], UniMGS [40], and When Gaus-
+sian Meets Surfel [42]) and for controllable avatars and
+heads (e.g., SplattingAvatar [33], GaussianAvatars [25],
+HAHA [34], MeGA [37], HERA [3], Gaussian Pixel Codec
+Avatars [12], and relightable Gaussian avatars [30, 38, 43]).
+Related works such as SuGaR [10], MILo [11], and
+GaMeS [36] further demonstrate the benefits of explicit
+surfaces for geometric stability and mesh-in-the-loop op-
+timization. However, many existing scene-reconstruction
+hybrids rely on two-pass rendering, hard depth-based split-
+ting [21], or heuristically pruned hard occluders [15], which
+can suppress residual Gaussians, block their reconstruction
+gradients, or abruptly switch the mesh–Gaussian visibility
+state. Gaussolve instead formulates visibility fusion as a
+single continuous transmittance accumulation with a volu-
+metric Neural Dissolve Field, enabling continuous fusion
+and selective suppression of inconsistent mesh content.
+3. Method
+As shown in Fig. 2, given posed multi-view images and a
+textured mesh prior, Gaussolve constructs a hybrid represen-
+tation with three branches: a textured mesh branch, residual
+RGB Gaussians, and a Neural Dissolve Field (NDF). The
+mesh branch provides compact structural and texture evi-
+dence for broad regular regions, while residual RGB Gaus-
+sians model content that cannot be consistently represented
+by the mesh, including fine details and view-dependent ap-
+pearance. Instead of treating the mesh as a hard occluder,
+Gaussolve uses the NDF to selectively dissolve inconsistent
+mesh content and continuously exposes residual Gaussians
+through transmittance-based fusion.
+3.1. Textured Mesh Prior
+Gaussolve uses a textured mesh prior M as the mesh branch.
+We reconstruct the geometry with RealityCapture (RC) [7]
+and directly project the training images onto the mesh to
+
+
+Figure 3. Hard-Z brittleness and gradient recovery. (a) Gaus-
+sians initially in front of the mesh frequently cross behind the
+Hard-Z visibility boundary during training. (b) For Gaussians
+whose reconstruction gradients are blocked by Hard-Z, Gaussolve
+recovers a substantial fraction of the ungated reference gradient.
+Curves and shading denote the four-scene mean and range.
+obtain its texture. Compared with baking reconstructed ap-
+pearance from NeRF or Gaussian representations [6, 15],
+direct projection better preserves observed high-frequency
+details, as shown in Fig. 7. To avoid test-view leakage, only
+training views are used for both MVS reconstruction and
+texturing. Unless otherwise stated, the default meshes are
+uniformly decimated to 100k faces. The resulting projected
+texture map defines the mesh color Cm used during fusion.
+3.2. Continuous Transmittance Fusion
+Hard depth splitting treats the mesh as a binary occluder,
+removing Gaussian contributions behind it. This cannot
+resolve multi-view mesh inconsistencies and also blocks
+corrective gradients to occluded residual Gaussians. Fig. 3
+quantifies both the frequent visibility changes and the result-
+ing gradient starvation. We therefore replace hard visibility
+with a continuous fusion rule.
+For exposition, we describe the fusion rule using a ray-
+wise front/back decomposition and omit repeated pixel and
+view arguments. Let (Cf, Tf) denote the accumulated Gaus-
+sian color and transmittance before the mesh depth along
+a ray, and let Cb denote the accumulated Gaussian color
+behind the mesh depth, excluding the front transmittance.
+The full Gaussian rendering is
+Cg = Cf + TfCb.
+(1)
+A direct soft fusion between the mesh color Cm and the
+Gaussian back segment is
+Chybrid = Cf + Tf
+ αeff
+m Cm + (1 −αeff
+m )Cb
+
+,
+(2)
+where αeff
+m ∈[0, 1] is the effective mesh opacity. Rather
+than explicitly recovering Cb through division by Tf, we
+substitute TfCb = Cg −Cf and obtain the division-free
+form
+Chybrid = αeff
+m (Cf + TfCm) + (1 −αeff
+m )Cg.
+(3)
+Thus αeff
+m = 1 preserves the mesh evidence, while αeff
+m = 0
+falls back to Gaussian rendering. In practice, the rasterized
+mesh depth is used only to compute the front/back Gaussian
+partition; dissolving the mesh changes only the final blending
+weight, not the mesh geometry.
+3.3. Neural Dissolve Field
+Eq. (3) requires estimating the effective mesh opacity
+αeff
+m (u). A natural alternative is to learn this opacity di-
+rectly on the mesh surface, either as per-vertex alpha or as a
+texture-map alpha. However, such surface-alpha fields are
+limited in two ways.
+First, surface alpha is view-invariant, while mesh inconsis-
+tencies vary with viewpoint. In geometry and occlusion con-
+flicts, a false protrusion, hole, or inaccurate boundary may
+block the correct visual content only from certain viewpoints.
+Similarly, the textured mesh branch has fixed appearance
+and cannot selectively hand off highlights and reflection-like
+residuals to residual RGB Gaussians from specific directions.
+Second, surface alpha is limited by its parameterization.
+Per-vertex alpha is tied to mesh tessellation, while texture-
+map alpha requires indirect view-space-to-texture-space op-
+timization and can produce fragmented masks. We there-
+fore model these inconsistencies with a volumetric, view-
+dependent Neural Dissolve Field.
+The NDF is represented by dissolve Gaussians D. Each
+dissolve Gaussian stores standard Gaussian geometry and
+opacity parameters, but predicts a scalar dissolve value in-
+stead of RGB color. For viewing direction v, the i-th dis-
+solve Gaussian predicts
+cd,i(v) = σ(SHd,i(v)) ∈[0, 1],
+(4)
+where SHd,i denotes a scalar spherical-harmonic function
+attached to the i-th dissolve Gaussian.
+We rasterize dissolve Gaussians using the same Gaussian
+rasterizer. Let ˆαd,i(u) denote the effective per-pixel opacity
+of the i-th dissolve Gaussian at pixel u, sorted in front-to-
+back order. The dissolve value is composited as
+D(u) =
+X
+i
+Td,i(u) ˆαd,i(u) cd,i(v),
+(5)
+with
+Td,i(u) =
+Y
+j<i
+(1 −ˆαd,j(u)) .
+(6)
+Although written as D(u), the dissolve value is view-
+dependent through cd,i(v). The effective mesh opacity used
+in Eq. (3) is
+αeff
+m (u) = 1 −D(u).
+(7)
+Thus, D(u) = 0 preserves the mesh contribution, while
+D(u) = 1 fully dissolves it. The dissolve branch does
+not emit radiance. It only attenuates mesh evidence in the
+final fusion, allowing residual RGB Gaussians to refill the
+revealed content.
+
+
+Table 1. Main comparison on structured and semi-structured scenes. The target regime contains broad regular structures where a
+fixed-budget textured mesh can replace redundant Gaussian primitives. Bold indicates the best performance, and cell colors highlight the
+top , second-best , and third-best results .
+Method
+Mesh Hybrid
+ML-Hypersim-AI (Structured)
+Deep Blending (Semi-Structured)
+PSNR↑
+SSIM↑
+LPIPS↓
+∆GS↑
+Aux.%
+PSNR↑
+SSIM↑
+LPIPS↓
+∆GS↑
+Aux.%
+3DGS
+×
+×
+34.39
+0.959
+0.155
+0%
+–
+28.50
+0.877
+0.272
+0%
+–
+Reduced 3DGS
+×
+×
+34.04
+0.957
+0.153
+62%
+–
+28.43
+0.875
+0.277
+51%
+–
+3DGS-MCMC
+×
+×
+35.82
+0.960
+0.140
+-1%
+–
+28.56
+0.875
+0.268
+-12%
+–
+SuGaR
+✓
+×
+32.29
+0.950
+0.149
+33%
+–
+27.58
+0.858
+0.306
+19%
+–
+PGSR
+✓
+×
+32.95
+0.958
+0.147
+61%
+–
+28.44
+0.863
+0.302
+28%
+–
+MeshSplatting
+✓
+×
+28.47
+0.903
+0.236
+–
+–
+24.71
+0.809
+0.359
+–
+–
+3D-GES
+×
+✓
+34.87
+0.961
+0.130
+63%
+13%
+28.42
+0.875
+0.262
+41%
+17%
+Hard-Z Proxy
+✓
+✓
+34.31
+0.958
+0.119
+27%
+–
+28.32
+0.872
+0.234
+39%
+–
+Ours (3DGS)
+✓
+✓
+35.35
+0.962
+0.108
+30%
+7%
+28.75
+0.876
+0.228
+47%
+8%
+Ours (Reduced 3DGS)
+✓
+✓
+35.29
+0.959
+0.113
+67%
+8%
+28.67
+0.877
+0.232
+65%
+13%
+Ours (3DGS-MCMC)
+✓
+✓
+36.89
+0.961
+0.110
+-6%
+4%
+28.93
+0.880
+0.227
+-3%
+4%
+Table 2. Comparison with MeshGS [6] and Hybrid Mesh-Gaussian [15] on the Deep Blending dataset. For the baselines, we report the
+3DGS-based results directly from the respective papers.
+Method
+Mesh Hybrid
+DrJohnson
+Playroom
+Average
+PSNR↑
+SSIM↑
+LPIPS↓
+∆GS↑
+PSNR↑
+SSIM↑
+LPIPS↓
+∆GS↑
+PSNR↑
+SSIM↑
+LPIPS↓
+∆GS↑
+MeshGS
+✓
+✓
+28.80
+0.900
+0.240
+–
+30.50
+0.900
+0.250
+–
+29.65
+0.900
+0.245
+∼30%
+Hybrid Mesh-Gaussian
+✓
+✓
+29.01
+0.888
+0.262
+43%
+30.11
+0.901
+0.255
+30%
+29.56
+0.895
+0.259
+36%
+Ours
+✓
+✓
+29.69
+0.894
+0.240
+58%
+30.93
+0.893
+0.223
+61%
+30.31
+0.894
+0.232
+59.5%
+3.4. Optimization Curriculum and Loss-Driven
+Dual Densification
+We progressively introduce the three components instead of
+optimizing the full hybrid representation from the beginning.
+1) We first optimize the residual Gaussian branch alone using
+the standard 3DGS objective, which provides a stable initial-
+ization for the subsequent hybrid optimization. 2) We then
+introduce the projection-textured mesh and NDF and enable
+continuous transmittance fusion. During hybrid optimiza-
+tion, we freeze the mesh texture and employ loss-driven dual
+densification: First, we sample high-error pixels from the
+current fused rendering. These pixels are back-projected into
+3D, with mesh depth serving as a coarse geometric anchor,
+to add candidates to both the dissolve branch and the residual
+RGB branch. The former increases the capacity to dissolve
+inconsistent mesh content, while the latter increases the ca-
+pacity to refill the revealed regions. All inserted candidates
+remain fully trainable and are not constrained to the mesh
+surface. 3) Finally, after Gaussian densification terminates,
+we continue optimizing the Gaussian representation for a
+short stabilization period before unfreezing the mesh texture
+and jointly fine-tuning all components.
+The main Gaussian branch follows the same global den-
+sification window as standard 3DGS. For plug-in variants,
+each Gaussian backbone retains its update strategy. Dissolve
+Gaussians are initialized according to multi-view mesh-texel
+errors. Additional details of the initialization and dual densi-
+fication are provided in the supplementary material.
+4. Experiments
+4.1. Setup
+Datasets and metrics.
+We evaluate on ML-Hypersim-
+AI [28], Deep Blending [13]. These datasets cover struc-
+tured indoor scenes, semi-structured indoor/outdoor scenes,
+and foliage-heavy unstructured scenes. We report PSNR and
+SSIM [39] for distortion and structural fidelity, LPIPS [44]
+for perceptual similarity, Gaussian reduction ∆GS
+=
+(N3DGS −Nmethod)/N3DGS, and Aux.% as the fraction
+of auxiliary Gaussians within total Gaussians. Stress tests
+on unstructured scenes are provided in the supplementary
+material.
+Baselines.
+We compare against Gaussian-only, surface-
+oriented, and hybrid baselines. For Gaussian-only methods,
+we include 3DGS [17], 3DGS-MCMC [18], and Reduced
+3DGS [24]. For surface-oriented reconstruction, we compare
+with SuGaR [10], PGSR [5], and MeshSplatting [14]. We
+further include 3D-GES [42] as a compact hybrid baseline.
+For a controlled comparison with hard depth-based fusion,
+we instantiate a Hard-Z Proxy with the same textured mesh
+prior as Gaussolve. Since official implementations of repre-
+sentative Mesh–Gaussian hybrid scene-reconstruction meth-
+
+
+Reference
+GT
+3DGS
+PGSR
+3D-GES
+MeshSplatting
+Ours
+ML-Hypersim-001
+Playroom
+SaintAnne
+Figure 4. Qualitative comparisons on novel-view synthesis. Compared with 3DGS, PGSR, 3D-GES, and MeshSplatting, Gaussolve better
+preserves weakly textured surfaces. The red and blue boxes indicate the corresponding enlarged regions.
+Reference
+GT
+Mesh
+Hard-Z
+Ours
+Diss.
+Res.
+Playroom
+DrJohnson
+SaintAnne
+Figure 5. Visualization of the subtract-and-refill mechanism. Compared with the projection-textured mesh and the Hard-Z hybrid
+baseline, Gaussolve selectively dissolves inconsistent mesh content (Diss.) and lets residual Gaussians refill the revealed regions (Res.),
+producing cleaner boundaries and more accurate appearance. The red and blue boxes indicate the corresponding enlarged regions.
+ods such as MeshGS [6] and Hybrid Mesh-Gaussian [15]
+are unavailable, we report the published Deep Blending
+results in Tab. 2. To evaluate its compatibility with differ-
+ent Gaussian backbones, we further plug Gaussolve into
+3DGS-MCMC [18] and Reduced 3DGS [24]. Detailed im-
+plementations are provided in the supplementary material.
+
+
+Group 1
+Group 2
+Group 3
+w/ SH
+w/o SH
+Figure 6. Directional dissolve for view-dependent appearance. A view-invariant dissolve field can suppress some static geometry errors,
+but it cannot provide a directional handoff for view-specific evidence. The scalar-SH dissolve field attenuates mesh evidence only from
+conflict-prone viewing directions, allowing residual RGB Gaussians to recover the corresponding view-dependent details.
+SaintAnne
+ML-Hypersim-001
+RC
+MILo
+PGSR
+SuGaR
+RC
+MILo
+PGSR
+SuGaR
+Figure 7. Textured mesh priors and direct image projection. We compare RC, MILo, PGSR, and SuGaR mesh priors on SaintAnne and
+ML-Hypersim-001. The top row visualizes the reconstructed mesh geometry, and the bottom row shows enlarged textured renderings. Direct
+projection preserves sharper local appearance than appearance baked from reconstructed representations.
+DA-V2
+Mesh
+Ours
+Hard-Z
+Figure 8. Rendered-depth comparison. Aligned Depth Anything
+V2 (DA-V2) reference [41], mesh depth, Gaussolve, and Hard-Z.
+Red boxes mark representative conflict regions.
+All experiments are run on an NVIDIA RTX 5000 Ada GPU.
+4.2. Quantitative and Qualitative Comparisons
+Table 1 summarizes the results on structured and semi-
+structured scenes. Across all three Gaussian backbones,
+integrating Gaussolve consistently improves reconstruction
+quality, showing that the proposed fusion is not tied to a
+specific Gaussian optimization strategy. The 3DGS-MCMC
+variant reaches the highest PSNR on both datasets, while
+the Reduced 3DGS variant provides a stronger quality–
+compactness trade-off with substantially fewer Gaussians.
+The MCMC variants show slightly negative ∆GS because
+3DGS-MCMC removes the opacity reset and opacity-based
+pruning used by vanilla 3DGS. We retain its original up-
+date strategy as our goal here is to evaluate whether the
+fusion framework improves the backbone without changing
+its native optimization behavior. Compared with the Hard-
+Z Proxy under the same textured-mesh setting, Gaussolve
+consistently improves reconstruction quality, confirming the
+benefit of continuous subtract-and-refill fusion over hard
+visibility. Table 2 further compares against MeshGS and
+Hybrid Mesh-Gaussian on the two commonly reported Deep
+Blending scenes. Gaussolve achieves higher average PSNR
+and substantially lower LPIPS while reducing the Gaussian
+population by 59.5%, compared with approximately 30% for
+MeshGS and 36% for Hybrid Mesh-Gaussian.
+4.3. Subtract-and-Refill Analysis
+Gaussolve separates complementary roles between the tex-
+tured mesh and the dissolve-and-refill branches. Fig. 5 vi-
+sualizes this learned division of labor: the mesh branch
+explains regular structures, the dissolve field concentrates
+on local mesh–image conflicts, and residual RGB Gaussians
+allocate capacity to the revealed regions and remaining fine
+details. This decomposition supports the subtract-and-refill
+interpretation: Gaussolve selectively attenuates inconsistent
+
+
+Table 3. Efficiency breakdown. Average rendering efficiency,
+storage, and memory on the Deep Blending dataset.
+3DGS
+Reduced 3DGS
+Component
+Storage
+FPS
+Mem.
+Storage
+FPS
+Mem.
+Mesh Only
+0.069G
+1003
+0.98G
+0.069G
+988
+0.98G
+Dissolve GS Only
+0.016G
+1110
+0.09G
+0.016G
+1111
+0.09G
+Residual GS Only
+0.251G
+265
+0.77G
+0.134G
+463
+0.49G
+GS Baseline
+0.655G
+99
+1.64G
+0.071G
+311
+0.48G
+Ours
+0.336G
+168
+1.70G
+0.219G
+236
+1.42G
+Ours (Parallel)
+0.336G
+174
+1.71G
+0.219G
+241
+1.43G
+Table 4. Ablation study on ML-Hypersim-001. Ablations of
+representation components, training design, and mesh geome-
+try/appearance.
+Variant
+Faces
+PSNR↑
+SSIM↑
+LPIPS↓
+A. Component Ablation (RC)
+Mesh Only
+–
+27.97
+0.894
+0.249
+Residual GS Only
+–
+34.25
+0.960
+0.153
+Mesh + Residual GS (Hard-Z)
+–
+33.51
+0.932
+0.197
+Mesh + NDF
+–
+29.76
+0.896
+0.241
+Full
+–
+35.21
+0.963
+0.106
+B. Training-Design Ablation (RC)
+w/o Scalar SH
+–
+34.64
+0.954
+0.116
+w/o Dual Densification
+–
+34.80
+0.957
+0.115
+w/o Progressive Initialization
+–
+35.02
+0.959
+0.109
+C. Geometry and Appearance Ablation (PGSR)
+PGSR + Projection
+10K
+35.52
+0.963
+0.112
+PGSR + Projection
+50K
+35.56
+0.964
+0.111
+PGSR + Projection
+100K
+35.61
+0.964
+0.112
+PGSR + Projection
+1M
+35.57
+0.965
+0.112
+PGSR + Baked Color
+100K
+35.42
+0.961
+0.140
+Table 5. Depth consistency with the aligned DA-V2 reference.
+We report the standard AbsRel, RMSE, and δ1 metrics used by
+Depth Anything V2 [41], together with Boundary F1 to measure
+depth-discontinuity alignment. Boundary F1 uses a shared Sobel
+threshold and a two-pixel matching tolerance.
+Method
+AbsRel↓
+RMSE↓
+δ1 ↑
+Boundary F1↑
+Mesh
+0.0787
+0.0909
+0.9725
+0.5274
+Hard-Z
+0.0868
+0.0845
+0.9736
+0.6720
+Ours
+0.0680
+0.0785
+0.9751
+0.6814
+mesh content and refills the exposed regions, rather than
+simply adding another Gaussian layer on top of the mesh.
+To further examine the subtract-and-refill behavior, Fig. 8
+compares the aligned DA-V2 reference with the mesh depth
+and rendered depths from Hard-Z and Gaussolve. Hard-
+Z largely follows the mesh depth, whereas Gaussolve sup-
+presses inconsistent mesh evidence and allows residual Gaus-
+sians to explain the revealed regions. Table 5 further shows
+that Gaussolve achieves the best depth consistency and
+boundary accuracy across all four metrics.
+Fig. 6 isolates the view-dependent part of the dissolve
+field. The View-invariant variant, without scalar SH, cannot
+Table 6. Training overhead. Training time and peak GPU memory
+for Gaussolve with different Gaussian backbones.
+Method
+3DGS
+Reduced 3DGS
+3DGS-MCMC
+Mesh
+Time
+Mem.
+Time
+Mem.
+Time
+Mem.
+Mem.
+Baseline
+32.5min
+3.67G
+24.5min
+1.51G
+36.0min
+4.11G
+–
+Ours
+32.9min
+4.91G
+34.1min
+4.78G
+53.1min
+6.95G
+3.95G
+follow direction-specific appearance residuals. With scalar
+SH, it can attenuate mesh content only from conflicting
+viewing directions, allowing residual RGB Gaussians to
+recover highlights and reflection-like details when needed.
+4.4. Ablations
+Table 4 summarizes the ablations on ML-Hypersim-001.
+The component and training-design ablations use the RC
+mesh. The full model achieves 35.21 PSNR and 0.106
+LPIPS, outperforming the residual-GS-only and Hard-Z vari-
+ants. Removing scalar SH, dual densification, or progressive
+initialization also degrades reconstruction quality, validat-
+ing the proposed training design. For the geometry and
+appearance ablation, we use the PGSR mesh. Performance
+remains stable from 10K to 1M faces, while at around 100K
+faces, direct projection reduces LPIPS from 0.140 to 0.112
+compared with baked appearance while maintaining similar
+PSNR and SSIM. Furthermore, the consistent performance
+across various resolutions and appearance constructions in-
+dicates that Gaussolve does not depend on a narrowly tuned
+mesh configuration.
+4.5. Rendering and Training Efficiency
+Table 3 reports the average efficiency. With the 3DGS back-
+bone, Ours (Parallel) improves rendering speed from 99 to
+174 FPS while reducing storage from 0.655G to 0.336G. Re-
+placing the Gaussian backbone with Reduced 3DGS further
+increases our rendering speed to 241 FPS and reduces storage
+to 0.219G. Although the hybrid remains slower than stan-
+dalone Reduced 3DGS due to the additional mesh and NDF
+rendering overhead, it achieves substantially better recon-
+struction quality. Introducing the mesh also incurs additional
+training cost (Table 6), but the overhead remains within a
+manageable range, as the mesh itself has a nearly constant
+memory footprint independent of the Gaussian population.
+5. Conclusion
+We presented Gaussolve, a hybrid Mesh–Gaussian renderer
+that reformulates representation conflicts as multi-view in-
+consistencies. Gaussolve selectively dissolves inconsistent
+mesh content with a Neural Dissolve Field and lets resid-
+ual Gaussians refill the revealed regions. Experiments on
+structured and semi-structured scenes demonstrate improved
+visual quality across different Gaussian backbones, together
+with substantial Gaussian reduction and real-time rendering.
+
+
+References
+[1] Marco Attene. A lightweight approach to repairing digitized
+polygon meshes. The Visual Computer, 26(11):1393–1406,
+2010. 3
+[2] Yanqi Bao, Tianyu Ding, Jing Huo, Yaoli Liu, Yuxin Li,
+Wenbin Li, Yang Gao, and Jiebo Luo. 3d gaussian splatting:
+Survey, technologies, challenges, and opportunities. arXiv
+preprint arXiv:2407.17418, 2024. 2
+[3] Hongrui Cai, Yuting Xiao, Xuan Wang, Jiafei Li, Yudong
+Guo, Yanbo Fan, Shenghua Gao, and Juyong Zhang. Hera:
+Hybrid explicit representation for ultra-realistic head avatars.
+In Proceedings of the IEEE/CVF Conference on Computer
+Vision and Pattern Recognition (CVPR), pages 260–270, 2025.
+3
+[4] Yuhang Cao, Haojun Yan, and Danya Yao. Omega: Joint
+optimization of explicit meshes and gaussian splats for robust
+scene-level surface reconstruction. In Proceedings of the
+IEEE/CVF Winter Conference on Applications of Computer
+Vision (WACV), pages 4386–4395, 2026. 3
+[5] Danpeng Chen, Hai Li, Weicai Ye, Yifan Wang, Weijian
+Xie, Shangjin Zhai, Nan Wang, Haomin Liu, Hujun Bao,
+and Guofeng Zhang. PGSR: Planar-based gaussian splatting
+for efficient and high-fidelity surface reconstruction. arXiv
+preprint arXiv:2406.06521, 2024. 5
+[6] Jaehoon Choi, Yonghan Lee, Hyungtae Lee, Heesung Kwon,
+and Dinesh Manocha. Meshgs: Adaptive mesh-aligned gaus-
+sian splatting for high-quality rendering. In Proceedings of
+the Asian Conference on Computer Vision (ACCV), pages
+3310–3326, 2024. 1, 3, 4, 5, 6
+[7] Epic Games.
+RealityCapture.
+https : / / www .
+capturingreality.com/, 2024. 3
+[8] Zhiwen Fan, Kevin Wang, Kairun Wen, Zehao Zhu, Dejia
+Xu, and Zhangyang Wang. Lightgaussian: Unbounded 3d
+gaussian compression with 15x reduction and 200+ fps. In
+Advances in Neural Information Processing Systems, pages
+140138–140158, 2024. 1, 2
+[9] Guangchi Fang and Bing Wang. Mini-splatting: Representing
+scenes with a constrained number of gaussians. In Computer
+Vision – ECCV 2024, pages 165–181, 2024. 2
+[10] Antoine Gu´edon and Vincent Lepetit. Sugar: Surface-aligned
+gaussian splatting for efficient 3d mesh reconstruction and
+high-quality mesh rendering. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition
+(CVPR), pages 5354–5363, 2024. 3, 5
+[11] Antoine Gu´edon, Diego Gomez, Nissim Maruani, Bingchen
+Gong, George Drettakis, and Maks Ovsjanikov. Milo: Mesh-
+in-the-loop gaussian splatting for detailed and efficient surface
+reconstruction. ACM Transactions on Graphics, 44(6):1–15,
+2025. 3
+[12] Divam Gupta, Anuj Pahuja, Nemanja Bartolovic, Tomas Si-
+mon, Forrest Iandola, and Giljoo Nam. Gaussian pixel codec
+avatars: A hybrid representation for efficient rendering. CoRR,
+abs/2512.15711, 2025. 3
+[13] Peter Hedman, Julien Philip, True Price, Jan-Michael Frahm,
+George Drettakis, and Gabriel Brostow. Deep blending for
+free-viewpoint image-based rendering. ACM Transactions on
+Graphics, 37(6):257:1–257:15, 2018. 5
+[14] Jan Held, Sanghyun Son, Renaud Vandeghen, Daniel Re-
+bain, Matheus Gadelha, Yi Zhou, Anthony Cioppa, Ming C.
+Lin, Marc Van Droogenbroeck, and Andrea Tagliasacchi.
+Meshsplatting: Differentiable rendering with opaque meshes.
+In Proceedings of the IEEE/CVF Conference on Computer
+Vision and Pattern Recognition (CVPR), pages 7320–7329,
+2026. 1, 5
+[15] Binxiao Huang, Zhihao Li, Shiyong Liu, Xiao Tang, Jiajun
+Tang, Jiaqi Lin, Yuxin Cheng, Zhenyu Chen, Xiaofei Wu,
+and Ngai Wong. Hybrid mesh-gaussian representation for
+efficient indoor scene reconstruction. In Proceedings of the
+Thirty-Fourth International Joint Conference on Artificial
+Intelligence (IJCAI-25), pages 1143–1151, 2025. 1, 3, 4, 5, 6
+[16] Michael Kazhdan, Matthew Bolitho, and Hugues Hoppe. Pois-
+son surface reconstruction. In Proceedings of the Fourth Euro-
+graphics Symposium on Geometry Processing, pages 61–70,
+2006. 2
+[17] Bernhard Kerbl, Georgios Kopanas, Thomas Leimk¨uhler, and
+George Drettakis. 3d gaussian splatting for real-time radiance
+field rendering. ACM Transactions on Graphics, 42(4):139:1–
+139:14, 2023. 1, 2, 5
+[18] Shakiba Kheradmand, Daniel Rebain, Gopal Sharma, Weiwei
+Sun, Yang-Che Tseng, Hossam Isack, Abhishek Kar, Andrea
+Tagliasacchi, and Kwang Moo Yi. 3d gaussian splatting as
+markov chain monte carlo. In Advances in Neural Information
+Processing Systems, pages 80965–80986, 2024. 5, 6
+[19] Jiyeop Kim and Jongwoo Lim. Integrating meshes and 3D
+gaussians for indoor scene reconstruction with SAM mask
+guidance. arXiv preprint arXiv:2407.16173, 2024. 1
+[20] Joo Chan Lee, Daniel Rho, Xiangyu Sun, Jong Hwan Ko,
+and Eunbyung Park. Compact 3d gaussian representation for
+radiance field. In Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition (CVPR), pages
+21719–21728, 2024. 1
+[21] Weihang Liu, Yuhui Zhong, Yuke Li, Xi Chen, Jiadi Cui,
+Honglong Zhang, Lan Xu, Xin Lou, Yujiao Shi, Jingyi Yu,
+and Yingliang Zhang. Citygo: Lightweight urban modeling
+and rendering with proxy buildings and residual gaussians. In
+SIGGRAPH Asia 2025 Conference Papers, 2025. 3
+[22] Tao Lu, Mulin Yu, Linning Xu, Yuanbo Xiangli, Limin Wang,
+Dahua Lin, and Bo Dai. Scaffold-gs: Structured 3d gaussians
+for view-adaptive rendering. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition
+(CVPR), 2024. 2
+[23] Saswat Subhajyoti Mallick, Rahul Goel, Bernhard Kerbl,
+Francisco Vicente Carrasco, Markus Steinberger, and Fer-
+nando De La Torre. Taming 3dgs: High-quality radiance
+fields with limited resources. In SIGGRAPH Asia 2024 Con-
+ference Papers, 2024. 2
+[24] Panagiotis Papantonakis, Georgios Kopanas, Bernhard Kerbl,
+Alexandre Lanvin, and George Drettakis. Reducing the mem-
+ory footprint of 3d gaussian splatting. Proceedings of the
+ACM on Computer Graphics and Interactive Techniques, 7
+(1):1–17, 2024. 2, 5, 6
+[25] Shenhan Qian, Tobias Kirschstein, Liam Schoneveld, Davide
+Davoli, Simon Giebenhain, and Matthias Nießner. Gaussiana-
+vatars: Photorealistic head avatars with rigged 3d gaussians.
+
+
+In Proceedings of the IEEE/CVF Conference on Computer
+Vision and Pattern Recognition (CVPR), pages 20299–20309,
+2024. 3
+[26] Lukas Radl, Michael Steiner, Mathias Parger, Alexander
+Weinrauch, Bernhard Kerbl, and Markus Steinberger. Stopthe-
+pop: Sorted gaussian splatting for view-consistent real-time
+rendering. ACM Transactions on Graphics, 43(4):1–17, 2024.
+2
+[27] Kerui Ren, Lihan Jiang, Tao Lu, Mulin Yu, Linning Xu,
+Zhangkai Ni, and Bo Dai. Octree-gs: Towards consistent
+real-time rendering with lod-structured 3d gaussians. arXiv
+preprint arXiv:2403.17898, 2024. 2
+[28] Mike Roberts, Jason Ramapuram, Anurag Ranjan, Atulit Ku-
+mar, Miguel Angel Bautista, Nathan Paczan, Russ Webb, and
+Joshua M. Susskind. Hypersim: A photorealistic synthetic
+dataset for holistic indoor scene understanding. In Proceed-
+ings of the IEEE/CVF International Conference on Computer
+Vision (ICCV), pages 10912–10922, 2021. 5
+[29] Samuel Rota Bul`o, Lorenzo Porzi, and Peter Kontschieder.
+Revising densification in gaussian splatting. In Computer
+Vision – ECCV 2024, pages 347–362, 2024. 2
+[30] Shunsuke Saito, Gabriel Schwartz, Tomas Simon, Junxuan Li,
+and Giljoo Nam. Relightable gaussian codec avatars. arXiv
+preprint arXiv:2312.03704, 2023. 3
+[31] Johannes
+Lutz
+Sch¨onberger
+and
+Jan-Michael
+Frahm.
+Structure-from-motion revisited. In Proceedings of the IEEE
+Conference on Computer Vision and Pattern Recognition
+(CVPR), pages 4104–4113, 2016. 2
+[32] Johannes Lutz Sch¨onberger, Enliang Zheng, Jan-Michael
+Frahm, and Marc Pollefeys. Pixelwise view selection for
+unstructured multi-view stereo. In Computer Vision – ECCV
+2016, pages 501–518. Springer, 2016. 2
+[33] Zhijing Shao, Zhaolong Wang, Zhuang Li, Duotun Wang,
+Xiangru Lin, Yu Zhang, Mingming Fan, and Zeyu Wang.
+Splattingavatar:
+Realistic real-time human avatars with
+mesh-embedded gaussian splatting. In Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), pages 1606–1616, 2024. 3
+[34] David Svitov, Pietro Morerio, Lourdes Agapito, and Alessio
+Del Bue. Haha: Highly articulated gaussian human avatars
+with textured mesh prior. In Computer Vision – ACCV 2024,
+pages 105–122, 2024. 3
+[35] Rafał Tobiasz,
+Grzegorz Wilczy´nski,
+Marcin Mazur,
+Sławomir Tadeja, and Przemysław Spurek.
+Meshsplats:
+Mesh-based rendering with gaussian splatting initialization.
+arXiv preprint arXiv:2502.07754, 2025. 3
+[36] Joanna Waczy´nska, Piotr Borycki, Sławomir Tadeja, Jacek
+Tabor, and Przemysław Spurek. GaMeS: Mesh-based adapt-
+ing and modification of gaussian splatting. arXiv preprint
+arXiv:2402.01459, 2024. 3
+[37] Cong Wang, Di Kang, Heyi Sun, Shenhan Qian, Zixuan Wang,
+Linchao Bao, and Song-Hai Zhang. Mega: Hybrid mesh-
+gaussian head avatar for high-fidelity rendering and head
+editing. In Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition (CVPR), pages
+26274–26284, 2025. 3
+[38] Shaofei Wang, Tomas Simon, Igor Santesteban, Timur
+Bagautdinov, Junxuan Li, Vasu Agrawal, Fabian Prada,
+Shoou-I Yu, Pace Nalbone, Matt Gramlich, Roman Lubach-
+ersky, Chenglei Wu, Javier Romero, Jason Saragih, Michael
+Zollhoefer, Andreas Geiger, Siyu Tang, and Shunsuke Saito.
+Relightable full-body gaussian codec avatars. arXiv preprint
+arXiv:2501.14726, 2025. 3
+[39] Zhou Wang, Alan C. Bovik, Hamid R. Sheikh, and Eero P.
+Simoncelli. Image quality assessment: From error visibility to
+structural similarity. IEEE Transactions on Image Processing,
+13(4):600–612, 2004. 5
+[40] Zeyu Xiao, Mingyang Sun, Yimin Cong, Lintao Wang,
+Dongliang Kou, Zhenyi Wu, Dingkang Yang, Peng Zhai,
+Zeyu Wang, and Lihua Zhang. Unimgs: Unifying mesh and
+3d gaussian splatting with single-pass rasterization and proxy-
+based deformation. arXiv preprint arXiv:2601.19233, 2026.
+3
+[41] Lihe Yang, Bingyi Kang, Zilong Huang, Zhen Zhao, Xiao-
+gang Xu, Jiashi Feng, and Hengshuang Zhao. Depth anything
+v2. In Advances in Neural Information Processing Systems,
+2024. 7, 8
+[42] Keyang Ye, Tianjia Shao, and Kun Zhou. When gaussian
+meets surfel: Ultra-fast high-fidelity radiance field rendering.
+ACM Transactions on Graphics, 44(4), 2025. 3, 5
+[43] Youyi Zhan, Tianjia Shao, He Wang, Yin Yang, and Kun
+Zhou. Interactive rendering of relightable and animatable
+gaussian avatars. arXiv preprint arXiv:2407.10707, 2024. 3
+[44] Richard Zhang, Phillip Isola, Alexei A. Efros, Eli Shecht-
+man, and Oliver Wang. The unreasonable effectiveness of
+deep features as a perceptual metric. In Proceedings of the
+IEEE Conference on Computer Vision and Pattern Recogni-
+tion (CVPR), pages 586–595, 2018. 5
+[45] Qingyuan Zhou, Yuehu Gong, Weidong Yang, Jiaze Li, Yeqi
+Luo, Baixin Xu, Shuhao Li, Ben Fei, and Ying He. MGSR:
+2d/3d mutual-boosted gaussian splatting for high-fidelity sur-
+face reconstruction under various light conditions. In Proceed-
+ings of the IEEE/CVF International Conference on Computer
+Vision (ICCV), pages 27295–27304, 2025. 1
+
+
+Gaussians Can Subtract: Neural Dissolve Fields for Hybrid Scene Rendering
+Supplementary Material
+S1. Additional Method Details
+S1.1. Fixed Mesh Depth in Continuous Fusion
+A possible extension of dissolution is to recompute a new
+depth map after the mesh has been partially dissolved, and
+then use this updated depth to separate front and back Gaus-
+sian contributions. We do not adopt this design. Once dis-
+solution becomes soft, a unique post-dissolution depth is no
+longer naturally defined. Any such depth would require an
+additional heuristic, such as thresholding a soft visibility pro-
+file or defining an expected depth along the ray. This would
+introduce extra hyperparameters and make the front/back
+partition itself depend on the dissolve prediction.
+More importantly, such a design creates an undesirable
+feedback loop. If dissolution changes the depth, then the
+updated depth changes which Gaussians are assigned to the
+front or back segment. Those changed Gaussian contribu-
+tions in turn modify the gradients that supervise the dissolve
+field. As a result, the partition boundary itself becomes
+unstable near occlusion transitions.
+For this reason, Gaussolve always uses the rasterized
+mesh depth Zm(u) as a fixed depth for the Gaussian-center
+front/back partition. This depth is used only to compute the
+front-segment statistics (Cf, Tf) required by the decompo-
+sition in the main paper. The dissolve field does not alter
+Zm(u). Instead, it only modulates the effective mesh opacity
+αeff
+m (u) = 1 −D(u).
+(S1)
+Thus the mesh depth remains fixed for the front/back decom-
+position, while dissolution only changes the final blending
+weight.
+S1.2. Parallel Rendering Implementation
+For each viewpoint, the mesh is rasterized once to obtain
+the reference depth map Zm(u), the visible mesh mask,
+and screen-space coordinates. After this step, the mesh,
+dissolve, and residual Gaussian branches become largely
+independent until the final compositing stage. The mesh
+branch computes the mesh color Cm(u); the dissolve branch
+renders D(u) and converts it into αeff
+m (u) = 1 −D(u); and
+the residual Gaussian branch uses the fixed mesh depth to
+compute (Cf, Tf) and Cg. The final image is
+Ihybrid(u) = αeff
+m (u)(Cf(u) + Tf(u)Cm(u))
++ (1 −αeff
+m (u))Cg(u).
+(S2)
+After the shared mesh rasterization and depth computation,
+the three branch computations are scheduled asynchronously
+on separate CUDA streams.
+S1.3. Multi-view Mesh-Texel Initialization
+We initialize the NDF around mesh regions that consistently
+disagree with the training images. Specifically, we use the
+mesh UV atlas as a common domain for aggregating errors
+across views by rendering the pretrained textured mesh from
+every training view and transferring the resulting RGB re-
+construction errors to the corresponding mesh texels using
+the rasterized UV coordinates.
+For a texel q, let Vq denote the training views in which it
+is visible, and let ev(q) denote its mean RGB error in view
+v. Its multi-view error is
+E(q) =
+1
+|Vq|
+X
+v∈Vq
+ev(q).
+(S3)
+We select texels with high multi-view error that are ob-
+served from multiple training views. For a selected texel q,
+let x1, x2, x3 denote the vertices of its mesh triangle, and let
+β1(q), β2(q), β3(q) be the corresponding barycentric coordi-
+nates. Its 3D surface position is
+x(q) = β1(q)x1 + β2(q)x2 + β3(q)x3.
+(S4)
+To remove UV-seam duplicates and overly dense samples,
+each position is assigned to a 3D voxel,
+k(q) =
+x(q) −xmin
+δ
+
+,
+(S5)
+where δ is the voxel size and xmin is the minimum corner
+of the selected point set. Candidates assigned to the same
+voxel are merged, retaining the one with the strongest multi-
+view support. A scalar-SH dissolve Gaussian is initialized
+at each retained position. These Gaussians are subsequently
+fully trainable and are not constrained to remain on the mesh
+surface.
+
+
+Mesh/GT
+Texture α / blend
+Vertex α / blend
+Ours / blend
+Scene 1
+Scene 2
+Figure S1. Surface-alpha dissolve alternatives. We compare texture-map alpha, per-vertex alpha, and the proposed volumetric NDF. The
+first row of each scene shows the learned mesh/dissolve representation, the second row shows the blended rendering with red and blue boxes,
+and the third row shows the corresponding zoom-ins. Texture-map and vertex alpha can reduce some mesh–image conflicts but often produce
+diffuse or fragmented masks, while the volumetric NDF localizes unreliable mesh evidence and enables cleaner residual Gaussian refill.
+
+
+ML-Hy-001
+ML-Hy-035
+ML-Hy-039
+Bridge
+Museum-1
+Museum-2
+Playroom
+SaintAnne
+DrJohnson
+Figure S2. Per-scene component visualizations. The decomposition shows how the dissolve field suppresses unreliable mesh evidence and
+how residual Gaussians refill the corresponding regions. Here, ML-Hy denotes the ML-Hypersim-AI scene family.
+S1.4. Loss-Driven Dual Densification
+The initial NDF captures mesh–image conflicts that are al-
+ready visible before hybrid training. However, additional
+conflicts may emerge as the hybrid representation evolves.
+We therefore periodically render the current fused result for
+all training views and compute its per-pixel mean absolute
+RGB error. Pixels with negligible errors are discarded.
+For a training view v, let Rv(p) denote the reconstruction
+error at pixel p, and let Ωv denote the set of pixels whose
+errors exceed the selection threshold. We sample pixels from
+an error-proportional categorical distribution,
+
+
+Scene 1
+Scene 2
+Figure S3. Additional adjacent-view consistency. Consecutive rendered crops remain stable across nearby views, including regions where
+residual Gaussians correct unreliable mesh evidence.
+Algorithm S1 Parallel Differentiable Hybrid Rendering
+1: Input: viewpoint v, mesh prior M, residual Gaussians
+Gr, dissolve Gaussians Gd
+2: Rasterize M to obtain mesh depth Zm(u), visibility
+mask, and screen-space coordinates.
+3: Launch three asynchronous branches.
+· Mesh branch: render the textured mesh color Cm(u).
+· Dissolve branch: rasterize Gd to obtain D(u) and
+αeff
+m (u) = 1 −D(u).
+· Residual branch: render Gr with fixed mesh depth to
+obtain Cf, Tf, and Cg.
+4: Synchronize all streams and composite Ihybrid
+=
+αeff
+m (Cf + TfCm) + (1 −αeff
+m )Cg.
+Pv(p) =
+Rv(p)
+P
+p′∈Ωv Rv(p′),
+p ∈Ωv,
+(S6)
+Thus, pixels with larger reconstruction errors have a
+higher probability of being selected.
+For each sampled pixel, we use the rasterized mesh depth
+to obtain a mesh-guided 3D anchor. Let Dm(p) denote the
+mesh depth at pixel p and BackProjv(p, Dm(p)) denote its
+back-projection in view v. The anchor position is
+x(p) = BackProjv (p, Dm(p)) .
+(S7)
+At this position, we initialize one dissolve candidate and
+one residual RGB candidate. The dissolve candidate in-
+creases the capacity to attenuate unreliable mesh evidence,
+while the residual candidate increases the capacity to recon-
+struct the content revealed after dissolution.
+Candidates collected from different training views are first
+retained based on visibility across multiple distinct cameras,
+and then residual candidates are merged using the 3D voxel
+aggregation described above. Retained residual candidates
+are initialized from the corresponding ground-truth colors,
+whereas dissolve candidates start from a small scalar dissolve
+value. Although both candidates share the same initial mesh-
+guided anchor, they are optimized independently and are not
+constrained to remain on the mesh surface.
+S2. Additional Implementation Details
+S2.1. Training and Reproduction Settings
+All locally reproduced methods use the same calibrated cam-
+eras, train/test splits, input resolution, and scene coordinate
+system. Unless otherwise specified, training is performed
+for 30k iterations on a single NVIDIA RTX 5000 Ada GPU.
+Test views are not used for mesh reconstruction, texturing,
+hyperparameter selection, or training.
+For each baseline, we retain its official training objective
+and native Gaussian update strategy. The Gaussolve variants
+use the same mesh, NDF initialization, continuous fusion,
+and training schedule; they differ only in the update strategy
+of the residual Gaussian backbone, as described in Sec. S2.2.
+Exact commands and configuration files are included in the
+supplementary code.
+The MeshGS and Hybrid Mesh-Gaussian results in the
+main paper are taken directly from their respective publica-
+tions and are not included among our local reproductions.
+MeshSplatting reproduction.
+The official MeshSplatting
+implementation constructs its mesh through a Restricted De-
+launay (RDel) stage. Its topology code assumes that each
+triangular face is shared by at most two tetrahedra. On
+several large scenes, the raw Delaunay output contained du-
+plicate, degenerate, or non-manifold tetrahedra that violated
+this assumption and caused the official code to terminate.
+For these scenes, we used a deterministic robustness fix
+before the existing RDel topology construction. We isotropi-
+cally normalize the input coordinates, canonicalize and dedu-
+plicate the generated tetrahedra, remove degenerate tetra-
+
+
+Table S1. Quantitative breakdown of hybrid methods on the Deep Blending dataset. We select four representative scenes encompassing
+both complex indoor layouts and structured outdoor architectural environments. Bold indicates the best performance, and cell colors
+highlight the top , second-best , and third-best results. † Indicates catastrophic geometry collapse.
+Method
+Mesh Hybrid
+Indoor: DrJohnson
+Indoor: Playroom
+Outdoor: SaintAnne
+Outdoor: Bridge
+PSNR↑SSIM↑LPIPS↓∆GS↑PSNR↑SSIM↑LPIPS↓∆GS↑PSNR↑SSIM↑LPIPS↓∆GS↑PSNR↑SSIM↑LPIPS↓∆GS↑
+3DGS
+×
+×
+29.33
+0.897
+0.271
+0%
+30.62
+0.897
+0.266
+0%
+25.54
+0.838
+0.280
+0%
+26.44
+0.854
+0.260
+0%
+Reduced 3DGS
+×
+×
+29.30
+0.894
+0.276
+53%
+30.50
+0.896
+0.266
+61%
+25.50
+0.835
+0.287
+39%
+25.59
+0.837
+0.286
+59%
+3DGS-MCMC
+×
+×
+29.40
+0.889
+0.274
+1%
+30.65
+0.896
+0.252
+-36%
+25.62
+0.840
+0.279
+0%
+26.46
+0.856
+0.257
+0%
+SuGaR
+✓
+×
+28.30
+0.870
+0.326
+59%
+30.25
+0.884
+0.289
+37%
+24.20
+0.820
+0.301
+-38%
+24.50
+0.791
+0.320
+5%
+PGSR
+✓
+×
+29.25
+0.895
+0.273
+37%
+30.65
+0.868
+0.318
+28%
+25.42
+0.827
+0.315
+19%
+25.46
+0.834
+0.291
+44%
+MeshSplatting
+✓
+×
+27.28
+0.837
+0.367
+–
+24.17
+0.808
+0.365
+–
+22.69
+0.780
+0.346
+–
+22.79
+0.748
+0.395
+–
+3D-GES
+×
+✓
+29.42
+0.891
+0.262
+54%
+30.66
+0.895
+0.253
+45%
+25.18
+0.839
+0.270
+23%
+11.75† 0.521† 0.608†
+–
+Hard-Z Proxy
+✓
+✓
+29.15
+0.891
+0.244
+49%
+30.55
+0.890
+0.226
+49%
+25.27
+0.836
+0.231
+20%
+25.97
+0.847
+0.241
+59%
+Ours (3DGS)
+✓
+✓
+29.69
+0.894
+0.240
+58%
+30.93
+0.893
+0.223
+61%
+25.61
+0.842
+0.221
+21%
+26.23
+0.854
+0.234
+58%
+Ours (Reduced 3DGS)
+✓
+✓
+29.60
+0.895
+0.243
+74%
+30.81
+0.892
+0.229
+76%
+25.62
+0.843
+0.224
+45%
+26.29
+0.850
+0.236
+76%
+Ours (3DGS-MCMC)
+✓
+✓
+29.95
+0.896
+0.241
+-2%
+31.10
+0.897
+0.218
+-3%
+25.73
+0.847
+0.222
+-5%
+26.39
+0.850
+0.238
+-6%
+Table S2. Irregular-scene stress test on Mip-NeRF 360. We report results on four outdoor scenes with complex geometry, vegetation, and
+weakly structured regions. Bold indicates the best performance, and cell colors highlight the top and second-best .
+Method
+Mesh Hybrid
+Outdoor: Treehill
+Outdoor: Garden
+Outdoor: Flowers
+Outdoor: Bicycle
+PSNR↑SSIM↑LPIPS↓∆GS↑PSNR↑SSIM↑LPIPS↓∆GS↑PSNR↑SSIM↑LPIPS↓∆GS↑PSNR↑SSIM↑LPIPS↓∆GS↑
+3DGS
+×
+×
+20.42
+0.684
+0.258
+0%
+28.55
+0.883
+0.123
+0%
+22.48
+0.641
+0.314
+0%
+26.24
+0.809
+0.187
+0%
+Hard-Z Proxy
+✓
+✓
+19.21
+0.655
+0.290
+-1%
+27.41
+0.866
+0.119
+7%
+20.77
+0.573
+0.334
+5%
+24.33
+0.764
+0.211
+13%
+Ours (3DGS)
+✓
+✓
+20.58
+0.689
+0.255
+14%
+29.00
+0.897
+0.093
+5%
+22.34
+0.635
+0.295
+13%
+26.21
+0.808
+0.175
+17%
+hedra, and retain at most the two highest-quality incident
+tetrahedra for each remaining non-manifold face. The re-
+pair is accepted only when the removed fraction is below
+0.1% and the final face incidence is at most two. All subse-
+quent MeshSplatting training and rendering stages remain
+unchanged. Results produced with this fix are identified as
+the robust-RDel variant.
+S2.2. Plug-in Gaussian Backbones
+3DGS.
+The default variant uses a 3DGS checkpoint ob-
+tained after the Gaussian-only warm-up. At the hybrid hand-
+off, we retain the Gaussian positions, scales, and rotations,
+while resetting their color coefficients and opacities. The
+residual field then continues with the standard 3DGS clone,
+split, and opacity-based pruning operations. The NDF uses
+an independent scalar-Gaussian optimizer and densification
+process.
+3DGS-MCMC.
+For the MCMC variant, the Gaussian-only
+warm-up is performed using the official 3DGS-MCMC up-
+date strategy. Unlike the default 3DGS handoff, the MCMC
+Gaussian colors and opacities are retained because they de-
+termine the current particle distribution and relocation prob-
+abilities.
+During hybrid optimization, the MCMC operations are
+applied only to the residual Gaussian field. Low-opacity
+residual Gaussians are relocated to samples drawn from
+the alive population, their opacity and scale are adjusted
+using the original MCMC relocation rule, and new residual
+Gaussians are added until the prescribed scene capacity is
+reached. The original opacity-dependent SGLD perturbation
+is also retained.
+The NDF, the textured mesh and continuous fusion re-
+main unchanged.
+Because 3DGS-MCMC does not use the opacity-based
+pruning mechanism of standard 3DGS, we retain its original
+update strategy, as our goal is to evaluate whether the fusion
+framework improves the backbone without altering its native
+optimization behavior. Consequently, this variant can yield
+slightly negative ∆GS, as reported in the main paper.
+Reduced 3DGS.
+For the Reduced 3DGS variant, the
+Gaussian-only warm-up is performed using the official Re-
+duced 3DGS update strategy. Because the Gaussolve ren-
+derer expects a standard SH tensor layout, the grouped Re-
+duced 3DGS checkpoint is converted to an equivalent full-
+SH representation at the hybrid handoff. This conversion
+changes only the storage layout and preserves the Gaussian
+geometry and appearance.
+During hybrid optimization, the redundancy-aware mercy
+pruning and dead-point removal of Reduced 3DGS are ap-
+plied only to the residual Gaussian field. Moreover, we retain
+
+
+its non-DC SH sparsity regularization. At the end of the den-
+sification window, multi-view SH-band culling determines
+the lowest sufficient SH degree for each residual Gaussian
+and removes the unused higher-order coefficients.
+The NDF, the textured mesh and continuous fusion re-
+main unchanged.
+Compression codebooks and entropy coding are offline
+storage mechanisms and are not required for the plug-in
+training comparison. We therefore transfer the backbone’s
+Gaussian initialization and population-reduction strategy,
+while storing the final hybrid fields in the common represen-
+tation used by our renderer.
+S3. Surface-Based Dissolve Alternatives
+A natural simplification of the Neural Dissolve Field is to
+directly optimize opacity on the mesh surface. We study two
+such alternatives: per-vertex alpha and texture-map alpha.
+Per-vertex alpha is constrained by mesh tessellation and has
+difficulty isolating thin or localized failure regions. Texture-
+map alpha is less constrained by vertex count, but the learned
+pattern is often diffuse and fragmented because texture-space
+errors do not correspond cleanly to view-space photometric
+conflicts. By contrast, the volumetric Neural Dissolve Field
+is localized in 3D and can be view-dependent, allowing the
+residual Gaussian branch to take over after unreliable mesh
+evidence is removed.
+S3.1. Additional Component Visualizations
+Fig. S2 visualizes the mesh, residual, and dissolve compo-
+nents across representative structured and semi-structured
+scenes. The dissolve field suppresses unreliable mesh evi-
+dence, while the residual branch reconstructs the revealed
+content.
+S4. Additional View Consistency
+Fig. S3 shows adjacent-view crops under small viewpoint
+changes. The rendered appearance remains stable around
+mesh-image conflict regions, indicating that the dissolve-
+and-refill decomposition does not introduce noticeable view-
+to-view flicker.
+S5. Limitations on Irregular Scenes
+Gaussolve is designed for scenes where a lightweight tex-
+tured mesh can replace broad structured regions, while resid-
+ual Gaussians handle complex geometry and appearance
+details. In scenes dominated by foliage, thin branches, and
+severe geometric ambiguity, the extracted mesh may be too
+inaccurate to provide a reliable surface prior. The mesh and
+residual branches may then compete to explain the same im-
+age evidence, limiting the reduction in Gaussian primitives.
+This defines the intended operating regime of our method:
+its largest compactness gains arise when broad regular re-
+gions can be represented efficiently by the textured mesh.
+Geometry-aware routing for highly irregular regions is an
+interesting direction for future work.
