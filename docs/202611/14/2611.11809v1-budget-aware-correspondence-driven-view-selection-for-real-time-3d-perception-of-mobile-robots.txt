@@ -1,0 +1,1021 @@
+TECHNICAL REPORT
+Report No. TR-RoboPI-2602
+November 05, 2026
+Budget-aware Correspondence-driven View Selection for
+Real-time 3D Perception of Mobile Robots
+Vaishnav Ramesh1, Jacob Carter2, Shivali J. Patel1, Sanjeev J. Koppal2, and Md Jahidul Islam1
+1RoboPI Laboratory, ECE Department, University of Florida
+2FOCUS Laboratory, ECE Department, University of Florida
+Abstract
+3D visual perception and scene reconstruction are critical for autonomous robots and intelligent
+transportation, yet real-world deployments often generate long, redundant image sequences that hinder
+downstream processing. This report investigates BCVS (budget-aware correspondence-driven view
+sampling), a pose-free view selection algorithm that offers 22+ FPS on a CPU, enabling online filtering
+for efficient 3D perception by mobile robots. Unlike existing approaches that rely on full structure-
+from-motion (SfM) pipelines or camera pose estimation, BCVS employs a purely correspondence-based
+scoring strategy that prioritizes view novelty while maintaining sufficient overlap for geometric stability.
+Given a user-specified budget, BCVS iteratively selects the most distinct frames and suppresses
+near-duplicates, producing compact subsets that preserve connectivity and minimize reconstruction
+loss. Extensive experiments on benchmark show that BCVS outperforms CPU-friendly baselines at
+tight budgets and remains competitive as budgets scale. Field trials with large aerial and marine
+robotics data further validate its practicality and scalability: BCVS reduces redundancy up to 16%
+while sustaining robust SfM registration and high-quality 3D reconstructions.
+Keywords: 3D reconstruction; view selection; image correspondence; real-time vision.
+Authors are with the University of Florida (UF), Gainesville, FL, USA. Dr. Sanjeev J. Koppal holds concurrent appointments as an
+Associate Professor at ECE-UF and a Scholar at Amazon Robotics. This report’s activities are performed independently at UF.
+arXiv:2611.11809v1  [cs.RO]  9 Nov 2026
+
+
+TR-RoboPI-2602
+BCVS: Budget-aware Correspondence-driven View Selection
+1 Introduction
+Fast and accurate 3D reconstruction is critical for
+mobile robots operating in ground, aerial, and ma-
+rine domains, supporting tasks such as dense map-
+ping, long-horizon navigation, mission planning, and
+downstream scene understanding, including infras-
+tructure inspection, asset monitoring, and structural
+assessment [3, 4].
+Contemporary visual pipelines
+range from geometric approaches such as Structure
+from Motion (SfM) and SLAM [5] to learned neural
+scene representations [6,7], which transform onboard
+multi-view imagery into metrically consistent 3D
+structure and radiance fields, offering rich geomet-
+ric and appearance cues for perception systems. In
+practice, however, mobile robots often depend on
+SLAM for real-time autonomy [8] while relegating
+high-fidelity reconstruction to post-processing due
+to constraints in power, memory, and latency.
+Real-world deployments often generate long, re-
+dundant mission data that substantially increases
+the computational cost of image matching, bundle
+adjustment (BA), and downstream training. In SfM
+pipelines, computation scales with the number of
+input views: retrieval methods are used to prune the
+quadratic complexity of pairwise matching, while BA
+repeatedly solves large-scale optimization problems.
+As a result, the sheer data volume becomes a primary
+bottleneck [9,10]. Similarly, neural 3D reconstruc-
+tion methods scale with the number of images and
+sampled rays, such that retaining fewer but more in-
+formative views can both accelerate training and im-
+prove numerical conditioning [6,7]. These challenges
+motivate budget-aware view selection strategies that
+compress missions by preserving only distinctive yet
+geometrically informative frames.
+Existing approaches to view selection generally
+fall into two categories: next-best-view (NBV) plan-
+ning and offline subset selection.
+NBV planners
+actively guide data acquisition by selecting the next
+camera pose according to predicted information gain
+or uncertainty [2,11,12]. While these methods can
+achieve high-fidelity reconstructions, they require
+expensive model-in-the-loop updates at each step,
+which limits scalability. In contrast, offline subset-
+selection methods only operate post-mission, i.e.,
+after full data collection. Redundancy-aware strate-
+gies [13] leverage images with pre-estimated camera
+poses, whereas coverage-based approaches, such as
+NeRF Director [2], rely on coarse SfM outputs to en-
+force spatially uniform sampling. Although effective
+at reducing redundancy, these offline methods re-
+main dependent on SfM-derived geometry or camera
+pose information, constraining their applicability in
+settings where such priors are unavailable or com-
+putationally infeasible.
+In
+this
+report,
+we
+present
+Budget-aware
+Correspondence-driven
+View
+Sampling
+(BCVS) – a fast, camera pose–free algorithm that
+selects views by regularizing novelty (information
+variance) in views from keypoint correspondences
+alone. Using only images as input, BCVS uses a
+lightweight feature matching step to estimate inter-
+frame motion and select diverse viewpoints, without
+relying on external poses or point clouds. Given a
+computational budget as prior, the view candidates
+are favored when they add new visual information
+while retaining enough overlap to remain connected.
+Operating in a short temporal neighborhood, BCVS
+incrementally prefers informative change, suppresses
+redundancy, and then lightly adjusts the set to meet
+a target budget (in maximum number of views).
+This budget-aware process produces a compact,
+viewpoint-diverse subset that can be utilized for
+fast 3D reconstruction with minimal loss.
+Notably, our focus is on real-time view selection for
+3D robot perception with onboard CPU processing
+constraints. A fast view selection operation is cru-
+cial to keep pace with the camera stream, while the
+bulk of the processing power is typically dedicated to
+perception and control systems [14]. However, most
+existing approaches are mainly offline, requiring a
+trained model, large embedding encoders, and/or
+a full SfM pipeline with accurate camera poses –
+which incur latency and memory overhead [15,16].
+To close this gap, we adopt a pose-free and CPU-
+only design that relies on lightweight keypoint
+correspondences to admit distinct views while pre-
+serving overlap for stable reconstruction. In prac-
+tice, our system processes frames at 22.3 FPS on
+CPU, enabling online filtering close to the camera
+rate (30 FPS). A fast budget-adjustment pass then
+consolidates the stream into a compact subset for
+downstream 3D reconstruction. This hybrid work-
+flow delivers the benefits of an efficient, on-board
+selection without requiring deep visual inference or
+1
+
+
+TR-RoboPI-2602
+BCVS: Budget-aware Correspondence-driven View Selection
+Figure 1. Performance margins for view selection strategies are shown with budget vs. reconstruction quality scores
+on MipsNerf-360 benchmark [1]. Top: PSNR as a function of view budget for four selectors – Uniform, Random,
+FVS, and the proposed BCVS algorithm. BCVS achieves higher PSNR across most budgets compared to the current
+state-of-the-art FVS [2], with the largest gains at low budgets, where view choice is particularly critical. Bottom: A
+sample rendering comparison at 30% budget with insets highlighting texture on the sofa and table region; as seen,
+FVS exhibits blur and residual artifacts, whereas BCVS preserves sharper detail and cleaner boundaries.
+precomputed camera poses as prior.
+We evaluate BCVS on the MipNeRF-360 bench-
+mark [1], and further assess it on marine and aerial
+robotics trial data where slow platform motion yields
+long stretches of redundant frames. For fairness and
+to match our deployment constraints, we compare
+against real-time CPU-based approaches available
+in the literature: Random, Uniform, and pose-based
+Farthest View Sampling (FVS) [2]; as Fig 1 demon-
+strates, BCVS achieves the best performance under
+tight computational budgets. We also demonstrate
+its real-time utility for CPU-based online filter-
+ing of large (long) missions, without which, 3D
+reconstruction onboard mobile robots is computa-
+tionally infeasible.
+This report makes the following contributions:
+1. We introduce BCVS, which selects views by reg-
+ularizing novelty with correspondence overlap
+using lightweight image features alone, without
+requiring a full-scale SfM pipeline or camera poses
+as prior. BCVS employs a budget-aware selection
+procedure to generate compact subsets that pre-
+serve coverage and geometric consistency, yielding
+minimal reconstruction loss downstream.
+2. BCVS is computationally efficient, offering 22+
+FPS on CPU and includes a fast budget-
+adjustment pass that consolidates the stream
+into a compact subset, enabling timely online
+filtering onboard mobile robots without requiring
+pretrained embeddings or pose estimation.
+3. Comprehensive evaluations on MipNeRF-360 and
+field experimental data confirm the effectiveness
+of BCVS. It consistently matches or surpasses
+pose-based selection methods and clearly outper-
+forms all baselines at low budgets, while remain-
+ing competitive as budgets increase.
+2 Background & Related Work
+Modern reconstruction pipelines encompass a range
+of methods, including geometric, hybrid, and neural
+approaches. SfM and SLAM pipelines recover cam-
+era trajectories and sparse 3D structure from multi-
+view imagery [10, 17–19]. These systems combine
+robust feature matching, incremental mapping, and
+bundle adjustment for metrically consistent models
+suitable in downstream planning and localization.
+Neural scene representations [6] learn a continuous
+radiance field that renders high-fidelity novel views,
+trading heavy training for photorealism and smooth-
+ness. In particular, 3D Gaussian Splatting [7] offers
+a fast, explicit alternative: it optimizes a set of
+anisotropic Gaussians with per-primitive appear-
+ance, enabling real-time rendering while preserving
+rich geometry/appearance cues.
+Moreover, active NBV (next-best-view) planners
+choose the next camera view by maximizing ex-
+pected information gain or uncertainty reduction
+under a continually updated scene model. ActiveN-
+eRF [12] estimates per-ray uncertainty to greedily
+reduce it. For instance, FisherRF [20] models the
+Fisher information of NeRF parameters and selects
+viewpoints by maximizing the expected information
+gain, whereas BavsNeRF methods [21] select batches
+of complementary views from a partially trained
+field. On the other hand, IOVS4NeRF models [22]
+target large-scale settings with uncertainty-guided
+incremental selection.
+2
+
+
+TR-RoboPI-2602
+BCVS: Budget-aware Correspondence-driven View Selection
+Figure 2. An overview of the proposed BCVS filtering pipeline for view selection is illustrated. First, ORB features
+are extracted and matched between frames Ii and Ij; from these matches, we estimate a homography Hij and a
+fundamental matrix Fij to obtain inlier ratios and normalized flows
+ rH, fH
+
+,
+ rF , fF
+
+. These statistics drive the
+viewpoint diversity and redundancy terms that compose the pairwise scoring function Tij. Over a short commit
+window G, we select the top-scoring candidate i.e., the most informative, distinct viewpoint with sufficient overlap
+and append it to the subset S.
+Offline methods operate after the full trajectory
+has been collected to prune near-duplicates while
+preserving geometric/scene coverage. NeRF Direc-
+tor [2] evaluates training view selection for neural
+volume rendering and shows which frames materially
+impact the quality and convergence of the reconstruc-
+tion. It introduces Farthest View Sampling (FVS)
+and Information-Gain Sampling (IGS) to enforce
+uniform, diverse coverage without retraining. Be-
+sides, redundancy-aware camera selection [13] works
+on images with pre-estimated camera poses, scoring
+candidates by overlap or diversity to retain a com-
+pact subset that maintains coverage while minimiz-
+ing viewpoint redundancy. Lastly, ConMax3D [23]
+selects frames without requiring camera poses; it
+maximizes the concept or semantic diversity for fil-
+tering views based on image embeddings.
+Despite considerable progress in recent years, sev-
+eral view-selection methods still rely on SfM outputs
+or pre-computed camera poses, which are not always
+available in real-time robotics applications. Besides,
+NBV approaches require a model-in-the-loop or high-
+dimensional image embeddings. We address these
+limitations with a purely feature-matching-based
+method that eliminates the need for camera poses,
+enabling real-time use by mobile robots.
+3 Methodology
+3.1 Overall Computational Pipeline
+We introduce BCVS, a fast view-selection algorithm
+that produces a compact, viewpoint-diverse subset
+S from an image stream {It}t=1..N under a target
+budget K for downstream 3D reconstruction. We
+construct the subset S in a single pass: for each
+incoming frame Ij, we compare it to the last com-
+mitted view and to what is already represented in
+S, to compute a score Tij that rewards informative
+viewpoint change while penalizing near-duplicates,
+visually static, or redundant views. Using a short
+temporal window G, we retain a candidate with the
+highest score and commit it when the window closes;
+S thus grows by repeatedly adding the next most
+informative, least redundant frame. Fig. 2 depicts
+the selection pipeline in detail.
+After one pass of processing, we further adjust the
+view selection if the budget is under-utilized or over-
+shot. If |S| < K, we densify by inserting frames into
+the largest temporal gaps in S to improve coverage
+and connectivity between neighbors. On the other
+hand, if |S| > K, we prune by removing frames with
+the smallest marginal contribution to viewpoint di-
+versity relative to their neighbors. The resulting
+subset S (|S| ≈K) preserves geometric diversity
+and connectivity, enabling scene reconstruction with
+minimal degradation compared to using all frames.
+3
+
+
+TR-RoboPI-2602
+BCVS: Budget-aware Correspondence-driven View Selection
+3.2 Feature Matching and Scoring
+Unlike prior methods [2, 13] that rely on camera
+poses, we estimate viewpoint redundancy and diver-
+sity using only images via feature matching. For
+each pair (i, j) in S, we detect ORB [24] keypoints
+and binary descriptors; ORB offers repeatability un-
+der moderate viewpoint/illumination change and
+enables fast matching with a small memory foot-
+print. We form putative correspondences using a
+BF–Hamming matcher and retain good matches via
+Lowe’s ratio test [25]. Let Mij be the resulting set
+of good correspondences between Ii and Ij, and let
+Ki, Kj be their detected keypoint sets. We define
+the match reliability ratio as:
+mrij = |Mij| : min(|Ki|, |Kj|).
+(1)
+This pose-free correspondence layer supplies reliable
+point pairs at low cost, enabling a fast selection
+pipeline.
+For pair (i, j), whether Ij contributes a new view-
+point – is assessed with a per-pair score Tij; it is
+composed of three terms: (i) a viewpoint diversity
+score Dij that measures how much the camera view-
+point has changed, using geometry-consistent motion
+between the images; (ii) a redundancy penalty Rij
+that captures how visually similar and motion-wise
+static the pair is; and (iii) a global redundancy RG
+ij
+that penalizes frames that are similar to selected
+views from S.
+Given Mij, a homography Hij and a fundamen-
+tal matrix Fij are estimated; Hij captures planar
+and pure rotational motion, while Fij encodes the
+epipolar geometry, capturing translation-induced
+parallax. In our estimation, each fit returns an in-
+lier mask, IH ⊂Mij and IF ⊂Mij, consisting of
+matches within respective models under a reprojec-
+tion threshold. The corresponding inlier ratios rH
+and rF are rH = |IH| : |Mij| and rF = |IF | : |Mij|,
+respectively.
+With this, we define the inlier flow parameters
+(fH, fF ) to quantify the motion under each geometry.
+It is computed by mapping the median 2D displace-
+ment of the inlier correspondences to [0, 1]. Let ¯d
+denote the image diagonal, and λ > 0 a flow-scale
+constant. then,
+fH = tanh
+ 
+median(x,x′)∈IH∥x′ −x∥2
+λ ¯d
+!
+,
+fF = tanh
+ 
+median(x,x′)∈IF ∥x′ −x∥2
+λ ¯d
+!
+.
+Effectively, the pairs (rH, fH) and (rF , fF ) summa-
+rize, respectively, the rotation/planar motion and
+translation constrained by epipolar geometry.
+Viewpoint Diversity Score:We factor diversity
+into two complementary terms:
+a connectivity
+term Cij that measures reliable overlap between
+the images, and a parallax term Pij that rewards
+translation-induced parallax.
+Cij = mrij rF
+Pij = (rF fF )q,
+q ∈(0, 1],
+Dij = wconn Cij + wpar Pij.
+(2)
+This design embodies novelty regularized by overlap:
+the connectivity term ensures that new views are sup-
+ported by sufficient, geometry-consistent correspon-
+dences (overlap), while the parallax term promotes
+genuine baseline change (novelty). Thus, choosing
+frames with high Dij prioritizes candidates that ex-
+pand scene coverage over frames that repeat already
+observed content.
+Viewpoint
+Redundancy
+Penalty:
+Rij
+is
+measured using the structural similarity index
+(SSIM) [26], combined with geometry cues to re-
+flect limited motion, and is denoted as
+Rij = sij
+h
+rH (1 −fH)
+ir
+(3)
+where r ∈[0, 1] and sij is the SSIM between the
+downsampled versions of Ii and Ij. The penalty
+increases when the pair is geometry-consistent (large
+rH) yet shows limited motion (small fH), and the
+images are highly similar.
+Global Redundancy Penalty: RG
+j
+suppresses
+selections that are redundant with those already in S;
+that is, the current candidate Ij is compared against
+the last L committed frames in S.
+Let SL ⊆S
+denote the indices of the most recent L selections.
+This penalty applies a hinge loss as:
+RG
+j = max
+
+0, (max
+s∈SL cjs −τ)
+
+, τ ∈(0, 1).
+(4)
+4
+
+
+TR-RoboPI-2602
+BCVS: Budget-aware Correspondence-driven View Selection
+Figure 3. Overview of our scoring function Tij: given
+an anchor frame I0, we compare candidates I1 and I2;
+I1 offers higher overlap/connectivity, while I2 provides
+greater parallax/novelty. BCVS balances parallax and
+overlap to keep views informative yet connected; in this
+example, the stronger parallax of I2, outweighs the extra
+overlap of I1, thus I2 is preferred for selection.
+Total Score: Tij, the total pair-to-pair score is then
+given by
+Tij = wdiv Dij −wred Rij −wglb RG
+j
+(5)
+where w⊙s are hyperparameters weighting the view-
+point diversity, redundancy penalty, and global re-
+dundancy scores. Fig 3 illustrates how we select
+images using Tij, balancing novelty against overlap
+to choose distinct views.
+3.3 Algorithm and Implementation Details
+The proposed budget-aware correspondence-driven
+view sampling (BCVS) pipeline is summarized in
+Algorithm 1. It performs fast view selection with a
+fixed temporal window of size G to maintain tempo-
+ral consistency. First, it initializes the selected set S
+with the first frame; then, for each window of candi-
+dates that follows, it evaluates the per-pair score Tij
+based on Eq. 5. The frame with the highest score is
+added to S as the next view, the window advances
+from this new anchor, and the process iterates. Us-
+ing a bounded temporal neighborhood discourages
+abrupt jumps, preserves continuity in motion and
+content, and steadily accumulates diverse viewpoints
+until the entire stream is processed.
+After all frames are processed, the selected subset
+Algorithm 1: Budget-aware correspondence-
+driven view sampling (BCVS).
+Input: Stream {It}N
+t=1, budget K, window G
+Output: Selected subset S
+1 S ←{1}; i ←1; b ←∅; v ←−∞;
+2 for j ←2 to N do
+3
+Compute ORB correspondence Mij;
+4
+Compute match ratio mrij;
+5
+if |Mij| ≥nmin then
+6
+Estimate Hij, Fij; Compute inlier
+ratios rH, rF , and flow parameters
+fH, fF ;
+7
+else
+8
+rH, rF , fH, fF ←0;
+9
+Compute downsampled SSIM sij;
+10
+Compute diversity score Dij;
+11
+Compute redundancy penalties Rij, RG
+ij;
+12
+Compute total score Tij;
+13
+Update best index and score (b, v);
+14
+if j −i ≥G then
+15
+Commit b to S; i ←b;
+(b, v) ←(∅, −∞);
+16 while |S| < K do
+17
+Find longest gap (L, R) in S;
+18
+Insert index j⋆maximizing JL,j,R;
+19 while |S| > K do
+20
+Remove index t with the least Γt;
+21 return S;
+S may not satisfy the target budget K. When |S| <
+K, temporal gaps between consecutive selections
+are examined, and each candidate inside a gap is
+evaluated with respect to both neighbors to ensure
+it connects well on both sides. For a gap (L, R) with
+L, R ∈S and any j ∈(L, R), the joint edge score is
+the minimum of the boundary scores
+JL,j,R = min
+
+TL,j · Tj,R
+
+.
+(6)
+Subsequently, another sweep through the gaps is
+done, prioritizing larger temporal gaps, to select
+j⋆= arg max
+L<j<R JL,j,R
+(7)
+into S. Using the minimum filters out candidates
+that are weak to either neighbor, so each insertion
+bridges the gap with a frame that is simultaneously
+5
+
+
+TR-RoboPI-2602
+BCVS: Budget-aware Correspondence-driven View Selection
+Table 1. Quantitative results for reconstruction quality given a selection budget on MipNeRF-360 dataset [1]. Each
+cell reports PSNR/SSIM scores across scenes on the held-out split, using the same 3DGS training protocol for all
+methods; only the selected training views differ. Budgets indicate the % of views retained; scores are shown as mean
+± standard deviation; best scores are in bold.
+Percentage of Views Selected (%)
+Sampler (↓)
+100
+90
+70
+50
+40
+30
+20
+10
+PSNR
+Random
+29.40 ± 2.57
+28.11 ± 4.52
+27.66 ± 4.76
+24.69 ± 4.89
+25.41 ± 4.72
+23.58 ± 4.11
+21.78 ± 2.82
+18.46 ± 3.17
+Uniform
+28.11 ± 4.60
+27.46 ± 4.95
+26.12 ± 4.06
+25.37 ± 4.09
+22.09 ± 3.39
+20.79 ± 3.59
+17.65 ± 2.29
+FVS [2]
+28.24 ± 2.45
+28.03 ± 3.18
+26.06 ± 3.77
+25.49 ± 3.89
+23.62 ± 3.66
+22.37 ± 0.78
+16.79 ± 1.29
+BCVS (Ours)
+28.43 ± 3.93
+27.87 ± 4.36
+26.10 ± 4.94
+26.08 ± 4.11
+24.44 ± 3.49
+24.85 ± 2.92
+20.60 ± 1.33
+SSIM
+Random
+0.885 ± 0.06
+0.852 ± 0.122
+0.828 ± 0.158
+0.743 ± 0.196
+0.778 ± 0.203
+0.722 ± 0.168
+0.730 ± 0.085
+0.692 ± 0.105
+Uniform
+0.843 ± 0.141
+0.825 ± 0.171
+0.819 ± 0.133
+0.771 ± 0.193
+0.673 ± 0.205
+0.687 ± 0.153
+0.573 ± 0.133
+FVS [2]
+0.858 ± 0.105
+0.851 ± 0.117
+0.806 ± 0.152
+0.808 ± 0.155
+0.713 ± 0.222
+0.776 ± 0.048
+0.528 ± 0.083
+BCVS (Ours)
+0.861 ± 0.107
+0.846 ± 0.126
+0.803 ± 0.172
+0.793 ± 0.167
+0.756 ± 0.171
+0.812 ± 0.072
+0.675 ± 0.102
+compatible with L and R, improving coverage and
+local temporal consistency.
+Conversely, when |S| > K, frames that add the
+least local value are removed using a neighbor-aware
+score. For each non-end index t ∈S with neighbors
+L and R, we define
+Γt = (TL,t + Tt,R) −TL,R
+(8)
+A small Γt indicates that the direct connection L↔R
+already carries strong utility while the two edges
+that rely on index t are weak, making it a good
+candidate for removal. Finally, pruning proceeds by
+iteratively deleting t⋆= arg mint Γt until |S| = K.
+This criterion preserves well-supported transitions,
+eliminates frames that do not improve local connec-
+tivity or viewpoint diversity, and yields a compact
+subset that maintains geometric coherence.
+Implementation details. We implement BCVS
+using the basic Python-OpenCV library alone for
+fast CPU-only processing. Each image is resized
+(aspect preserved) to a maximum side of 960 pix-
+els for feature extraction, and downsampled to 128
+pixels for fast SSIM computation. ORB extracts up
+to 3000 keypoints per frame; matches are computed
+with a BF–Hamming k-NN matcher and filtered by
+Lowe’s ratio test (τratio = 0.75). The median inlier
+flow is normalized with a scale λ = 0.15. Online
+selection uses a short temporal window G = 5 and
+computes the global redundancy penalty RG
+j over
+the last L = 20 committed frames using an SSIM
+threshold τ = 0.80.
+4 Benchmark Evaluation
+4.1 Experimental Setup
+We assess the effectiveness of the proposed BCVS al-
+gorithm by training a 3D Gaussian Splatting (3DGS)
+model [7] on subsets of training views and measur-
+ing reconstruction quality on a held-out test set.
+To isolate the effect of view selection, all methods
+use the same 3DGS pipeline and identical hyperpa-
+rameters. We sweep budgets of 10-90% with 10%
+intervals of the full data and report the qualitative
+and quantitative results.
+Dataset and Metrics.
+We use the MipNeRF-
+360 [1] benchmark dataset, which provides forward-
+facing and 360◦trajectories with high-resolution im-
+ages. According to standard practices, for each scene
+we construct a test set by assigning every 8th frame;
+all remaining frames form the training set. We train
+3DGS for 30k iterations per scene/budget using the
+default hyperparameters. Reconstruction quality is
+reported on the test split using PSNR and SSIM, av-
+eraged over test views and then across scenes. To en-
+sure fairness, all runs share identical pre-processing,
+training resolution, and random seeds; only the
+training-view indices differ. In our evaluation, we
+use 7 scenes: {bonsai, garden, kitchen, room,
+stump, bicycle, counter}; the per-scene image
+counts vary from 125 to 311 frames.
+Performance Baselines. We evaluate three base-
+lines under the same protocol and budget K. The
+Random Sampler picks K training views randomly
+without replacement; we report mean and standard
+deviations over three seeds. The Uniform Sampler
+6
+
+
+TR-RoboPI-2602
+BCVS: Budget-aware Correspondence-driven View Selection
+Figure 4. Qualitative comparison of reconstructed views across sampling budgets (10-70%) for garden scene. The
+red boxes mark major errors and inconsistencies such as missing geometry, distortions, and blurring. Random and
+Uniform leave large viewpoint gaps, while FVS spreads poses broadly but often with poor overlap, leading to ghosting
+and unstable rendering. BCVS balances both novelty and overlap, producing sharper textures and more complete
+geometry, and generalizes better to unseen views.
+takes one frame every m frames along the capture
+order, where m = ⌊N/K⌋and N is the number
+of frames; if we reach the end before selecting K
+views, we continue from the beginning until we have
+exactly K, then keep them in chronological order.
+The Farthest-View Sampling (FVS) [2] greedily adds
+the view farthest from the current set in pose space,
+using the dataset’s camera intrinsics and extrin-
+sics together with the sparse SfM point cloud to
+compute a photogrammetric distance, following the
+original NeRF Director formulation. Note that we
+consider view selection approaches that offer online
+CPU implementations for enabling deployments on
+resource-constrained mobile robots. Offline methods
+with GPU dependencies and prior pose estimation
+constraints are infeasible for real-time use.
+4.2 Qualitative and Quantitative Analyses
+Table 1 presents the quantitative results for recon-
+struction quality across sampling budgets (10-90%).
+To ensure fairness at low budgets, we exclude the
+bicycle and stump scenes from the 10-20% eval-
+uations, as their limited number of images led to
+frequent COLMAP registration failures for most
+baselines. The comparative quantitative scores high-
+light three key insights. First, under tight budgets
+(10-20%), BCVS provides the largest improvements,
+outperforming pose-based FVS by 11.1-22.7% (4.6-
+27.8%) on PSNR (SSIM). Although Random and
+Uniform samplers surpass FVS in this regime, they
+remain unstable across the scenes. This confirms
+that correspondence-guided novelty produces more
+informative and less redundant subsets when ev-
+ery frame matters.
+Second, in the mid-range of
+budget (30-70%), all methods naturally improve as
+more views are available. Random and Uniform
+still vary across the scenes, while FVS typically
+averages higher than both; nevertheless, BCVS re-
+mains competitive to FVS without requiring poses.
+Finally, at high budgets (80-90%), performance con-
+verges as expected, yet BCVS continues to match
+or surpass FVS. An additional practical advantage
+is runtime: BCVS operates entirely on CPU at 22.3
+7
+
+
+TR-RoboPI-2602
+BCVS: Budget-aware Correspondence-driven View Selection
+Figure 5. Additional qualitative evaluations of BCVS across sampling budgets (10–60%) on MipNeRF-360 [1] data:
+across room, kitchen, and bonsai scenes. Similar to Fig. 4, the red boxes highlight major reconstruction errors and
+inconsistencies.
+FPS, enabling real-time processing without the pose-
+estimation overhead of FVS.
+Fig. 4 illustrates qualitative results across sam-
+pling strategies evaluated on the garden scenes.
+Since each baseline yields a different subset, the
+per-subset test split produces different rendered im-
+ages across methods.
+This fairly evaluates each
+baseline on viewpoints that are unseen relative to
+its own selection and reflects the coverage patterns
+induced by that baseline. Within the illustrations,
+red boxes highlight common reconstruction failures,
+including missing geometry, blurred textures, and
+ghosting artifacts [27].
+Fig. 5 further presents additional results for BCVS
+on room, kitchen, and bonsai scenes at 10-60%
+budgets. We find that at low budgets (10-20%),
+Random and Uniform samplers frequently leave wide
+gaps along the trajectory, producing tearing, holes,
+and incomplete structures. FVS distributes poses
+more broadly, sometimes improving sharpness but of-
+ten yielding insufficient overlap between viewpoints,
+which leads to ghosting and localized distortions [27].
+In contrast, BCVS consistently produces sharper
+boundaries, cleaner textures, and more complete
+geometry, even with less data. At mid to higher
+budgets (30–70%), all methods improve, although
+Random and Uniform continue to exhibit residual
+inconsistencies, while FVS remains more reliable yet
+still prone to missing fine details when overlap is
+weak. Collectively, BCVS is the most robust, produc-
+ing stable reconstructions with fewer artifacts. These
+qualitative observations align with the quantitative
+gains in Table 1, reinforcing that correspondence-
+based novelty regularized by overlap delivers both
+higher accuracy and robustness.
+5 Field Experimental Evaluation
+5.1 Field Trials Data: Aerial and Marine Robots
+We further evaluate BCVS on two long, noisy, real-
+world mission data collected by 6-DOF robots to test
+scalability and practical efficiency: (i) A drone orbit
+of the Statue of Liberty with 6, 845 frames; and (ii)
+An autonomous underwater vehicles (AUV) survey
+of a coral reef at the Atlantic, with 3, 752 frames.
+Both sequences contain long stretches of redundant
+images due to the slow motion and near-stationary
+viewpoints. To investigate the quality and efficiency
+trade-off, we run multiple budgets per mission, re-
+taining 4.4-8.8% of the drone frames and 8-16%
+of the AUV frames, respectively. For these long
+streams of redundant data, we use a larger window
+gap (G = 20), so that BCVS searches for the next
+distinct view over a wider temporal neighborhood,
+improving stability while keeping selection fast. We
+8
+
+
+TR-RoboPI-2602
+BCVS: Budget-aware Correspondence-driven View Selection
+Figure 6. BCVS on long, noisy, real-world field trial data: a coral–reef survey data from an AUV on the left (3752
+frames); and aerial views of the Statue of Liberty orbited by a drone on the right (6845 frames). We show sample
+results for two budgets (K = 300 and K = 600) for each scene. Top rows: COLMAP sparse reconstructions with
+selected camera poses (in red). Bottom rows: example rendered views from the trained 3DGS model. In the coral
+reef scene, we find that increasing the budget densifies coverage and reduces holes. On the other hand, in the aerial
+scene, increasing K introduces many near-duplicate views with limited parallax, yielding noisier registration and
+blurrier renderings, demonstrating that adding frames without an added baseline can degrade reconstruction.
+then train a standard 3DGS model on each selected
+subset, allowing us to examine how aggressively we
+can compress long missions for reconstruction, and
+how reconstruction quality and runtime evolve as K
+increases.
+Fig. 6 compares visual results for two budgets on
+both mission data, as well as shows the COLMAP
+SfM outputs (camera frusta in red) and rendered
+viewpoints from 3DGS. On the coral reef sequence,
+increasing the budget from 300 to 600 raises view-
+point density along the ring trajectory, fills coverage
+gaps, and sharpens fine coral structure. Moreover,
+the reconstructed 3D point cloud is noticeably denser
+with fewer voids, an expected gain when added views
+contribute well-overlapped parallax.
+In contrast, on the aerial footage sequence, BCVS
+performs worse with K = 600 than K = 300 despite
+keeping more frames. We observed that many of the
+extra selections were near-duplicates along an almost
+circular, slow-motion path – thus adding no new
+baselines while injecting repetitive correspondences.
+This eventually diluted the effective overlap and
+shortened the track lengths. Thus, the reconstructed
+point cloud was noisier with blurrier renderings.
+5.2 Discussion: Strengths and Weaknesses
+BCVS is a pose-free and CPU-only algorithm, ideal
+for resource-constrained single-board devices. By
+regularizing novelty with overlap, it preferentially
+keeps parallax-rich, well-connected views and sup-
+presses near-duplicates; as observed in our field data,
+the resulting subsets register robustly in COLMAP
+(most selected frames are incorporated), whereas
+naive FPS-based uniform sampling yields large base-
+line jumps or runs of similar frames that fail to
+register. However, BCVS is sensitive to the balance
+between connectivity and parallax: over-weighting
+connectivity risks keeping rotation-only redundancy,
+while prioritizing parallax can fragment overlap.
+Moreover, the feature matching quality can degrade
+in low-texture, dynamic, or heavily blurred scenes,
+which in turn weakens the selection signals.
+9
+
+
+TR-RoboPI-2602
+BCVS: Budget-aware Correspondence-driven View Selection
+6 Conclusion
+This report investigated a budget-aware view selec-
+tion algorithm for efficient 3D reconstruction. We in-
+troduced BCVS, a real-time, pose-free view-selection
+pipeline that leverages keypoint correspondences
+to promote informative views and suppress redun-
+dancy. BCVS yields compact subsets that preserve
+geometric support with minimal reconstruction loss,
+running at over 22 FPS on CPU without pose es-
+timation or deep encoders. Experiments on bench-
+mark datasets as well as real-world aerial and marine
+robotics missions show that BCVS selects as little as
+4–16% of frames while sustaining clean registration
+and high-quality reconstructions. It outperforms
+CPU-friendly baselines at tight budgets by signif-
+icant margins and remains competitive at higher
+budgets.
+Field experimental analyses further re-
+veal that excessive near-duplicate views can degrade
+reconstructions, while budget-aware selection sta-
+bilizes geometry. These results demonstrate that
+simple correspondence cues are sufficient to achieve
+scalable, efficient, and accurate view selection – ideal
+for use by mobile robots.
+Acknowledgment
+The authors acknowledge support from the Ama-
+zon Robotics grant AGR DTD 10-06-2025 and the
+National Science Foundation (NSF) award 2330416.
+References
+[1] J. T. Barron,
+B. Mildenhall,
+D. Verbin,
+P. P. Srinivasan, and P. Hedman, “Mip-NeRF
+360: Unbounded Anti-Aliased Neural Radiance
+Fields,” in Proceedings of the IEEE/CVF Con-
+ference on Computer Vision and Pattern Recog-
+nition, 2022, pp. 5470–5479.
+[2] W. Xiao, R. S. Cruz, D. Ahmedt-Aristizabal,
+O. Salvado, C. Fookes, and L. Lebrat, “Nerf
+Director: Revisiting View Selection in Neu-
+ral Volume Rendering,” in Proceedings of the
+IEEE/CVF Conference on Computer Vision
+and Pattern Recognition, 2024, pp. 20 742–
+20 751.
+[3] D. Selvaratnam and D. Bazazian, “3D Recon-
+struction in Robotics: A Comprehensive Re-
+view,” Computers & Graphics, p. 104256, 2025.
+[4] T. Shan, B. Englot, D. Meyers, W. Wang,
+C. Ratti, and D. Rus, “LIO-SAM: Tightly-
+Coupled Lidar Inertial Odometry via Smooth-
+ing and Mapping,” in 2020 IEEE/RSJ Inter-
+national Conference on Intelligent Robots and
+Systems (IROS).
+IEEE, 2020, pp. 5135–5142.
+[5] S. Ullman, “The Interpretation of Structure
+from Motion,” Proceedings of the Royal Society
+of London. Series B. Biological Sciences, vol.
+203, no. 1153, pp. 405–426, 1979.
+[6] B. Mildenhall, P. P. Srinivasan, M. Tancik, J. T.
+Barron, R. Ramamoorthi, and R. Ng, “NeRF:
+Representing Scenes as Neural Radiance Fields
+for View Synthesis,” Communications of the
+ACM, vol. 65, no. 1, pp. 99–106, 2021.
+[7] B. Kerbl, G. Kopanas, T. Leimkühler, and
+G. Drettakis, “3D Gaussian Splatting for Real-
+time Radiance Field Rendering.” ACM Trans-
+actions Graph., vol. 42, no. 4, pp. 139–1, 2023.
+[8] S. Rahman, A. Q. Li, and I. Rekleitis, “SVIn2:
+An Underwater Slam System using Sonar, Vi-
+sual, Inertial, and Depth Sensor,” in 2019
+IEEE/RSJ International Conference on Intelli-
+gent Robots and Systems (IROS).
+IEEE, 2019,
+pp. 1861–1868.
+[9] D. Nister and H. Stewenius, “Scalable Recog-
+nition with a Vocabulary Tree,” in 2006 IEEE
+Computer Society Conference on Computer Vi-
+sion and Pattern Recognition (CVPR’06), vol. 2,
+2006, pp. 2161–2168.
+[10] J. L. Schönberger and J.-M. Frahm, “Structure-
+from-Motion Revisited,” in Conference on Com-
+puter Vision and Pattern Recognition (CVPR),
+2016.
+[11] L. Jin, X. Chen, J. Rückin, and M. Popović,
+“NeU-NBV: Next Best View Planning using
+Uncertainty Estimation in Image-based Neural
+Rendering,” in 2023 IEEE/RSJ International
+Conference on Intelligent Robots and Systems
+(IROS).
+IEEE, 2023, pp. 11 305–11 312.
+[12] X. Pan, Z. Lai, S. Song, and G. Huang, “Ac-
+tiveNeRF: Learning Where to See with Uncer-
+10
+
+
+TR-RoboPI-2602
+BCVS: Budget-aware Correspondence-driven View Selection
+tainty Estimation,” in European Conference on
+Computer Vision.
+Springer, 2022, pp. 230–246.
+[13] Z. Wang, H. Zhou, M. B. Blaschko, T. Tuyte-
+laars, and M. Wu, “Diversity-Driven View Sub-
+set Selection for Indoor Novel View Synthesis,”
+Transactions on Machine Learning Research,
+2025.
+[14] K. A. Skinner and M. Johnson-Roberson, “To-
+wards Real-time Underwater 3D Reconstruction
+with Plenoptic Cameras,” in 2016 IEEE/RSJ
+International Conference on Intelligent Robots
+and Systems (IROS), 2016, pp. 2014–2021.
+[15] Y. Sun, Q. Huang, D.-Y. Hsiao, L. Guan, and
+G. Hua, “Learning view selection for 3d scenes,”
+in Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition,
+2021, pp. 14 464–14 473.
+[16] V. Kaushal, R. Iyer, S. Kothawade, R. Ma-
+hadev, K. Doctor, and G. Ramakrishnan,
+“Learning from Less Data: A Unified Data Sub-
+set Selection and Active Learning Framework
+for Computer Vision,” in 2019 IEEE Winter
+Conference on Applications of Computer Vision
+(WACV).
+IEEE, 2019, pp. 1289–1299.
+[17] J.-M. Frahm, P. Fite-Georgel, D. Gallup,
+T. Johnson, R. Raguram, C. Wu, Y.-H. Jen,
+E. Dunn, B. Clipp, S. Lazebnik et al., “Building
+Rome on a Cloudless Day,” in European con-
+ference on computer vision (ECCV).
+Springer,
+2010, pp. 368–381.
+[18] R. Mur-Artal, J. M. M. Montiel, and J. D.
+Tardos, “ORB-SLAM: A Versatile and Accurate
+Monocular SLAM System,” IEEE Transactions
+on Robotics, vol. 31, no. 5, pp. 1147–1163, 2015.
+[19] J.
+A.
+Placed,
+J.
+Strader,
+H.
+Carrillo,
+N. Atanasov, V. Indelman, L. Carlone, and
+J. A. Castellanos, “A Survey on Active Simulta-
+neous Localization and Mapping: State of the
+art and new frontiers,” IEEE Transactions on
+Robotics, vol. 39, no. 3, pp. 1686–1705, 2023.
+[20] W. Jiang, B. Lei, and K. Daniilidis, “Fisherrf:
+Active View Selection and Mapping with Radi-
+ance Fields using Fisher Information,” in Euro-
+pean conference on computer vision.
+Springer,
+2024, pp. 422–440.
+[21] Y. Li, R. Li, S. Tang, and Y. Gu, “BavsNeRF:
+Batch Active View Selection for Neural Radi-
+ance Field Using Scene Uncertainty,” in The
+First Workshop on Populating Empty Cities –
+Virtual Humans for Robotics and Autonomous
+Driving at CVPR 2024, 2024.
+[22] J. Xie, S. Tan, Y. Wang, T. Du, Y. Xue,
+and Y. Lao, “IOVS4NeRF: Incremental Opti-
+mal View Selection for Large-Scale NeRFs,” in
+ICASSP 2025-2025 IEEE International Confer-
+ence on Acoustics, Speech and Signal Processing
+(ICASSP).
+IEEE, 2025, pp. 1–5.
+[23] A. Malhotra, N. B. Seghouani, G. Badaro, and
+C. Blaya, “ConMax3D: Frame Selection for 3D
+Reconstruction Through Concept Maximiza-
+tion,” in VISIGRAPP : VISAPP, 2025.
+[24] E. Rublee, V. Rabaud, K. Konolige, and
+G. Bradski, “ORB: An Efficient Alternative to
+SIFT or SURF,” in 2011 International Confer-
+ence on Computer Vision, 2011, pp. 2564–2571.
+[25] D. G. Lowe, “Distinctive Image Features from
+Scale-Invariant Keypoints,” International Jour-
+nal of Computer Vision, vol. 60, no. 2, pp. 91–
+110, 2004.
+[26] Z. Wang, A. C. Bovik, H. R. Sheikh, and E. P.
+Simoncelli, “Image Quality Assessment: from
+Error Visibility to Structural Similarity,” IEEE
+Transactions on Image Processing, vol. 13, no. 4,
+pp. 600–612, 2004.
+[27] F. Warburg, E. Weber, M. Tancik, A. Holyn-
+ski, and A. Kanazawa, “Nerfbusters: Remov-
+ing Ghostly Artifacts from Casually Captured
+NeRFs,” in Proceedings of the IEEE/CVF Inter-
+national Conference on Computer Vision, 2023,
+pp. 18 120–18 130.
+11

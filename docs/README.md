@@ -51,14 +51,14 @@
       <span class="dpr-home-dashboard-kicker">2026-11-14</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 25 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 39 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
-    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>10</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>15</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>2 次</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>20</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>19</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-11-14 00:54:17 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-11-14 22:46:48 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,9 +69,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日共生成 25 篇推荐（精读 10 篇，速读 15 篇）</p>
-<p>精读：《Trainspotting: Learning Object-Centric 3D Reconstruction from Found Photos》（8.0/10）, 《Gaussians Can Subtract: Neural Dissolve Fields for Hybrid Scene Rendering》（8.0/10）</p>
-<p>速读：《XM4D: 4D Reconstruction through Certifiable Geometric Optimization》（8.0/10）, 《Rotation Is Token-Blind: A Structural Criterion for Post-Training Quantization of Feed-Forward Geometry Transformers》（8.0/10）, 《Hierarchical Incremental Beta Splatting for Online Reconstruction》（8.0/10）</p>
+<p>今日共生成 39 篇推荐（精读 20 篇，速读 19 篇）</p>
+<p>精读：《DeepSoMo: Deformable Object Motion Estimation under Proprioceptive Partial Observability via Predictive Latent Dynamics》（8.0/10）, 《TransArt3D: From Two States to Articulated 3D Reconstruction with Video Transition Priors》（8.0/10）</p>
+<p>速读：《A forensic evaluation framework for egocentric foundation models: an EFM3D case study for crime scene reconstruction》（8.0/10）, 《UniOMA: Unified Optimal-Transport Multi-Modal Structural Alignment for Robot Perception》（8.0/10）, 《WanderBench: Can World Models Explore Dynamic Worlds from Video?》（8.0/10）</p>
 <p>这些结果覆盖了当下较热的方向，建议先看精读区论文的关键问题与方法。</p>
   </div>
 </section>
@@ -81,12 +81,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">10 篇</strong>
+    <strong class="dpr-home-dashboard-count">20 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Trainspotting: Learning Object-Centric 3D Reconstruction from Found Photos">Trainspotting: Learning Object-Centric 3D Reconstruction from Found Photos</span></li><li><span class="dpr-home-dashboard-paper-title" title="Gaussians Can Subtract: Neural Dissolve Fields for Hybrid Scene Rendering">Gaussians Can Subtract: Neural Dissolve Fields for Hybrid Scene Rendering</span></li><li><span class="dpr-home-dashboard-paper-title" title="DC-SQEM: Medial Mesh Extraction by Dual Contouring with Spherical Quadric Error Metric">DC-SQEM: Medial Mesh Extraction by Dual Contouring with Spherical Quadric Error Metric</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="DeepSoMo: Deformable Object Motion Estimation under Proprioceptive Partial Observability via Predictive Latent Dynamics">DeepSoMo: Deformable Object Motion Estimation under Proprioceptive Partial Observability via Predictive Latent Dynamics</span></li><li><span class="dpr-home-dashboard-paper-title" title="TransArt3D: From Two States to Articulated 3D Reconstruction with Video Transition Priors">TransArt3D: From Two States to Articulated 3D Reconstruction with Video Transition Priors</span></li><li><span class="dpr-home-dashboard-paper-title" title="Rethinking Geometric Depth in Monocular 3D Object Detection: A Projection-Consistent Reformulation">Rethinking Geometric Depth in Monocular 3D Object Detection: A Projection-Consistent Reformulation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>3</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>5</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>4</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>4</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -94,12 +94,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">15 篇</strong>
+    <strong class="dpr-home-dashboard-count">19 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="XM4D: 4D Reconstruction through Certifiable Geometric Optimization">XM4D: 4D Reconstruction through Certifiable Geometric Optimization</span></li><li><span class="dpr-home-dashboard-paper-title" title="Rotation Is Token-Blind: A Structural Criterion for Post-Training Quantization of Feed-Forward Geometry Transformers">Rotation Is Token-Blind: A Structural Criterion for Post-Training Quantization of Feed-Forward Geometry Transformers</span></li><li><span class="dpr-home-dashboard-paper-title" title="Hierarchical Incremental Beta Splatting for Online Reconstruction">Hierarchical Incremental Beta Splatting for Online Reconstruction</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="A forensic evaluation framework for egocentric foundation models: an EFM3D case study for crime scene reconstruction">A forensic evaluation framework for egocentric foundation models: an EFM3D case study for crime scene reconstruction</span></li><li><span class="dpr-home-dashboard-paper-title" title="UniOMA: Unified Optimal-Transport Multi-Modal Structural Alignment for Robot Perception">UniOMA: Unified Optimal-Transport Multi-Modal Structural Alignment for Robot Perception</span></li><li><span class="dpr-home-dashboard-paper-title" title="WanderBench: Can World Models Explore Dynamic Worlds from Video?">WanderBench: Can World Models Explore Dynamic Worlds from Video?</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>5</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>3</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>9</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>5</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>4</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span></div>
 </section>
 </div>
 
