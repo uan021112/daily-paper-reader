@@ -1,0 +1,2565 @@
+AGPF: Dynamic Source Selection for Feature Pyramid Fusion
+X. Yang
+G. Agam
+Department of Computer Science
+Illinois Institute of Technology
+xyang99@hawk.illinoistech.edu
+agam@illinoistech.edu
+Abstract
+Feature pyramids provide dense predictors with features
+at several spatial resolutions. However, it remains largely
+unexplored which pyramid levels each output location should
+aggregate information from. We investigate this question by
+allowing each output location to attend to features from every
+pyramid level and measuring how attention is distributed
+across scales. Surprisingly, locations on the finest output
+grid allocate approximately 75% of their attention to features
+two levels coarser, rather than to the current or adjacent
+levels. Even on the same output grid, the balance shifts
+toward coarser features as object size increases.
+These observations motivate Asymmetric Global Pyramid
+Fusion (AGPF), a neck that preserves the original output
+grids while allowing each location to dynamically select its
+contextual sources across scales. Each location interacts
+with a multiscale memory whose features are aligned in
+image coordinates, enabling flexible cross-scale aggregation
+without altering prediction resolutions. Compared with FPN,
+AGPF improves all 19 object detection and all seven instance
+segmentation configurations evaluated on COCO. A single
+fusion block improves Cascade Mask R-CNN by 1.7 box
+AP and 2.3 mask AP, and the gains consistently transfer to
+semantic and panoptic segmentation.
+1. Introduction
+Feature pyramids provide representations of an image at
+multiple spatial resolutions. Dense predictors rely on these
+representations for complementary localization detail and se-
+mantic context, while a neck determines how information is
+exchanged among them. This organization naturally invites
+a structural view of fusion: connect pyramid levels so that
+their features can support one another. Yet the level at which
+a feature is needed for prediction does not determine where
+its supporting context should come from. A fundamental
+question is therefore which pyramid features each output
+location should combine.
+Existing necks approach this question through differ-
+FPN
+P2
+P3
+P4
+P5
+bottom-up
+top-down
+AGPF
+P2
+P3
+P4
+P5
+Query
+Memory
+Attn
+Output
+0.05
+0.03
+0.05
+0.03
+0.36
+0.21
+0.27
+36
+40
+44
+48
+52
+FPN box AP
+mean +1.9
+Box AP 19/19 improved
+RetinaNet
+FCOS
+RepPoints
+ATSS
+GFL
+VFNet
+TOOD
+Faster
+Dynamic
+Grid
+Cascade
+SABL
+Mask R-CNN
+MS R-CNN
+Cascade Mask
+HTC
+R101
+Swin-T
+Swin-B
+36
+40
+44
+FPN mask AP
+mean +2.5
+Mask AP 7/7 improved
+Mask R-CNN
+MS R-CNN
+Cascade Mask
+HTC
+R101
+Swin-T
+Swin-B
+ΔAP
++1
++2
++3
++4
+One-stage
+Two-stage
+Backbone scaling
+Figure 1. From fixed fusion paths to per-location source se-
+lection. Top: FPN adds lateral and top-down connections to the
+bottom-up backbone; AGPF lets each output location retrieve from
+a shared multilevel memory, normalizing attention jointly over all
+levels. Bottom: box and mask AP gains over matched FPN base-
+lines, one point per configuration; dashed lines mark the means.
+ent interaction structures. FPN [30] propagates coarse fea-
+tures along a top-down pathway, while subsequent designs
+add bottom-up aggregation, search for cross-scale connec-
+tions, or repeat bidirectional fusion [13, 32, 43]. Attention-
+based necks and multi-scale encoders introduce content-
+dependent interactions, organizing context through direc-
+tional cross-level transformations [51], shared global fea-
+tures [15], or grouped cross-layer attention [10]. Other de-
+signs fuse pyramid features resampled to common spatial
+resolutions [9, 45], retrieve from query-dependent sampling
+points with a fixed budget per level [59], or combine self-
+attention at the coarsest encoder level with convolutional
+cross-scale fusion [57]. Despite these diverse designs, they
+all specify how pyramid levels interact rather than asking
+1
+arXiv:2611.19836v1  [cs.CV]  15 Nov 2026
+
+
+(a) Cross-Level Dependency
+FPN
+AGPF-S
+2.3%
+38.3%
+median R₉₀/D
+median R₉₀/D
+(b) Adaptive Pyramid Routing
+Figure 2. Pyramid source selection and spatial dependency. (a) Gradient-based dependency maps for a matched query; the normalized
+90%-mass radii are medians over 600 paired queries. (b) Source-level attention mass with full and pooled memory, averaged over object-
+centered queries and heads; the right plot shows the large-minus-small change in pooled-memory routing at each fixed query level.
+which levels each output location actually depends on. Con-
+sider two locations on the finest output grid, one on a small
+object and the other on a large one. In FPN, both receive
+coarse context through the adjacent level, where features
+from farther up the pyramid have already been combined.
+Adding a cross-level shortcut gives both locations direct ac-
+cess to a more distant source. If each location could draw
+directly from every level, would nearby levels contribute
+most, and would the two locations favor the same sources?
+We let each output location attend to a shared memory
+of pooled features from all pyramid levels and measure the
+share of attention it assigns to each level (Fig. 2(b)). Over
+object-centered queries on COCO, attention concentrates on
+P4 and P5. Queries on the finest level, P2, allocate approx-
+imately 75% of their attention to P4, two levels away; this
+preference persists after accounting for the number of mem-
+ory tokens at each level. The concentration does not imply
+a fixed assignment: even with the query level held constant,
+attention shifts from P4 toward P5 as object size increases.
+Thus, the finest output grid can draw most of its retrieved
+context from a nonadjacent source, while the balance among
+sources changes with the represented object.
+These findings suggest organizing pyramid fusion around
+the sources selected by each location (Fig. 1, top). The out-
+put hierarchy specifies the resolutions at which features are
+produced; the observed retrieval patterns describe a differ-
+ent organization of how context is used. We develop this
+view into Asymmetric Global Pyramid Fusion (AGPF), a
+neck that gives each output location direct access to a shared
+multilevel spatial memory and learns the contributions of its
+sources. This formulation preserves the native output grids
+while allowing each query to compare context across both
+levels and spatial regions. Complementary gradient-based
+analysis shows that AGPF retains strong local sensitivity
+while exhibiting a broader spatial dependence on the input
+pyramid than FPN (Fig. 2(a)).
+Joint retrieval across resolutions also requires a consis-
+tent spatial reference. A displacement of one cell represents
+different image-space distances at different pyramid lev-
+els, and memory pooling changes those distances further.
+We introduce Feature-Aligned Rotary Position Embedding
+(FA-RoPE), which places each query and memory token at
+the image-space center of its sampling cell before applying
+rotary encoding. Cross-level interactions therefore use a
+common spatial reference, accounting for both backbone
+stride and memory pooling.
+Making source selection practical also requires control-
+ling the size of the context. The two finest levels account
+for over 90% of the tokens in an uncompressed pyramid, but
+preserving their dense output grids need not require equally
+dense representations on the memory side. We therefore
+retain every output query and spatially pool the fine-level
+memory, keeping sources from all levels directly accessible.
+A controlled comparison shows that this compact memory
+matches full-pyramid attention in box and mask AP with
+far fewer query–key interactions, so compression need not
+restrict retrieval to a subset of pyramid levels.
+AGPF integrates source selection, spatial alignment, and
+memory pooling into a compact asymmetric attention block
+whose output retains the multiresolution interface expected
+by existing prediction heads. Stacking this block without
+changing that interface yields AGPF-S, AGPF-B, and AGPF-
+L.
+Replacing FPN with AGPF improves all 19 evaluated
+object-detection and all seven instance-segmentation con-
+figurations on COCO, spanning one-stage, two-stage, and
+cascade detectors with convolutional and Transformer back-
+bones (Fig. 1, bottom), and the gains extend to semantic
+segmentation on Cityscapes and ADE20K and to panoptic
+segmentation. Together, the routing analysis and the task
+results support a view of pyramid fusion centered on per-
+location source selection: dense multiresolution outputs can
+be served by selective retrieval from a compact, spatially
+aligned context.
+2. Related Work
+Feature-pyramid fusion. Existing methods differ in both
+cross-level connectivity and the way multiscale context is
+aggregated. FPN combines top-down semantic enrichment
+2
+
+
+(a) AGPA Block with FA-RoPE
+Multi-scale Tokens
+(Queries)
+Linear
+Linear
+Linear
+Q
+(Dense)
+FA-RoPE
+(on Q)
+Per-Level K/V Pooling
+Depthwise
+Pooling
+Linear
+Depthwise
+Pooling
+Linear
+Depthwise
+Pooling
+Linear
+K
+(Pooled)
+V
+(Pooled)
+FA-RoPE
+(on K)
+Global
+Attention
+Output
+Projection
++
+FFN
+(b) Feature-aligned geometry
+Level s1
+Level s2
+Different
+strides
+Shared image coordinates
+Δp = s2 c2 −s1 c1
+c is the center of cell (i, j)
+Figure 3. AGPF block and feature-aligned coordinates. (a) Dense queries jointly retrieve from pooled memory spanning all pyramid
+levels, preserving the output grids. (b) Shared image-space coordinates account for differing effective strides of queries and memory tokens.
+with lateral connections [30]. Subsequent designs introduce
+bottom-up path augmentation [32], search over cross-scale
+connections [13], and repeated bidirectional weighted fu-
+sion [43]. Related designs further address how context is
+assembled: Dynamic Head combines scale-, spatial-, and
+task-aware attention [9], while Gold-YOLO gathers multi-
+level features and distributes the fused information back to
+individual levels [45].
+Cross-level attention. Attention-based pyramid modules
+provide direct precedents for content-dependent cross-scale
+interaction. FPT uses separate self-level, top-down, and
+bottom-up transformations [51]. CA-FPN augments pyra-
+mid features by attending to a shared global content map
+derived from the deepest backbone stage [15]. CFPT com-
+bines grouped cross-layer channel and spatial attention with
+consistent positional encoding [10]. In AGPF, pooled spa-
+tial tokens from all levels form a globally shared memory,
+allowing each native-resolution query to allocate attention
+jointly across levels and positions. We use this formulation
+to examine how source allocation relates to output level and
+object scale.
+Efficient multiscale attention. Multiscale models reduce
+attention cost through sparse sampling, selective feature
+updates, and pooled representations. Deformable DETR
+retrieves from a small set of query-dependent locations at
+each level [59]. Lite DETR interleaves updates across levels
+to reduce high-resolution processing [25], while RT-DETR
+combines self-attention at the coarsest feature level with con-
+volutional cross-scale fusion [57]. MViT and MViTv2 use
+pooling attention to construct efficient hierarchical backbone
+representations [11, 28]. AGPF applies memory compres-
+sion to an existing pyramid while preserving the dense query
+grids used by prediction heads, allowing a compact multi-
+level context to serve output locations across resolutions.
+3. Approach
+AGPF treats the feature at each output location as a query
+that retrieves context from a shared multilevel memory. Each
+block preserves dense queries, pools the keys and values, and
+aligns their spatial coordinates before attention (Fig. 3(a)).
+The resulting features retain the original pyramid resolutions
+for the prediction heads.
+Pyramid tokenization. Given an image, we form the input
+pyramid {Cl}l∈L from backbone features, using the levels re-
+quired by the prediction architecture. Level l has spatial size
+Hl ×Wl and image stride sl. We project each level to a com-
+mon width d and flatten it into Xl ∈RNl×d, where Nl =
+HlWl. The full token sequence is X = Concatl∈L Xl, with
+each token associated with its source level and spatial loca-
+tion.
+Memory pooling. Within each block, we add a learned level
+embedding to Xl and use linear projections shared across
+levels to obtain queries Ql, keys Kl, and values Vl. Queries
+retain every spatial location. Keys and values are pooled
+separately on their spatial grids and then concatenated across
+levels:
+Q = Concatl Ql,
+[K, V ] = Concatl Pl([Kl, Vl]).
+(1)
+Here, Pl applies spatial pooling at stride rl independently to
+the key and value branches. We use depthwise convolution
+for pooling, with separate parameters for the two branches.
+Levels with rl = 1 skip pooling. Our default configuration
+compresses the finer levels, which contain most of the pyra-
+mid tokens, while retaining the coarser levels at their native
+resolutions. Tokens from different levels remain separate in
+the memory, even when pooling gives them the same spatial
+resolution.
+Aligned spatial reference. Queries and memory tokens can
+have different strides, so the same grid index can refer to dif-
+ferent image locations. Feature-Aligned Rotary Position Em-
+bedding (FA-RoPE) expresses their positions in a common
+image coordinate system (Fig. 3(c)). Common-coordinate
+rotary embeddings have been used for multi-resolution crops
+in MuViT [37] and different patch sizes in HyperDiT [19].
+FA-RoPE applies this principle to native pyramid queries
+and independently pooled memory, accounting for both the
+3
+
+
+0
+64
+128
+192
+Input translation (pixels)
+0.000
+0.005
+0.010
+0.015
+0.020
+Level-local indexing
+FA-RoPE
+Attention drift (JSD/ln 2)
+Figure 4. Spatial dependency and translation consistency. Left:
+median cumulative gradient mass around the query (shading: in-
+terquartile range; dashed line: r/D = 0.05). Right: mean attention
+drift under input translation.
+backbone stride and the pooling stride. We place each token
+at the image-space center of its sampling cell:
+p(i, j; t) =
+  j + 1
+2
+
+t,
+ i + 1
+2
+
+t
+
+,
+(2)
+where (i, j) is the row–column index and t is the effective
+stride. Queries at level l use t = sl, while pooled keys
+use t = rlsl. We apply mixed RoPE [20] to queries and
+keys using these coordinates, with the rotary mapping shared
+across levels. Their positional interactions therefore encode
+displacement in common image units across resolutions.
+Joint pyramid retrieval.
+We implement joint retrieval
+as asymmetric multi-head attention between dense queries
+and pooled keys and values. Each query attends to every
+memory token, with the softmax normalized jointly over all
+source levels and spatial positions within each head. Even
+queries on the same output grid can therefore assign dif-
+ferent weights to source levels and spatial regions. Before
+output projection, we add the unrotated projected query to
+the retrieved context. A standard FFN follows the atten-
+tion update; both sublayers use residual connections and
+post-normalization.
+Let Nq = P
+l Nl and Nm = P
+l ¯Nl denote the numbers
+of query and memory tokens, where ¯Nl is the token count
+after pooling level l. The attention computation is reduced
+from O(N 2
+q d) for full-pyramid attention to
+O(NqNmd),
+Nm ≪Nq,
+(3)
+while preserving an output at every query location. Setting
+rl = 1 for all levels recovers the full-memory reference with
+Nm = Nq.
+Simple implementation and stacking. A single standard at-
+tention operation handles all source levels, without separate
+fusion modules for individual level pairs. After each block,
+we split the output sequence by query level and reshape it
+into feature maps Yl on the original Hl × Wl grids, preserv-
+ing the multiresolution interface. Blocks can therefore be
+stacked without modifying the prediction heads, each con-
+structing its memory from the updated features; varying their
+number yields AGPF-S, AGPF-B, and AGPF-L.
+Source selection. We measure source selection using the
+attention mass assigned to each pyramid level. To account
+for different numbers of memory tokens across levels, we
+also report enrichment relative to uniform attention over all
+memory tokens. For a query q at level l, these measures are
+Rl→m(q) = 1
+nh
+nh
+X
+h=1
+X
+j∈Mm
+A(h)
+qj ,
+El→m(q) = Rl→m(q)
+|Mm|/Nm ,
+(4)
+where A(h)
+qj
+is the attention weight on memory token j
+in head h, Mm contains the tokens from source level m,
+and nh is the number of heads. Uniform attention over all
+memory tokens gives E = 1; values above one indicate
+more attention to that source than this reference assigns.
+Spatial dependency. We measure the sensitivity of an output
+feature to the input pyramid. For a query q at output level l,
+let zq = ∥Yl(:, q)∥2. Its sensitivity to location (x, y) in input
+level m is
+gq,m(x, y) =
+
+∂zq
+∂Cm(:, x, y)
+
+2
+.
+(5)
+We align these maps in image space, sum them on a common
+reference grid, and normalize the result to unit mass. We
+report R90/D, where R90 is the smallest query-centered
+radius containing 90% of this mass and D is the reference-
+grid diagonal.
+Translation consistency. We translate the input image, re-
+compute its features, and compare attention at correspond-
+ing spatial locations.
+For each query and source level,
+let a and a∆denote the aligned attention distributions be-
+fore and after a translation by ∆. Both distributions are
+normalized within that source level. We measure atten-
+tion drift using normalized Jensen–Shannon divergence,
+Dattn = JSD(a, a∆)/ ln 2. Lower values indicate less at-
+tention drift.
+4. Experiments
+We evaluate AGPF on object detection, instance segmenta-
+tion, and panoptic segmentation on COCO, and on semantic
+segmentation on Cityscapes and ADE20K. Our COCO exper-
+iments first examine how individual output locations select
+and use pyramid context, then compare AGPF with alterna-
+tive necks across detectors and backbones, and finally ablate
+its main design choices.
+4.1. Experimental Setup
+Datasets and metrics. We evaluate object detection and
+instance segmentation on COCO val2017 [29] using box
+and mask AP. Semantic segmentation is evaluated on
+Cityscapes [8] and ADE20K [58] using mIoU and mAcc.
+For panoptic segmentation on COCO, we report PQ, PQTh,
+PQSt, SQ, and RQ [24].
+4
+
+
+Detector
+Neck / Fusion Source
+Box Detection
+Instance Segmentation
+Mem.
+AP
+AP50
+AP75
+APS
+APM
+APL
+AP
+AP50
+AP75
+APS
+APM
+APL
+Faster R-CNN
+FPN [30]
+Reimpl. 37.4
+58.1
+40.4
+21.2
+41.0
+48.1
+–
+–
+–
+–
+–
+–
+3777
+BiFPN [43]
+Reimpl. 35.3
+54.9
+38.1
+20.3
+38.7
+45.3
+–
+–
+–
+–
+–
+–
+5540
+HRFPN [42]
+Reimpl. 37.4
+58.3
+40.5
+21.4
+40.9
+48.3
+–
+–
+–
+–
+–
+–
+6632
+PAFPN [32]
+Reimpl. 37.7
+58.5
+41.0
+22.0
+41.4
+48.7
+–
+–
+–
+–
+–
+–
+3631
+AugFPN [16]
+Reimpl. 38.1
+59.5
+41.4
+22.9
+41.6
+49.1
+–
+–
+–
+–
+–
+–
+3583
+AGPF-S
+Ours
+38.8
+60.1
+41.7
+23.0
+41.9
+51.0
+–
+–
+–
+–
+–
+–
+4988
+Mask R-CNN
+FPN [30]
+Reimpl. 38.2
+58.8
+41.4
+21.9
+40.9
+49.5
+34.7
+55.7
+37.2
+18.3
+37.4
+47.2
+4441
+BiFPN [43]
+Reimpl. 36.3
+55.8
+39.5
+20.7
+39.6
+47.1
+32.5
+52.6
+34.5
+15.1
+35.0
+47.3
+6240
+HRFPN [42]
+Reimpl. 38.0
+58.6
+41.4
+21.9
+41.3
+49.8
+34.3
+55.4
+36.4
+16.0
+36.8
+50.2
+6675
+PAFPN [32]
+Reimpl. 38.4
+59.1
+41.7
+22.3
+41.5
+49.8
+34.9
+55.8
+37.0
+16.2
+37.1
+50.8
+4323
+AugFPN [16]
+Reimpl. 39.1
+60.1
+42.6
+23.1
+42.7
+50.5
+35.2
+56.8
+37.5
+16.7
+38.0
+51.0
+4315
+AGPF-S
+Ours
+39.2
+60.1
+42.5
+23.0
+42.2
+51.9
+36.0
+57.0
+38.5
+17.4
+38.6
+52.5
+5260
+Cascade Mask R-CNN
+FPN [30]
+Reimpl. 41.2
+59.4
+45.0
+23.9
+44.2
+54.4
+36.0
+56.6
+38.4
+19.4
+38.5
+49.3
+5970
+BiFPN [43]
+Reimpl. 38.1
+55.3
+41.6
+20.3
+41.3
+50.8
+33.1
+52.4
+35.5
+14.6
+35.5
+48.6
+7684
+HRFPN [42]
+Reimpl. 40.9
+59.2
+44.6
+23.1
+44.2
+54.0
+35.7
+56.2
+38.3
+16.8
+38.2
+52.5
+7484
+PAFPN [32]
+Reimpl. 41.2
+59.2
+45.1
+23.5
+44.8
+54.6
+35.9
+56.3
+38.5
+16.5
+38.6
+52.7
+5797
+AFPN [49]
+Reimpl. 41.8
+60.5
+45.6
+24.4
+45.3
+55.2
+36.4
+57.3
+38.9
+17.5
+38.9
+53.4
+5989
+AugFPN [16]
+Reimpl. 42.1
+60.9
+45.9
+24.8
+45.6
+55.4
+36.5
+57.8
+39.2
+17.9
+39.1
+53.3
+5774
+FPT∗[51]
+Reimpl. 42.1
+60.7
+45.6
+23.3
+45.8
+55.6
+36.5
+57.5
+39.0
+17.0
+38.5
+52.8
+9003
+AGPF-S
+Ours
+42.9
+61.7
+46.8
+25.6
+45.9
+56.9
+38.3
+59.3
+41.3
+19.0
+40.7
+55.6
+6389
+Table 1. Comparison with feature-pyramid necks on COCO val2017 under matched detector settings. AGPF-S uses one fusion block.
+Mem. denotes training memory in MB. ∗FPT builds on FPN; removing it reduces AP by over 2 points, indicating not fair comparison.
+Implementation. Detection experiments use MMDetec-
+tion [5]. Controlled FPN–AGPF comparisons replace only
+the neck, with the remaining model, training recipe, and
+evaluation protocol unchanged. Unless otherwise stated,
+analyses and ablations use Cascade Mask R-CNN [2] with
+an ImageNet-pretrained ResNet-50 [17] and AGPF-S. We
+use a feature width of d = 256, following FPN [30], and
+eight attention heads with an FFN hidden width of 1024,
+following Deformable DETR [59]. AGPF-S, AGPF-B, and
+AGPF-L contain one, three, and six fusion blocks, respec-
+tively.
+The reference configuration uses a 12-epoch (1×) sched-
+ule and a total batch size of 16 on eight NVIDIA A6000
+GPUs. We use AdamW [35] with weight decay 0.05 and
+initial learning rates of 2 × 10−4 for ResNet and 1 × 10−4
+for Swin [34] backbones. For memory-design comparisons,
+detector latency and peak training memory are measured
+with matched hardware, input size, batch size. Across re-
+peated training runs without a fixed random seed, the main
+evaluation metrics are reproducible within 0.1 points.
+4.2. Experiments on COCO
+Pyramid source selection. We analyze AGPF-S over all
+5,000 COCO val2017 images, sampling a query at the
+bounding-box center of each of 36,334 valid objects at every
+output level. Routing statistics follow Eq. 4, with enrichment
+computed per image before aggregation.
+With the default pooled memory, P2 queries assign ap-
+proximately 75% of their attention to P4, two levels away,
+and 92% to P4 and P5 together (Fig. 2(b)). This preference
+FPN
+AGPF-S
+Small
+Medium
+Large
+Figure 5. Cross-level dependency of FPN and AGPF-S across
+small, medium, and large COCO objects.
+persists after accounting for memory-token counts: the P2-
+to-P4 allocation is 2.48× the uniform-token reference (Supp.
+C.2). The unpooled reference also favors coarse sources
+(Fig. 2(b)), indicating that this preference is not specific
+to memory compression. A fine output resolution therefore
+does not imply a preference for fine or adjacent source levels.
+Routing across object scales. At each query level, AGPF-S
+queries associated with larger objects allocate more attention
+to P5 and less to P4 (Fig. 2(b)). For P2 queries, attention
+to P5 increases from 16.0% for small objects to 18.9% for
+large ones, while attention to P4 decreases from 75.8% to
+5
+
+
+Method
+Fusion
+APbox
+APbox
+50
+APbox
+S
+APmask APmask
+50
+APmask
+S
+One-stage detection (ResNet-50)
+RetinaNet [31]
+Anchor-based
+FPN
+36.5
+55.4
+20.4
+–
+–
+–
+AGPF-S
+37.9 +1.4 57.2
+21.9
+–
+–
+–
+FCOS [44]
+Anchor-free
+FPN
+36.6
+56.0
+21.0
+–
+–
+–
+AGPF-S
+37.3 +0.7 56.2
+21.0
+–
+–
+–
+RepPoints [50]
+Point-set
+FPN
+37.0
+56.7
+20.4
+–
+–
+–
+AGPF-S
+39.0 +2.0 59.4
+23.1
+–
+–
+–
+ATSS [55]
+Adaptive assignment
+FPN
+39.4
+57.6
+23.6
+–
+–
+–
+AGPF-S
+40.5 +1.1 58.6
+24.1
+–
+–
+–
+GFL [27]
+Quality-aware
+FPN
+40.2
+58.4
+23.3
+–
+–
+–
+AGPF-S
+41.1 +0.9 59.0
+22.8
+–
+–
+–
+VFNet [53]
+IoU-aware
+FPN
+41.6
+59.5
+24.4
+–
+–
+–
+AGPF-S
+41.8 +0.2 59.5
+24.9
+–
+–
+–
+TOOD [12]
+Task-aligned
+FPN
+42.4
+59.5
+25.1
+–
+–
+–
+AGPF-S
+43.2 +0.8 60.7
+25.6
+–
+–
+–
+Two-stage detection and instance segmentation (ResNet-50)
+Faster R-CNN [40]
+Two-stage
+FPN
+37.4
+58.1
+21.2
+–
+–
+–
+AGPF-B
+39.8 +2.4 61.0
+23.8
+–
+–
+–
+Dynamic R-CNN [52]
+Dynamic two-stage
+FPN
+38.9
+57.6
+22.1
+–
+–
+–
+AGPF-B
+40.9 +2.0 60.0
+23.3
+–
+–
+–
+Grid R-CNN [36]
+Grid-guided
+FPN
+40.4
+58.5
+22.7
+–
+–
+–
+AGPF-B
+42.2 +1.8 61.0
+24.8
+–
+–
+–
+Cascade R-CNN [2]
+Cascade
+FPN
+40.3
+58.6
+22.5
+–
+–
+–
+AGPF-B
+42.9 +2.6 61.9
+26.0
+–
+–
+–
+SABL R-CNN [46]
+Side-aware
+FPN
+41.0
+59.5
+23.1
+–
+–
+–
+AGPF-B
+44.0 +3.0 61.9
+26.4
+–
+–
+–
+Mask R-CNN [18]
+Instance segmentation
+FPN
+38.2
+58.8
+21.9
+34.7
+55.7
+18.3
+FaPN [22]
+39.8
+–
+24.3
+36.4
+–
+18.1
+A2-FPN [21] 40.0
+–
+–
+36.2
+58.4
+20.1
+AGPF-B
+41.1 +2.9 62.0
+24.7
+37.5 +2.8 59.3
+18.9
+Mask Scoring R-CNN [23]
+Mask-quality scoring
+FPN
+38.2
+58.8
+21.6
+36.0
+55.8
+18.4
+AGPF-B
+40.8 +2.6 60.5
+24.2
+38.6 +2.6 58.7
+18.9
+Cascade Mask R-CNN [2]
+Cascade instance
+FPN
+41.2
+59.4
+23.9
+36.0
+56.6
+19.4
+AGPF-B
+44.3 +3.1 63.4
+26.9
+39.4 +3.4 60.8
+20.5
+HTC [4]
+Hybrid cascade
+FPN
+42.3
+61.1
+23.7
+37.4
+58.4
+19.6
+AGPF-B
+45.4 +3.1 64.8
+27.5
+40.8 +3.4 62.3
+20.5
+Backbone scaling with Cascade Mask R-CNN
+ResNet-101
+FPN
+42.9
+61.0
+24.4
+37.3
+58.2
+19.7
+AGPF-B
+44.6 +1.7 63.3
+26.5
+39.5 +2.2 60.7
+19.7
+Swin-T
+FPN
+46.4
+65.8
+29.0
+41.0
+63.2
+21.4
+AGPF-B
+47.3 +0.9 67.1
+29.6
+41.7 +0.7 64.3
+21.8
+Swin-B†
+FPN
+51.9
+70.5
+35.4
+45.0
+68.1
+28.9
+AGPF-B
+54.5 +2.6 73.3
+39.0
+47.1 +2.1 71.1
+29.0
+Table 2. Neck replacement across detectors and backbones on
+COCO val2017. Small suffixes indicate AP gains over the corre-
+sponding FPN baselines; † denotes 3× multiscale training.
+72.8%. Across the five query levels, the large-minus-small
+increase in P5 attention ranges from 2.8 to 4.6 percentage
+points, with all image-bootstrap 95% confidence intervals
+above zero (Supp. C.4) Finer object-scale bins show the same
+overall trend (Supp. C.3). These differences occur within the
+same output grid: a query’s output resolution alone does not
+describe which pyramid sources it favors.
+Spatial dependency. Source-level routing describes how a
+query distributes attention across pyramid levels; gradient
+sensitivity identifies which input-pyramid locations affect
+its output. We compare FPN and AGPF-S on the same 600
+object-centered queries, with 200 objects from each COCO
+size group. The median R90/D increases from 2.3% for
+FPN to 38.3% for AGPF-S, with a larger radius for AGPF-
+S in all 600 pairs (Fig. 6). AGPF-S also retains a median
+of 47.1% of its gradient mass within 0.05D of the query,
+whereas FPN accumulates nearly all its mass within this
+neighborhood (Fig. 4, left; Fig. 5). These dependencies
+complement the routing results: AGPF selects context across
+levels and exhibits sensitivity to spatially distant pyramid
+Method
+Setting
+Recipe
+APbox APmask
+Conventional CNN-based systems
+RetinaNet
+R50 + NASFPN
+50e
+40.5
+–
+Mask R-CNN
+R101 + FPN
+MS, 3×
+42.7
+38.5
+Cascade Mask R-CNN
+R101 + FPN
+MS, 3×
+45.5
+39.6
+HTC
+R101 + FPN
+20e
+44.8
+39.6
+DetectoRS [39]
+R101 + HTC
+20e
+50.5
+43.9
+AGPF-L
+R50 + Cascade
+MS, 3×
+51.1
+44.6
+Modern detection and segmentation systems
+DETR [3]
+R50
+MS, 150e
+39.9
+–
+DAB-DETR [33]
+R50
+MS, 50e
+42.3
+–
+Deformable DETR [59] R50, 2-stage
+MS, 50e
+47.0
+–
+Co-Deform-DETR [60] R50
+MS, 1×
+49.5
+–
+DINO [54]
+R50, 5-scale
+MS, 3×
+51.2
+–
+MaskFormer [6]
+R50
+MS, 50e
+–
+34.0
+Mask2Former [7]
+R50
+LSJ, 50e
+45.7
+42.9
+AGPF-L + HTC
+R50
+MS, 3×
+52.4
+45.8
+Mask DINO [26]
+R50
+LSJ, 50e
+50.5
+46.0
+Co-DETR [60]
+R50, DINO++
+LSJ, 3×
+54.8
+–
+AGPF-L + HTC++
+R50
+LSJ, 50e
+55.2
+48.0
+Table 3. Comparison with representative detection and instance-
+segmentation methods on COCO. MS indicates multi-scale training,
+and LSJ denotes large-scale jittering [14].
+regions while retaining a substantial local component.
+Translation consistency. We compare level-local coordi-
+nates and FA-RoPE on 200 COCO images using one check-
+point. Both coordinate schemes use the same extracted
+queries and keys for each input. For query–memory pairs
+with different effective strides, FA-RoPE reduces mean at-
+tention drift by 93.6–94.9% across translations of 64, 128,
+and 192 pixels (Fig. 4, right). A complementary control
+that translates the extracted features directly preserves atten-
+tion to numerical precision with FA-RoPE (Fig. 14). In the
+positional ablation, replacing level-local RoPE with fixed-
+frequency FA-RoPE improves box AP by 1.2 and mask AP
+by 0.8, with learned level embeddings retained (Table 5(b)).
+These results support a shared spatial reference for joint
+retrieval across pyramid resolutions.
+Comparison with pyramid-fusion necks. Table 1 com-
+pares AGPF-S with alternative necks under matched Faster
+Method
+#PEnc. Hours Iter. (s) Train Mem. APB/M
+Mask2Former
+29.5M
+62
+0.6
+10732
+45.7 / 42.9
+Mask DINO
+37.6M
+102
+1.0
+14520
+50.5 / 46.0
+DINO
+37.1M
+83
+1.1
+24394
+51.2 /
+–
+Co-DETR
+41.0M
+132
+1.8
+29228
+54.8 /
+–
+AGPF-HTC
+34.0M
+83
+1.1
+16972
+52.4 / 45.8
+AGPF-HTC++ 34.0M
+169
+1.6
+15707
+55.2 / 48.0
+Table 4. System-level accuracy and efficiency comparison. #PEnc.
+counts backbone and encoder/fusion parameters; Hours, Iter., and
+Mem. denote training hours, seconds per iteration, and peak train-
+ing memory (MB), respectively.
+6
+
+
+Method
+P2 Pool #Layers APbox APmask Params Mem. Iter. (s)
+AGPF-T
+✓
+1
+42.1
+37.6
+6.49M
+5520
+0.41
+AGPF-S
+✗
+1
+42.9
+38.3
+6.49M
+6389
+0.51
+AGPF-B
+✗
+3
+44.3
+39.4
+8.07M
+9392
+0.62
+AGPF-L
+✗
+6
+44.6
+39.5
+10.45M 13963
+0.94
+AGPF-L†
+✗
+6
+50.9
+44.3
+10.45M 13963
+0.94
+Position design
+Level Emb. Feature-aligned APbox APmask
+No position
+✗
+✗
+41.3
+37.4
+Fixed 2D sin-cos
+✓
+✗
+41.8
+37.7
+Local RoPE
+✓
+✗
+41.5
+37.4
+FA-RoPE
+✓
+✓
+42.7
+38.2
+Mixed FA-RoPE
+✓
+✓
+42.9
+38.3
+Method
+Global KV Pool Fused APbox APmask
+FPN
+✗
+–
+–
+41.2
+36.0
+Full attention
+✓
+✗
+✓
+42.7
+38.2
+Enforce Pool
+✓
+✓
+✓
+42.4
+37.9
+AGPF w/ mask
+✓
+✓
+✗
+42.8
+38.2
+AGPF
+✓
+✓
+✓
+42.9
+38.3
+(a) Model scaling
+(b) Positional encoding
+(c) Attention components
+Table 5. Controlled ablation studies of the main AGPF design choices. † denotes 3× multi-scale training.
+0
+10
+20
+30
+40
+50
+60
+Paired gain in R90/D (percentage points)
+Small
+Medium
+Large
+median 35.9%
+median 37.6%
+median 33.8%
+600 / 600 positive
+Figure 6. Paired change in normalized R90 from FPN to AGPF-S.
+R-CNN, Mask R-CNN, and Cascade Mask R-CNN settings.
+With a single joint-retrieval block, AGPF-S achieves the
+highest overall box AP in all three detector groups and
+the highest mask AP in both instance-segmentation groups.
+Compared with AugFPN, the strongest alternative in overall
+AP, AGPF-S improves box AP by 0.1–0.8 points and mask
+AP by 0.8–1.8 points. Joint source selection thus offers an
+effective alternative to fusion through prescribed pyramid
+pathways. Small-object mask AP remains slightly below
+FPN, possibly reflecting limited refinement of fine spatial
+detail within a single fusion block.
+Across detectors and backbones. We use the single-block
+AGPF-S with one-stage heads and the deeper AGPF-B with
+the more complex two-stage and cascade prediction pipelines
+(Table 2). Replacing FPN improves overall box AP in all 19
+evaluated configurations and mask AP in all seven instance-
+segmentation configurations. AGPF-B also surpasses FPN in
+small-object mask AP with both Mask R-CNN and Cascade
+Mask R-CNN.
+The improvements span different ways of consuming
+pyramid features. AGPF-S increases RepPoints box AP
+from 37.0 to 39.0, while AGPF-B improves HTC by 3.1
+box AP and 3.4 mask AP. The gains persist with ResNet-
+101, Swin-T, and Swin-B backbones. With Swin-B under
+matched 3× multiscale training, Cascade Mask R-CNN im-
+proves from 51.9/45.0 to 54.5/47.1 box/mask AP. Across
+these architectures, the same retrieval operation improves
+prediction while preserving the pyramid interface expected
+by their existing heads.
+Comparison with complete systems. Table 3 compares
+complete AGPF-based detectors with representative detec-
+tion and instance-segmentation systems. Here, AGPF-L
+is combined with enhanced prediction heads and training
+Ablation
+Setting
+Default
+APbox
+APmask
+Mem.
+#Heads
+2
+42.6
+38.1
+6383
+4
+42.5
+38.0
+6356
+8
+✓
+42.9
+38.3
+6389
+16
+42.9
+38.3
+6405
+Pooling
+AvgPool
+42.7
+38.1
+6392
+MaxPool
+42.8
+38.3
+6387
+DWConv
+✓
+42.9
+38.3
+6389
+KV stride
+[8,4,2,1,1]
+41.5
+37.3
+6172
+[4,2,1,1,1]
+✓
+42.9
+38.3
+6389
+[4,2,2,1,1]
+41.7
+37.5
+6356
+[4,4,2,2,1]
+41.7
+37.5
+6331
+Table 6. Single-layer AGPF design ablations.
+recipes; configuration details are provided in Supp. F.
+With ResNet-50, AGPF-L reaches 51.1/44.6 box/mask
+AP with Cascade Mask R-CNN and 52.4/45.8 with HTC.
+The stronger HTC++ configuration, trained for 50 epochs
+with large-scale jittering, reaches 55.2/48.0, exceeding the
+listed Co-DETR result by 0.4 box AP and Mask DINO by
+2.0 mask AP.
+Table 4 reports the corresponding training costs under
+matched measurement conditions.
+Compared with Co-
+DETR, AGPF-HTC++ uses 46.3% less peak training mem-
+ory and takes 1.6 rather than 1.8 seconds per iteration, al-
+though its longer schedule requires 169 hours in total versus
+132; the higher accuracy therefore does not imply a uni-
+formly lower training cost. AGPF can thus serve as the
+fusion component of competitive region-based detection and
+segmentation systems, alongside stronger heads and training
+recipes.
+Panoptic segmentation. We replace FPN with AGPF in
+Panoptic FPN [24] and K-Net [56], retaining their prediction
+components (Table 8). With ResNet-50, AGPF-B improves
+Panoptic FPN from 42.5 to 46.4 PQ and K-Net from 47.1
+to 49.0 PQ. With Swin-L, AGPF-L improves K-Net from
+54.5 to 55.8 PQ. Both thing and stuff PQ increase in all three
+settings. For Panoptic FPN, the gains are 3.1 PQTh and 5.1
+PQSt, showing that the retrieved pyramid context benefits
+both individual objects and semantic regions within the same
+prediction system.
+4.3. Semantic Segmentation
+We evaluate AGPF in UPerNet [48] and K-Net [56] on
+Cityscapes and ADE20K (Table 7).
+We replace their
+pyramid-fusion modules with AGPF-B for ResNet-50 and
+AGPF-L for Swin-L, keeping the remaining model and train-
+7
+
+
+Framework
+Backbone
+Fusion
+Cityscapes
+ADE20K
+mIoU
+mAcc
+mIoU
+mAcc
+UPerNet [48]
+R50
+FPN
+79.3
+87.2
+40.7
+51.9
+AGPF-B
+80.0
+87.4
+43.7
+54.7
+Swin-L
+FPN
+82.3
+88.8
+52.0
+63.2
+AGPF-L
+82.5
+89.0
+52.4
+63.7
+K-Net [56]
+R50
+FPN
+80.5
+87.1
+43.4
+54.8
+AGPF-B
+80.6
+87.4
+44.7
+55.6
+Swin-L
+FPN
+82.3
+88.5
+52.2
+63.5
+AGPF-L
+83.5
+89.5
+52.5
+63.8
+Table 7. Semantic segmentation on Cityscapes and ADE20K.
+ing settings unchanged. Both mIoU and mAcc improve in
+every paired comparison. With UPerNet and ResNet-50,
+mIoU increases from 79.3 to 80.0 on Cityscapes and from
+40.7 to 43.7 on ADE20K. The gains also extend to Trans-
+former backbones: K-Net with Swin-L improves from 82.3
+to 83.5 mIoU on Cityscapes. Joint pyramid retrieval thus
+supplies useful context for pixelwise scene labeling as well
+as object-level prediction, without requiring a task-specific
+fusion structure.
+4.4. Ablation Studies
+Memory resolution. The default pooled memory preserves
+the accuracy of the full-memory reference: 42.9/38.3 ver-
+sus 42.7/38.2 box/mask AP (Table 5(c)). Further compres-
+sion, however, affects accuracy (Table 6). Changing the KV
+strides from [4, 2, 1, 1, 1] to [4, 2, 2, 1, 1], which addition-
+ally downsamples P4, reduces performance to 41.7/37.5.
+The more aggressive [8, 4, 2, 1, 1] configuration obtains
+41.5/37.3. The sensitivity to P4 compression is consistent
+with its prominent role in retrieval and supports retaining its
+native memory resolution while compressing the finer levels.
+Fusion depth and query density. Table 5(a) compares the
+AGPF variants. Increasing fusion depth from one block
+to three improves box/mask AP by 1.4/1.1. Increasing it
+further to six blocks adds only 0.3/0.1 AP, while training
+iteration time rises from 0.62 to 0.94 seconds. AGPF-B
+therefore captures most of the depth-related gain at a lower
+training cost than AGPF-L.
+AGPF-T instead reduces query density by pooling P2
+queries. Relative to AGPF-S, it saves 13.6% of training mem-
+ory and reduces iteration time from 0.51 to 0.41 seconds,
+but loses 0.8/0.7 box/mask AP. We retain dense queries
+in the standard S/B/L variants, with AGPF-T providing an
+additional option when memory is constrained.
+Positional encoding. Both feature-aligned variants outper-
+form the unaligned encodings in Table 5(b). Within the
+shared image coordinate system, mixed RoPE adds 0.2 box
+AP and 0.1 mask AP over fixed-frequency FA-RoPE and
+is used by default. The larger improvement is already ob-
+Framework
+Backbone Fusion
+PQ PQT h PQSt
+SQ
+RQ
+Panoptic FPN [24] R50
+FPN
+42.5
+50.3
+30.7
+78.1 51.7
+AGPF-B 46.4
+53.4
+35.8
+81.4 55.8
+K-Net [56]
+R50
+FPN
+47.1
+51.6
+40.2
+80.6 57.3
+AGPF-B 49.0
+53.4
+42.2
+81.4 59.0
+Swin-L
+FPN
+54.5
+60.2
+46.0
+82.3 65.4
+AGPF-L 55.8
+61.6
+46.9
+82.6 66.7
+Table 8. Panoptic segmentation on COCO val2017.
+tained with the shared spatial reference, consistent with the
+translation analysis in Sec. 4.2.
+Pooling operator. Average and max pooling remain within
+0.2 AP of depthwise-convolution pooling (Table 6). The
+gains therefore do not require a learnable pooling operator.
+We use depthwise convolution, which gives the highest box
+AP and ties max pooling in mask AP. The Enforce Pool
+variant obtains 42.4/37.9 (Table 5(c)), below the default
+42.9/38.3. We therefore skip pooling at stride one, where
+no spatial reduction is required.
+Attention configuration. Varying the number of heads from
+two to sixteen yields 42.5–42.9 box AP and 38.0–38.3 mask
+AP (Table 6). Eight and sixteen heads both obtain 42.9/38.3;
+we use eight. Explicit padding masking with the non-fused
+implementation obtains 42.8/38.2 (Table 5(c)). We retain
+the fused implementation, which achieves comparable accu-
+racy without an explicit padding mask.
+5. Discussion
+Retrieval preference and spatial detail. Low average at-
+tention to fine-resolution memory does not imply that fine-
+resolution features are dispensable: a source used sparingly
+in aggregate may still matter to particular predictions, and
+fine-resolution features define dense output queries as well
+as supplying context. AGPF compresses the memory while
+preserving these queries, and the accuracy loss from addi-
+tionally pooling queries (Sec. 4.4) separates the two roles.
+Reducing context density and reducing the spatial resolution
+of prediction features are therefore distinct tradeoffs.
+Scope and future work.
+AGPF addresses pyramid fu-
+sion within the interface used by existing dense prediction
+heads. In DETR-style systems, encoder representations are
+designed together with object-query decoding and the set-
+prediction objective [3, 59], so their effectiveness within that
+joint design does not establish their effectiveness as stan-
+dalone pyramid necks serving other prediction heads; we
+therefore do not treat them as interchangeable neck base-
+lines, and Tables 3 and 4 compare complete-system accuracy
+and cost rather than encoder quality in isolation. Extending
+compact pyramid retrieval to such joint encoder–decoder
+designs remains future work.
+8
+
+
+6. Conclusion
+This work shows that an output location’s level in a fea-
+ture pyramid does not fully describe its use of context: when
+pyramid sources are jointly accessible, queries can favor non-
+adjacent levels, and their allocation across sources changes
+with object scale even at a fixed query level. AGPF turns this
+observation into a practical fusion design in which dense out-
+put queries retrieve from a compact multilevel memory with
+a shared spatial reference, and controlled neck replacements
+improve detection and segmentation across the evaluated ar-
+chitectures while retaining their prediction interfaces. Dense
+prediction outputs can therefore be supported by selective
+retrieval from compact context, which suggests treating the
+output hierarchy and the organization of context as separate
+design choices, and using the source preferences of indi-
+vidual locations to guide how pyramid information is made
+available and combined.
+References
+[1] Navaneeth Bodla, Bharat Singh, Rama Chellappa, and
+Larry S. Davis. Soft-nms – improving object detection with
+one line of code. In Proceedings of the IEEE International
+Conference on Computer Vision (ICCV), 2017. 15
+[2] Zhaowei Cai and Nuno Vasconcelos. Cascade r-cnn: Delving
+into high quality object detection. In 2018 IEEE/CVF con-
+ference on computer vision and pattern recognition, pages
+6154–6162. Ieee, 2018. 5, 6
+[3] Nicolas Carion, Francisco Massa, Gabriel Synnaeve, Nicolas
+Usunier, Alexander Kirillov, and Sergey Zagoruyko. End-to-
+end object detection with transformers. In European confer-
+ence on computer vision, pages 213–229. Springer, 2020. 6,
+8, 15
+[4] Kai Chen, Jiangmiao Pang, Jiaqi Wang, Yu Xiong, Xiaox-
+iao Li, Shuyang Sun, Wansen Feng, Ziwei Liu, Jianping Shi,
+Wanli Ouyang, et al. Hybrid task cascade for instance segmen-
+tation. In 2019 IEEE/CVF Conference on Computer Vision
+and Pattern Recognition (CVPR), pages 4969–4978. IEEE,
+2019. 6
+[5] Kai Chen, Jiaqi Wang, Jiangmiao Pang, Yuhang Cao, Yu
+Xiong, Xiaoxiao Li, Shuyang Sun, Wansen Feng, Ziwei Liu,
+Jiarui Xu, et al. Mmdetection: Open mmlab detection toolbox
+and benchmark. arXiv preprint arXiv:1906.07155, 2019. 5
+[6] Bowen Cheng, Alex Schwing, and Alexander Kirillov. Per-
+pixel classification is not all you need for semantic segmenta-
+tion. Advances in neural information processing systems, 34:
+17864–17875, 2021. 6
+[7] Bowen Cheng, Ishan Misra, Alexander G Schwing, Alexander
+Kirillov, and Rohit Girdhar. Masked-attention mask trans-
+former for universal image segmentation. In 2022 IEEE/CVF
+Conference on Computer Vision and Pattern Recognition
+(CVPR), pages 1280–1289. IEEE, 2022. 6
+[8] Marius Cordts, Mohamed Omran, Sebastian Ramos, Timo
+Rehfeld, Markus Enzweiler, Rodrigo Benenson, Uwe Franke,
+Stefan Roth, and Bernt Schiele. The cityscapes dataset for
+semantic urban scene understanding. In Proceedings of the
+IEEE conference on computer vision and pattern recognition,
+pages 3213–3223, 2016. 4
+[9] Xiyang Dai, Yinpeng Chen, Bin Xiao, Dongdong Chen,
+Mengchen Liu, Lu Yuan, and Lei Zhang. Dynamic head:
+Unifying object detection heads with attentions. In 2021
+IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), pages 7369–7378. ieee, 2021. 1, 3
+[10] Zewen Du, Zhenjiang Hu, Guiyu Zhao, Ying Jin, and Hongbin
+Ma. Cross-layer feature pyramid transformer for small object
+detection in aerial images. IEEE Transactions on Geoscience
+and Remote Sensing, 63:1–14, 2025. 1, 3
+[11] Haoqi Fan, Bo Xiong, Karttikeya Mangalam, Yanghao Li,
+Zhicheng Yan, Jitendra Malik, and Christoph Feichtenhofer.
+Multiscale vision transformers. In 2021 IEEE/CVF interna-
+tional conference on computer vision (ICCV), pages 6804–
+6815. IEEE, 2021. 3
+[12] Chengjian Feng, Yujie Zhong, Yu Gao, Matthew R Scott, and
+Weilin Huang. Tood: Task-aligned one-stage object detection.
+In 2021 IEEE/CVF international conference on computer
+vision (ICCV), pages 3490–3499. Ieee, 2021. 6
+[13] Golnaz Ghiasi, Tsung-Yi Lin, and Quoc V Le. Nas-fpn:
+Learning scalable feature pyramid architecture for object de-
+tection. In 2019 IEEE/CVF Conference on Computer Vision
+and Pattern Recognition (CVPR), pages 7029–7038. IEEE,
+2019. 1, 3
+[14] Golnaz Ghiasi, Yin Cui, Aravind Srinivas, Rui Qian, Tsung-
+Yi Lin, Ekin D Cubuk, Quoc V Le, and Barret Zoph. Simple
+copy-paste is a strong data augmentation method for instance
+segmentation. In 2021 IEEE/CVF Conference on Computer
+Vision and Pattern Recognition (CVPR), pages 2917–2927.
+IEEE, 2021. 6, 15
+[15] Yongxiang Gu, Xiaolin Qin, Yuncong Peng, and Lu Li.
+Content-augmented feature pyramid network with light linear
+spatial transformers for object detection. IET Image Process-
+ing, 16(13):3567–3578, 2022. 1, 3
+[16] Chaoxu Guo, Bin Fan, Qian Zhang, Shiming Xiang, and
+Chunhong Pan. Augfpn: Improving multi-scale feature learn-
+ing for object detection. In 2020 IEEE/CVF Conference on
+Computer Vision and Pattern Recognition (CVPR), pages
+12592–12601. IEEE, 2020. 5
+[17] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun.
+Deep residual learning for image recognition. In Proceed-
+ings of the IEEE conference on computer vision and pattern
+recognition, pages 770–778, 2016. 5
+[18] Kaiming He, Georgia Gkioxari, Piotr Doll´ar, and Ross Gir-
+shick. Mask r-cnn. In Proceedings of the IEEE international
+conference on computer vision, pages 2961–2969, 2017. 6
+[19] Yu He, Lichen Ma, Zipeng Guo, Xinyuan Shan, Jingling Fu,
+Dong Chen, Junshi Huang, and Yan Li. Hyperdit: Hyper-
+connected transformers for high-fidelity pixel-space diffusion.
+arXiv preprint arXiv:2605.15741, 2026. 3
+[20] Byeongho Heo, Song Park, Dongyoon Han, and Sangdoo
+Yun. Rotary position embedding for vision transformer. In
+European Conference on Computer Vision, pages 289–305.
+Springer, 2024. 4
+[21] Miao Hu, Yali Li, Lu Fang, and Shengjin Wang. A 2-fpn:
+Attention aggregation based feature pyramid network for in-
+9
+
+
+stance segmentation. In 2021 IEEE/CVF Conference on Com-
+puter Vision and Pattern Recognition (CVPR), pages 15338–
+15347. IEEE, 2021. 6
+[22] Shihua Huang, Zhichao Lu, Ran Cheng, and Cheng He. Fapn:
+Feature-aligned pyramid network for dense image prediction.
+In 2021 IEEE/CVF international conference on computer
+vision (ICCV), pages 844–853. IEEE, 2021. 6
+[23] Zhaojin Huang, Lichao Huang, Yongchao Gong, Chang
+Huang, and Xinggang Wang.
+Mask scoring r-cnn.
+In
+2019 IEEE/CVF Conference on Computer Vision and Pat-
+tern Recognition (CVPR), pages 6402–6411. IEEE, 2019. 6
+[24] Alexander Kirillov, Kaiming He, Ross Girshick, Carsten
+Rother, and Piotr Doll´ar. Panoptic segmentation. In 2019
+IEEE/CVF conference on computer vision and pattern recog-
+nition (CVPR), pages 9396–9405. Ieee, 2019. 4, 7, 8
+[25] Feng Li, Ailing Zeng, Shilong Liu, Hao Zhang, Hongyang
+Li, Lei Zhang, and Lionel M Ni. Lite detr: An interleaved
+multi-scale encoder for efficient detr. In 2023 IEEE/CVF Con-
+ference on Computer Vision and Pattern Recognition (CVPR),
+pages 18558–18567. IEEE, 2023. 3
+[26] Feng Li, Hao Zhang, Huaizhe Xu, Shilong Liu, Lei Zhang,
+Lionel M Ni, and Heung-Yeung Shum. Mask dino: Towards a
+unified transformer-based framework for object detection and
+segmentation. In 2023 IEEE/CVF Conference on Computer
+Vision and Pattern Recognition (CVPR), pages 3041–3050.
+IEEE, 2023. 6
+[27] Xiang Li, Wenhai Wang, Lijun Wu, Shuo Chen, Xiaolin Hu,
+Jun Li, Jinhui Tang, and Jian Yang. Generalized focal loss:
+Learning qualified and distributed bounding boxes for dense
+object detection. Advances in neural information processing
+systems, 33:21002–21012, 2020. 6
+[28] Yanghao Li, Chao-Yuan Wu, Haoqi Fan, Karttikeya Man-
+galam, Bo Xiong, Jitendra Malik, and Christoph Feichten-
+hofer. Mvitv2: Improved multiscale vision transformers for
+classification and detection. In 2022 IEEE/CVF Conference
+on Computer Vision and Pattern Recognition (CVPR), pages
+4794–4804. IEEE, 2022. 3
+[29] Tsung-Yi Lin, Michael Maire, Serge Belongie, James Hays,
+Pietro Perona, Deva Ramanan, Piotr Doll´ar, and C Lawrence
+Zitnick. Microsoft coco: Common objects in context. In
+European conference on computer vision, pages 740–755.
+Springer, 2014. 4
+[30] Tsung-Yi Lin, Piotr Doll´ar, Ross Girshick, Kaiming He,
+Bharath Hariharan, and Serge Belongie. Feature pyramid
+networks for object detection. In 2017 IEEE conference on
+computer vision and pattern recognition (CVPR), pages 936–
+944. Ieee, 2017. 1, 3, 5
+[31] Tsung-Yi Lin, Priya Goyal, Ross Girshick, Kaiming He, and
+Piotr Doll´ar. Focal loss for dense object detection. In Pro-
+ceedings of the IEEE international conference on computer
+vision, pages 2980–2988, 2017. 6
+[32] Shu Liu, Lu Qi, Haifang Qin, Jianping Shi, and Jiaya Jia.
+Path aggregation network for instance segmentation. In 2018
+IEEE/CVF conference on computer vision and pattern recog-
+nition, pages 8759–8768. Ieee, 2018. 1, 3, 5
+[33] Shilong Liu, Feng Li, Hao Zhang, Xiao Yang, Xianbiao Qi,
+Hang Su, Jun Zhu, and Lei Zhang. DAB-DETR: Dynamic
+anchor boxes are better queries for DETR. In International
+Conference on Learning Representations, 2022. 6
+[34] Ze Liu, Yutong Lin, Yue Cao, Han Hu, Yixuan Wei, Zheng
+Zhang, Stephen Lin, and Baining Guo. Swin transformer:
+Hierarchical vision transformer using shifted windows. In
+2021 IEEE/CVF international conference on computer vision
+(ICCV), pages 9992–10002. Ieee, 2021. 5
+[35] Ilya Loshchilov and Frank Hutter. Decoupled weight decay
+regularization. arXiv preprint arXiv:1711.05101, 2017. 5
+[36] Xin Lu, Buyu Li, Yuxin Yue, Quanquan Li, and Junjie Yan.
+Grid r-cnn. In 2019 IEEE/CVF Conference on Computer
+Vision and Pattern Recognition (CVPR), pages 7355–7364.
+IEEE, 2019. 6
+[37] Albert Dominguez Mantes, Gioele La Manno, and Martin
+Weigert. Muvit: Multi-resolution vision transformers for
+learning across scales in microscopy.
+In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), pages 13648–13657, 2026. 3
+[38] Fausto Milletari, Nassir Navab, and Seyed-Ahmad Ahmadi.
+V-net: Fully convolutional neural networks for volumetric
+medical image segmentation. In 2016 fourth international
+conference on 3D vision (3DV), pages 565–571. Ieee, 2016.
+15
+[39] Siyuan Qiao, Liang-Chieh Chen, and Alan Yuille. Detec-
+tors: Detecting objects with recursive feature pyramid and
+switchable atrous convolution. In 2021 IEEE/CVF Confer-
+ence on Computer Vision and Pattern Recognition (CVPR),
+pages 10208–10219. IEEE, 2021. 6
+[40] Shaoqing Ren, Kaiming He, Ross Girshick, and Jian Sun.
+Faster r-cnn: Towards real-time object detection with region
+proposal networks. Advances in neural information process-
+ing systems, 28, 2015. 6
+[41] Hamid Rezatofighi, Nathan Tsoi, JunYoung Gwak, Amir
+Sadeghian, Ian Reid, and Silvio Savarese. Generalized in-
+tersection over union: A metric and a loss for bounding box
+regression. In Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition (CVPR), 2019. 15
+[42] Ke Sun, Yang Zhao, Borui Jiang, Tianheng Cheng, Bin Xiao,
+Dong Liu, Yadong Mu, Xinggang Wang, Wenyu Liu, and
+Jingdong Wang. High-resolution representations for labeling
+pixels and regions. arXiv preprint arXiv:1904.04514, 2019. 5
+[43] Mingxing Tan, Ruoming Pang, and Quoc V Le.
+Effi-
+cientdet: Scalable and efficient object detection. In 2020
+IEEE/CVF conference on computer vision and pattern recog-
+nition (CVPR), pages 10778–10787. IEEE, 2020. 1, 3, 5
+[44] Zhi Tian, Chunhua Shen, Hao Chen, and Tong He. Fcos: Fully
+convolutional one-stage object detection. In 2019 IEEE/CVF
+international conference on computer vision (ICCV), pages
+9626–9635. Ieee, 2019. 6
+[45] Chengcheng Wang, Wei He, Ying Nie, Jianyuan Guo, Chuan-
+jian Liu, Yunhe Wang, and Kai Han. Gold-yolo: Efficient ob-
+ject detector via gather-and-distribute mechanism. Advances
+in neural information processing systems, 36:51094–51112,
+2023. 1, 3
+[46] Jiaqi Wang, Wenwei Zhang, Yuhang Cao, Kai Chen, Jiang-
+miao Pang, Tao Gong, Jianping Shi, Chen Change Loy, and
+Dahua Lin. Side-aware boundary localization for more pre-
+10
+
+
+cise object detection. In European conference on computer
+vision, pages 403–419. Springer, 2020. 6
+[47] Yuxin Wu and Kaiming He. Group normalization. In Proceed-
+ings of the European conference on computer vision (ECCV),
+pages 3–19, 2018. 15
+[48] Tete Xiao, Yingcheng Liu, Bolei Zhou, Yuning Jiang, and
+Jian Sun. Unified perceptual parsing for scene understanding.
+In European conference on computer vision, pages 432–448.
+Springer, 2018. 7, 8
+[49] Guoyu Yang, Jie Lei, Zhikuan Zhu, Siyu Cheng, Zunlei Feng,
+and Ronghua Liang.
+Afpn: Asymptotic feature pyramid
+network for object detection. In 2023 IEEE international
+conference on systems, man, and cybernetics (SMC), pages
+2184–2189. IEEE, 2023. 5
+[50] Ze Yang, Shaohui Liu, Han Hu, Liwei Wang, and Stephen
+Lin. Reppoints: Point set representation for object detection.
+In 2019 IEEE/CVF International Conference on Computer
+Vision (ICCV), pages 9656–9665. IEEE, 2019. 6
+[51] Dong Zhang, Hanwang Zhang, Jinhui Tang, Meng Wang,
+Xiansheng Hua, and Qianru Sun. Feature pyramid transformer.
+In European conference on computer vision, pages 323–339.
+Springer, 2020. 1, 3, 5
+[52] Hongkai Zhang, Hong Chang, Bingpeng Ma, Naiyan Wang,
+and Xilin Chen. Dynamic r-cnn: Towards high quality object
+detection via dynamic training. In European conference on
+computer vision, pages 260–275. Springer, 2020. 6
+[53] Haoyang Zhang, Ying Wang, Feras Dayoub, and Niko Sun-
+derhauf. Varifocalnet: An iou-aware dense object detector. In
+Proceedings of the IEEE/CVF conference on computer vision
+and pattern recognition, pages 8514–8523, 2021. 6
+[54] Hao Zhang, Feng Li, Shilong Liu, Lei Zhang, Hang Su, Jun
+Zhu, Lionel Ni, and Heung-Yeung Shum. DINO: DETR with
+Improved DeNoising Anchor Boxes for End-to-End Object
+Detection. In International Conference on Learning Repre-
+sentations, 2023. 6
+[55] Shifeng Zhang, Cheng Chi, Yongqiang Yao, Zhen Lei, and
+Stan Z Li. Bridging the gap between anchor-based and anchor-
+free detection via adaptive training sample selection.
+In
+2020 IEEE/CVF Conference on Computer Vision and Pat-
+tern Recognition (CVPR), pages 9756–9765. Ieee, 2020. 6
+[56] Wenwei Zhang, Jiangmiao Pang, Kai Chen, and Chen Change
+Loy. K-net: Towards unified image segmentation. Advances
+in Neural Information Processing Systems, 34:10326–10338,
+2021. 7, 8
+[57] Yian Zhao, Wenyu Lv, Shangliang Xu, Jinman Wei,
+Guanzhong Wang, Qingqing Dang, Yi Liu, and Jie Chen.
+Detrs beat yolos on real-time object detection.
+In 2024
+IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), pages 16965–16974. IEEE, 2024. 1, 3
+[58] Bolei Zhou, Hang Zhao, Xavier Puig, Sanja Fidler, Adela Bar-
+riuso, and Antonio Torralba. Scene parsing through ade20k
+dataset. In 2017 IEEE conference on computer vision and
+pattern recognition (CVPR), pages 5122–5130. IEEE, 2017.
+4
+[59] Xizhou Zhu, Weijie Su, Lewei Lu, Bin Li, Xiaogang Wang,
+and Jifeng Dai. Deformable DETR: Deformable Transformers
+for End-to-End Object Detection. In International Conference
+on Learning Representations, 2021. 1, 3, 5, 6, 8
+[60] Zhuofan Zong, Guanglu Song, and Yu Liu. Detrs with col-
+laborative hybrid assignments training. In Proceedings of
+the IEEE/CVF International Conference on Computer Vision
+(ICCV), pages 6748–6758, 2023. 6
+11
+
+
+A. Measurement Protocols
+We use the measurements defined in Sec. 3. All analyses are
+conducted on COCO val2017. Unless otherwise stated,
+routing and translation analyses use AGPF-S with its default
+pooled memory.
+A.1. Object-centered query sampling
+We evaluate routing on all 5,000 COCO images and 36,334
+valid ground-truth instances. For each instance, we sam-
+ple a query at its bounding-box center at every output level,
+allowing object scales to be compared while holding the
+query level fixed. Attention mass is aggregated over in-
+stances and attention heads following Eq. 4. Enrichment
+uses the memory-token counts of each image before ag-
+gregation. Small, medium, and large instances follow the
+COCO object-size groups.
+A.2. Matched gradient measurements
+We sample 600 objects, with 200 from each COCO size
+group and at most one object per image. Each query is placed
+at the ground-truth box center and assigned to a pyramid
+level according to object scale after test-time resizing. FPN
+and AGPF-S are evaluated at the same query location and
+level for each object. We exclude objects whose centers lie
+within 5% of an image boundary to reduce truncation of the
+dependency maps. All radius statistics use the normalized
+gradient distribution defined in Sec. 3.
+A.3. Matched input translations
+We evaluate 200 COCO images under translations of 64,
+128, and 192 pixels. These displacements are integer-aligned
+with all effective query and memory strides. Features are
+recomputed after each input translation, and attention is
+compared at corresponding interior query locations. For
+each input, level-local coordinates and FA-RoPE use the
+same checkpoint and extracted query/key features; only their
+positional coordinates differ. Drift is measured using the
+source-normalized attention distributions and normalized
+Jensen–Shannon divergence defined in Sec. 3.
+B. Parameter-matched FPN
+Neck
+Params (M)
+Box AP
+Mask AP
+FPN
+3.34
+41.2
+36.0
+FPN, expanded
+6.49
+41.2
+36.1
+AGPF-S
+6.49
+42.9
+38.3
+Table 9. Neck-capacity comparison with Cascade Mask R-CNN
+and ResNet-50 under the reference training setting. Parameters
+count the neck only.
+We expand FPN to approximately match the neck parameter
+count of AGPF-S. The expanded FPN achieves 41.2/36.1
+box/mask AP, compared with 42.9/38.3 for AGPF-S (Ta-
+ble 9). At comparable capacity, AGPF-S retains gains of 1.7
+box AP and 2.2 mask AP over the expanded FPN.
+C. Checks on Pyramid Retrieval
+C.1. Object scale at fixed query resolution
+Figure 7 gives the complete source-allocation matrices for
+the three COCO size groups. Fine-level queries favor P4,
+whereas coarser query levels place more attention on P5.
+Within every fixed query level, larger objects shift attention
+from P4 toward P5. The scale-dependent shift therefore does
+not result from assigning larger objects to coarser output lev-
+els: source allocation changes even when output resolution
+is held fixed.
+Figure 7. Source allocation for small, medium, and large COCO instances. Each entry is the mean attention mass from a fixed query level to
+a memory level, averaged over instances in the corresponding size group and attention heads.
+12
+
+
+C.2. Accounting for token availability
+P2
+P3
+P4
+P5
+P6
+Memory level
+P2
+P3
+P4
+P5
+P6
+Query level
+0.09
+0.10
+2.48
+2.25
+1.25
+0.07
+0.09
+2.07
+3.94
+1.66
+0.07
+0.09
+1.41
+6.39
+2.22
+0.11
+0.14
+1.04
+7.33
+2.98
+0.30
+0.37
+0.89
+6.18
+3.33
+Figure 8. Source-level enrichment relative to uniform attention
+over memory tokens. Rows denote query levels and columns de-
+note memory levels. A value of one matches the uniform-token
+reference.
+For P2 queries, enrichment is 2.48 for P4 memory but only
+0.09 for P2 memory (Fig. 8). The coarse-source preference
+persists after accounting for the number of tokens supplied
+by each level.
+C.3. Finer scale partitions
+23
+24
+25
+26
+27
+Object scale  bbox area  (px)
+38
+40
+42
+44
+46
+48
+Attention mass (%)
+P4 memory
+P5 memory
+Figure 9. Source allocation across eight equal-frequency object-
+scale bins. Scale is the square root of bounding-box area; attention
+is averaged over instances within each bin, with equal weighting of
+query levels and attention heads.
+From the smallest to the largest bin, mean attention to P4
+decreases from 48.2% to 45.3%, while attention to P5 in-
+creases from 38.1% to 42.6%. The smallest bins vary little;
+the shift toward P5 becomes clearer for larger objects. The
+trend thus extends beyond the three COCO size groups.
+C.4. Uncertainty under image resampling
+0
+1
+2
+3
+4
+5
+P5 shift: Large-Small (pp)
+P2
+P3
+P4
+P5
+P6
+Fixed query level
+Figure 10. Large-minus-small change in attention to P5 at each
+fixed query level. Points show the change in percentage points, and
+error bars show 95% image-level bootstrap confidence intervals.
+The dashed line marks zero change.
+We estimate uncertainty in the large-minus-small change
+in P5 attention by resampling complete images, keeping
+instances from the same image together. This accounts for
+correlations among objects within an image. At every fixed
+query level, the 95% confidence interval lies above zero
+(Fig. 10). For the evaluated checkpoint, the increase in P5
+allocation remains positive under image-level resampling.
+C.5. Differences among attention heads
+P2
+P3
+P4
+P5
+P6
+Memory level
+H1
+H2
+H3
+H4
+H5
+H6
+H7
+H8
+Attention head
+1%
+5%
+55%
+34%
+5%
+1%
+1%
+71%
+25%
+1%
+0%
+1%
+43%
+47%
+8%
+2%
+2%
+34%
+57%
+5%
+5%
+5%
+42%
+46%
+2%
+5%
+4%
+57%
+33%
+1%
+3%
+4%
+39%
+50%
+3%
+12%
+16%
+39%
+23%
+11%
+Figure 11. Source allocation of individual attention heads in AGPF-
+S. Each row reports attention mass averaged over objects and query
+levels.
+The aggregate routing pattern combines heads with different
+source preferences (Fig. 11). For example, head H2 assigns
+71% of its attention to P4, whereas head H4 assigns 57%
+13
+
+
+to P5. Head H8 distributes attention more broadly and al-
+locates more mass to the finer levels than the other heads.
+The average allocation therefore summarizes several distinct
+retrieval patterns within the same block.
+D. Robustness of Spatial Dependence
+D.1. Grouping and radius thresholds
+(a) Object Scale
+(b) Query Level
+(c) Dependency Radius
+Figure 12. Dependency extent across measurement settings. Me-
+dian R90/D is grouped by (a) object scale and (b) assigned query
+level. (c) compares radii enclosing 50%, 75%, and 90% of gradient
+mass. All radii are normalized by the reference-grid diagonal D.
+Counts report paired queries with a larger radius for AGPF-S.
+AGPF-S has a larger median R90/D in every displayed
+object-size and query-level group. The difference remains
+when the enclosed gradient mass is reduced from 90%
+to 75% or 50%. The wider spatial dependence is there-
+fore not confined to one object-size group, query level, or
+dependency-mass threshold.
+D.2. Per-object paired differences
+Figure 6 reports ∆q = (RAGPF
+90,q
+−RFPN
+90,q )/D for each sam-
+pled object. All 600 differences are positive. The median in-
+creases are 35.9, 37.6, and 33.8 percentage points for small,
+medium, and large objects, respectively. The larger aggre-
+gate extent is thus shared across the sampled queries rather
+than driven by a few extreme cases.
+E. Translation Controls for FA-RoPE
+E.1. Drift between query and memory levels
+Figure 13 breaks down attention drift by query and mem-
+ory level under a 128-pixel input translation. Query strides
+are [4, 8, 16, 32, 64], while pooling gives memory strides
+of [16, 16, 16, 32, 64]. Large reductions occur in several
+cross-level interactions. For P2,Q →P4,K, normalized drift
+falls from 0.1526 to 0.00146, a reduction of approximately
+99.0%. FA-RoPE substantially reduces these large discrep-
+ancies, although attention need not be exactly preserved
+when the translated image also produces different feature
+content.
+E.2. Translation with fixed feature content
+0
+64
+128
+192
+Feature translation (pixels)
+0.000
+0.005
+0.010
+0.015
+0.020
+Attention drift (JSD/ln 2)
+Level-local indexing
+FA-RoPE
+Figure 14. Attention drift when extracted pyramid features are
+translated directly. Corresponding pre-RoPE queries and keys are
+held fixed, isolating the effect of positional coordinates.
+We isolate the positional contribution by translating the ex-
+tracted pyramid features directly. Corresponding pre-RoPE
+query and key features are identical before and after trans-
+lation. FA-RoPE preserves the measured attention distribu-
+tions up to numerical precision (Fig. 14). Level-local coor-
+dinates instead produce normalized drift of 0.0126, 0.0202,
+and 0.0209 for translations of 64, 128, and 192 pixels, re-
+spectively. Coordinate choice can therefore change cross-
+resolution attention even when feature content is unchanged;
+the shared spatial reference removes this source of drift in
+the controlled test.
+14
+
+
+P2
+P3
+P4
+P5
+P6
+Memory level
+P2
+P3
+P4
+P5
+P6
+Query level
+0.001
+0.001
+0.153
+0.090
+0.022
+0.000
+0.000
+0.046
+0.019
+0.008
+0.000
+0.000
+0.002
+0.033
+0.002
+0.000
+0.000
+0.022
+0.002
+0.006
+0.000
+0.000
+0.006
+0.011
+0.000
+Level-local indexing
+P2
+P3
+P4
+P5
+P6
+Memory level
+P2
+P3
+P4
+P5
+P6
+0.000
+0.000
+0.001
+0.002
+0.000
+0.000
+0.000
+0.001
+0.002
+0.000
+0.000
+0.000
+0.002
+0.002
+0.001
+0.000
+0.000
+0.004
+0.003
+0.001
+0.000
+0.000
+0.003
+0.003
+0.001
+FA-RoPE
+P2
+P3
+P4
+P5
+P6
+Memory level
+P2
+P3
+P4
+P5
+P6
+0.001
+0.001
+0.151
+0.088
+0.022
+0.000
+0.000
+0.045
+0.017
+0.008
+-0.000 -0.000 -0.001 0.031
+0.002
+-0.000 -0.000 0.018 -0.002 0.004
+-0.000 -0.000 0.003
+0.008 -0.001
+Drift removed (Local - FA)
+0.00
+0.05
+0.10
+0.15
+0.00
+0.05
+0.10
+0.15
+0.00
+0.05
+0.10
+0.15
+Figure 13. Attention drift for each query–memory level pair under a 128-pixel input translation. The first two panels compare level-local
+coordinates and FA-RoPE using the same extracted features. The right panel shows their difference (level-local minus FA-RoPE). Positive
+values indicate reduced drift with FA-RoPE.
+F. Enhanced Detector Recipes
+config
+value
+optimizer
+AdamW
+base learning rate
+2e-4
+weight decay
+0.05
+batch size
+16 (2/GPU, 8 GPUs)
+warmup iterations
+1000
+training epochs
+36
+learning rate milestones
+27, 33 (×0.1)
+augmentation
+multi-scale [3]
+box head
+4conv1fc (SyncBN) [47]
+box regression loss
+GIoU [41] (λ = 10)
+mask loss
+CE + Dice [38] (1:2)
+AGPF blocks
+6 (L)
+Table 10. Enhanced training recipe for Cascade Mask R-CNN and
+HTC.
+config
+value
+optimizer
+AdamW
+base learning rate
+2e-4
+weight decay
+0.05
+batch size
+16 (2/GPU, 8 GPUs)
+warmup iterations
+1000
+training epochs
+50
+learning rate milestones
+40, 48 (×0.1)
+augmentation
+LSJ [14]
+box head
+4conv1fc (SyncBN)
+box regression loss
+GIoU (λ = 10)
+mask loss
+CE + Dice (1:2)
+AGPF blocks
+6 (L)
+RoI NMS
+Soft-NMS [1]
+Table 11. Enhanced training and inference recipe for HTC++.
+Tables 10 and 11 summarize the enhanced detector recipes
+used for the complete-system comparisons in Table 3. Cas-
+cade Mask R-CNN and HTC follow a 36-epoch multi-scale
+training schedule, while HTC++ adopts a 50-epoch sched-
+ule with large-scale jittering, Copy-Paste augmentation, and
+Soft-NMS. No test-time augmentation (TTA) is used. These
+enhanced recipes are exclusive to the complete-system com-
+parisons; all controlled FPN–AGPF experiments retain the
+original detector heads, losses, and training settings, with
+only the neck replaced.
+G. Additional Qualitative Comparisons
+Figure 15 presents additional qualitative comparisons of
+gradient-based spatial dependency between FPN and AGPF-
+S on COCO val2017. For each matched object-centered
+query, we visualize the sensitivity of its output feature to the
+input feature pyramid, following the procedure described
+in Sec. 3. The white boxes indicate target objects, and the
+crosses mark query locations. FPN typically exhibits highly
+localized responses around the query, whereas AGPF-S main-
+tains local sensitivity while extending its spatial dependence
+to more distant regions. These examples complement our
+quantitative analysis, further illustrating how AGPF enables
+individual output locations to incorporate information from
+a broader spatial context.
+15
+
+
+Figure 15. Qualitative spatial dependency maps for matched object-centered queries. Each pair shows FPN (left) and AGPF-S (right).
+16
