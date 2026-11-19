@@ -1,0 +1,2112 @@
+Accelerating 3D Gaussian Splatting Training through Selective
+Freezing and Computation Caching
+He Zhu
+Shanghai Jiao Tong University
+Shanghai, China
+zhcon16@sjtu.edu.cn
+Ziheng Dai
+Shanghai Jiao Tong University
+Shanghai, China
+zhihengdai@sjtu.edu.cn
+Zihan Liu
+Shanghai Jiao Tong University
+Shanghai, China
+altair.liu@sjtu.edu.cn
+Ruyang Li
+IEIT SYSTEMS Co., Ltd.
+Beijing, China
+liruyang@ieisystem.com
+Hui Wei
+IEIT SYSTEMS Co., Ltd.
+Beijing, China
+weihui@ieisystem.com
+Yaqian Zhao
+IEIT SYSTEMS Co., Ltd.
+Beijing, China
+zhaoyaqian@ieisystem.com
+Han Zhao
+Shanghai Jiao Tong University
+Shanghai, China
+zhao-han@cs.sjtu.edu.cn
+Xiaofeng Hou
+Shanghai Jiao Tong University
+Shanghai, China
+hou-xf@cs.sjtu.edu.cn
+Chen Chen
+Shanghai Jiao Tong University
+Shanghai, China
+chen-chen@sjtu.edu.cn
+Jingwen Leng
+Shanghai Jiao Tong University
+Shanghai, China
+leng-jw@sjtu.edu.cn
+Yu Feng∗
+Shanghai Jiao Tong University
+Shanghai, China
+y-feng@sjtu.edu.cn
+Minyi Guo
+Shanghai Jiao Tong University
+Shanghai, China
+guo-my@cs.sjtu.edu.cn
+Abstract
+3D Gaussian Splatting (3DGS) becomes a key primitive for immer-
+sive 3D experiences. However, its applicability is limited by its long
+training overhead. Although prior work has shown that gradient
+accumulation is the dominant bottleneck in training, existing works
+either have limited speedup or degrade reconstruction quality.
+To address this issue, we present ElsaGS, an algorithm–hardware
+co-designed framework that accelerates 3DGS training with neg-
+ligible accuracy degradation. Our key observation is that most
+Gaussians converge early, while later iterations only refine a small
+subset of Gaussians. Thus, we propose a technique, progressive
+Gaussian freezing, which dynamically freezes well-converged Gaus-
+sians and caches their cumulative contributions, thereby reducing
+computations in both forward rasterization and backward gradient
+accumulation. To make caching efficient, we further propose an
+architecture, ElsaGS core, which integrates a pixel-parallel rasteri-
+zation array with a set-associative frozen-Gaussian cache, FGcache.
+Across three 3DGS datasets, ElsaGS freezes up to 90% of Gaussians
+with negligible quality loss and achieves up to 20.6× end-to-end
+speedup and 99.4% energy reduction over GPUs.
+Keywords
+3DGS Training, Algorithm-Hardware Co-Design.
+∗Corresponding Author.
+Conference’17, Washington, DC, USA
+2026. ACM ISBN 978-x-xxxx-xxxx-x/YY/MM
+https://doi.org/XXXXXXX.XXXXXXX
+1
+Introduction
+3D Gaussian Splatting (3DGS) [6, 7, 23, 31, 68] has emerged as a
+next-generation primitive for spatial computing and immersive
+3D social experiences. Recent VR platforms, e.g., Meta Quest 3,
+already integrate 3DGS with applications, e.g., Arrival Space [59],
+and enable users to relive scenes interactively. Huawei and Kiri
+recently introduced Remy [47] into HarmonyOS, allowing everyday
+users to reconstruct high-fidelity spatial content directly using
+their smartphones. These applications fundamentally change how
+users record and share their memories, transforming photos into
+interactive 3D experiences rather than flat images.
+Despite its promising user experience, 3DGS is still limited by its
+training time. E.g., reconstructing even a small-scale scene, Room,
+requires around 60 minutes on a mobile Nvidia Ampere GPU [52].
+This means that users must wait tens of minutes before viewing or
+sharing captured scenes, breaking the immediacy expected from
+mobile and social applications. Therefore, accelerating the 3DGS
+training process is critical for interactive spatial memory capturing.
+To accelerate 3DGS training, prior studies target backward gradi-
+ent accumulation, where numerous pixels update the same Gaussian
+parameters through costly atomic operations [5, 18, 21, 46, 66, 67].
+Existing solutions attempt to alleviate this overhead either by re-
+designing computational dataflows [5, 21, 46, 66] or by pruning in-
+significant gradients [18, 67]. However, those approaches typically
+have limited speedup or introduce noticeable quality degradation.
+Motivation. Our goal is to speed up training by orders of mag-
+nitude while preserving accuracy. We notice that a large portion of
+Gaussians stabilize early with low gradients, while subsequent itera-
+tions predominantly refine a small active subset of Gaussians (Sec. 3).
+This creates an opportunity to stop their updates and reuse their
+arXiv:2611.22059v1  [cs.AR]  17 Nov 2026
+
+
+Conference’17, July 2017, Washington, DC, USA
+He Zhu et al.
+per-view contributions across iterations to reduce computation in
+both forward and backward passes during training.
+Framework. We thus propose ElsaGS, a progressive Gaussian-
+freezing framework in Sec. 4 that “freezes” low-gradient Gaussians
+dynamically while continuing to optimize the remaining active
+ones. The framework combines two optimizations. First, it caches
+their per-view contributions to avoid repeated computation in both
+the forward and backward passes over iterations. Second, it skips
+backpropagation for frozen Gaussians to eliminate their gradient
+accumulations. Sec. 7.1 shows that ElsaGS achieves better recon-
+struction quality than prior gradient pruning techniques [18].
+Caching. While ElsaGS avoids redundant computations, caching
+individual frozen-Gaussian contributions incurs substantial memory-
+access overhead. We therefore introduce FGcache in Sec. 4.2, which
+stores cumulative contributions for consecutive frozen Gaussians.
+To further make these group-level summaries usable by canonical
+backward rasterization, which only accepts individual contribu-
+tions, we redesign gradient evaluation to consume the summaries
+directly. Together, these designs reduce the data transmission over-
+head and enable cache reuse in both rasterization passes.
+Architecture. To support Gaussian lookups and updates, we pro-
+pose a streaming architecture that pipelines different 3DGS stages
+while supporting sparse Gaussian updates in Sec. 5. The key inno-
+vation is the ElsaGS core, which integrates the rasterization array
+with our dedicated cache, FGcache, to enable efficient Gaussian
+reuse. The rasterization array performs pixel-wise processing with
+on-chip partial gradient reduction to minimize off-chip memory
+traffic. Meanwhile, FGcache is designed to share the cached results
+across both forward and backward passes, further eliminating re-
+dundant storage overhead. These optimizations allow ElsaGS to
+reduce both rasterization and backpropagation overheads.
+Results. We evaluate ElsaGS on three widely used datasets [3,
+19, 26]. To demonstrate the effectiveness, we evaluate our approach
+on both canonical and pruned 3DGS algorithms [23, 46]. Our re-
+sults show that ElsaGS can freeze up to 90% of Gaussians during
+training with negligible quality loss. We further compare against off-
+the-shelf GPUs and dedicated 3DGS accelerators [18, 66]. ElsaGS
+delivers up to 20.6× speedup and 99.4% energy savings.
+The contributions of this paper are as follows:
+• We propose ElsaGS, a framework that accelerates training
+by progressive and selective Gaussian freezing.
+• We develop FGcache and a cache-compatible backward ras-
+terization to reuse contributions of frozen Gaussians.
+• We introduce an algorithm–hardware co-design that ad-
+dresses the irregular memory access patterns introduced
+by sparse Gaussian updates via our cache architecture.
+• ElsaGS achieves up to 20.6× speedup and 99.4% energy sav-
+ings against GPUs and prior accelerators.
+2
+Background
+2.1
+3DGS Training Pipeline.
+The goal of the 3DGS training process is to optimize the Gaussian
+primitives, {𝐺𝑖}, that model the 3D scene. Each Gaussian encodes
+scene attributes such as position, opacity, and color. These Gaussian
+primitives are initially obtained by photogrammetry tools, e.g.,
+COLMAP [60]. Then, the training process refines these Gaussians
+via iterations of the forward pass and the backward pass (Fig. 1).
+During the forward pass, the pipeline renders an image from a
+camera pose. The backward pass then computes the loss between
+the rendered image and its corresponding ground-truth image, and
+back-propagates the loss to Gaussian parameters for parameter
+updates. We next describe the key stages.
+Forward Pass. This pass contains projection, sorting, and forward
+rasterization. This pass renders images tile-by-tile.
+Projection. The projection stage filters out Gaussians that are
+outside the current view frustum. In this tile-based pipeline, it
+determines the intersection between Gaussians and rendering tiles,
+and stores the results in a tile-Gaussian intersection list.
+Sorting. Gaussians within each tile are depth-sorted from nearest
+to farthest to ensure correct rendering order.
+Forward Rasterization. The sorted Gaussians are then rendered
+pixel-by-pixel. Each pixel in a tile iterates over the Gaussians and
+performs 𝛼-checking to determine whether a Gaussian contributes
+to that pixel. A Gaussian is considered intersecting if its trans-
+parency 𝛼𝑖at the pixel exceeds a threshold 𝛼∗. The pixel color is
+then accumulated from its contributing Gaussians based on,
+C(p) =
+𝑁
+∑︁
+𝑖=1
+Γ𝑖𝛼𝑖c𝑖, and Γ𝑖=
+𝑖−1
+Ö
+𝑗=1
+(1 −𝛼𝑗),
+(1)
+where C(p) denotes the final color of pixel p and c𝑖represents the
+color of the 𝑖th Gaussian. 𝛼𝑖and Γ𝑖are the transparency of the 𝑖th
+Gaussian and accumulated transmittance along the ray from the
+first Gaussian to the (𝑖−1)th Gaussian at p. The transparency 𝛼𝑖is
+determined by its opacity 𝜎𝑖and its 2D covariance matrix [80].
+Backward Pass. Once the image is rendered, the backward
+pass first computes the pixel-wise loss, then backpropagates the
+loss to the Gaussians. The backward pass consists of three stages:
+backward rasterization, aggregation, and re-projection.
+Backward Rasterization. This stage computes the partial gradi-
+ents of every pixel-Gaussian pair. Similar to the forward pass, each
+pixel first identifies its intersecting Gaussians through 𝛼-checking.
+Given these per-pixel Gaussian lists, the backward rasterization
+inverts the color blending process (Eqn. 1) and computes the partial
+gradients of individual Gaussians with respect to the pixel loss,
+𝜕𝐿
+𝜕𝛼𝑖
+(p) = ∇C(p)𝐿(Γ𝑖c𝑖−
+1
+1 −𝛼𝑖
+𝑁
+∑︁
+𝑗=𝑖+1
+𝛼𝑗c𝑗Γ𝑗),
+(2)
+𝜕𝐿
+𝜕c𝑖
+(p) = ∇C(p)𝐿Γ𝑖𝛼𝑖,
+(3)
+where 𝜕𝐿
+𝜕𝛼𝑖and 𝜕𝐿
+𝜕c𝑖are the Gaussian-wise gradients for transparency
+and color, respectively, and ∇C(p)𝐿is pixel-wise color loss. Back-
+ward rasterization processes Gaussians in reverse order (from the 𝑁th
+Gaussian to the 1st Gaussian) to propagate gradients. Results are
+stored in the partial gradient list.
+Aggregation. The aggregation stage gathers all partial gradients
+associated with each Gaussian and accumulates them to obtain the
+final gradient for that Gaussian. To ensure correct accumulation,
+existing GPU implementations use atomic operations. This stage is
+often fused with backward rasterization.
+
+
+Accelerating 3D Gaussian Splatting Training through Selective Freezing and Computation Caching
+Conference’17, July 2017, Washington, DC, USA
+Projection
+T0:
+1
+…
+10
+5
+T15:
+…
+…
+T1:
+1
+2
+…
+Sorting
+T0:
+…
+10
+T15:
+…
+…
+T1:
+2
+…
+ 
+Pixel-wise 
+Forward Rasterization
+Blending
+⍺-Checking
+(
+)
+,
+Rendered
+Image
+Ground
+Truth
+Per-Pixel
+Loss
+⍺-Checking
+Reverse 
+Blending
+:
+1
+2
+(0.2, 0.1, …, 0.2)
+…
+Aggregation
+(w/ Atomic Operations)
+Re-Projection
+& Update
+ 
+Pixel-wise 
+Backward Rasterization
++
+:
+9
+N
+:
+:
+(0.2, 0.4, …, 0.2)
+(0.2, 0.3, …, 0.1)
+(0.1, 0.1, …, 0.2)
+:
+1
+2
+1.6
+…
+:
+9
+N
+:
+:
+2.3
+0.8
+0.6
+Tile-Gaussian
+Sorted List
+Tile-Gaussian
+Intersection List
+Aggregated
+Gradients
+Partial 
+Gradient List
+4
+8
+7
+4
+1
+Gaussian Scene Representation,
+w/ Camera Poses,
++
+Figure 1: Overview of the 3DGS training pipeline, including the forward and backward passes. The inputs consist of a set
+of captured images and their corresponding camera poses obtained from photogrammetry tools. The optimization target is
+the Gaussian scene representation, i.e., a set of Gaussian primitives. In each training iteration, the forward pass renders an
+image from a selected camera pose and computes the pixel-wise loss against the ground-truth image. The backward pass then
+back-propagates this loss to individual Gaussians and updates their parameters accordingly.
+Points from 
+COLMAP
+Is Itotal Over a 
+threshold, Ith?
+Training IK 
+iterations
+Densiﬁcation 
+w/ additional IN iter.
+Gaussian 
+Model
+Finetuning IM 
+iterations
+N
+Y
+Figure 2: The general 3DGS training procedure. It progres-
+sively optimizes Gaussians by iteratively performing train-
+ing and periodic densification. Finally, a finetuning stage is
+performed to further refine rendering quality.
+Re-Projection. Finally, the accumulated gradients are transformed
+from the camera coordinate system to the world coordinate system.
+This computation is often lightweight.
+2.2
+3DGS Training Procedure.
+With the training pipeline in Sec. 2.1, 3DGS adopts a progressive
+optimization procedure to produce photorealistic representations.
+Fig. 2 shows the workflow. It begins with a 3D point cloud recon-
+structed by a photogrammetry pipeline, e.g., COLMAP, which is
+converted into initial Gaussian primitives.
+Procedure. Training proceeds iteratively. The initial model is
+first optimized for 𝐼𝐾iterations, during which Gaussian parame-
+ters are updated through repeated forward and backward passes.
+After this stage, the algorithm checks whether the total number of
+training iterations, 𝐼total, exceeds a threshold, 𝐼th.
+If the criterion is not satisfied, the system performs a densifica-
+tion step [23, 46]. During densification, the system clones or splits
+Gaussians with high gradients to better capture scene details, and
+removes those with low opacity. After densification, the model con-
+tinues training for an additional 𝐼𝑁iterations to refine the scene.
+This process repeats until the threshold, 𝐼th, is reached.
+Once the iteration threshold is satisfied, the training stops gen-
+erating more new Gaussians and enters a final finetuning stage
+with 𝐼𝑀training iterations. This step refines Gaussian parameters
+to stabilize rendering quality until the training finishes.
+Characteristics. During training, the initial stage 𝐼𝐾is relatively
+short, 500-1000 iterations. The following densification phase often
+Figure 3: Profiled training-stage latency on Room (Orin) with
+software atomic reduction [5]. Top: visualization of Gauss-
+ian primitives at 2k, 10k, and 30k iterations. Bottom: stage
+latency averaged within 1k-iteration bins.
+Figure 4: Execution breakdown of Canonical 3DGS [23] and
+its variant with atomic operation reduction [5] across three
+datasets over iterations 10k, 20k, and 30k.
+consists of 10k-15k iterations, with each densification step occurring
+every 500 iterations. Finally, the finetuning stage requires 15k-30k
+iterations. For large-scale scenes, the finetuning can be even longer,
+up to 200k iterations [74]. Fig. 3 shows the training-stage latency
+over iterations with atomic-reduction optimization [5]. Latencies of
+all stages steadily grow as training progresses due to the increasing
+number of Gaussians visualized by the three images in Fig. 3.
+3
+Motivation
+With an understanding of the 3DGS training, we next give two key
+observations that drive our algorithm-hardware co-design.
+Observation 1: Forward and backward rasterization dominate
+training, and the dominance persists as the model scales.
+
+
+Conference’17, July 2017, Washington, DC, USA
+He Zhu et al.
+(a) Garden in M360 dataset.
+(b) Stump in M360 dataset.
+(c) Room in M360 dataset.
+(d) DrJohnson in DB dataset.
+(e) Playroom in DB dataset.
+(f) Truck in T&T dataset.
+Figure 5: The absolute gradient distribution over the
+course of training. Here, we show six scenes across three
+datasets [3, 19, 26]. Most Gaussians have already converged
+after the initial training iterations.
+Fig. 4 shows the runtime breakdown of the forward and backward
+passes. Specifically, we profile three widely used datasets [3, 19, 26],
+at 10k, 20k, and 30k training iterations on canonical 3DGS and
+variants with atomic operation reduction [5]. Across all methods
+and training iterations, forward rasterization and backward ras-
+terization dominate the total execution time. Though method [5]
+reduces atomic operations, the forward and backward rasterization
+are time-consuming, taking up over 80% of the execution time. Both
+rasterization stages are computationally expensive since every pixel
+must traverse thousands of Gaussians during each iteration [10].
+Observation 2: A majority of Gaussians converge initially during
+training, and only a small fraction of Gaussians require further
+training in subsequent iterations.
+Fig. 5 presents six violin plots of the gradient magnitude distribu-
+tion across all Gaussians during training. The results are measured
+on three datasets [3, 19, 26]. To reduce data noise, gradients are
+averaged over 100 iterations, and we plot every 2k iterations. We
+consider a Gaussian to be well-trained once its gradient magnitude
+stabilizes and no longer decreases.
+As shown in Fig. 5, the distributions shift toward low magnitudes
+within the first 6k iterations, while their upper tails continue to de-
+crease later in training. This trend yields two key observations. First,
+the majority of Gaussians converge early in training and no longer
+require further training after the initial training stage. Second, a
+small subset of Gaussians still requires additional optimization to
+refine reconstruction details. Meanwhile, the densification process
+would introduce new Gaussians that require further optimization.
+Existing methods exploit early Gaussian convergence but ei-
+ther leave forward passes to be recomputed [1] or rely on order-
+independent rendering for contribution reuse [69]. In contrast, El-
+saGS reuses frozen Gaussian contributions in both forward and
+backward passes while preserving depth-ordered alpha blending.
+4
+Progressive Gaussian-Freezing Framework
+With these two key observations in Sec. 3, we present our training
+framework that “freezes” the majority of Gaussians during training,
+i.e., stops updating their parameters. We first give an overview
+of the training workflow in Sec. 4.1, and then describe our cache
+design that enables efficient execution in Sec. 4.2. Lastly, we explain
+how we modify backward rasterization in Sec. 4.3 to enable sharing
+a single cache between forward and backward passes.
+4.1
+Overview
+We first introduce our training pipeline that leverages frozen Gaus-
+sians to reduce computations, and then describe how these Gaus-
+sians are identified dynamically during training.
+Pipeline. Fig. 6 shows our pipeline. The orange blocks denote
+the stages in the original pipeline, while the blue blocks highlight
+our augmentations. Specifically, our pipeline accelerates two bot-
+tlenecks, forward and backward rasterization.
+During forward rasterization, the original pipeline computes the
+transparency of every Gaussian and blends its color contribution
+into individual pixels as defined in Eqn. 1. In contrast, our pipeline
+first determines whether a Gaussian is frozen, i.e., its parameters are
+held fixed and no longer updated. For frozen Gaussians, we avoid
+their computations and directly query the Frozen Gaussian Cache,
+FGcache, to retrieve their precomputed contributions, e.g., trans-
+parency 𝛼𝑖and color c𝑖. For active Gaussians, the pipeline falls back
+to the canonical rasterization. To further reduce caching overhead,
+we group consecutive frozen Gaussians and cache their cumula-
+tive contributions rather than individual Gaussian contributions.
+Sec. 4.2 further describes the detailed cache design.
+Similarly, during backward rasterization, the pipeline needs to
+compute partial gradients of transparency𝛼𝑖and color c𝑖(Eqn. 2 and
+Eqn. 3). In particular, canonical backward pipeline requires travers-
+ing the tile-Gaussian sorted list in reverse order and reconstructing
+the cumulative color and transmittance contribution through iter-
+ation of per Gaussian. Here, we avoid the computation of frozen
+Gaussians by first checking whether a Gaussian is frozen. If not, we
+directly compute the gradients for the active Gaussians; otherwise,
+we query FGcache. Note that, FGcache stores cumulative con-
+tributions of consecutive frozen Gaussians rather than individual
+Gaussian contributions. We thus redesign backward rasterization
+in Sec. 4.3 to enable FGcache sharing for backward rasterization.
+Procedure. Fig. 7 shows the overall training procedure. It con-
+sists of an initial training, progressive freezing during densification,
+and final finetuning. For the first 6k iterations, we follow the origi-
+nal training and densification schedule. After this, our framework
+begins to gradually freeze Gaussians.
+In each densification iteration, we select low-gradient Gaussian
+candidates for freezing after removing low-opacity ones. Similar
+to the densification process, we rank Gaussians using the same
+gradient statistic in densification and freeze those with the smallest
+scores. All attributes of a frozen Gaussian are excluded from further
+optimization. The freezing ratio 𝜌𝑡is based on:
+𝜌𝑡= min
+
+𝜌,𝜅max
+ 𝑁curr −𝑁init
+𝑁curr
+, 0
+
+(4)
+where 𝑁init is the initial COLMAP Gaussian count and 𝑁curr is the
+current count before densification. 𝜌caps the target freezing ra-
+tio, while 𝜅controls how quickly it increases with the Gaussian
+population. Before each densification, we compute a target frozen
+fraction 𝜌𝑡using Eqn. 4. This target applies to the total frozen pop-
+ulation, including Gaussians frozen at earlier events. If the current
+frozen count is below the target, we freeze additional Gaussians.
+Afterwards, we perform densification and initialize all newly added
+
+
+Accelerating 3D Gaussian Splatting Training through Selective Freezing and Computation Caching
+Conference’17, July 2017, Washington, DC, USA
+Projection
+Sorting
+T0:
+…
+10
+T15:
+…
+…
+T1:
+2
+…
+ 
+Pixel-wise Forward Rasterization
+Blending
+⍺-Checking
+(
+)
+,
+Rendered
+Image
+Ground
+Truth
+Per-Pixel
+Loss
+⍺-Checking
+:
+(0.2, 0.1, …, 0.2)
+…
+Aggregation
+(w/ Atomic Operations)
+Re-Projection
+& Update
+ 
+Pixel-wise Backward Rasterization
+:
+:
+:
+(0.2, 0.4, …, 0.2)
+(0.2, 0.3, …, 0.1)
+(0.1, 0.1, …, 0.2)
+:
+1.6
+…
+:
+:
+:
+2.3
+0.8
+0.6
+Tile-Gaussian
+Sorted List
+Aggregated
+Gradients
+Partial 
+Gradient List
+8
+7
+4
+1
+If Frozen?
+1
+2
+3
+4
+6
+N
+5
+…
+2
+3
+13
+M
+T0:
+…
+T15:
+…
+…
+T1:
+…
+Tile-Gaussian
+Intersection List
+1
+4
+1
+2
+5
+10
+14
+7
+12
+N
+Y
+Query Cache
+Frozen Gaussian Cache
+(Sec. 4.2)
++
+If Frozen?
+N
+Y
+Query Cache
+New Backward 
+Rasterization
+(Sec. 4.3)
+2
+3
+13
+M
+Gaussian 
+Primitives,
+Camera
+Poses,
++
+Frozen Gaussians
+Active Gaussians
+Original Pipeline Stages
+Our Modiﬁed Stages
+Legend
+Figure 6: Our training pipeline with Gaussian freezing. Orange blocks denote stages in the original pipeline, while blue blocks
+highlight our modifications. Orange and blue circles represent active and frozen Gaussians, respectively. Our training pipeline
+introduces two key modifications to reduce the overall computation. First, we cache the intermediate results of frozen Gaussians
+during forward rasterization. Second, we redesign the backward rasterization to enable cache sharing between forward and
+backward rasterization, allowing these two bottleneck stages to skip computation for grouped frozen Gaussians.
+Points from 
+COLMAP
+Training IK 
+iterations
+Freezing Gauss. 
+by 𝜌tNcurr 
+Finetuning 
+IN iterations
+Gaussian 
+Model
+Y
+N
+Densiﬁcation
+Itotal > Ith ?
+Freezing Gauss. 
+by 𝜌Ncurr 
+& Finetuning
+Figure 7: Our 3DGS training procedure. Before the finetuning
+stage, we iteratively freeze low-gradient Gaussians for every
+𝐼𝑁iterations, similar to the original training procedure. In the
+finetuning stage, we freeze 𝜌of the Gaussians permanently
+until the total iteration threshold is reached.
+Gaussians as active, preventing them from being frozen immedi-
+ately. Next, we continue to train the remaining active Gaussians
+until the next densification iteration or the finetuning stage.
+When densification ends at 𝐼th, we enter the 𝐼𝑀-iteration finetun-
+ing stage. At the start of the stage, we perform a final freezing step
+to bring the total frozen fraction to 𝜌. We then keep the resulting
+frozen set fixed for the remainder of training. Lastly, training runs
+for an additional 𝐼𝑀iterations and outputs the final Gaussian model.
+In practice, we set 𝜌= 0.9 and 𝜅= 2.0 to freeze up to 90% of
+Gaussians, and any Gaussians frozen once will not be unfrozen. Our
+evaluation in Sec. 7.1 demonstrates that the procedure can preserve
+model quality without additional recovery of frozen Gaussians
+under our progressive freezing framework.
+4.2
+Frozen Gaussian Cache, FGcache
+In this subsection, we introduce FGcache. Here, we describe the
+general caching abstraction. The detailed architecture of FGcache
+is shown in Sec. 5. We first present the key idea behind FGcache
+and describe how intermediate results are cached, then describe
+our cache management policy.
+Idea. Here, Fig. 8 illustrates the FGcache design using forward
+rasterization of a single image as an example. The same caching prin-
+ciple applies to backward rasterization. Fig. 8a shows the canonical
+rasterization, where each pixel in a tile fetches individual Gaussians
+sequentially and blends their color contributions into the pixel.
+Color
+Blending
+Fetch
+Gaussian
+9
+7
+2
+4
+6
+N
+5
+…
+Tile-Gaussian Sorted List
+(a) Original rasterization pipeline.
+If Frozen?
+N
+Y
+Pixel ID +
+Gaussian ID
+Fetch
+Gaussian
+9
+7
+2
+4
+6
+N
+5
+…
+Tile-Gaussian Sorted List
+⍺-Checking
+Color
+Blending
+Query
+Cache
+(b) Rasterization pipeline w/ naive pixel-wise Gaussian caching.
+If Frozen?
+N
+Y
+Fetch
+Gaussian
+9
+7
+2
+4
+6
+N
+5
+…
+Tile-Gaussian Sorted List
+Query
+Cache
+6
+Tile ID,
+(c) Rasterization pipeline w/ tile-wise Gaussian caching.
+If Frozen?
+N
+Y
+Fetch
+Gaussians
+9
+7
+2
+4
+6
+N
+5
+…
+Tile-Gaussian Sorted List
+Color
+Blending
+⍺-Checking
+Query
+Cache
+4
+Tile ID,
+Group Key
+(d) Rasterization pipeline w/ our grouped tile-wise Gaussian caching.
+Accum.
+⍺ & Colors
+⍺-Checking
+Frozen Gaussians
+Active Gaussians
+Match
+IDs
+4
+5
+6
+IDs:
+Accum.
+⍺ & Colors
+Color
+Blending
+⍺-Checking
+Figure 8: Intuition of FGcache. Compared to naive Gaussian
+caching, i.e., storing every ⟨𝑃ID,𝐺ID⟩pair, we introduce two
+optimizations: 1) grouping pixels and consecutive Gaussians
+to reduce metadata overhead, and 2) replacing ⟨𝑇ID, {𝐺ID}⟩
+with a fixed-length ⟨𝑇ID,𝐺ID, L⟩key. 𝑃ID: pixel ID; 𝑇ID: tile ID;
+𝐺ID: Gaussian ID; 𝐺ID, L: leading Gaussian ID.
+A naive Gaussian caching approach would cache the intermedi-
+ate results of individual Gaussians, including their transparencies 𝛼𝑖
+and color contributions c𝑖, as shown in Fig. 8b. If a frozen Gaussian
+passes the 𝛼-checking, its contribution to a pixel can be cached
+using the key ⟨𝑃ID,𝐺ID⟩, where 𝑃ID and 𝐺ID are the pixel ID and
+
+
+Conference’17, July 2017, Washington, DC, USA
+He Zhu et al.
+Fetch
+Gaussian
+7
+2
+4
+8
+5
+…
+Tile-Gaussian Sorted List
+Query Cache
+4
+5
+Temporary
+Buﬀer
+(a) Case 1: newly frozen Gaussians (     ) after the cached frozen Gaussians,     and     .
+…
+1
+8
+Accum. ⍺ & Colors  
+of 
+4
+5 and
+8
+Compute ⍺ & Color for 
++
+Accum. ⍺ & Colors  
+of 
+4
+5 and
+8 ,
+Update Cache
+Fetch
+Gaussian
+7
+2
+4
+8
+9
+…
+Tile-Gaussian Sorted List
+Query Cache
+…
+1
+Update Cache
+Fetch
+Gaussian
+7
+2
+4
+8
+5
+…
+Tile-Gaussian Sorted List
+Query Cache
+4
+5
+…
+1
+8
+⍺ & Colors    
+of 
+4
+5 and
+8
+Recompute ⍺ & Color for 
+4
+8
+9
+Accum. ⍺ & Colors  
+of 
+4
+and
+8
+, 9
+Mismatch
+w/
+4
+5
+8
+4
+5
+and
+Update Cache
+4
+5
+8
+⍺ & Colors for 
+(key: Tile, 4)
+(key: Tile, 8)
+(key: Tile, 4)
+,
+8
+4
+5
+(b) Case 2: newly frozen Gaussians (     and     ) followed by the cached frozen Gaussians,     .
+8
+4
+9
+(c) Case 3: original cached sequence (     and     ) interrupted by newly frozen Gaussians,     .
+4
+5
+8
+Frozen Gaussians
+Active Gaussians
+Newly Frozen Gaussians
+Temporary
+Buﬀer
+Temporary
+Buﬀer
+Mismatch
+w/ 4
+8
+9
+Recompute ⍺ & Color for 
+8
+9 and 
+4 ,
+Figure 9: Three cache-update scenarios in FGcache. An up-
+date is required when newly frozen Gaussians or active Gaus-
+sians change the rendering order of the sorted Gaussian list.
+Gaussian ID. We then use this key to retrieve 𝛼𝑖and c𝑖. However,
+caching every frozen Gaussian-pixel pair generates a large number
+of cache entries, leading to excessive memory traffic.
+To reduce the number of cache entries, we organize these pixel-
+specific opacity, 𝛼𝑖, and color contributions, c𝑖, into one ⟨𝑇ID,𝐺ID⟩
+entry per tile-Gaussian pair as shown in Fig. 8c, where𝑇ID is the tile
+ID. Grouping these pixels reduces substantial repeated metadata
+reads and writes. Nevertheless, tile-wise caching still requires a
+separate access for every frozen Gaussian.
+To further reduce these accesses, we group consecutive frozen
+Gaussians by caching their cumulative contributions. Fig. 8d shows
+an instance where Gaussians 4, 5, and 6 form a consecutive frozen
+group. We store the group’s contribution under the key ⟨𝑇ID, {𝐺ID}⟩,
+where {𝐺ID} is the set of consecutive frozen Gaussian IDs. This
+design requires only one cache access per group. However, explicitly
+recording all Gaussian IDs produces variable-length cache keys.
+Fortunately, within a given tile’s sorted Gaussian list, each con-
+secutive group can be uniquely identified by its leading Gaussian
+ID, 𝐺ID, L, and group length, since each Gaussian appears only once
+in the list. We therefore use a fixed-length key, ⟨𝑇ID,𝐺ID, L⟩, to lo-
+cate the cache entry and compare its stored group length with the
+current group length to confirm a group match. In the cache policy
+below, we also show that this check remains effective when new
+updated active Gaussians change the Gaussian list.
+Cache Policy. In the following paragraphs, we describe the
+cache management policy of FGcache. Specifically, we explain
+four operations: read, update, insert, and evict.
+Read. We define a read operation as querying results from
+FGcache. During rasterization, FGcache maintains a temporary
+queue buffer filled with Gaussians from the sorted Gaussian list.
+The rasterizer processes either a single unfrozen Gaussian or a con-
+secutive frozen group at the top of the queue. It queries FGcache
+when the frozen group reaches the maximum group length, is fol-
+lowed by an unfrozen Gaussian, or reaches the end of the list. Then,
+each consecutive frozen group is queried using ⟨𝑇ID,𝐺ID, L⟩. Next,
+the length of the frozen Gaussians in the current temporary buffer
+is checked against the metadata stored in the cache entry. A match
+means a cache hit. Thus, we can directly reuse the cached result.
+On a cache miss, we recompute all the Gaussians in the current
+temporary buffer, and follow the update step described below to
+update the new cumulative contribution to FGcache.
+Update. However, during training, the positions of the sorted
+Gaussian list and frozen groups can be changed by the updates to
+active Gaussians and newly frozen Gaussians. Cache entries must
+therefore be updated accordingly. Fig. 9 shows three scenarios in
+which cache entries need to be updated. In these examples, we
+assume the maximum frozen group length is 3. For simplicity, some
+operations in the original rasterization are omitted.
+Fig. 9a shows the first case, where a newly frozen Gaussian, 8,
+follows the unchanged cached prefix of Gaussians 4 and 5. Accord-
+ing to the policy, we retrieve the entry using the key ⟨𝑇ID, 4⟩and
+find its stored length of 2 is shorter than the current group length
+of 3. Since the cached group remains an unchanged prefix of the
+current group, we reuse its cumulative contribution. Meanwhile,
+the opacity and color contribution of Gaussian 8 are computed on
+the fly. Lastly, we combine the computed contribution with the
+cached prefix in rendering order, and update the entry in place with
+the combined result and the new frozen group length of 3.
+Fig. 9b shows the second scenario, where an existing frozen
+Gaussian 4 is led by two newly frozen Gaussians, 8 and 9. Since
+Gaussian 8 is newly frozen and not stored in cache, querying the
+new key ⟨𝑇ID, 8⟩finds no valid entry, causing a cache miss. We
+therefore recompute all three Gaussians and insert their cumulative
+contribution with a group length of 3. The old subgroup starting at
+Gaussian 4 does not need explicit invalidation. Since it is no longer
+accessed, it will eventually be evicted after rasterization.
+In last scenario (Fig. 9c), a frozen Gaussian, 8, moves between
+frozen Gaussians 4 and 5 and splits their cached group. The cur-
+rent frozen group starting at Gaussian 4 ends before Gaussian 8,
+so querying ⟨𝑇ID, 4⟩finds an entry with a longer stored length.
+Thus, we recompute the contributions of all frozen Gaussians in
+the temporary buffer and update the cache with new results.
+Insert&Eviction. In FGcache, insertion occurs when new cumu-
+lative results need to be stored. Unlike conventional caches that
+rely on least recently used (LRU) or similar replacement policies,
+we propose a new shortest Gaussian length (SGL) replacement pol-
+icy. The policy is based on two observations. First, during per-tile
+rasterization, the pipeline queries each frozen group exactly once.
+Thus, the temporary locality across entries is similar, and the pri-
+mary difference is the amount of computation each entry can save.
+Second, an entry that is not queried indicates that its cached group
+no longer corresponds to any current query group. These entries
+are expired and should be removed to keep consistency.
+Therefore, after each rasterization, any entries not queried are
+invalidated for that view and tile. Upon insertion, FGcache will
+first replace any invalid cache entry. If FGcache is full, SGL policy
+selects the entry with the smallest group of Gaussians for eviction.
+This way, it retains entries that yield higher computational savings.
+Multi-view Training. To support multi-view training, we add
+the image ID, 𝐼ID, to form the key ⟨𝐼ID,𝑇ID,𝐺ID, L⟩, giving each view
+
+
+Accelerating 3D Gaussian Splatting Training through Selective Freezing and Computation Caching
+Conference’17, July 2017, Washington, DC, USA
+Frozen Gaussians
+Active Gaussians
+Transitional Gaussians
+Frozen Group
+Update Cache  (key: A, Tile, 7) w/ Length = 3
+Gaussian List 
+of view A
+7
+1
+4
+N
+2
+…
+7
+1
+2
+N
+4
+…
+Model Update 
+by View B
+Add Frozen 
+Gaussians
+w/ Transitional Status
+7
+1
+2
+N
+4
+…
+Query Cache
+(key: A, Tile, 7)
+Mismatch
+w/ Length = 2 
+wo/ Transitional Status
+7
+1
+2
+N
+4
+…
+Query Cache
+(key: A, Tile, 7)
+Match
+w/ Length = 3 
+Figure 10: Cache refresh during multi-view training. An up-
+date from another view moves Gaussian 2 into a cached
+frozen group. With a maximum group length of 3, freezing
+Gaussian 2 immediately could change the group members
+while preserving the key and length. Here, we set Gaussian 2
+as a transitional Gaussian, so the next cache lookup for this
+tile detects a mismatch between the current length of 2 and
+the cached length of 3 and triggers recomputation.
+Algorithm 1: Our new backward rasterization.
+Data: Depth-ordered frozen-group and individual-Gaussian
+data for pixel p, rendered color C(p), pixel color
+gradient ∇C(p)𝐿.
+S(p) ←(0, 0, 0), Γ ←1;
+foreach item in forward order do
+if item is a frozen group with data (𝑇group, Cgroup) then
+S(p) ←S(p) + Γ · Cgroup;
+Γ ←Γ · 𝑇group;
+else
+Let 𝐺𝑖be the individual Gaussian with data (𝛼𝑖, c𝑖);
+S(p) ←S(p) + 𝛼𝑖· Γ · c𝑖;
+if 𝐺𝑖is trainable then
+𝜕𝐿
+𝜕𝛼𝑖(p),
+𝜕𝐿
+𝜕c𝑖(p) ←ComputeGradients(∇C(p)𝐿);
+AggregateGradients( 𝜕𝐿
+𝜕𝛼𝑖(p), 𝜕𝐿
+𝜕c𝑖(p));
+end
+Γ ←Γ · (1 −𝛼𝑖);
+end
+end
+an independent cache space. However, Gaussian updates across
+views can allow incorrect reuse of stale entries. For a given view
+and tile, a cached frozen group may be split by an active Gaussian
+updated by another view, as shown in Fig. 10. This Gaussian may
+then be frozen before the corresponding entry is updated. Since
+group lengths are capped, the current group may contain different
+members despite matching the leading ID and length.
+To address this, we add one more training state, transitional, to
+each Gaussian. At each freezing step, selected active Gaussians
+enter the transitional state for one full freezing interval before
+promotion to frozen. Transitional Gaussians have fixed parameters
+but remain unfrozen to the cache. Their contributions are computed
+individually rather than cached. Their fixed positions preserve
+their relative order with existing frozen Gaussians throughout the
+interval. To refresh every view’s cache under the preceding policy
+before promotion, each freezing interval must cover all training
+views. Our existing training configuration already satisfies this
+requirement, without changing the freezing schedule.
+4.3
+New Backward Rasterization
+While frozen Gaussians require no parameter gradients, their con-
+tributions are necessary for evaluating active-Gaussian gradients.
+As Eqn. 2 shows, the gradient 𝜕𝐿
+𝜕𝛼𝑖of an active Gaussian depends on
+the cumulative contributions of all Gaussians behind it. Canonical
+backward rasterization maintains this contribution through a back-
+to-front traversal, updating its running state using each Gaussian’s
+𝛼and c. Frozen Gaussians must participate in these state updates,
+although their own gradient computations are omitted. However,
+FGcache only stores front-to-back group-level transmittance and
+color, without values required by the per-Gaussian updates. To
+reuse the values cached in FGcache, we reformulate gradient com-
+putation in terms of cumulative rendering contributions and design
+a backward rasterization that leverages cached frozen Gaussians.
+Cache-Compatible Gradient Evaluation. In Eqn. 2, the term,
+Í𝑁
+𝑗=𝑖+1 𝛼𝑗c𝑗Γ𝑗, stands for the cumulative color contribution behind
+Gaussian 𝑖. This quantity can be computed as the residual between
+the final pixel color and the forward accumulated color. Therefore,
+𝜕𝐿
+𝜕𝛼𝑖can be refactored as,
+𝜕𝐿
+𝜕𝛼𝑖
+(p) = ∇C(p)𝐿(Γ𝑖c𝑖−C(p) −S𝑖(p)
+1 −𝛼𝑖
+), S𝑖(p) =
+𝑖∑︁
+𝑗=1
+𝛼𝑗c𝑗Γ𝑗.
+(5)
+This formulation evaluates gradients using the running color and
+transmittance, which can be updated directly from FGcache with-
+out reconstructing individual frozen-Gaussian contributions.
+Cache-Aware Backward Rasterization. We show our back-
+ward rasterization with Gaussian caching in Algo. 1. It implements
+the gradient evaluation through a front-to-back traversal and main-
+tains a running color S(p) and a transmittance Γ. Similarly, we
+follow the cache policy in Sec. 4.2 to group consecutive frozen
+Gaussians and query their accumulated values from FGcache.
+For an active individual Gaussian, we compute and aggregate
+the gradient. For a frozen group of 𝑘Gaussians in FGcache, we
+fetch the transmittance 𝑇group and accumulated color Cgroup.
+𝑇group =
+𝑘
+Ö
+𝑖=1
+(1 −𝛼𝑖), Cgroup =
+𝑘
+∑︁
+𝑖=1
+𝛼𝑖c𝑖
+𝑖−1
+Ö
+𝑗=1
+(1 −𝛼𝑗).
+(6)
+These cached results update S(p) and Γ at group granularity, avoid-
+ing recomputing per-Gaussian contributions.
+In this way, our algorithm enables a single forward cumulative
+cache, FGcache, to accelerate both forward and backward rasteri-
+zation while preserving gradient correctness.
+5
+ElsaGS Architecture
+With FGcache, we can eliminate a large portion of redundant com-
+putations in both forward and backward rasterization. However,
+implementing its group identification and cache policy in off-the-
+shelf GPU software introduces additional shared-memory accesses
+and control overhead, which can offset the benefits of reuse. To ad-
+dress this limitation, we propose our hardware architecture, ElsaGS,
+to efficiently support Gaussian freezing and cached rasterization.
+In this section, we first describe the overall architecture. We then
+describe the designs of two key components in the ElsaGS core:
+the rasterization unit array and FGcache.
+
+
+Conference’17, July 2017, Washington, DC, USA
+He Zhu et al.
+Temp. Buffer
+Accum.
+Loss 
+Comp.
+FGcache
+On-Chip Gradient
+Reduction Unit
+Rast. Unit
+Partial Color&T
+⍺-Check
+-
+1
+*
+Grad. Comp. Unit
+dL/d⍺ 
+Comp.
+dL/dG 
+Comp.
+Inv.  ⍺ 
+Check Frozen
+Image Buffer
+Query?
+Query Result
+New Group
+Accum.
+DRAM
+ElsaGS 
+Core
+Aggregation
+Unit
+Projection&
+Culling Unit
+Sorting Unit
+Postprocess
+Unit
+Raster.
+Unit
+Array
+Sorted Gaussian Buﬀer
+Sorted Gaussian Buﬀer
+Output
+Buﬀer
+Reduction
+Unit
+FGcache
+Output
+Buﬀer
+Raster.
+Unit
+Array
+Raster.
+Unit
+Array
+Raster.
+Unit
+Array
+Raster.
+Unit
+Array
+Raster.
+Array
+Figure 11: Overall streaming architecture of ElsaGS. Our design integrates projection, sorting, aggregation, post-processing,
+and the ElsaGS core into a pipelined dataflow. Our key contribution is the ElsaGS core, which has a set of rasterization units
+to accelerate both forward and backward rasterization, and a FGcache to reuse the cumulative results of frozen Gaussians.
+Index
+Leading 
+Gaussian ID
+Tile 
+ID
+Tag
+Tag
+|{G}|, {⍺}, {RGB}
+Tag
+|{G}|, {⍺}, {RGB}
+Tag
+|{G}|, {⍺}, {RGB}
+V
+V
+V
+Tag
+|{G}|, {⍺}, {RGB}
+V
+…
+Check Tag
+&Valid Bit
+Data
+N-Way
+Figure 12: Our FGcache design, which is a 𝑁-way set-
+associative cache to store frozen Gaussian attributes. Each
+cache entry stores the length of the consecutive frozen Gaus-
+sians and their cumulative transmittance and colors.
+Overview. Fig. 11 shows the overall hardware design of ElsaGS.
+We implement ElsaGS as a streaming architecture consisting of
+five major components: an ElsaGS core, a projection unit, a sorting
+unit, an aggregation unit, and a postprocessing unit. The ElsaGS
+core is our key contribution, which will be further explained in the
+following paragraphs. The projection and sorting units execute the
+projection and sorting stages in the forward pass, similar to prior
+work [30, 40]. The aggregation unit collects partial gradients for
+each Gaussian and writes the accumulated results back to memory,
+like GSArch [18]. The postprocessing unit updates parameters and
+executes densification or freezing according to gradient statistics.
+To rank Gaussians by gradients, we reuse the existing sorting
+unit, so ElsaGS does not require an additional dedicated hard-
+ware unit for Gaussian selection. ElsaGS further adopts tiled SSIM,
+like [66], so that the image loss can be computed in a streaming
+manner. This enables our architecture to pipeline sorting, forward
+rasterization, and backward rasterization. To do this, we implement
+double buffering between consecutive stages, allowing overlap be-
+tween computation and data communication.
+ElsaGS Core. The key component of our architecture is the
+ElsaGS core, which supports training with our technique, Gauss-
+ian freezing, while accelerating both forward and backward ras-
+terization. As shown in Fig. 11, the ElsaGS core consists of five
+components: a sorted Gaussian buffer, an output buffer, a FGcache,
+a rasterization unit array, and a reduction unit. Both the Gauss-
+ian buffer and the output buffer are double-buffered to support
+our streaming processing and hide off-chip data traffic latency. The
+rasterization unit array performs both forward and backward raster-
+ization computations, while the on-chip reduction unit aggregates
+partial Gaussian gradients to reduce off-chip memory traffic.
+Rasterization Array. Our rasterization array comprises a set
+of rasterization units executing in parallel. Each rasterization unit
+adopts a pixel-wise processing paradigm to execute forward or
+backward rasterization. The right side of Fig. 11 shows a single-
+unit design. It is organized into two separate stages: a frontend
+that accumulates Gaussian contributions (light blue) and a back-
+end that computes the image loss or gradients (dark blue). Each
+array maintains a temporary buffer, which fetches data from the
+sorted Gaussian buffer and detects consecutive frozen Gaussians for
+FGcache queries. This buffer is set to twice the maximum Gaussian-
+group length used for FGcache queries, ensuring sufficient capacity
+for grouping consecutive frozen Gaussians.
+In forward rasterization, the frontend continuously consumes
+consecutive frozen Gaussians or individual active Gaussians at the
+top of the temporary buffer, then pops the processed entries and
+refills the buffer from the sorted Gaussian list. When the frozen
+Gaussian group reaches the maximum length, encounters an un-
+frozen Gaussian, or reaches the end of the list, it queries the FG-
+cache. On a cache hit, the returned cached contribution is directly
+accumulated into the rendered pixel. Otherwise, the frontend per-
+forms recomputation and updates FGcache based on the policy in
+Sec. 4.2. Meanwhile, transitional or active Gaussians still go through
+the canonical forward rasterization pipeline and accumulate their
+contributions to the pixel. After the frontend completes the color
+accumulation over all Gaussians in the sorted Gaussian list, the
+backend then calculates the image loss and saves it in the buffer.
+
+
+Accelerating 3D Gaussian Splatting Training through Selective Freezing and Computation Caching
+Conference’17, July 2017, Washington, DC, USA
+During backward rasterization, the backend traverses the list in
+the same order and reconstructs the cumulative color and transmit-
+tance. The backend uses these values and losses in the image buffer
+to compute partial gradients for active Gaussians. Our architecture
+adopts the redesigned backward rasterization in Sec. 4.3, so that
+the FGcache can be shared in both rasterization stages. Lastly, the
+partial gradients from all rasterization units are locally aggregated
+by an on-chip gradient reduction unit to reduce off-chip traffic.
+FGcache. Fig. 12 shows FGcache design, which is implemented
+as a 𝑁-way associative cache to store precomputed frozen-Gaussian
+attributes. For simplicity, we show the cache design for a single
+view, where the key consists of the tile ID and leading Gaussian ID.
+During a cache lookup, we first index the target set through the
+least significant bits of the group key. The cache then compares
+its tags in parallel. A valid tag match identifies a candidate entry.
+The rasterization array directly reuses the cached transmittance
+and color contributions if the stored group length |{𝐺}| of the
+entry matches the current group length. Length mismatches are
+handled by the cache update policy. This way, we can reduce the
+computation of these consecutive frozen Gaussians.
+To further regularize off-chip data access, we design FGcache
+with double buffering. Each FGcache buffer is shared across the
+rendering of eight image tiles, where each tile has a size of 16×16.
+While the current eight tiles are being rendered, the cache contents
+for the next eight tiles are prefetched into the fill buffer. In this way,
+off-chip data movement for FGcache becomes streaming.
+6
+Experimental Setup
+Hardware Setup. Our overall architecture consists of 4 projection
+units, 4 sorting units, 4 gradient reduction units, and a ElsaGS core.
+We implement ElsaGS core with 2 rasterization arrays clocked at
+1 GHz. Each has 8 × 8 rasterization units. Both the sorted Gaussian
+buffer and the output buffer are shared across all rasterization
+arrays. They have a total size of 64 KB and 4 KB, respectively.
+The FGcache is shared across the rasterization arrays. This
+512 KB cache has 32 sets with 8 entries per set. The tag of each
+cache entry is constructed by the leading Gaussian ID, tile ID, and
+Image ID. Each entry stores a tile (16 × 16) of the accumulated color
+and transparency values. Each cache access requires 8 cycles to
+return 512 B of cached data (an 8 × 8 tile accumulation result). Two
+8 × 8 tiles can be accessed in parallel. FGcache is shared across
+8 image tiles with a size of 16 × 16. We cap each frozen group at
+64 Gaussians. Each rasterization array has a temporary buffer that
+holds up to 128 Gaussians, twice the maximum group size.
+Experimental Methodology. The datapath of ElsaGS is de-
+veloped using a standard EDA flow with Synopsys and Cadence
+tools targeting TSMC’s 16 nm FinFET technology. The resulting
+design is then scaled to the 8 nm process node using DeepScale-
+Tool [58] to have a fair comparison with the mobile GPU on Nvidia
+Orin SoC [58, 62]. SRAM components are generated using the Arm
+Artisan memory compiler, and power estimates are obtained with
+Synopsys PrimeTimePX using annotated switching activities. The
+DRAM subsystem in our simulation is modeled using Micron’s
+16 Gb LPDDR5 at 6400 MT/s with four memory channels, following
+the datasheet [48]. DRAM energy consumption is estimated using
+Micron’s System Power Calculator [22]. To evaluate system-level
+Table 1: Area comparison. The area is scaled into 8 nm.
+Baselines
+GSArch [18]
+CambriconGS [66]
+ElsaGS
+PE (mm2)
+1.04
+1.57
+0.96
+SRAM (mm2)
+0.11
+0.13
+0.38
+Total (mm2)
+1.15
+1.70
+1.34
+Figure 13: Quality evaluation over 3DGS.
+Figure 14: Freezing framework ablation. Base: canonical
+3DGS. Random: freeze Gaussians randomly under the pro-
+gressive freezing budget. Abrupt: freeze 𝜌of Gaussians at
+every freezing event. Recovery: unfreeze all Gaussians and
+finetune for 1k iterations before final freezing step.
+performance, we then develop a cycle-accurate simulator that mod-
+els component-level latencies and power consumption obtained
+from post-synthesis RTL measurements.
+Area. Tbl. 1 shows that ElsaGS has comparable area compared
+to the prior 3DGS accelerators [18, 66]. The area numbers of GSArch
+and CambriconGS are obtained from their papers and scaled to 8 nm.
+The total area of our design is 1.34 mm2 in 8 nm technology.
+Datasets and Metrics. We evaluate ElsaGS on three widely
+adopted real-world datasets: Mip-NeRF360 [3], Tanks and Tem-
+ples [26], and DeepBlending [19]. Rendering quality is evaluated
+using standard metrics, including PSNR and SSIM.
+Baselines. We evaluate ElsaGS using the canonical 3DGS train-
+ing algorithm [23], and a variant with software implementation
+of atomic operation reduction [5]. For hardware comparison, we
+consider three baselines. The first is GPU, a mobile Ampere GPU in
+Nvidia’s Orin SoC. The other two are GSArch [18] and CamGS [66],
+both of which are dedicated accelerators designed for 3DGS train-
+ing. We do not compare against inference-only accelerators [10, 30,
+35, 54, 70], as they do not support the training process.
+Variants. To dissect our contributions in algorithm and ar-
+chitecture, we evaluate two variants of ElsaGS to separate the
+contributions proposed in our paper. We set the Gaussian freezing
+ratio 𝜌= 90% and the finetuning stage to start at 𝐼𝑡ℎ= 15𝑘:
+• ElsaGS-sw: GPU implementation of Gaussian freezing.
+• ElsaGS-hw: this variant is a full-fledged implementation
+with our hardware support.
+7
+Evaluation
+7.1
+Quality Evaluation
+Fig. 13 compares the reconstruction quality of ElsaGS against two
+baselines: the original 3DGS pipelines and the technique proposed
+by GSArch. Here, we evaluate them on canonical 3DGS. Overall,
+ElsaGS achieves nearly identical performance to the original 3DGS.
+
+
+Conference’17, July 2017, Washington, DC, USA
+He Zhu et al.
+Figure 15: End-to-end training latency. Speedup numbers are
+normalized to the corresponding GPU baselines.
+Figure 16: End-to-end training energy. Bars show energy nor-
+malized to GSArch.
+Figure 17: Normalized latency, per-frame speedup and energy
+over training iterations (3k, 12k, 21k, 30k). All numbers are
+normalized to GSArch at iteration 3k.
+ElsaGS achieves a PSNR 0.2 dB below canonical 3DGS, 1.08 dB
+above GSArch. For SSIM, ElsaGS shows a similar result, while
+GSArch loses 0.013. Fig. 14 compares different freezing strategies
+(see Fig. 14 caption). Compared to ElsaGS, Random and Abrupt
+yield 0.5 dB and 0.6 dB lower PSNR, respectively. Thus, our training
+strategy can better preserve quality compared to other heuristics.
+On the other hand, Recovery provides negligible improvement
+over ElsaGS, supporting our choice to keep selected Gaussians
+frozen under the training schedule.
+7.2
+Performance
+Speedup. Fig. 15 compares end-to-end training speed across hard-
+ware platforms. Overall, ElsaGS-hw achieves the highest speedup
+across all datasets and training algorithms. On average, ElsaGS-hw
+delivers 18.7× speedup over GPU, reducing the training time from
+hours to minutes. Compared to dedicated accelerators, ElsaGS-hw
+achieves 5.6× and 1.3× speedup over GSArch and CamGS, respec-
+tively. Meanwhile, we also report the speedup of our GPU-based
+implementation, ElsaGS-sw, which achieves 1.9× and 1.6× speedup
+over the GPU and Arc, respectively, by omitting gradient compu-
+tation and accumulation of frozen Gaussians.
+Fig. 17a compares stage latency and per-frame speedup over iter-
+ations. At initial training, all Gaussians are active, and ElsaGS-hw
+is slower than CamGS. As training progresses, more Gaussians are
+frozen, and their contributions are cached in FGcache. ElsaGS-hw
+reduces computation in both forward and backward rasterization.
+E.g., at iteration 12k, ElsaGS-hw achieves per-frame speedups
+of 1.1× and 3.0× over CamGS and GSArch, respectively. At fine-
+tuning, the freezing ratio reaches 90%. Compared to GSArch and
+CamGS, ElsaGS-hw achieves at least 9.4× and 3.5× speedup.
+Figure 18: Off-chip Memory
+Traffic. Numbers are normal-
+ized to GSArch.
+Figure 19: Study of FGcache
+miss rate on forward and
+backward rasterization.
+Energy Savings. Fig. 16 shows the end-to-end training energy
+of different hardware across datasets and training methods. Overall,
+ElsaGS reduces the training energy by 78.0% compared to GSArch
+and achieves comparable energy consumption to CamGS. Com-
+pared to GPU, ElsaGS reduces the training energy by 99.4% on
+average. Fig. 17b further shows the normalized per-frame energy
+over iterations. As the training progresses, ElsaGS-hw gains a per-
+frame energy advantage over other accelerators. Since FGcache
+reduces a large amount of computation in both forward and back-
+ward passes, ElsaGS-hw consumes over 40% less dynamic energy
+per frame than CamGS and over 85% less than GSArch at finetun-
+ing stage.
+Memory Traffic. In Fig. 18, we report the off-chip memory
+traffic of ElsaGS under a 90% freezing ratio. We break down the
+traffic into four categories. The first category is the memory traffic
+in forward and backward rasterization. The second one is the data
+transmission during aggregation, where the pipeline accumulates
+gradients through atomic operations. The third one is the data
+transmission caused by the FGcache, which only occurs in ElsaGS.
+The last one includes the remaining memory traffic.
+As the results show, ElsaGS reduces most memory traffic in the
+aggregation stage. This is because ElsaGS leverages Gaussian-wise
+sparsity compared to other methods, naturally reducing most gra-
+dient accumulation. Moreover, ElsaGS reduces over 50% memory
+traffic in rasterization by caching the cumulative contributions.
+Meanwhile, our overall cache design effectively reduces the cache
+traffic and further reduces the overall memory traffic.
+Cache Miss Rate. Fig. 19 gives a case study of cache miss
+rates on 3DGS with 90% Gaussians frozen. We break down misses
+by forward and backward rasterization and further classify these
+misses into four categories. The first one is the conflict misses due to
+new cache entries. This comes from the original grouped Gaussians
+being split into two. The second one is the conflict misses due to
+cache entry mismatches. This is from the grouped Gaussians having
+been expanded or shortened. The third one is the canonical conflict
+misses. These are misses similar to the conventional cache conflict
+misses due to cache associativity. The last one is capacity misses.
+Most misses occur in the forward pass. Among them, 64.8% are
+classified as conflict misses. However, most of these conflicts come
+from the first two categories, i.e., new entries and entry mismatches,
+rather than conventional cache conflicts. These misses are mainly
+caused by the dynamic nature of 3DGS training. As Gaussian pa-
+rameters are updated over iterations, active Gaussians can alter the
+ordering of existing Gaussian groups. In contrast, entry-mismatch
+and new-entry misses do not appear in the backward pass, because
+Gaussian parameters remain unchanged in the same iteration and
+backward rasterization can fully reuse cached results.
+
+
+Accelerating 3D Gaussian Splatting Training through Selective Freezing and Computation Caching
+Conference’17, July 2017, Washington, DC, USA
+Figure 20: Ablation study
+with different variants. Num-
+bers are normalized to gpu.
+8
+16
+32
+64
+# of Set
+2
+4
+8
+16
+# of Way
+0.69 0.73 0.81 0.92
+0.74 0.81 0.91 1.02
+0.80 0.90 1.00 1.04
+0.88 0.98 1.03 1.04
+0.50
+0.75
+1.00
+1.25
+1.50
+Speedup
+Figure 21: Sensitivity of per-
+formance to various cache
+configurations.
+8
+16
+32
+64
+Max Group Size
+0.7
+0.8
+0.9
+1.0
+Speedup
+0.8
+1.0
+1.2
+1.4
+Norm. Energy
+Speedup
+Energy
+Figure
+22:
+Sensitivity
+of
+speedup and energy con-
+sumption to the maximum
+frozen group size.
+2
+4
+8
+16
+Shared Tiles
+0.90
+0.95
+1.00
+1.05
+Speedup
+0.8
+1.0
+1.2
+1.4
+1.6
+Norm. Energy
+Speedup
+Energy
+Figure 23: Performance Sen-
+sitivity to number of shared
+tiles in FGcache. Numbers
+are normalized to the 8-tile
+configuration.
+7.3
+Ablation Study
+Fig. 20 further dissects the contribution of ElsaGS-hw. Specifically,
+we gradually include more components in ElsaGS, +Freezing and
++Fwd. FGcache. Base-hw runs with all Gaussians active and FG-
+cache disabled, which improves performance over GPU by 3.1×.
++Freezing skips gradient computation and accumulation for frozen
+Gaussians, yielding a 2.4× speedup and reducing energy by 51.9%
+relative to Base-hw. +Fwd. FGcache only supports FGcache for
+forward rasterization and further reduces energy by 20.8% relative
+to +Freezing, with negligible change in speedup because backward
+rasterization still recomputes the contributions of frozen Gaussians.
+Finally, ElsaGS adds the cache-compatible backward rasterization
+in Sec. 4.3, achieving a further 2.5× speedup and reducing energy
+by 40.3% relative to +Fwd. FGcache.
+7.4
+Sensitivity Study
+Shared Tiles per FGcache. Fig. 23 shows the sensitivity of per-
+formance to the number of shared tiles per FGcache, normalized
+to the 8-tile configuration. As the number of shared tiles increases,
+overall speedup decreases due to higher cache conflict rates. Mean-
+while, energy efficiency is also improved as tile sharing increases
+from 2 to 8. However, further increasing the number of shared tiles
+from 8 to 16 decreases both speedup and energy efficiency due to
+increasing cache contention.
+Cache Configuration. Fig. 21 shows the sensitivity of speedup
+to cache configuration with 90% of Gaussians frozen. All numbers
+are normalized to the configuration with 32 sets and 8 ways. The re-
+sult shows that increasing either the number of sets or associativity
+generally improves speedup by reducing cache conflicts. However,
+the overall performance gains diminish beyond our default con-
+figuration, i.e., 32 sets and 8 ways, where further increases yield
+marginal gains. This shows that our default configuration achieves
+a good balance between performance and hardware cost.
+Figure 24: Sensitivity to the
+freezing multiplier, 𝜅.
+Figure
+25:
+Evaluation
+of
+ElsaGS on Taming3DGS.
+Figure
+26:
+Comparison
+against GSarch across dif-
+ferent pruning/frozen ratios.
+1
+2
+4
+8
+# of Raster. Array
+128
+256
+512
+1024
+FGCache Size (KB)
+0.50 0.81 1.18 1.54
+0.58 0.91 1.29 1.62
+0.65 1.00 1.37 1.69
+0.67 1.03 1.40 1.70
+0.0
+0.4
+0.8
+1.2
+1.6
+2.0
+Speedup
+Figure 27: Scalability analysis
+on FGcache size and number
+of rasterization arrays.
+Freezing Multiplier. Fig. 24 shows how the multiplier 𝜅in
+Eqn. 4 affects speed and rendering quality. We fix the freezing cap
+𝜌at 90%. Speedup is normalized to the default configuration with
+𝜅= 2. As 𝜅increases, ElsaGS freezes Gaussians more aggressively
+during training, leading to higher speedup. Meanwhile, aggressively
+freezing Gaussians slightly reduces reconstruction quality.
+Maximum Frozen Group Size. Fig. 22 shows the effect of the
+maximum frozen group size on speedup and energy consumption,
+normalized to the configuration with a maximum group size of
+64 Gaussians. Here, we keep the default cache configuration. As
+the maximum group size increases, speedup gradually increases
+because grouping more consecutive frozen Gaussians can reduce
+cache contention. At the same time, normalized energy decreases
+due to reduced recomputation.
+7.5
+Scalability
+Fig. 27 shows the scalability of ElsaGS to FGcache size and the
+number of rasterization arrays under Taming3DGS. Here, we set
+the cache associativity to be 8 across all cache sizes. The speedup
+numbers are normalized to our default configuration, 2 rasteriza-
+tion arrays with a cache of 512 KB. It shows that increasing the
+number of rasterization arrays improves speedup. However, exces-
+sive rasterization arrays would lead to sublinear scaling due to the
+bottleneck shifts. Meanwhile, larger FGcache sizes could further
+improve performance by alleviating cache contention and reducing
+recomputation, with the size of 512 KB being a good tradeoff.
+7.6
+Performance on Taming3DGS
+We further evaluate the performance of ElsaGS under the same ex-
+perimental settings on Taming3DGS [46], a points pruning variant
+of 3DGS. Compared to the baseline, ElsaGS achieves 19.0× speedup
+with 0.4 dB PSNR loss on average. The performance gain suggests
+that ElsaGS can be applied to other 3DGS-based algorithms by
+leveraging similar freezing and caching techniques.
+
+
+Conference’17, July 2017, Washington, DC, USA
+He Zhu et al.
+7.7
+Comparison with GSArch
+Fig. 26 shows how freezing and pruning affect 3DGS training. The
+evaluation is performed on M360 dataset. From 75% to 95%, ElsaGS
+is substantially faster than GSArch at comparable or higher PSNR.
+Increasing the freezing ratio 𝜌improves speedup with only a modest
+loss in reconstruction quality. In contrast, GSArch achieves limited
+speedup with noticeable PSNR drops at high pruning ratios.
+8
+Related Work
+Neural Rendering Accelerators. In recent years, a wide range of
+studies have focused on accelerating neural rendering [5, 10, 11, 13,
+18, 27–30, 33, 34, 37, 38, 40, 44, 49, 54, 55, 61, 66, 70, 72, 73]. Some
+studies [10, 29, 40, 41, 53, 78] propose dedicated accelerators for ren-
+dering only. Meanwhile, others [18, 21, 67] focus on optimizing the
+training procedure. REACT3D [63], RTGS [36], and Splatonic [21],
+propose dedicated accelerators for SLAM-based 3DGS.
+3DGS Acceleration Techniques. In addition to hardware sup-
+port, numerous software optimizations have been proposed to ac-
+celerate 3DGS. To reduce rendering workload, studies [6–8, 17, 46]
+propose to prune insignificant Gaussians. Others [24, 32, 50, 51, 56]
+introduce alternative data representations to alleviate memory
+pressure. Another line of research targets optimizing the 3DGS
+pipeline itself, e.g., online filtering techniques [14, 16, 25, 30, 64]
+or rasterization optimization [9, 15, 39, 77]. Recently, GSta [1] and
+SparseOIT [69] attempt to accelerate training by fixing the parame-
+ters of a subset of Gaussians. However, they either only optimize the
+backward pass or rely on order-independent transparency render-
+ing assumptions. In contrast, ElsaGS exploits the unique training
+characteristics to accelerate both forward and backward passes,
+and is applicable to different 3DGS-based algorithms.
+Memoization Techniques. There is a long history in the archi-
+tecture community of leveraging memoization to reduce computa-
+tion. Recent work [2, 4, 20, 57, 65] has explored computation reuse
+for vision DNNs at multiple granularities. Other works [42, 43]
+target resource-constrained platforms by clustering similar inputs
+to avoid redundant convolution operations. Meanwhile, another
+line of research exploits temporal correlations in video streams to
+bypass unnecessary computation [12, 45, 71, 75, 76, 79].
+9
+Conclusion
+We propose ElsaGS, accelerates 3DGS training by progressively
+freezing low-gradient Gaussians and reusing their cached contribu-
+tions with negligible quality loss. To improve the reuse efficiency,
+we develop FGcache and cache-compatible backward rasterization.
+We further introduce a streaming architecture, ElsaGS core, with
+our dedicated frozen-Gaussian cache. Our results show that El-
+saGS freezes up to 90% of Gaussians with higher speedup against
+off-the-shelf GPUs and prior accelerators.
+References
+[1] Anil Armagan, Albert Saà-Garriga, Bruno Manganelli, Kyuwon Kim, and M Kerim
+Yucel. 2026. Gsta: Efficient training scheme with siestaed gaussians for monocular
+3d scene reconstruction. In ICASSP 2026-2026 IEEE International Conference on
+Acoustics, Speech and Signal Processing (ICASSP). IEEE, 10097–10101.
+[2] Arash Azizimazreah and Lizhong Chen. 2019.
+Shortcut Mining: Exploit-
+ing Cross-Layer Shortcut Reuse in DCNN Accelerators. In 2019 IEEE Interna-
+tional Symposium on High Performance Computer Architecture (HPCA). 94–105.
+doi:10.1109/HPCA.2019.00030
+[3] Jonathan T. Barron, Ben Mildenhall, Dor Verbin, Pratul P. Srinivasan, and Peter
+Hedman. 2022. Mip-NeRF 360: Unbounded Anti-Aliased Neural Radiance Fields.
+CVPR (2022).
+[4] Andrew Brock, Theodore Lim, James M Ritchie, and Nick Weston. 2017. Freeze-
+out: Accelerate training by progressively freezing layers.
+arXiv preprint
+arXiv:1706.04983 (2017).
+[5] Sankeerth Durvasula, Adrian Zhao, Fan Chen, Ruofan Liang, Pawan Kumar San-
+jaya, Yushi Guan, Christina Giannoula, and Nandita Vijaykumar. 2025. ARC:
+Warp-level Adaptive Atomic Reduction in GPUs to Accelerate Differentiable Ren-
+dering. In Proceedings of the 30th ACM International Conference on Architectural
+Support for Programming Languages and Operating Systems, Volume 1. 64–83.
+[6] Zhiwen Fan, Kevin Wang, Kairun Wen, Zehao Zhu, Dejia Xu, and Zhangyang
+Wang. 2023.
+Lightgaussian: Unbounded 3d gaussian compression with 15x
+reduction and 200+ fps. arXiv preprint arXiv:2311.17245 (2023).
+[7] Guangchi Fang and Bing Wang. 2024. Mini-Splatting: Representing Scenes with
+a Constrained Number of Gaussians. arXiv preprint arXiv:2403.14166 (2024).
+[8] Guangchi Fang and Bing Wang. 2024. Mini-splatting2: Building 360 scenes within
+minutes via aggressive gaussian densification. arXiv preprint arXiv:2411.12788
+(2024).
+[9] Guofeng Feng, Siyan Chen, Rong Fu, Zimu Liao, Yi Wang, Tao Liu, Boni Hu,
+Linning Xu, Zhilin Pei, Hengjie Li, Xiuhong Li, Ninghui Sun, Xingcheng Zhang,
+and Bo Dai. 2025. Flashgs: Efficient 3d gaussian splatting for large-scale and
+high-resolution rendering. In Proceedings of the Computer Vision and Pattern
+Recognition Conference. 26652–26662.
+[10] Yu Feng, Weikai Lin, Yuge Cheng, Zihan Liu, Jingwen Leng, Minyi Guo, Chen
+Chen, Shixuan Sun, and Yuhao Zhu. 2025. Lumina: Real-Time Mobile Neural
+Rendering by Exploiting Computational Redundancy. In Proceedings of the 52nd
+Annual International Symposium on Computer Architecture.
+[11] Yu Feng, Zihan Liu, Jingwen Leng, Minyi Guo, and Yuhao Zhu. 2024. Cicero:
+Addressing Algorithmic and Architectural Bottlenecks in Neural Rendering by
+Radiance Warping and Memory Optimizations. In Proceedings of the 50th Annual
+International Symposium on Computer Architecture.
+[12] Yu Feng, Paul Whatmough, and Yuhao Zhu. 2019. Asv: Accelerated stereo vision
+system. In Proceedings of the 52nd Annual IEEE/ACM International Symposium on
+Microarchitecture. 643–656.
+[13] Yonggan Fu, Zhifan Ye, Jiayi Yuan, Shunyao Zhang, Sixu Li, Haoran You, and
+Yingyan Lin. 2023. Gen-NeRF: Efficient and Generalizable Neural Radiance
+Fields via Algorithm-Hardware Co-Design. In Proceedings of the 50th Annual
+International Symposium on Computer Architecture. 1–12.
+[14] Stefan Gottschalk, Ming C Lin, and Dinesh Manocha. 1996. OBBTree: A hierar-
+chical structure for rapid interference detection. In Proceedings of the 23rd annual
+conference on Computer graphics and interactive techniques. 171–180.
+[15] Hao Gui, Lin Hu, Rui Chen, Mingxiao Huang, Yuxin Yin, Jin Yang, and Yong Wu.
+2024. Balanced 3DGS: Gaussian-wise Parallelism Rendering with Fine-Grained
+Tiling. arXiv preprint arXiv:2412.17378 (2024).
+[16] Alex Hanson, Allen Tu, Geng Lin, Vasu Singla, Matthias Zwicker, and Tom
+Goldstein. 2025. Speedy-splat: Fast 3d gaussian splatting with sparse pixels and
+sparse primitives. In Proceedings of the Computer Vision and Pattern Recognition
+Conference. 21537–21546.
+[17] Alex Hanson, Allen Tu, Vasu Singla, Mayuka Jayawardhana, Matthias Zwicker,
+and Tom Goldstein. 2025. Pup 3d-gs: Principled uncertainty pruning for 3d
+gaussian splatting. In Proceedings of the Computer Vision and Pattern Recognition
+Conference. 5949–5958.
+[18] Houshu He, Gang Li, Fangxin Liu, Li Jiang, Xiaoyao Liang, and Zhuoran Song.
+2025. GSArch: Breaking Memory Barriers in 3D Gaussian Splatting Training via
+Architectural Support. In 2025 IEEE International Symposium on High Performance
+Computer Architecture (HPCA). IEEE, 366–379.
+[19] Peter Hedman, Julien Philip, True Price, Jan-Michael Frahm, George Drettakis,
+and Gabriel Brostow. 2018. Deep blending for free-viewpoint image-based ren-
+dering. ACM Transactions on Graphics (ToG) 37, 6 (2018), 1–15.
+[20] Kartik Hegde, Jiyong Yu, Rohit Agrawal, Mengjia Yan, Michael Pellauer, and
+Christopher W. Fletcher. 2018. UCNN: exploiting computational reuse in deep
+neural networks via weight repetition. In Proceedings of the 45th Annual Interna-
+tional Symposium on Computer Architecture (Los Angeles, California) (ISCA ’18).
+IEEE Press, 674–687. doi:10.1109/ISCA.2018.00062
+[21] Xiaotong Huang, He Zhu, Tianrui Ma, Yuxiang Xiong, Fangxin Liu, Zhezhi He,
+Yiming Gan, Zihan Liu, Jingwen Leng, Yu Feng, and Minyi Guo. 2026. Splatonic:
+Architectural Support for 3D Gaussian Splatting SLAM via Sparse Processing.
+In Proceedings of the 32nd IEEE International Symposium on High Performance
+Computer Architecture.
+[22] Micron Technology Inc. 2025. Micron System Power Calculators. https://www.
+micron.com/support/tools-and-utilities/power-calc.
+[23] Bernhard Kerbl, Georgios Kopanas, Thomas Leimkühler, and George Drettakis.
+2023. 3d gaussian splatting for real-time radiance field rendering. ACM Transac-
+tions on Graphics 42, 4 (2023), 1–14.
+[24] Bernhard Kerbl, Andreas Meuleman, Georgios Kopanas, Michael Wimmer,
+Alexandre Lanvin, and George Drettakis. 2024. A hierarchical 3d gaussian repre-
+sentation for real-time rendering of very large datasets. ACM Transactions on
+
+
+Accelerating 3D Gaussian Splatting Training through Selective Freezing and Computation Caching
+Conference’17, July 2017, Washington, DC, USA
+Graphics (TOG) 43, 4 (2024), 1–15.
+[25] James T Klosowski, Martin Held, Joseph SB Mitchell, Henry Sowizral, and Karel
+Zikan. 1998. Efficient collision detection using bounding volume hierarchies of
+k-DOPs. IEEE Transactions on Visualization and Computer Graphics 4, 1 (1998),
+21–36.
+[26] Arno Knapitsch, Jaesik Park, Qian-Yi Zhou, and Vladlen Koltun. 2017. Tanks and
+Temples: Benchmarking Large-Scale Scene Reconstruction. ACM Transactions on
+Graphics 36, 4 (2017).
+[27] Donghyun Lee, Dawoon Jeong, Jae W. Lee, and Hongil Yoon. 2026. GS-Scale:
+Unlocking Large-Scale 3D Gaussian Splatting Training via Host Offloading. In
+Proceedings of the 31st ACM International Conference on Architectural Support for
+Programming Languages and Operating Systems, Volume 2 (USA) (ASPLOS ’26).
+Association for Computing Machinery, New York, NY, USA, 860–875. doi:10.
+1145/3779212.3790167
+[28] Junseo Lee, Kwanseok Choi, Jungi Lee, Seokwon Lee, Joonho Whangbo, and
+Jaewoong Sim. 2023. NeuRex: A Case for Neural Rendering Acceleration. In
+Proceedings of the 50th Annual International Symposium on Computer Architecture.
+1–13.
+[29] Junseo Lee, Jaisung Kim, Junyong Park, and Jaewoong Sim. 2025. VR-Pipe:
+Streamlining Hardware Graphics Pipeline for Volume Rendering. In 2025 IEEE
+International Symposium on High Performance Computer Architecture (HPCA).
+IEEE, 217–230.
+[30] Junseo Lee, Seokwon Lee, Jungi Lee, Junyong Park, and Jaewoong Sim. 2024.
+Gscore: Efficient radiance field rendering via architectural support for 3d gaussian
+splatting. In Proceedings of the 29th ACM International Conference on Architectural
+Support for Programming Languages and Operating Systems, Volume 3. 497–511.
+[31] Joo Chan Lee, Daniel Rho, Xiangyu Sun, Jong Hwan Ko, and Eunbyung Park.
+2023. Compact 3d gaussian representation for radiance field. arXiv preprint
+arXiv:2311.13681 (2023).
+[32] Joo Chan Lee, Daniel Rho, Xiangyu Sun, Jong Hwan Ko, and Eunbyung Park.
+2024. Compact 3d gaussian representation for radiance field. In Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern Recognition. 21719–21728.
+[33] Chaojian Li, Sixu Li, Linrui Jiang, Jingqun Zhang, and Yingyan Celine Lin. 2025.
+Uni-Render: A Unified Accelerator for Real-Time Rendering Across Diverse
+Neural Renderers. In 2025 IEEE International Symposium on High Performance
+Computer Architecture (HPCA). IEEE, 246–260.
+[34] Chaojian Li, Sixu Li, Yang Zhao, Wenbo Zhu, and Yingyan Lin. 2022. RT-NeRF:
+Real-Time On-Device Neural Radiance Fields Towards Immersive AR/VR Render-
+ing. In Proceedings of the 41st IEEE/ACM International Conference on Computer-
+Aided Design. 1–9.
+[35] Haomin Li, Yue Liang, Fangxin Liu, Bowen Zhu, Zongwu Wang, Yu Feng, Liqiang
+Lu, Li Jiang, and Haibing Guan. 2026. ORANGE: Exploring Ockham’s Razor
+for Neural Rendering by Accelerating 3DGS on NPUs with GEMM-Friendly
+Blending and Balanced Workloads. In 2026 IEEE International Symposium on High
+Performance Computer Architecture (HPCA). IEEE, 1–15.
+[36] Leshu Li, Jiayin Qin, Jie Peng, Zishen Wan, Huaizhi Qu, Ye Han, Pingqing Zheng,
+Hongsen Zhang, Yu Cao, Tianlong Chen, and Yang Zhao. 2025. RTGS: Real-Time
+3D Gaussian Splatting SLAM via Multi-Level Redundancy Reduction. In 2025 58th
+IEEE/ACM International Symposium on Microarchitecture (MICRO). 1838–1851.
+doi:10.1145/3725843.3756099
+[37] Sixu Li, Chaojian Li, Wenbo Zhu, Boyang Yu, Yang Zhao, Cheng Wan, Haoran
+You, Huihong Shi, and Yingyan Lin. 2023. Instant-3D: Instant Neural Radiance
+Field Training Towards On-Device AR/VR 3D Reconstruction. In Proceedings of
+the 50th Annual International Symposium on Computer Architecture. 1–13.
+[38] Xingyang Li, Jie Jiang, Yu Feng, Yiming Gan, Jieru Zhao, Zihan Liu, Jingwen Leng,
+and Minyi Guo. 2025. SLTarch: Towards Scalable Point-Based Neural Rendering
+by Taming Workload Imbalance and Memory Irregularity. In 2025 IEEE/ACM
+International Conference on Computer Aided Design (ICCAD). IEEE, 1–9.
+[39] Zimu Liao, Jifeng Ding, Siwei Cui, Ruixuan Gong, Boni Hu, Yi Wang, Hengjie
+Li, XIngcheng Zhang, Hui Wang, and Rong Fu. 2025. Tc-gs: A faster gaussian
+splatting module utilizing tensor cores. arXiv preprint arXiv:2505.24796 (2025).
+[40] Weikai Lin, Yu Feng, and Yuhao Zhu. 2025. Metasapiens: Real-time neural
+rendering with efficiency-aware pruning and accelerated foveated rendering. In
+Proceedings of the 30th ACM International Conference on Architectural Support for
+Programming Languages and Operating Systems, Volume 1. 669–682.
+[41] Fangxin Liu, Haomin Li, Bowen Zhu, Zongwu Wang, Zhuoran Song, Haibing
+Guan, and Li Jiang. 2025. ASDR: Exploiting Adaptive Sampling and Data Reuse for
+CIM-based Instant Neural Rendering. In Proceedings of the 30th ACM International
+Conference on Architectural Support for Programming Languages and Operating
+Systems, Volume 3 (Rotterdam, Netherlands) (ASPLOS ’25). Association for Com-
+puting Machinery, New York, NY, USA, 18–33. doi:10.1145/3676642.3736117
+[42] Jiesong Liu, Bin Ren, and Xipeng Shen. 2025. Generalizing Reuse Patterns for
+Efficient DNN on Microcontrollers. In Proceedings of the 30th ACM International
+Conference on Architectural Support for Programming Languages and Operating
+Systems, Volume 2 (Rotterdam, Netherlands) (ASPLOS ’25). Association for Com-
+puting Machinery, New York, NY, USA, 451–466. doi:10.1145/3676641.3716257
+[43] Jiesong Liu, Feng Zhang, Jiawei Guan, Hsin-Hsuan Sung, Xiaoguang Guo, Xiaoy-
+ong Du, and Xipeng Shen. 2023. Space-Efficient TREC for Enabling Deep Learning
+on Microcontrollers. In Proceedings of the 28th ACM International Conference on
+Architectural Support for Programming Languages and Operating Systems, Volume
+3 (Vancouver, BC, Canada) (ASPLOS 2023). Association for Computing Machinery,
+New York, NY, USA, 644–659. doi:10.1145/3582016.3582062
+[44] Tianbo Liu, Xinkai Song, Zhifei Yue, Rui Wen, Xing Hu, Zhuoran Song, Yuanbo
+Wen, Yifan Hao, Wei Li, Zidong Du, Rui Zhang, Jiaming Guo, Di Huang, Shaohui
+Peng, Guangzhong Sun, Qi Guo, and Tianshi Chen. 2025. Cambricon-SR: An
+Accelerator for Neural Scene Representation with Sparse Encoding Table. In
+Proceedings of the 52nd Annual International Symposium on Computer Architecture.
+1254–1268.
+[45] Xinyin Ma, Gongfan Fang, and Xinchao Wang. 2024. DeepCache: Accelerating
+Diffusion Models for Free. In 2024 IEEE/CVF Conference on Computer Vision and
+Pattern Recognition (CVPR). 15762–15772. doi:10.1109/CVPR52733.2024.01492
+[46] Saswat Subhajyoti Mallick, Rahul Goel, Bernhard Kerbl, Markus Steinberger,
+Francisco Vicente Carrasco, and Fernando De La Torre. 2024. Taming 3dgs: High-
+quality radiance fields with limited resources. In SIGGRAPH Asia 2024 Conference
+Papers. 1–11.
+[47] Emiko Matsui. 2025. HarmonyOS 6 to introduce ‘3D image view feature’ to
+Huawei phones. https://www.huaweicentral.com/harmonyos-6-to-introduce-
+3d-image-view-feature-to-huawei-phones/
+[48] Micron Technology, Inc. 2025.
+Y52P LPDDR5X SDRAM.
+https:
+//www.micron.com/products/memory/lpddr-components/lpddr5/part-
+catalog/part-detail/mt62f2g64d8ek-026-wt-c
+Production data sheet, Rev.
+H, document CCM005-1974498342-220. See Table 1 and p. 21 for part
+MT62F2G64D8EK-026 WT:C. URL points to the manufacturer’s product page.
+[49] Muhammad Husnain Mubarik, Ramakrishna Kanungo, Tobias Zirr, and Rakesh
+Kumar. 2023. Hardware Acceleration of Neural Graphics. In Proceedings of the
+50th Annual International Symposium on Computer Architecture. 1–12.
+[50] Simon Niedermayr, Josef Stumpfegger, and Rüdiger Westermann. 2024. Com-
+pressed 3d gaussian splatting for accelerated novel view synthesis. In Proceedings
+of the IEEE/CVF Conference on Computer Vision and Pattern Recognition. 10349–
+10358.
+[51] Michael Niemeyer, Fabian Manhardt, Marie-Julie Rakotosaona, Michael Oechsle,
+Daniel Duckworth, Rama Gosula, Keisuke Tateno, John Bates, Dominik Kaeser,
+and Federico Tombari. 2024. Radsplat: Radiance field-informed gaussian splatting
+for robust real-time rendering with 900+ fps. arXiv preprint arXiv:2403.13806
+(2024).
+[52] Nvidia. 2023. Jetson Orin for Next-Gen Robotics. https://www.nvidia.com/en-
+us/autonomous-machines/embedded-systems/jetson-orin/
+[53] Changhun Oh, Seongryong Oh, Jinwoo Hwang, Yoonsung Kim, Hardik Sharma,
+and Jongse Park. 2026. Neo: Real-Time On-Device 3D Gaussian Splatting with
+Reuse-and-Update Sorting Acceleration. In Proceedings of the 31st ACM Inter-
+national Conference on Architectural Support for Programming Languages and
+Operating Systems, Volume 2 (USA) (ASPLOS ’26). Association for Computing
+Machinery, New York, NY, USA, 1268–1284. doi:10.1145/3779212.3790192
+[54] Minnan Pei, Gang Li, Junwen Si, Zeyu Zhu, Zitao Mo, Peisong Wang, Zhuoran
+Song, Xiaoyao Liang, and Jian Cheng. 2025. GCC: A 3DGS Inference Architec-
+ture with Gaussian-Wise and Cross-Stage Conditional Processing. In 2025 58th
+IEEE/ACM International Symposium on Microarchitecture (MICRO). 1824–1837.
+doi:10.1145/3725843.3756072
+[55] Chaolin Rao, Huangjie Yu, Haochuan Wan, Jindong Zhou, Yueyang Zheng, Minye
+Wu, Yu Ma, Anpei Chen, Binzhe Yuan, Pingqiang Zhou, Xin Lou, and Jingyi Yu.
+2022. ICARUS: A Specialized Architecture for Neural Radiance Fields Rendering.
+ACM Transactions on Graphics (TOG) 41, 6 (2022), 1–14.
+[56] Kerui Ren, Lihan Jiang, Tao Lu, Mulin Yu, Linning Xu, Zhangkai Ni, and Bo Dai.
+2024. Octree-gs: Towards consistent real-time rendering with lod-structured 3d
+gaussians. arXiv preprint arXiv:2403.17898 (2024).
+[57] Marc Riera, Jose-Maria Arnau, and Antonio González. 2018. Computation reuse
+in DNNs by exploiting input similarity. In Proceedings of the 45th Annual Interna-
+tional Symposium on Computer Architecture (Los Angeles, California) (ISCA ’18).
+IEEE Press, 57–68. doi:10.1109/ISCA.2018.00016
+[58] Satyabrata Sarangi and Bevan Baas. 2021. DeepScaleTool: A tool for the accu-
+rate estimation of technology scaling in the deep-submicron era. In 2021 IEEE
+International Symposium on Circuits and Systems (ISCAS). IEEE, 1–5.
+[59] Niantic Scaniverse. 2025. Four ways to explore 3D Gaussian splats with your
+Meta Quest. https://scaniverse.com/news/four-ways-to-explore-3d-gaussian-
+splats-on-meta-quest
+[60] Johannes Lutz Schönberger and Jan-Michael Frahm. 2016. Structure-from-Motion
+Revisited. In Conference on Computer Vision and Pattern Recognition (CVPR).
+[61] Zhuoran Song, Houshu He, Fangxin Liu, Yifan Hao, Xinkai Song, Li Jiang, and
+Xiaoyao Liang. 2024. SRender: Boosting Neural Radiance Field Efficiency via
+Sensitivity-Aware Dynamic Precision Rendering. In 2024 57th IEEE/ACM Interna-
+tional Symposium on Microarchitecture (MICRO). IEEE, 525–537.
+[62] Aaron Stillmaker and Bevan Baas. 2017. Scaling equations for the accurate
+prediction of CMOS device performance from 180 nm to 7 nm. Integration 58
+(2017), 74–81.
+[63] Hongyi Wang, Zhenhua Zhu, Tianchen Zhao, Yunfei Xiang, Zehao Wang,
+Jincheng Yu, Huazhong Yang, Yuan Xie, and Yu Wang. 2025. REACT3D: Real-time
+
+
+Conference’17, July 2017, Washington, DC, USA
+He Zhu et al.
+Edge Accelerator for Incremental Training in 3D Gaussian Splatting based SLAM
+Systems. In 2025 58th IEEE/ACM International Symposium on Microarchitecture
+(MICRO). 1852–1866. doi:10.1145/3725843.3756109
+[64] Xinzhe Wang, Ran Yi, and Lizhuang Ma. 2024. AdR-Gaussian: Accelerating
+Gaussian Splatting with Adaptive Radius. In SIGGRAPH Asia 2024 Conference
+Papers. 1–10.
+[65] Yiding Wang, Decang Sun, Kai Chen, Fan Lai, and Mosharaf Chowdhury. 2023.
+Egeria: Efficient dnn training with knowledge-guided layer freezing. In Proceed-
+ings of the eighteenth European conference on computer systems. 851–866.
+[66] Rui Wen, Zhifei Yue, Tianbo Liu, Xinkai Song, Jin Li, Di Huang, Jiaming Guo, Xing
+Hu, Zidong Du, Qi Guo, and Tianshi Chen. 2026. Cambricon-GS: An Accelerator
+for 3D Gaussian Splatting Training with Gaussian-Pixel Hybrid Parallelism.
+In Proceedings of the 32nd IEEE International Symposium on High Performance
+Computer Architecture.
+[67] Lizhou Wu, Haozhe Zhu, Siqi He, Jiapei Zheng, Chixiao Chen, and Xiaoyang
+Zeng. 2024. GauSPU: 3D Gaussian Splatting Processor for Real-Time SLAM
+Systems. In 2024 57th IEEE/ACM International Symposium on Microarchitecture
+(MICRO). IEEE, 1562–1573.
+[68] Tong Wu, Yu-Jie Yuan, Ling-Xiao Zhang, Jie Yang, Yan-Pei Cao, Ling-Qi Yan,
+and Lin Gao. 2024. Recent Advances in 3D Gaussian Splatting. arXiv preprint
+arXiv:2403.11134 (2024).
+[69] Wentao Yang, Fanzhen Kong, Zejian Kang, and Xiangru Huang. 2026. SparseOIT:
+Improving Order-Independent Transparency 3DGS via Active Set Method. In
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition
+(CVPR). 41012–41021.
+[70] Zhifan Ye, Yonggan Fu, Jingqun Zhang, Leshu Li, Yongan Zhang, Sixu Li, Cheng
+Wan, Chenxi Wan, Chaojian Li, Sreemanth Prathipati, and Yingyan Celine Lin.
+2025. Gaussian Blending Unit: An Edge GPU Plug-in for Real-Time Gaussian-
+Based Rendering in AR/VR. In 2025 IEEE International Symposium on High Per-
+formance Computer Architecture (HPCA). IEEE, 353–365.
+[71] Ziyu Ying, Shulin Zhao, Haibo Zhang, Cyan Subhra Mishra, Sandeepa Bhuyan,
+Mahmut T Kandemir, Anand Sivasubramaniam, and Chita R Das. 2022. Exploiting
+Frame Similarity for Efficient Inference on Edge Devices. In 2022 IEEE 42nd
+International Conference on Distributed Computing Systems (ICDCS). IEEE, 1073–
+1084.
+[72] Chenqi Zhang, Yu Feng, Jieru Zhao, Guangda Liu, Wenchao Ding, Chentao Wu,
+and Minyi Guo. 2025. StreamingGS: Voxel-Based Streaming 3D Gaussian Splatting
+with Memory Optimization and Architectural Support. In 62nd ACM/IEEE Design
+Automation Conference (DAC). IEEE, 1–9.
+[73] Hexu Zhao, Xiwen Min, Xiaoteng Liu, Moonjun Gong, Yiming Li, Ang Li, Saining
+Xie, Jinyang Li, and Aurojit Panda. 2026. CLM: Removing the GPU Memory
+Barrier for 3D Gaussian Splatting. In Proceedings of the 31st ACM International
+Conference on Architectural Support for Programming Languages and Operating
+Systems, Volume 2 (USA) (ASPLOS ’26). Association for Computing Machinery,
+New York, NY, USA, 377–393. doi:10.1145/3779212.3790140
+[74] Hexu Zhao, Haoyang Weng, Daohan Lu, Ang Li, Jinyang Li, Aurojit Panda, and
+Saining Xie. 2025. On Scaling Up 3D Gaussian Splatting Training. In Computer
+Vision – ECCV 2024 Workshops: Milan, Italy, September 29–October 4, 2024, Pro-
+ceedings, Part XXIII (Milan, Italy). Springer-Verlag, Berlin, Heidelberg, 14–36.
+doi:10.1007/978-3-031-91989-3_2
+[75] Shulin Zhao, Haibo Zhang, Sandeepa Bhuyan, Cyan Subhra Mishra, Ziyu Ying,
+Mahmut T Kandemir, Anand Sivasubramaniam, and Chita R Das. 2020. Déja
+view: Spatio-temporal compute reuse for ‘energy-efficient 360 vr video streaming.
+In 2020 ACM/IEEE 47th Annual International Symposium on Computer Architecture
+(ISCA). IEEE, 241–253.
+[76] Shulin Zhao, Haibo Zhang, Cyan Subhra Mishra, Sandeepa Bhuyan, Ziyu Ying,
+Mahmut Taylan Kandemir, Anand Sivasubramaniam, and Chita Das. 2021. Holoar:
+On-the-fly optimization of 3d holographic processing for augmented reality. In
+MICRO-54: 54th Annual IEEE/ACM International Symposium on Microarchitecture.
+494–506.
+[77] He Zhu, Xiaotong Huang, Zihan Liu, Weikai Lin, Xiaohong Liu, Zhezhi He,
+Jingwen Leng, Minyi Guo, and Yu Feng. 2026. SeeLe: A Unified Acceleration
+Framework for Real-Time Gaussian Splatting. In Proceedings of the Computer
+Vision and Pattern Recognition Conference.
+[78] He Zhu, Zheng Liu, Xingyang Li, Anbang Wu, Jieru Zhao, Fangxin Liu, Yim-
+ing Gan, Jingwen Leng, and Yu Feng. 2026. Nebula: Infinite-Scale 3D Gaussian
+Splatting in VR via Collaborative Rendering and Accelerated Stereo Rasteriza-
+tion (ASPLOS ’26). Association for Computing Machinery, New York, NY, USA,
+1235–1250. doi:10.1145/3779212.3790190
+[79] Yuhao Zhu, Anand Samajdar, Matthew Mattina, and Paul Whatmough. 2018.
+Euphrates: Algorithm-soc co-design for low-power mobile continuous vision.
+arXiv preprint arXiv:1803.11232 (2018).
+[80] Matthias Zwicker, Hanspeter Pfister, Jeroen Van Baar, and Markus Gross. 2001.
+EWA volume splatting. In Proceedings Visualization, 2001. VIS’01. IEEE, 29–538.

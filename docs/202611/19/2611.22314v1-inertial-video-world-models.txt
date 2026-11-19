@@ -1,0 +1,2175 @@
+Preprint
+INERTIAL VIDEO WORLD MODELS
+Yuan Gao1∗, Fan Xu2∗, Yu Guo3, Yuxu Lu4,
+Zhengru Fang5, Hao Wu1†, Xiaomeng Huang1†
+1Tsinghua University, 2University of Science and Technology of China,
+3City University of Hong Kong, 4Hong Kong Polytechnic University,
+5The Hong Kong University of Science and Technology
+ABSTRACT
+The physical world has inertia: it evolves from what already exists rather than
+being recreated at every instant. However, many existing video world models lack
+an explicit mechanism for inertial state evolution, leaving the continuity of motion
+and structure implicit in video prediction. During autoregressive rollouts, repeated
+reconstruction can accumulate errors and destabilize the predicted dynamics. To
+address this limitation, we introduce INERTIALWORLD, an Inertial Video World
+Model that makes inertia a structural prior for autoregressive prediction: existing
+scene evidence is carried across time rather than reconstructed at every step. Central
+to this formulation is Inertial Memory, which turns memory from passive predictive
+context into an evolving video state with two complementary views: a dense
+Eulerian grid preserves scene-aligned evidence, while persistent Lagrangian carriers
+bind local content to learned canonical coordinates. At each step, the model
+transports the carrier content according to action-conditioned motion, predicts the
+complete next video state from the transported carriers and dense grid, and uses a
+learned gate to combine transported and newly predicted content into the memory
+for the next step. Extensive experiments across multiple domains, including robot
+manipulation, 3D game simulation, and open-world navigation, demonstrate that
+INERTIALWORLD achieves competitive autoregressive prediction performance
+against strong video world model baselines. Codes link: https://github.
+com/YuanGao-YG/InertialWorld.
+1
+INTRODUCTION
+Learned world models provide predictive environments for planning and control by modeling action-
+conditioned dynamics (Ha & Schmidhuber, 2018; Hafner et al., 2019; 2025). Within this broader
+family, video world models instantiate learned dynamics through action-conditioned video prediction,
+enabling interactive simulation in games, robotic manipulation, and embodied navigation (Micheli
+et al., 2022; Bruce et al., 2024; Yang et al., 2023; Bar et al., 2025). Autoregressive and diffusion-based
+formulations have substantially improved generation fidelity and controllability (Wu et al., 2024;
+Alonso et al., 2024; Huang et al., 2025; Zhu et al., 2026), while post-training further refines predicted
+rollouts (Wu et al., 2026b;a). Despite these advances, physical evolution is inertial: the world evolves
+from what already exists rather than being recreated at every instant. Most video world models,
+however, still formulate temporal evolution as repeated conditional generation, predicting persistent
+scene content again at every step rather than explicitly carrying it forward. Since each generated
+state conditions the next transition, small reconstruction errors can repeatedly re-enter the rollout and
+destabilize predicted motion and structure (Wang et al., 2017; Babaeizadeh et al., 2021).
+A prominent line of research mitigates this limitation by augmenting video prediction with memory.
+Recurrent video predictors retain temporal features across prediction steps (Wang et al., 2017; 2018),
+while transformer world models expose longer histories to the transition function (Chen et al., 2022;
+Wu et al., 2024). This additional context is particularly valuable when occlusion or accumulated
+generation noise makes the current frame ambiguous. Earlier features can retain identity and layout
+cues that are no longer directly visible but remain relevant to the next transition. Spatial and persistent
+∗Equal contribution. †Corresponding author.
+1
+arXiv:2611.22314v1  [cs.CV]  17 Nov 2026
+
+
+Preprint
+(a) Direct Prediction 
+(b) Prediction with Recurrent Memory
+(c) Inertial Video World Models (Ours)
+Visual
+Model
+𝑜𝑡
+𝑎𝑡
+𝑜𝑡+1
+Predict next observation from scratch.
+Continuity is implicit
+Update memory through a learned transition.
+Content transport is not explicit
+Visual
+Model
+𝑜𝑡
+𝑎𝑡
+𝑜𝑡+1
+𝑀𝑒𝑚𝑜𝑟𝑦𝑡
+Update
+𝑀𝑒𝑚𝑜𝑟𝑦𝑡+1
+Autoregressive
+𝑜𝑡
+𝑎𝑡
+𝑜𝑡+1
+Inertial
+Memory
+𝑆𝑡
+𝑆𝑡+1
+𝑆𝑡+n
+···
+Carry and evolve the world state.
+Content transport is explicit
+Dynamically
+update
+Same 
+world
+Figure 1: From memory to inertia. All three paradigms predict ot+1 from ot and action at. (a)
+Direct prediction reconstructs each next observation, leaving persistence implicit. (b) Recurrent
+memory retains the past as predictive context, but a generic transition need not use predicted motion
+to advance stored content. (c) INERTIALWORLD actively evolves its memory: action-conditioned
+coordinate motion carries bound content before gated prediction updates the state.
+memories preserve scene-aligned evidence across recurrent prediction steps (Wu et al., 2026c; Zhou
+et al., 2026). Object-centric representations provide a complementary form of persistence by binding
+content to structured entities (Locatello et al., 2020; Kipf et al., 2021), and their video extensions
+model the dynamics of these entities through time (Wu et al., 2022). Collectively, these mechanisms
+expose historical evidence to subsequent state transitions and improve temporal consistency, but
+retention alone does not specify how the retained content should evolve. When memory serves
+as context for a generic transition, the transition remains free to synthesize the next state without
+explicitly advancing the stored content. Transformation-based predictors demonstrate the value of
+warping observations or features (Jaderberg et al., 2015; Finn et al., 2016), yet warping does not
+by itself make transport the recurrent evolution rule of persistent memory across model-predicted
+steps. Thus, memory determines which past evidence remains available, whereas inertia additionally
+specifies what persists and where it moves. This distinction motivates the central question of this
+work: How can a video world model evolve the world it already remembers, rather than repeatedly
+reconstructing its persistent content?
+To address this question, we introduce INERTIALWORLD, an Inertial Video World Model that makes
+inertia a structural prior for autoregressive prediction: existing scene evidence is carried across time
+rather than reconstructed at every step. As illustrated in Figure 1, its central component, Inertial
+Memory, turns retained predictive context into an evolving video state with two complementary views:
+a dense Eulerian grid preserves scene-aligned evidence, while persistent Lagrangian carriers bind
+local content to learned canonical coordinates. At each step, the model transports the carrier content
+according to action-conditioned motion, predicts the complete next video state from the transported
+carriers and dense grid, and uses a learned gate to combine transported and newly predicted content
+into the memory for the next step. This carry-before-write transition establishes persistence as
+the default path of state evolution while preserving the capacity to model changes that transport
+alone cannot explain, without requiring object annotations or calibrated physical parameters. We
+evaluate INERTIALWORLD on RT-1 robot manipulation (Brohan et al., 2022), Counter-Strike 3D
+game simulation (Huang et al., 2025), and RECON open-world navigation (Shah et al., 2021). Across
+all three interactive domains, INERTIALWORLD produces competitive autoregressive predictions
+against strong video world model baselines. Our contributions are threefold:
+• We formulate inertial video world modeling, a state-evolution view of video world models
+in which existing scene evidence is inherited by default rather than repeatedly reconstructed.
+• We introduce Inertial Memory, a hybrid Eulerian–Lagrangian video state that preserves dense
+scene evidence while transporting persistent regional content through action-conditioned
+coordinate motion before a learned gate updates the memory.
+• We conduct extensive autoregressive prediction evaluations across robot manipulation, 3D
+game simulation, and open-world navigation, demonstrating competitive autoregressive
+prediction across all three domains against strong video world model baselines.
+2
+RELATED WORK
+Video World Models. Action-conditioned video prediction learns how future observations evolve
+under control (Oh et al., 2015; Finn et al., 2016). Early approaches use stochastic, recurrent, and
+2
+
+
+Preprint
+physics-inspired dynamics to model uncertainty and temporal dependence (Denton & Fergus, 2018;
+Wang et al., 2017; Guen & Thome, 2020; Babaeizadeh et al., 2021). Learned discrete representations
+(Van Den Oord et al., 2017; Esser et al., 2021) enable scalable autoregressive and masked video
+prediction (Yan et al., 2021; Yu et al., 2023; 2024; Wang et al., 2024). These formulations support
+interactive simulation across games and robotics (Bruce et al., 2024; Valevski et al., 2025; Wu et al.,
+2024; Yang et al., 2023; Zhou et al., 2024a;b), while diffusion-based models provide an alternative
+generative backbone (Alonso et al., 2024; Huang et al., 2025). Reinforcement learning and alignment
+objectives further refine predicted rollouts (Wu et al., 2026b;a). In parallel, latent world models learn
+compact predictive states for planning and imagined policy learning (Hafner et al., 2019; 2020; 2025),
+sometimes prioritizing task-relevant dynamics over frame reconstruction (Schrittwieser et al., 2020;
+Hansen et al., 2024). Rather than changing the video generator or its training objective, our work
+changes how the recurrent video state evolves by introducing transport-structured persistence that is
+compatible with different generative backbones.
+Memory and Structured Video State. Existing memory mechanisms primarily determine what a
+video world model retains. Recurrent states and token histories preserve temporal context (Wang
+et al., 2017; 2018); spatial and persistent memories preserve scene-aligned content (Wu et al., 2026c;
+Zhou et al., 2026); and object-centric representations bind content to persistent entities (Burgess et al.,
+2019; Greff et al., 2019; Locatello et al., 2020), with temporal extensions supporting tracking and
+prediction (Kipf et al., 2021; Wu et al., 2022; Kipf et al., 2019). Relational models expose interactions
+between state elements (Battaglia et al., 2016; Kipf et al., 2018; Battaglia et al., 2018), while
+Hamiltonian and graph-based simulators impose additional structure on state transitions (Greydanus
+et al., 2019; Sanchez-Gonzalez et al., 2020). These approaches enrich what persists, but they do not
+by themselves specify how retained content should evolve. A generic recurrent update can encode
+motion without requiring that motion to relocate content already in memory. Transformation-based
+predictors demonstrate the value of warping observations or features (Finn et al., 2016; Jaderberg
+et al., 2015), but warping alone does not make transport the recurrent evolution rule of a persistent
+state. Inertial Memory instead treats persistent canonical evidence as the transported quantity: it
+maintains a dense scene field, binds selected local content to learned coordinate frames, and uses
+their predicted evolution to transport the bound content before the memory is revised. Its defining
+property is therefore the explicit coupling of coordinate evolution and content transport within a
+hybrid dense–regional video state, rather than recurrence, slots, or warping in isolation.
+3
+METHOD
+3.1
+PROBLEM DEFINITION
+Figure 2 summarizes the complete prediction pipeline. At time t, a video world model receives the
+current frame ot and action at and predicts bot+1. A multi-step rollout observes ot only once; all
+subsequent frames are generated from the model’s own state and the action sequence. We use a frozen
+codec that represents the observed scene with a rollout-level Context code C and each predicted
+frame with a Dynamic code D. We encode C = EncC(ot) and initialize the recurrent video state as
+St = Init(C). Each causal prediction step is then
+( bDτ+1, Sτ+1) = Fθ(Sτ, aτ; C),
+boτ+1 = Dec(C, bDτ+1).
+(1)
+The Context code remains fixed and anchors the observed scene throughout the rollout. The predicted
+Dynamic code is a complete code for the next frame, not a residual correction to a ground-truth frame.
+At the first transition, there is no previous Dynamic code; all observed information enters through
+C and the initialized state. Future frames define training targets D⋆
+τ+1, but neither those targets nor
+their encoded features are fed back into the recurrence. This causal interface defines the prediction
+problem but does not specify how the state should evolve. A generic recurrent state can retain past
+information while the transition still rewrites its content at every step. We instead make persistence
+structural: predicted motion first acts on stored content, and prediction updates the state only after
+this content has been carried forward.
+3.2
+INERTIAL MEMORY
+Inertial Memory realizes this carry-before-write principle by coupling content with learned co-
+ordinates.
+Its state is Sτ
+= (Gτ, {rτ,k}K
+k=1, Bτ), where Gτ is a dense Eulerian grid and
+3
+
+
+Preprint
+VAE
+(Encoder)
+Context Token
+The Overall Architecture of InertialWorld
+Robot
+Manipulation
+3D Game
+Simulation
+Embodied 
+Navigation
+𝑜𝑡
+Initialized memory
+Inertial Memory
+Eulerian View
+Scene-aligned dense field
+Lagrangian View
+Persistent regional carriers
+𝑎𝑡
+Action
+Dynamic Token
+VAE
+(Decoder)
+𝑜𝑡+1:𝑡+𝑛
+New Content
+Gate
+Gated Commit
+The snowflake icon indicates that the 
+model parameters are frozen.
+The flame icon indicates that the 
+model parameters are trainable.
+Context Token
+Dynamic Token
+at t+1:t+n
+···
+Stable Interactive
+Video Prediction
+Figure 2: Overall architecture of INERTIALWORLD. A frozen encoder extracts the rollout-level
+Context code and initializes Inertial Memory. Its dense Eulerian grid preserves scene-aligned evidence,
+while action-conditioned Lagrangian carriers transport persistent regional content. A learned gate
+combines carried and newly predicted content, and a frozen decoder reconstructs future frames from
+the fixed Context code and predicted Dynamic codes.
+rτ,k = (Aτ,k, ατ,k, ξτ,k) is a persistent Lagrangian carrier. The grid remains aligned with scene
+coordinates and preserves evidence across the full spatial domain. Each carrier instead moves with a
+local region: Aτ,k stores canonical content, ατ,k describes its support, and ξτ,k specifies where that
+content is placed. The soft binding map Bτ assigns evidence between the carriers and a dense fallback.
+The carriers are learned regions rather than supervised semantic objects, so this representation does
+not require object annotations or a complete object decomposition.
+Carrying persistent content.
+Let ξτ collect all carrier coordinates. The first part of a transition
+predicts their action-conditioned motion and applies it to the stored state:
+ξτ+1 = Uθ(Sτ, aτ),
+eSτ+1 = Carry(Sτ; ξτ →ξτ+1).
+(2)
+The coordinate update Uθ predicts bounded motion from current memory and action. Carry re-renders
+each carrier’s canonical content and support at its new coordinates, so local evidence moves with
+the carrier rather than being synthesized again at the destination. For the dense grid, the binding
+map combines carrier-induced motion with a learned fallback flow; normalized forward splatting
+propagates evidence while accounting for ownership and visibility. The resulting eSτ+1 is therefore the
+state inherited from the past. When the predicted motion is zero, this operation reduces to an identity
+carry. The coordinates are learned representational variables, not calibrated physical parameters.
+Predicting and updating.
+Transport alone cannot explain newly visible content, deformation, or
+other changes not represented by the current memory. Let f
+Mτ+1 denote the writable content in the
+carried state. A predictor reads that state and jointly produces the complete next Dynamic code, a
+candidate memory update, and a learned write gate. Suppressing time subscripts within this transition
+and using + for time τ + 1, this is
+( bD+, Mnew, g) = Pθ( eS, a; C),
+M+ = (1 −g) ⊙f
+M + g ⊙Mnew.
+(3)
+The first output is decoded into the complete next frame, allowing the model to generate changes that
+cannot be obtained by transport alone. The second output proposes new writable memory content,
+while the gate determines which carried values should persist and which should be replaced. Together
+with the transported carrier coordinates, the updated content forms Sτ+1. Thus, persistence is the
+default path, but the memory can still adapt when the newly predicted state provides evidence for
+change. Because the proposal is generated from the model prediction rather than the target Dynamic
+code, repeated application of Eqs. 2–3 remains strictly predicted-only. This ordered transition—carry,
+predict, then update—is our operational definition of representational inertia; it does not impose a
+hard-coded Newtonian law.
+4
+
+
+Preprint
+3.3
+LEARNING AND AUTOREGRESSIVE ROLLOUT
+We train on the same predicted states used at inference and backpropagate through the complete
+rollout. Discrete internal decisions remain hard on the forward path and use a straight-through
+estimator for optimization. The recurrence is never refreshed with a target state or detached between
+autoregressive steps. We progressively increase the prediction horizon from 8 to 16 and then 32 steps
+so that the model learns to preserve and update its own state under repeated application.
+The training objective combines prediction, memory-consistency, and regularization terms:
+L = Lpred + λmemLmem + λregLreg.
+(4)
+Here, Lpred supervises the complete Dynamic token IDs, their finite scalar quantization dig-
+its (Mentzer et al., 2024), and the decoded frame’s appearance and temporal change. Lmem provides
+consistency signals for transporting, binding, and updating memory from adjacent frozen-codec
+representations without object or contact annotations. Lreg regularizes carrier diversity and dense
+motion.
+We use λmem = λreg = 1 in all experiments; each grouped loss is a fixed weighted sum of its
+constituent terms. Appendix B.2 gives the complete constituent list and coefficients together with the
+full staging schedule and gate initialization.
+Ground truth is used only to compute these losses; it never replaces Sτ in the rollout. Training
+therefore matches the causal, predicted-only recurrence used at inference.
+4
+EXPERIMENTS
+Our experiments address four questions that follow directly from the proposed inertial principle: (i)
+does the complete video world model improve the accuracy and stability of autoregressive prediction
+across interaction domains, (ii) are its gains retained when evaluation focuses on action-induced
+motion, (iii) do its generated rollouts preserve behavioral differences between policies, and (iv) does
+performance degrade when Inertial Memory is removed? We answer these questions in the same
+order below.
+4.1
+STABLE AUTOREGRESSIVE VIDEO PREDICTION
+Evaluation Protocols. We first evaluate autoregressive video prediction on RT-1 (Brohan et al.,
+2022). Every method is evaluated on the same 1,024 episodes and predicts 32 future frames using its
+native observation interface. All outputs are compared with the same 256×320 ground-truth frames.
+We evaluate the released checkpoints of RLVR-World (Wu et al., 2026b), Vid2World (Huang et al.,
+2025), WorldGym (Quevedo et al., 2026), and DriftWorld (Lu et al., 2026) without retraining. The
+frozen protocol is disjoint from our training and development episodes; because released methods use
+different native RT-1 partitions, it is not necessarily held out for every baseline. Under the released
+RLVR-World partition, 1,015 of the 1,024 evaluation episodes belong to its training subset. We
+therefore treat this as a descriptive released-checkpoint comparison, rather than a controlled estimate
+of held-out generalization. For Counter-Strike 3D game simulation, we follow the CSGO benchmark
+and data partition used by Vid2World (Huang et al., 2025). From its 500 held-out episodes, we
+reserve the first 128 for validation and evaluate a fixed 70-episode subset of the remaining split.
+Each selected episode contributes one fixed anchor with at least 32 preceding frames, and every
+method predicts the same 32 adjacent targets at 256×320 resolution. We compare against the released
+checkpoints of Vid2World and DIAMOND (Alonso et al., 2024); each method retains its native
+conditioning interface, while conditioning frames are never scored. Appendix C specifies the frozen
+selection rule and the complete frame–action alignment. We additionally evaluate video prediction
+for embodied navigation on RECON (Shah et al., 2021). We freeze 128 distinct test episodes from
+the official 2,367-episode held-out split after excluding the 17 trajectories used for validation. The
+common anchor in each episode provides the last observed frame ot, and every method predicts the
+same 32 adjacent targets ot+1:t+32 at 240×320 resolution; baselines retain their native four-frame
+context when required. We compare the released checkpoints of Vid2World, NWM (Bar et al.,
+2025), and RAE-NWM (Zhang et al., 2026). For all three dataset blocks in Table 1, we first average
+each frame-level metric over the 32 predicted frames of an episode. We then report the mean and
+5
+
+
+Preprint
+Table 1: Autoregressive video prediction on RT-1, CSGO, and RECON using released baseline
+checkpoints. Every method predicts 32 future frames. Best results within each dataset are in bold,
+and second-best results are underlined. Pixel errors are measured on RGB values normalized to [0, 1].
+Robot Manipulation: RT-1
+Model
+PSNR ↑
+SSIM ↑
+LPIPS ↓
+MSE ↓
+RLVR-World
+21.95 ± 2.36
+0.780 ± 0.062
+0.168 ± 0.050
+0.0086 ± 0.0053
+Vid2World
+21.32 ± 2.35
+0.724 ± 0.072
+0.244 ± 0.050
+0.0101 ± 0.0060
+WorldGym
+21.72 ± 2.45
+0.782 ± 0.063
+0.205 ± 0.050
+0.0094 ± 0.0060
+DriftWorld
+20.83 ± 2.44
+0.731 ± 0.072
+0.266 ± 0.061
+0.0116 ± 0.0064
+INERTIALWORLD (Ours)
+24.37 ± 2.60
+0.839 ± 0.054
+0.147 ± 0.049
+0.0051 ± 0.0036
+3D Game Simulation: CSGO
+Model
+PSNR ↑
+SSIM ↑
+LPIPS ↓
+MAE ↓
+DIAMOND
+17.04 ± 3.20
+0.513 ± 0.108
+0.576 ± 0.080
+0.1187 ± 0.0525
+Vid2World
+16.69 ± 3.14
+0.487 ± 0.108
+0.518 ± 0.084
+0.1234 ± 0.0509
+INERTIALWORLD (Ours)
+18.36 ± 3.02
+0.565 ± 0.097
+0.516 ± 0.086
+0.0934 ± 0.0358
+Embodied Navigation: RECON
+Model
+PSNR ↑
+SSIM ↑
+LPIPS ↓
+MAE ↓
+NWM
+13.03 ± 1.46
+0.410 ± 0.082
+0.507 ± 0.051
+0.1623 ± 0.0359
+RAE-NWM
+14.66 ± 1.56
+0.424 ± 0.080
+0.458 ± 0.046
+0.1285 ± 0.0280
+Vid2World
+15.59 ± 1.74
+0.488 ± 0.080
+0.416 ± 0.054
+0.1099 ± 0.0262
+INERTIALWORLD (Ours)
+16.70 ± 1.67
+0.546 ± 0.076
+0.401 ± 0.050
+0.0895 ± 0.0221
+1
+8
+16
+24
+32
+Predicted Frame
+20.0
+22.5
+25.0
+27.5
+PSNR ↑
+1
+8
+16
+24
+32
+Predicted Frame
+0.66
+0.72
+0.78
+0.84
+0.90
+SSIM ↑
+1
+8
+16
+24
+32
+Predicted Frame
+0.12
+0.18
+0.24
+0.30
+0.36
+LPIPS ↓
+1
+8
+16
+24
+32
+Predicted Frame
+4
+8
+12
+16
+MSE (×10⁻³) ↓
+RLVR-World
+Vid2World
+WorldGym
+DriftWorld
+InertialWorld (Ours)
+Figure 3: Prediction quality throughout the 32-step RT-1 rollout. Each curve reports the episode-
+level mean at every predicted frame under the same 1,024-episode protocol as Table 1.
+sample standard deviation across 1,024 RT-1 episodes, 70 CSGO test episodes, and 128 RECON test
+episodes, respectively; conditioning frames are never scored.
+Temporal Stability. Figure 3 resolves the aggregate RT-1 results over the complete autoregressive
+rollout. INERTIALWORLD achieves the highest PSNR and SSIM and the lowest LPIPS and MSE at
+every predicted frame. Its advantage is retained as the prediction horizon increases, showing that
+the main-table gain reflects consistently more stable video evolution rather than an improvement
+confined to the first few transitions.
+Qualitative Results. Figure 4 provides a complementary visual comparison under the same 32-step
+protocols. On RT-1, INERTIALWORLD preserves the articulated drawer geometry and the spatial
+relation between the drawer and robot through the final prediction. On CSGO, it retains the corridor
+layout and action-induced scene evolution without the pronounced structural degradation visible in
+competing rollouts. On RECON, it better maintains the curved building boundary, ground plane,
+and surrounding vegetation as the camera advances. Across all three domains, the benefit is most
+apparent at later predicted frames and in the highlighted regions, where independently reconstructing
+persistent content tends to blur, duplicate, or displace scene structure.
+Quantitative Results. Table 1 summarizes the released-checkpoint comparison. On RT-1, INER-
+TIALWORLD obtains the strongest values across pixel fidelity, structural similarity, and perceptual
+distance. Against the strongest baseline for each metric, PSNR increases from 21.95 to 24.37 dB,
+SSIM from 0.782 to 0.839, LPIPS decreases from 0.168 to 0.147, and MSE from 0.0086 to 0.0051.
+On the 70-episode CSGO evaluation, INERTIALWORLD remains competitive across all four metrics.
+6
+
+
+Preprint
+Figure 4: Qualitative comparison across the three evaluation domains. We show predicted
+frames at steps 8, 16, 24, and 32 for RT-1 robot manipulation, CSGO game simulation, and RECON
+embodied navigation. Each method uses its native conditioning interface, while all rows within a
+domain share the same episode, anchor, and action sequence. Red boxes mark structurally informative
+regions at the final step.
+Against DIAMOND, PSNR increases from 17.04 to 18.36 dB, SSIM from 0.513 to 0.565, and MAE
+decreases from 0.1187 to 0.0934; against Vid2World, LPIPS decreases from 0.518 to 0.516. On the
+held-out RECON protocol, INERTIALWORLD is likewise competitive across all reported metrics.
+Against Vid2World, PSNR increases from 15.59 to 16.70 dB, SSIM from 0.488 to 0.546, LPIPS
+decreases from 0.416 to 0.401, and MAE from 0.1099 to 0.0895. Across the three domains, all 36
+baseline–metric point estimates favor INERTIALWORLD. Episode-paired 95% bootstrap intervals and
+paired sign-flip tests with joint Holm correction support 35 of these 36 comparisons, including 11
+of the 12 strongest-baseline margins; the sole unresolved case is the small CSGO LPIPS difference
+against Vid2World (Appendix D.3). RT-1 is our primary domain and is trained for 60k steps; because
+training separate domain models is costly, the CSGO and RECON models use a fixed 30k-step
+budget and serve as secondary tests of cross-domain applicability rather than exhaustively tuned
+domain-specific systems.
+Long-Horizon Persistence.
+To probe beyond the maximum training horizon H=32, we roll out
+H=64 future frames, indexed by t ∈{1, . . . , H} after Context. Exactly 35 of the 1,024 frozen test
+episodes contain 64 aligned future frames and actions; we evaluate all 35 without subsampling, with
+eligibility determined only by sequence length, and report the aggregate results in Appendix D.4.
+Figure 5 is a representative mechanism case rather than the basis of this aggregate. A Context-visible
+structure is occluded by the robot arm around t=30, then reappears and remains preserved through
+t=64; INERTIALWORLD most closely retains the recovered region, drawer geometry, and task
+progression, whereas the competing long-horizon rollouts deviate more visibly from the reference.
+The bottom rows diagnose this state evolution. For the 16 carriers, the 16×16 cosine matrix compares
+every current carrier with every Context-initialized carrier. “diag” averages corresponding-slot
+similarities, “ID” is the fraction whose closest Context match has the same slot, and ∆averages
+the gap between that match and the strongest other-slot match; exact definitions are given in Eq. 13.
+From t=10 to t=64, diag decreases from 0.96 to 0.68 as content evolves, but ID remains 100% and
+7
+
+
+Preprint
+Figure 5: Representative 64-step RT-1 case study. Red boxes trace a local region from Context
+through occlusion around t=30 and its subsequent recovery, which remains preserved at t=64.
+Bottom rows show carrier correspondence, Lagrangian transport share, and post-carry write for
+INERTIALWORLD.
+∆remains positive (0.49 to 0.35), showing adaptation without identity swaps. This carrier-space
+matrix is not an image heat map: its warm diagonal denotes same-slot correspondence. The other
+two rows are image-aligned 16×20 maps with shared scales over time. Transport share m forms
+the committed flow f = (1 −m)f E + mf L, where f E and f L are Eulerian and carrier-derived
+Lagrangian flows; brighter cells indicate greater Lagrangian reliance, not greater motion magnitude.
+Its mean m remains high (0.879 to 0.699), so carrier transport remains dominant but not exclusive.
+The post-carry write gate g is the fraction of the new candidate committed after transport: g=0 retains
+the carried state, whereas g=1 replaces it with the candidate. Its spatial mean over all 320 cells is
+low (g = 0.023 to 0.016) because most of the scene remains static, while localized bright responses
+around the robot–drawer interaction and newly exposed region show that the gate activates where new
+evidence must be incorporated. The transport map varies over the same interaction region, whereas
+the static background remains largely dark; together, the maps connect carrier transport and selective
+local writing to the visible motion and recovery above.
+4.2
+MOTION FIDELITY UNDER ACTION
+Motion-Focused Diagnostics. Aggregate appearance metrics can be dominated by static regions, so
+we add three fixed diagnostics targeted at action-induced change. Because RT-1 lacks optical-flow
+annotations, the same frozen RAFT (Teed & Deng, 2020) estimator measures flow in every prediction
+and reference rollout. Flow EPE averages their endpoint discrepancy over all pixels and 32 transitions;
+it is not an error against measured flow ground truth. Flow Cosine measures directional agreement on
+reference-dynamic pixels with flow magnitude of at least one pixel. Dynamic-region LPIPS applies
+spatial LPIPS (Zhang et al., 2018) only within the same reference-motion mask. Each quantity is first
+aggregated within an episode and then across episodes.
+8
+
+
+Preprint
+0
+1
+2
+RLVR-World
+Vid2World
+WorldGym
+DriftWorld
+InertialWorld
+(a) Flow EPE ↓
+0.2
+0.4
+0.6
+(b) Flow Direction Cosine ↑
+0.3
+0.4
+0.5
+(c) Dynamic-region LPIPS ↓
+Figure 6: GT-grounded motion fidelity on RT-1. Colored diamonds denote episode means and
+capped horizontal bars denote one episode standard deviation over the same 1,024 episodes and 32
+predicted frames as the RT-1 block of Table 1.
+Table 2: Paired motion-fidelity margins on RT-1. INERTIALWORLD-favorable paired differences
+and 95% bootstrap intervals over 1,024 episodes. All 12 intervals exclude zero and survive Holm-
+corrected paired sign-flip tests (pHolm = 1.2×10−4).
+Method
+Flow EPE margin
+(95% CI)
+Flow Cosine margin
+(95% CI)
+Dyn. LPIPS margin
+(95% CI)
+RLVR-World
+0.076 [0.054, 0.097]
+0.118 [0.108, 0.127]
+0.071 [0.067, 0.075]
+Vid2World
+0.296 [0.264, 0.327]
+0.045 [0.035, 0.055]
+0.104 [0.100, 0.108]
+WorldGym
+0.515 [0.479, 0.553]
+0.203 [0.193, 0.213]
+0.112 [0.108, 0.116]
+DriftWorld
+0.332 [0.304, 0.360]
+0.135 [0.126, 0.144]
+0.169 [0.165, 0.172]
+INERTIALWORLD (Ours)
+Reference method
+Paired Motion Results. Figure 6 shows that INERTIALWORLD ranks first on all three diagnostics,
+achieving the lowest Flow EPE and dynamic-region LPIPS together with the highest Flow Cosine.
+Table 2 evaluates every baseline on the same episodes, rather than only the strongest baseline for
+each metric. Its margins are defined so that positive values always favor INERTIALWORLD: baseline
+minus ours for the lower-is-better Flow EPE and dynamic-region LPIPS, and ours minus baseline for
+the higher-is-better Flow Cosine; the final blue row marks INERTIALWORLD as the reference. All
+12 paired margins have 95% bootstrap intervals strictly above zero and remain significant after joint
+Holm correction, so every method–metric comparison favors INERTIALWORLD under the paired
+analysis. The gains therefore persist when evaluation is concentrated on where and how the scene
+changes, rather than on the static pixels that dominate the frame. This behavior is consistent with the
+intended role of Inertial Memory: preserving stored frame content while action-conditioned motion
+transports it through the predicted video state.
+4.3
+REAL2SIM POLICY EVALUATION
+RT-1
+Begin
+RT-1-X
+RT-1
+15%
+RT-1
+Converged
+0
+20
+40
+60
+80
+100
+Success Rate (%)
+(a) Policy Success Rate
+RT-1
+Begin
+RT-1-X
+RT-1
+15%
+RT-1
+Converged
+0
+10
+20
+30
+40
+50
+60
+MAE to Real World (pp)
+(b) Error to Real-World Success ↓
+Real World
+RLVR-World
+Vid2World
+WorldGym
+DriftWorld
+InertialWorld
+Figure 7: Real2Sim policy evaluation.
+We test whether closed-loop predictions
+preserve differences in policy compe-
+tence rather than only frame-level accu-
+racy. The protocol crosses four frozen
+RT-1 policies (Begin, RT-1-X, RT-1 15%,
+and Converged) with open- and close-
+drawer tasks and 18 requests per policy–
+task cell, yielding 144 trajectories per
+method and 720 across the five world
+models. All rollouts start from the same
+current observation; thereafter, the pol-
+icy receives only the frame generated by that world model, and its predicted action conditions the
+next transition for at most 113 control steps. Each trajectory is scored under the same final-state
+task-success criterion; complete initialization, rollout, and annotation details appear in Appendix C.5.
+Figure 7(a) reports success pooled equally over the two tasks for each policy, while panel (b) reports
+the task-averaged absolute gap to the SIMPLER real-world reference (Li et al., 2024), so opposite task
+errors cannot cancel. INERTIALWORLD has the smallest gap for every policy and a 15.1-percentage-
+point overall error, compared with 20.6 for WorldGym, 29.0 for Vid2World, 31.7 for RLVR-World,
+and 42.1 for DriftWorld. Its pooled success rises from 13.9% for Begin to 55.6%, 58.3%, and 69.4%
+for the stronger policies, preserving their competence ordering rather than uniformly inflating success.
+Because the references are external physical-rollout aggregates, we interpret these gaps as policy-level
+calibration rather than paired trajectory agreement.
+9
+
+
+Preprint
+Table 3: Matched persistence ablations at 30k steps. Episode mean ± sample standard deviation;
+lower is better. All variants are trained independently from scratch.
+Model
+Long-lived
+content ↓
+Post-reappearance
+content ↓
+Late-track
+content ↓
+RT-1, seed 0
+Plain AR
+0.5144 ± 0.1275
+0.5144 ± 0.1538
+0.1009 ± 0.0558
+Recurrent Memory
+0.4414 ± 0.1289
+0.4375 ± 0.1525
+0.0935 ± 0.0565
+Dense-only
+0.4247 ± 0.1334
+0.4183 ± 0.1637
+0.0896 ± 0.0573
+INERTIALWORLD (Full)
+0.4145 ± 0.1328
+0.4036 ± 0.1620
+0.0876 ± 0.0552
+RT-1, seed 1
+Plain AR
+0.5172 ± 0.1272
+0.5073 ± 0.1569
+0.1051 ± 0.0579
+INERTIALWORLD (Full)
+0.4153 ± 0.1354
+0.4053 ± 0.1644
+0.0888 ± 0.0561
+CSGO, seed 0
+Plain AR
+0.6076 ± 0.0761
+0.5961 ± 0.0915
+0.4864 ± 0.1211
+INERTIALWORLD (Full)
+0.5679 ± 0.0917
+0.5624 ± 0.1076
+0.4485 ± 0.1200
+4.4
+ABLATION STUDY
+We train four 0.8B-scale models from scratch for 30k updates under a matched protocol. The Full
+model combines dense Eulerian state with persistent Lagrangian carriers; Dense-only removes the
+carriers, canonical content, and transport while retaining the Eulerian state; Recurrent Memory
+replaces this structured state with a conventional GRU; and Plain AR uses no recurrent memory. All
+variants share the tokenizer, data, action representation, optimizer, AR8→AR16→AR32 curriculum,
+global batch size, and ordered 1,024-episode H32 protocol. We evaluate content persistence on frozen
+DINO tracks defined solely from ground truth: long-lived error measures displaced Context content
+over the fixed late half of the rollout (Steps 17–32), post-reappearance error evaluates content after a
+ground-truth gap of at least four steps anywhere in H32, and late-track error covers all reliable tracks
+in the same late-half window. The main evaluation covers all 32 steps; this shared midpoint window is
+used only to emphasize accumulated state persistence rather than short-range prediction quality. For
+all three prediction-to-reference feature errors, lower is better; they target persistence failures that can
+be obscured by static regions in full-frame metrics. On all three measures in Table 3, the Full model
+ranks first, followed by Dense-only, Recurrent Memory, and Plain AR. The Full model also improves
+over Dense-only in every case; all three pointwise paired 95% percentile-bootstrap intervals exclude
+zero and are reported in Appendix Table 13. The larger improvements over Recurrent Memory
+and Plain AR further favor structured inertial state over generic recurrence or direct autoregression,
+and the Full–Plain advantage repeats under an independent RT-1 seed and on CSGO. Together with
+Figure 5, these results demonstrate that our proposed Inertial Memory preserves evolving content
+more effectively than dense recurrence, generic recurrence, or direct autoregression. Appendix E
+gives the complete protocol and paired statistics.
+5
+CONCLUSION
+In this work, we introduce INERTIALWORLD, an Inertial Video World Model that treats prediction
+as the evolution of an existing video state rather than its repeated reconstruction. Inertial Memory
+realizes this principle through two complementary views: a dense Eulerian grid preserves scene-
+aligned evidence, while persistent Lagrangian carriers bind and transport regional content under
+action-conditioned motion. The model then predicts the complete next state and uses learned gates to
+incorporate changes that transport alone cannot explain. This carry-before-write transition makes
+persistence the default while retaining the flexibility required for newly visible content and non-rigid
+change. Across paired 32-step evaluations on RT-1, CSGO, and RECON, INERTIALWORLD achieves
+the strongest aggregate prediction results and improves diagnostics focused on action-induced motion.
+Controlled ablations and mechanism diagnostics further support the roles of structured transport and
+state-dependent memory updates. Together, these results identify inertial state evolution as a useful
+design principle for interactive video world models. Extending the current deterministic, learned-
+coordinate formulation to multimodal futures and explicit three-dimensional scene representations
+remains an important direction.
+10
+
+
+Preprint
+AI USE STATEMENT
+We use AI to check for grammatical errors in the text; the AI is not involved in ideas, experimental
+design, or the actual writing of the paper.
+ETHICS STATEMENT
+Human evaluations were conducted with informed consent from volunteers. All datasets and pre-
+trained models are publicly available and used under their respective licenses. We have carefully
+designed our experiments to minimize risks of bias or discrimination. We uphold the principles of
+transparency and integrity throughout the work.
+REPRODUCIBILITY STATEMENT
+The method section specifies the causal interface, recurrent video state, memory transition and
+readout, and training objective. The implementation records model configurations, fixed data splits,
+checkpoint-selection rules, and the sampling and optimizer states required to resume training.
+ACKNOWLEDGEMENTS
+This work was supported by the National Natural Science Foundation of China (42125503, 42430602).
+REFERENCES
+Eloi Alonso, Adam Jelley, Vincent Micheli, Anssi Kanervisto, Amos Storkey, Tim Pearce, and
+François Fleuret. Diffusion for world modeling: Visual details matter in Atari. In Advances in
+Neural Information Processing Systems, 2024.
+Mohammad Babaeizadeh, Mohammad Taghi Saffar, Suraj Nair, Sergey Levine, Chelsea Finn, and Du-
+mitru Erhan. Fitvid: Overfitting in pixel-level video prediction. arXiv preprint arXiv:2106.13195,
+2021.
+Amir Bar, Gaoyue Zhou, Danny Tran, Trevor Darrell, and Yann LeCun. Navigation world models.
+In 2025 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), pp. 15791–
+15801. IEEE, 2025.
+Peter Battaglia, Razvan Pascanu, Matthew Lai, Danilo Jimenez Rezende, et al. Interaction networks
+for learning about objects, relations and physics. Advances in neural information processing
+systems, 29, 2016.
+Peter W Battaglia, Jessica B Hamrick, Victor Bapst, Alvaro Sanchez-Gonzalez, Vinicius Zambaldi,
+Mateusz Malinowski, Andrea Tacchetti, David Raposo, Adam Santoro, Ryan Faulkner, et al.
+Relational inductive biases, deep learning, and graph networks. arXiv preprint arXiv:1806.01261,
+2(3):5, 2018.
+Anthony Brohan, Noah Brown, Justice Carbajal, Yevgen Chebotar, Joseph Dabis, Chelsea Finn,
+Keerthana Gopalakrishnan, Karol Hausman, Alex Herzog, Jasmine Hsu, et al. Rt-1: Robotics
+transformer for real-world control at scale. arXiv preprint arXiv:2212.06817, 2022.
+Jake Bruce, Michael D Dennis, Ashley Edwards, Jack Parker-Holder, Yuge Shi, Edward Hughes,
+Matthew Lai, Aditi Mavalankar, Richie Steigerwald, Chris Apps, et al.
+Genie: Generative
+interactive environments. In Forty-first international conference on machine learning, 2024.
+Christopher P Burgess, Loic Matthey, Nicholas Watters, Rishabh Kabra, Irina Higgins, Matt Botvinick,
+and Alexander Lerchner. Monet: Unsupervised scene decomposition and representation. arXiv
+preprint arXiv:1901.11390, 2019.
+Chang Chen, Yi-Fu Wu, Jaesik Yoon, and Sungjin Ahn. Transdreamer: Reinforcement learning with
+transformer world models. arXiv preprint arXiv:2202.09481, 2022.
+11
+
+
+Preprint
+Emily Denton and Rob Fergus. Stochastic video generation with a learned prior. In International
+conference on machine learning, pp. 1174–1183. PMLR, 2018.
+Patrick Esser, Robin Rombach, and Bjorn Ommer. Taming transformers for high-resolution image
+synthesis. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition,
+pp. 12873–12883, 2021.
+Chelsea Finn, Ian Goodfellow, and Sergey Levine. Unsupervised learning for physical interaction
+through video prediction. Advances in neural information processing systems, 29, 2016.
+Klaus Greff, Raphaël Lopez Kaufman, Rishabh Kabra, Nick Watters, Christopher Burgess, Daniel
+Zoran, Loic Matthey, Matthew Botvinick, and Alexander Lerchner. Multi-object representation
+learning with iterative variational inference. In International conference on machine learning, pp.
+2424–2433. PMLR, 2019.
+Samuel Greydanus, Misko Dzamba, and Jason Yosinski. Hamiltonian neural networks. Advances in
+neural information processing systems, 32, 2019.
+Vincent Le Guen and Nicolas Thome. Disentangling physical dynamics from unknown factors for
+unsupervised video prediction. In Proceedings of the IEEE/CVF conference on computer vision
+and pattern recognition, pp. 11474–11484, 2020.
+David Ha and Jürgen Schmidhuber. World models. arXiv preprint arXiv:1803.10122, 2(3):440, 2018.
+Danijar Hafner, Timothy Lillicrap, Ian Fischer, Ruben Villegas, David Ha, Honglak Lee, and James
+Davidson. Learning latent dynamics for planning from pixels. In International conference on
+machine learning, pp. 2555–2565. PMLR, 2019.
+Danijar Hafner, Timothy Lillicrap, Mohammad Norouzi, and Jimmy Ba. Mastering atari with discrete
+world models. arXiv preprint arXiv:2010.02193, 2020.
+Danijar Hafner, Jurgis Pasukonis, Jimmy Ba, and Timothy Lillicrap. Mastering diverse control tasks
+through world models. Nature, 640(8059):647–653, 2025.
+Nicklas Hansen, Hao Su, and Xiaolong Wang. TD-MPC2: Scalable, robust world models for
+continuous control. In International Conference on Learning Representations, 2024.
+Siqiao Huang, Jialong Wu, Qixing Zhou, Shangchen Miao, and Mingsheng Long. Vid2world:
+Crafting video diffusion models to interactive world models. arXiv preprint arXiv:2505.14357,
+2025.
+Max Jaderberg, Karen Simonyan, Andrew Zisserman, et al. Spatial transformer networks. Advances
+in neural information processing systems, 28, 2015.
+Thomas Kipf, Ethan Fetaya, Kuan-Chieh Wang, Max Welling, and Richard Zemel. Neural relational
+inference for interacting systems. In International conference on machine learning, pp. 2688–2697.
+Pmlr, 2018.
+Thomas Kipf, Elise Van der Pol, and Max Welling. Contrastive learning of structured world models.
+arXiv preprint arXiv:1911.12247, 2019.
+Thomas Kipf, Gamaleldin F Elsayed, Aravindh Mahendran, Austin Stone, Sara Sabour, Georg
+Heigold, Rico Jonschkowski, Alexey Dosovitskiy, and Klaus Greff. Conditional object-centric
+learning from video. arXiv preprint arXiv:2111.12594, 2021.
+Xuanlin Li, Kyle Hsu, Jiayuan Gu, Karl Pertsch, Oier Mees, Homer Rich Walke, Chuyuan Fu, Ishikaa
+Lunawat, Isabel Sieh, Sean Kirmani, et al. Evaluating real-world robot manipulation policies in
+simulation. arXiv preprint arXiv:2405.05941, 2024.
+Francesco Locatello, Dirk Weissenborn, Thomas Unterthiner, Aravindh Mahendran, Georg Heigold,
+Jakob Uszkoreit, Alexey Dosovitskiy, and Thomas Kipf. Object-centric learning with slot attention.
+Advances in neural information processing systems, 33:11525–11538, 2020.
+Susie Lu, Haonan Chen, Weirui Ye, and Yilun Du. Driftworld: Fast world modeling through drifting.
+arXiv preprint arXiv:2607.15065, 2026.
+12
+
+
+Preprint
+Fabian Mentzer, David Minnen, Eirikur Agustsson, and Michael Tschannen. Finite scalar quantization:
+Vq-vae made simple. In International Conference on Learning Representations, volume 2024, pp.
+51772–51783, 2024.
+Vincent Micheli, Eloi Alonso, and François Fleuret. Transformers are sample-efficient world models.
+arXiv preprint arXiv:2209.00588, 2022.
+Junhyuk Oh, Xiaoxiao Guo, Honglak Lee, Richard L Lewis, and Satinder Singh. Action-conditional
+video prediction using deep networks in atari games. Advances in neural information processing
+systems, 28, 2015.
+Julian Quevedo, Ansh Kumar Sharma, Yixiang Sun, Varad Suryavanshi, Percy Liang, and Sherry Yang.
+Worldgym: World model as an environment for policy evaluation. In International Conference on
+Learning Representations, volume 2026, pp. 78932–78957, 2026.
+Alvaro Sanchez-Gonzalez, Jonathan Godwin, Tobias Pfaff, Rex Ying, Jure Leskovec, and Peter
+Battaglia. Learning to simulate complex physics with graph networks. In International conference
+on machine learning, pp. 8459–8468. Pmlr, 2020.
+Julian Schrittwieser, Ioannis Antonoglou, Thomas Hubert, Karen Simonyan, Laurent Sifre, Simon
+Schmitt, Arthur Guez, Edward Lockhart, Demis Hassabis, Thore Graepel, et al. Mastering atari,
+go, chess and shogi by planning with a learned model. Nature, 588(7839):604–609, 2020.
+Dhruv Shah, Benjamin Eysenbach, Gregory Kahn, Nicholas Rhinehart, and Sergey Levine. Rapid
+exploration for open-world navigation with latent goal models. arXiv preprint arXiv:2104.05859,
+2021.
+Zachary Teed and Jia Deng. Raft: Recurrent all-pairs field transforms for optical flow. In European
+conference on computer vision, pp. 402–419. Springer, 2020.
+Dani Valevski, Yaniv Leviathan, Moab Arar, and Shlomi Fruchter. Diffusion models are real-time
+game engines. In International Conference on Learning Representations, volume 2025, pp.
+73754–73776, 2025.
+Aaron Van Den Oord, Oriol Vinyals, et al. Neural discrete representation learning. Advances in
+neural information processing systems, 30, 2017.
+Junke Wang, Yi Jiang, Zehuan Yuan, Binyue Peng, Zuxuan Wu, and Yu-Gang Jiang. Omnitokenizer:
+A joint image-video tokenizer for visual generation. Advances in Neural Information Processing
+Systems, 37:28281–28295, 2024.
+Yunbo Wang, Mingsheng Long, Jianmin Wang, Zhifeng Gao, and Philip S Yu. Predrnn: Recurrent
+neural networks for predictive learning using spatiotemporal lstms. Advances in neural information
+processing systems, 30, 2017.
+Yunbo Wang, Zhifeng Gao, Mingsheng Long, Jianmin Wang, and Philip S Yu. Predrnn++: Towards
+a resolution of the deep-in-time dilemma in spatiotemporal predictive learning. In International
+conference on machine learning, pp. 5123–5132. PMLR, 2018.
+Hao Wu, Yuqi Li, Yuan Gao, Fan Xu, Fan Zhang, Kun Wang, Penghao Zhao, Qiufeng Wang, Yizhou
+Zhao, Weiyan Wang, et al. Roboalign-r1: Distilled multimodal reward alignment for robot video
+world models. arXiv preprint arXiv:2605.03821, 2026a.
+Jialong Wu, Shaofeng Yin, Ningya Feng, Xu He, Dong Li, Jianye Hao, and Mingsheng Long.
+ivideogpt: Interactive videogpts are scalable world models. Advances in Neural Information
+Processing Systems, 37:68082–68119, 2024.
+Jialong Wu, Shaofeng Yin, Ningya Feng, and Mingsheng Long. Rlvr-world: Training world models
+with reinforcement learning. Advances in Neural Information Processing Systems, 38:125312–
+125350, 2026b.
+Tong Wu, Shuai Yang, Ryan Po, Yinghao Xu, Ziwei Liu, Dahua Lin, and Gordon Wetzstein. Video
+world models with long-term spatial memory. Advances in Neural Information Processing Systems,
+38:49371–49393, 2026c.
+13
+
+
+Preprint
+Ziyi Wu, Nikita Dvornik, Klaus Greff, Thomas Kipf, and Animesh Garg. Slotformer: Unsupervised
+visual dynamics simulation with object-centric models. arXiv preprint arXiv:2210.05861, 2022.
+Wilson Yan, Yunzhi Zhang, Pieter Abbeel, and Aravind Srinivas. Videogpt: Video generation using
+vq-vae and transformers. arXiv preprint arXiv:2104.10157, 2021.
+Mengjiao Yang, Yilun Du, Kamyar Ghasemipour, Jonathan Tompson, Dale Schuurmans, and Pieter
+Abbeel. Learning interactive real-world simulators. arXiv preprint arXiv:2310.06114, 1(2):6,
+2023.
+Lijun Yu, Yong Cheng, Kihyuk Sohn, José Lezama, Han Zhang, Huiwen Chang, Alexander G
+Hauptmann, Ming-Hsuan Yang, Yuan Hao, Irfan Essa, et al. Magvit: Masked generative video
+transformer. In 2023 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR),
+pp. 10459–10469. IEEE, 2023.
+Lijun Yu, José Lezama, Nitesh Bharadwaj Gundavarapu, Luca Versari, Kihyuk Sohn, David Min-
+nen, Yong Cheng, Agrim Gupta, Xiuye Gu, Alexander G Hauptmann, et al. Language model
+beats diffusion-tokenizer is key to visual generation. In International Conference on Learning
+Representations, volume 2024, pp. 765–783, 2024.
+Mingkun Zhang, Wangtian Shen, Fan Zhang, Haijian Qin, Zihao Pei, and Ziyang Meng. Rae-
+nwm: Navigation world model in dense visual representation space. In European Conference on
+Computer Vision, pp. 455–473. Springer, 2026.
+Richard Zhang, Phillip Isola, Alexei A Efros, Eli Shechtman, and Oliver Wang. The unreasonable
+effectiveness of deep features as a perceptual metric. In 2018 IEEE/CVF conference on computer
+vision and pattern recognition, pp. 586–595. IEEE, 2018.
+Gaoyue Zhou, Hengkai Pan, Yann LeCun, and Lerrel Pinto. Dino-wm: World models on pre-trained
+visual features enable zero-shot planning. arXiv preprint arXiv:2411.04983, 2024a.
+Siyuan Zhou, Yilun Du, Jiaben Chen, Yandong Li, Dit-Yan Yeung, and Chuang Gan. Robodreamer:
+Learning compositional world models for robot imagination. arXiv preprint arXiv:2404.12377,
+2024b.
+Siyuan Zhou, Yilun Du, Yuncong Yang, Lei Han, Peihao Chen, Dit-Yan Yeung, and Chuang Gan.
+Learning 3d persistent embodied world models. Advances in Neural Information Processing
+Systems, 38:104807–104829, 2026.
+Yixuan Zhu, Jiaqi Feng, Wenzhao Zheng, Yuan Gao, Xin Tao, Pengfei Wan, Jiwen Lu, and Jie Zhou.
+Astra: General interactive world model with autoregressive denoising. In International Conference
+on Learning Representations, volume 2026, pp. 79167–79184, 2026.
+14
+
+
+Preprint
+APPENDIX CONTENTS
+A Complete Formulation of Inertial Memory
+16
+A.1
+Frozen Video Representation . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+16
+A.2
+Initialization and Dual-View Binding . . . . . . . . . . . . . . . . . . . . . . . . .
+16
+A.3 Action-Conditioned Carry
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+16
+A.4
+Complete Prediction and Gated Commit . . . . . . . . . . . . . . . . . . . . . . .
+17
+B Architecture and Training Details
+17
+B.1
+Frozen Video Tokenizer . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+17
+B.2
+World-Model Architecture and Objective . . . . . . . . . . . . . . . . . . . . . . .
+18
+C Datasets and Frozen Evaluation Protocols
+21
+C.1
+RT-1 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+22
+C.2
+CSGO . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+22
+C.3
+RECON . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+22
+C.4
+Canonical Targets and Leakage Checks
+. . . . . . . . . . . . . . . . . . . . . . .
+22
+C.5
+Closed-Loop Real2Sim Policy Evaluation . . . . . . . . . . . . . . . . . . . . . .
+23
+D Baseline Reproduction and Metric Definitions
+23
+D.1
+Released-Checkpoint Rollout Contracts
+. . . . . . . . . . . . . . . . . . . . . . .
+23
+D.2
+Frame Metrics and Statistical Aggregation . . . . . . . . . . . . . . . . . . . . . .
+23
+D.3
+Paired Uncertainty for the Main Table . . . . . . . . . . . . . . . . . . . . . . . .
+24
+D.4
+Prediction Beyond the Training Horizon . . . . . . . . . . . . . . . . . . . . . . .
+25
+D.5
+Motion-Fidelity Diagnostics
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+27
+E Ablation Protocol and Paired Analysis
+28
+15
+
+
+Preprint
+A
+COMPLETE FORMULATION OF INERTIAL MEMORY
+This section expands the compact formulation in Section 3.2. We separate the state that implements
+the proposed inertial prior from auxiliary predictor context, and then describe a complete causal
+transition. Batch dimensions are omitted. Every recurrent variable is a function only of the initial
+observation, the action prefix, and previous model predictions.
+A.1
+FROZEN VIDEO REPRESENTATION
+The frozen video tokenizer decomposes a video into a rollout-level Context code C and frame-level
+Dynamic codes Dτ. The Context code contains two 32×40 lanes and is computed once from ot. A
+Dynamic code contains four 8×10 lanes that represent base and detail components of motion and
+appearance. It is a complete discrete representation of a frame, rather than a residual relative to an
+observed image. During a rollout, C remains fixed and every future bDτ is predicted by the model.
+Let τ index recurrent rollout steps. The recurrent video state is
+Sτ = (C, Iτ, Hτ, Qτ),
+Iτ = (Gτ, {Rτ,k}K
+k=1, Bτ).
+(5)
+In Eq. 5, Iτ is Inertial Memory and Rτ,k is the complete recurrent state of carrier k. Its Eulerian
+component Gτ is a dense 16×20 grid aligned with scene coordinates. Its Lagrangian component
+contains K = 16 persistent regional carriers. Carrier k maintains a descriptor, a canonical feature
+map and support, a translation–rotation–scale coordinate, persistent velocity, visibility and existence
+estimates, and a bounded local deformation. The soft binding map Bτ assigns Eulerian evidence
+between the carriers and a dense background branch. The carriers are learned regions, not supervised
+semantic objects, and the background branch avoids imposing a complete object decomposition.
+The implementation additionally keeps the four most recent predicted Dynamic states Hτ and 64
+generic interaction slots Qτ. They provide predictor context inherited from the video backbone; the
+proposed persistent video state and its carry operation are defined by Iτ. This distinction is important:
+the method is not equivalent to retaining a longer image history as passive attention context.
+A.2
+INITIALIZATION AND DUAL-VIEW BINDING
+Learned projections of C initialize the dense grid and interaction slots. The first K slots initialize the
+carrier descriptors. Carrier coordinates begin on a normalized 4×4 lattice with zero velocity; their
+canonical content is sampled from the initialized dense state. This constructs S0 = Init(C) from the
+single observed frame, without an object detector or calibrated geometry.
+At each recurrent step, a carrier is rendered into scene coordinates using its canonical content,
+support, coordinate, rigidity, and deformation. Its binding score at an Eulerian cell combines content
+compatibility, rendered support, visibility, and existence. A softmax over the K carriers and the
+background branch gives Bτ. The dense view consequently retains globally available scene evidence,
+whereas the carrier view gives local content a persistent coordinate system in which it can move.
+A.3
+ACTION-CONDITIONED CARRY
+The current action is combined with every carrier state, and a learned contact graph propagates
+action-dependent interactions between nearby carriers. The dynamics head predicts bounded changes
+to carrier velocity, coordinate, rigidity, existence, visibility, and deformation. Abstractly, the persistent
+coordinate update is
+vτ+1,k = ηvτ,k + ∆vτ,k,
+ξτ+1,k = Π(ξτ,k + vτ+1,k),
+(6)
+Here η = 0.90 is the fixed velocity-retention coefficient, ∆vτ,k is the bounded action- and contact-
+conditioned learned increment, and ξτ,k concatenates 2-D translation, rotation, and log scale. In
+Eq. 6, Π wraps rotation and projects translation and log scale to their valid ranges. Carrier motion is
+therefore accumulated through a persistent state rather than independently re-estimated from scratch.
+Old and updated carrier coordinates induce a Lagrangian correspondence. At Eulerian cell i, the
+binding-weighted carrier flow f L
+τ,i is combined with dense fallback flow f E
+τ,i according to foreground
+16
+
+
+Preprint
+binding mass mτ,i = P
+k Bτ,ik, where Bτ,ik is the soft binding of cell i to carrier k:
+fτ,i = (1 −mτ,i)f E
+τ,i + mτ,if L
+τ,i.
+(7)
+Eq. 7 defines mτ,i ∈[0, 1] as a Lagrangian mixture share, not a motion magnitude. The resulting
+correspondence carries owned source features with normalized bilinear forward splatting. Source
+ownership and destination coverage are kept separate: moved content is vacated at its source, while a
+learned reveal proposal fills newly uncovered locations. This prevents a feature from being duplicated
+at both its old and new positions. Zero predicted motion reduces to identity carry. We denote the
+complete inherited proposal by eSτ+1.
+A.4
+COMPLETE PREDICTION AND GATED COMMIT
+The predictor reads the fixed Context code, carried dense state, rendered carriers, predicted-state
+history, interaction slots, and current action. It predicts all four lanes of bDτ+1. For each lane and
+cell, the readout assigns probability to three sources: newly generated content, stationary content
+from the previous predicted state, and content transported from a previous predicted location. Invalid
+persistence routes are masked. At evaluation time, the hard route is sampled deterministically from
+the learned posterior using an immutable key derived from the Context code, recurrent step, lane, and
+cell. No route has access to a future target.
+Prediction and recurrent storage are deliberately distinct. Let M collect the writable fields of Inertial
+Memory and any predictor state updated by the transition. In the compact notation of Section 3.2,
+( bDτ+1, Mnew
+τ+1, gτ+1) = Pθ( eSτ+1, aτ; C),
+Mτ+1 = (1 −gτ+1) ⊙f
+Mτ+1 + gτ+1 ⊙Mnew
+τ+1.
+(8)
+In Eq. 8, Pθ is the predictor with parameters θ, aτ is the current action, f
+Mτ+1 denotes writable
+memory after carrying, Mnew
+τ+1 is its newly predicted candidate, gτ+1 ∈[0, 1] is the element-wise
+write gate, and ⊙denotes element-wise multiplication. A gate value of zero retains the carried
+state and a value of one replaces it with the candidate. The predicted Dynamic code reconstructs
+the complete next frame. Carrier descriptors are updated from their assigned dense evidence, and
+canonical content is updated by sampling the new dense state back into each carrier’s coordinate
+system. The binding map, interaction slots, and predicted-state history are updated last.
+One transition therefore follows the fixed order advance carriers →carry existing content →predict
+the complete next video state →commit memory. This is the operational meaning of carry-before-
+write. Training targets define losses but never replace any field of Sτ. Hard Dynamic IDs are
+used on the forward path, straight-through surrogates provide gradients through discrete decisions,
+and the recurrence is not detached between steps. Training and evaluation thus execute the same
+predicted-only state evolution.
+B
+ARCHITECTURE AND TRAINING DETAILS
+B.1
+FROZEN VIDEO TOKENIZER
+We train a separate tokenizer for each domain while keeping its learnable architecture, objective, and
+optimization recipe identical. The copies differ only in their data readers and image preprocessing.
+Each tokenizer contains 120.386M parameters, uses 384 hidden and 256 latent channels, and maps
+a 256×320 internal canvas to the shared interface in Table 4. Every token is represented by five
+finite-scalar-quantization digits with levels (7, 5, 5, 5, 5), giving 4,375 joint states (Mentzer et al.,
+2024).
+Tokenizer training uses 33-frame clips: one Context frame and 32 future frames. An update supervises
+the Context frame and eight deterministically distributed future frames, always including the first and
+last targets and covering all four temporal quarters; validation decodes all 32 targets. The objective
+combines pixel reconstruction, edge and high-frequency fidelity, two-level wavelet detail, SSIM,
+LPIPS-VGG (Zhang et al., 2018), quantization balance, and lane-specialization losses. Motion-region
+and late-frame terms are introduced at fixed stages after the initial reconstruction phase. We use no
+adversarial loss. This objective is identical across the three domains.
+17
+
+
+Preprint
+Table 4: Shared architecture of the frozen tokenizer and video world model. Parameter counts
+exclude the frozen tokenizer.
+Component
+Configuration
+Frozen tokenizer interface
+Context code
+Two 32×40 lanes; 2,560 tokens; fixed within a rollout.
+Dynamic code
+Four 8×10 lanes; 320 tokens per predicted frame.
+Token quantization
+Five FSQ digits with levels (7, 5, 5, 5, 5).
+World-model predictor
+Predictor backbone
+Width 1,280; 20 attention heads; 15 transition layers; three
+appearance-refinement layers; two Context blocks; one interaction
+layer; MLP ratio 4; zero dropout.
+Recurrent features
+320 dense scene tokens, 16 carriers of width 256, 64 interaction
+slots, and four recent predicted Dynamic states.
+All tokenizers are trained from scratch for 60k optimizer steps with AdamW, learning rate 10−4,
+weight decay 0.02, and (β1, β2) = (0.9, 0.95). The learning rate is warmed up for 2k steps and
+cosine-decayed to zero. Training uses BF16, global batch size 32, and gradient-norm clipping at 1.0.
+The completed 60k tokenizer is then frozen for video-world-model training.
+B.2
+WORLD-MODEL ARCHITECTURE AND OBJECTIVE
+The three domain models share all architectural and loss settings except the action projection. RT-1
+and CSGO consume their raw 13-D and 51-D actions. RECON consumes normalized local-frame
+displacement in x and y together with wrapped relative yaw. These input dimensions account for the
+small parameter-count differences in Table 6.
+The primary objective supervises all digits of the four complete Dynamic lanes and their joint
+code. It additionally supervises the innovation, stationary, and transported routes. A frozen-decoder
+objective on two frames per update supplies RGB, edge, frequency, chroma, motion-region, and
+temporal change signals. Memory-consistency terms supervise binding, transport, background
+preservation, carrier local-deformation magnitude, and contact consistency using detached frozen-
+tokenizer geometry together with model-internal consistency signals. The frozen geometry is used
+only to compute losses and is never inserted into the recurrent state. Transport, stationary routing,
+contact, and local deformation are staged in during the first 12k steps so that an untrained persistence
+path cannot dominate the initial predictor. The complete set of coefficients is identical across domains.
+Loss specification. We set λmem = λreg = 1 in Eq. 4. Table 5 expands the grouped objective
+into every additive constituent; no additional loss terms are used. The first five rows constitute
+Lpred; three-way route CE and all Eulerian–Lagrangian rows constitute Lmem; and slot diversity
+plus dense-flow regularization constitute Lreg. Because both group coefficients equal one, the row
+coefficients in the table are the final additive weights. Coefficients are shared across domains and,
+unless a ramp is listed, are active from the first optimizer step.
+Target construction and normalization. The frozen tokenizer supplies detached source grids,
+visibility, and motion; none enters the recurrent state. Its absolute source grid maps each current
+token to Context, and composing consecutive absolute grids gives the adjacent-frame source grid.
+Visible motion above 0.02 seeds the foreground target after a 3×3 spatial dilation, and the preceding
+foreground is then advected causally through the adjacent grid. The static-background target is the
+visible, sub-threshold complement of this persistent foreground. The foreground budget is the target
+foreground fraction plus a 0.10 margin. Assignment consistency compares the current background-
+plus-16-carrier distribution with the previous distribution bilinearly sampled at the model-predicted
+adjacent source grid. Its per-cell error is the mean absolute difference over these 17 channels, weighted
+by the product of frozen adjacent-motion gate and visibility and normalized by the total valid weight.
+Context-grid and adjacent-grid errors compare the two predicted grids with their respective frozen
+targets in normalized [−1, 1]2 coordinates; each coordinate L1 is normalized jointly over its batch,
+horizon, and cell supervision mass. Their weights are visibility times [0.05+0.95(1−exp(−δ/0.15))],
+where δ is displacement in token units.
+18
+
+
+Preprint
+Table 5: Complete world-model optimization recipe. Each row gives the exact Full-model definition
+and coefficient, its staging, and whether the matched Plain AR control retains it. “Shared” denotes
+the same target, coefficient, and schedule.
+Objective
+Exact definition and coefficient
+Staging
+Plain AR
+Token and visual prediction
+Joint-code CE
+0.50 on the complete Dynamic joint ID
+Active from step 0
+Shared
+Generation-
+code CE
+0.10 [0.25 all-cell +
+0.75 innovation-cell]
+Active from step 0
+0.10, all
+cells
+Digit CE
+0.25 on all FSQ digits
+Detail-lane factor
+rdetail: 0.25→1 over
+0–4k
+Shared
+Ordered-digit
+error
+0.05 on the ordered FSQ value
+Same detail-lane factor
+rdetail
+Shared
+Frozen-decoder
+objective
+1.0 RGB + 0.30 edge + 0.30 high
+frequency + 0.50 chroma + 1.0
+motion-region + 0.15 temporal residual
+Off through 1k, then
+→1 by 6k
+Shared
+Route and recurrent regularization
+Three-way
+route CE
+0.10 over innovation, stationary, and
+transported routes
+Transport 0.1→1 by
+6k; stationary off
+through 1k, then →1
+by 4k
+Not used
+Slot diversity
+0.002 times mean squared off-diagonal
+slot cosine similarity
+Active from step 0
+Not used
+Dense-flow
+regularizer
+0.0005 times mean component-wise
+squared flow
+Active from step 0
+Not used
+Eulerian–Lagrangian supervision
+Region
+composite
+0.010raux times [moving-cell
+foreground NLL + moving-cell
+assignment entropy normalized by
+log 16 + 0.20 static-background NLL
++ 0.10 squared foreground-mass excess
+above the target budget]
+raux: 0.1→1 by 4k
+Not used
+Assignment
+consistency
+0.050raux times
+motion/visibility-weighted L1 between
+the current 16-carrier-plus-background
+assignment and the previous assignment
+sampled at the predicted source grid
+Same region ramp
+Not used
+Carrier local-
+deformation
+magnitude
+0.010raux times the
+carrier-mass-weighted squared RMS
+local-deformation magnitude
+Same region ramp
+Not used
+Contact
+consistency
+0.002rauxrcontact times [pseudo-target
+BCE with positive-class weight 4
++ 0.05 off-diagonal mass + squared
+diagonal + 0.50 symmetry L1]
+rcontact=0 through 2k,
+then →1 by 8k
+Not used
+Context
+source-grid
+error
+0.050raux times weighted coordinate L1
+to the frozen Context-referenced source
+grid
+Same region ramp
+Not used
+Previous
+source-grid
+error
+0.100raux times weighted coordinate L1
+to the frozen adjacent-frame source grid
+Same region ramp
+Not used
+For carrier i, let Di(u, v) ∈R2 be its raw local deformation at lattice site (u, v) ∈{1, . . . , 4}2. The
+quantity named the carrier local-deformation magnitude in Table 5 is
+ri =
+ 
+1
+16
+4
+X
+u,v=1
+∥Di(u, v)∥2
+2 + 10−12
+!1/2
+.
+(9)
+19
+
+
+Preprint
+With ωi = P
+c Aci/ max(P
+j,c Acj, 10−8), the loss averages P
+i ωir2
+i over the batch. Thus Eq. 9
+regularizes the magnitude of local non-rigid deformation rather than a semantic-object label or a
+separate rigidity prediction; Aci is the carrier assignment defined below.
+Contact pseudo-targets combine detached model assignments with frozen-tokenizer motion. Let
+Aci be the assignment of Eulerian cell c to carrier i, uc its frozen adjacent-frame motion, and xc its
+identity-grid center. For i, j ∈{1, . . . , 16}, define
+Mi = max
+ X
+c
+Aci, 10−6
+!
+,
+ai = 1 −exp(−∥vi∥2/0.15),
+yii = 0,
+vi =
+P
+c Aciuc
+Mi
+,
+pi =
+P
+c Acixc
+Mi
+,
+yij = √aiaj exp
+
+−∥vi −vj∥2
+0.20
+
+exp
+
+−∥pi −pj∥2
+2
+2(0.45)2
+
+,
+i̸ = j.
+(10)
+Here Mi is assignment mass, vi and pi are its assignment-weighted motion and center, ai is motion
+activity, and ∥·∥2 is the Euclidean norm. The complete target {yij} is detached. Eq. 10 therefore
+requires both activity and compatible motion at nearby locations rather than treating proximity alone
+as contact; its off-diagonal BCE uses positive-class weight 4. The BCE and sparsity means use the
+ordered off-diagonal pairs, the diagonal term averages the 16 diagonal entries, and the symmetry
+term averages the full 16×16 matrix. Every loss is reduced over its valid cells or carriers before the
+scalar coefficient in Table 5 is applied.
+Weighting and staged initialization. Let s denote the optimizer step and H the current cur-
+riculum rollout horizon.
+The four Dynamic lanes are normalized and averaged with weights
+(1.0, 0.80rdetail, 1.25, 0.80rdetail) for motion-base, motion-detail, appearance-base, and appearance-
+detail. The 15% most changed cells receive weight 3, and the final max(2, ⌈0.25H⌉) rollout steps
+receive weight 1.5. Every per-step structural term is multiplied by the same horizon weight and
+divided by the sum of horizon weights; source-grid errors instead use their explicit weighted supervi-
+sion mass as the denominator. The visual objective decodes two adjacent frames per update: using
+zero-based target indices, even optimizer steps use (H −2, H −1), whereas odd steps rotate the
+start index as ⌊s/2⌋mod (H −1). Its motion term evaluates the 12% most changed target pixels.
+All ramps are linear between the stated endpoints and clipped outside them. The complete ramp
+definitions, with clipping made explicit, are
+clip(x) = min(1, max(0, x)),
+rdetail(s) = 0.25 + 0.75 min(s/4000, 1),
+raux(s) = 0.1 + 0.9 min(s/4000, 1),
+rvisual(s) = clip((s −1000)/5000),
+rstationary(s) = clip((s −1000)/3000),
+rtransport(s) = 0.1 + 0.9 min(s/6000, 1),
+rcontact(s) = clip((s −2000)/6000),
+rdef(s) = clip((s −4000)/8000).
+(11)
+Thus region memory, dense-scene writes, and canonical-content updates reach full strength at 4k;
+Lagrangian transport at 6k; contact at 8k; and local deformation at 12k. Eq. 11 also specifies the
+detail, frozen-decoder, and stationary-route schedules in Table 5. The local-deformation schedule is a
+structural multiplier on the deformation update and its induced source geometry, not an additional loss;
+its magnitude is regularized by the carrier-local-deformation-magnitude row in Table 5. Concretely,
+the state update retains 0.95 of the previous field and adds 0.05 of a tanh-bounded proposal with
+maximum scale 0.04, multiplied once by the region and deformation strengths. The model-side
+region strength and loss-side raux use the same numerical schedule but are separate multipliers. We
+zero-initialize the scene-memory gate weights. For a non-vacated location at unit confidence, its
+keep-logit bias and keep floor give
+κ0 = σ(2.2) = 0.900,
+eκ0 = 0.8 + 0.2κ0 = 0.980,
+g0 = 1 −eκ0 = 0.020,
+(12)
+where σ is the logistic sigmoid, κ0 and eκ0 are the raw and effective keep coefficients, and g0 is
+the new-content write coefficient in Eq. 8. Vacated source locations bypass the keep floor so that
+transported content can leave its old position. The carrier-descriptor keep gate also has zero weights
+and bias 3.0, giving σ(3.0) = 0.953. Full-only targets use static-grid weight 0.05, foreground-budget
+margin 0.10, motion-gate scale 0.15, static-motion threshold 0.02, and transport-visibility floor 0.10;
+contact pseudo-targets use motion/co-motion/proximity scales (0.15, 0.20, 0.45).
+20
+
+
+Preprint
+Table 6: Domain-specific preprocessing and video-world-model training. “Quick/full” gives the
+number of validation clips evaluated every 200/1,000 steps.
+Action
+WM
+params
+WM
+steps
+Peak-LR
+hold
+Quick/
+full
+Robot Manipulation: RT-1
+raw 13-D
+818.746M
+60k
+2k–32k
+64/1,024
+3D Game Simulation: CSGO
+raw 51-D
+818.795M
+30k
+2k–16k
+64/128
+Embodied Navigation: RECON
+local ∆3-D
+818.733M
+30k
+2k–16k
+13/13
+Table 7: Frozen evaluation protocols. Context is excluded from all reported metrics.
+Evaluated episodes
+Targets
+Resolution
+Common alignment
+Robot Manipulation: RT-1
+1,024
+32
+256×320
+ot, at:t+31 7→ot+1:t+32
+3D Game Simulation: CSGO
+70 of 372 test
+32
+256×320
+Same current anchor and raw 51-D
+action sequence.
+Embodied Navigation: RECON
+128
+32
+240×320
+Same current anchor and adjacent
+local-motion sequence.
+Matched Plain AR control. Plain AR retains the complete token-prediction and decoded-visual
+recipe, including the lane, changed-cell, terminal-frame, and visual schedules. Because it has no route
+variable, its generation CE is evaluated on all cells. All rows marked “Not used”—including route,
+slot/flow, carrier, transport, contact, and source-grid objectives—are absent, with no replacement
+auxiliary objective. The frozen representations used to construct Full-only targets supervise losses
+only and are never written into recurrent state.
+All video world models use AdamW with learning rate 10−4, minimum learning rate 10−5, weight
+decay 0.05, and (β1, β2) = (0.9, 0.95). After a 2k-step warmup, the rate is held at its peak for the
+interval in Table 6 and then cosine-decayed to the minimum at the final step. The predicted-only
+rollout curriculum is shared: AR8 for steps [0, 4k), AR16 for [4k, 12k), and AR32 thereafter. We
+backpropagate through the entire active rollout without teacher forcing or truncated BPTT.
+Formal training uses seed 0, BF16, PyTorch distributed data parallel over 32 GPUs, global batch
+size 32, no gradient accumulation, activation checkpointing, and gradient clipping at 1.0. Quick
+validation is run every 200 steps, full AR32 validation and checkpointing every 1,000 steps. The main
+results use the final raw-model checkpoint—60k for RT-1 and 30k for CSGO and RECON—rather
+than choosing a checkpoint on the test set. No exponential moving average is used. The ablation in
+Section 4.4 instead fixes every compared model to 30k steps.
+C
+DATASETS AND FROZEN EVALUATION PROTOCOLS
+All protocols were materialized as ordered episode lists before metric aggregation. A protocol
+records the source episode, anchor, action slice, conditioning frames, and 32 reference targets. Every
+method receives the same anchor and the same actions for the 32 scored transitions. A baseline may
+additionally use frames and aligned actions strictly before the anchor when required by its released
+interface, but no method observes any scored target. Table 7 summarizes the resulting contracts.
+21
+
+
+Preprint
+C.1
+RT-1
+We construct a fixed 1,024-episode protocol from RT-1 (Brohan et al., 2022). Episodes used by our
+development validation protocol are first excluded. Of the remaining episodes, 1,142 admit both a
+16-frame observation prefix and 32 adjacent future targets. We sample 1,024 distinct episodes without
+replacement using seed 0 and then sort the selected episode identifiers. The anchor within an episode
+is generated deterministically from the episode identifier and constrained to retain the preceding 15
+frames and all 32 future frames. The common current observation is ot; the raw 13-D action at+j is
+paired with target ot+j+1. Our model observes only ot, whereas a released baseline may use frames
+from the reserved prefix according to its native interface.
+This protocol is disjoint from the data used to train and validate INERTIALWORLD. The released
+baselines were trained with different RT-1 partitions, so it cannot simultaneously be a held-out
+split for every public checkpoint. In particular, 1,015 of the 1,024 episodes occur in the released
+RLVR-World training subset. We therefore use this block as a paired released-checkpoint comparison
+under a common rollout contract, not as a claim that every baseline is evaluated on its own held-out
+distribution.
+C.2
+CSGO
+We follow the 5,500-episode CSGO corpus and the 500-episode held-out partition used by
+Vid2World (Huang et al., 2025). The first 128 held-out episodes are reserved for validation and the
+remaining 372 define the test pool. For each test episode, a deterministic per-episode key selects an
+anchor uniformly from indices 32 through 967. Thus, every episode retains at least 32 earlier frames
+for native baseline context and exactly 32 future targets. All models use the same anchor and raw
+51-D action interval.
+The CSGO block reported in Table 1 is a fixed 70-episode slice of this 372-episode protocol: zero-
+based canonical request indices 0, 5, . . . , 345. We state this rule explicitly so that the subset can be
+reconstructed exactly.
+The source frames are 150×280 BGR images. We convert them to RGB and apply one antialiased
+bilinear resize to 256×320. The same spatial transform is applied independently to every frame and
+does not alter the temporal pairing between at and ot+1.
+C.3
+RECON
+We use the official Vid2World RECON split over 11,835 trajectories (Shah et al., 2021; Huang
+et al., 2025): 9,468 for training and 2,367 held out. We exclude the 17 held-out trajectories used
+for development validation, retain the 1,154 trajectories that admit the required native history and
+32 adjacent targets, and deterministically select 128 distinct test episodes with seed 0. A second
+deterministic key selects one valid anchor per episode. Every method receives the same anchor and
+sequence of normalized local x–y displacement and relative-yaw actions.
+RECON images are decoded at 480×640, resized with antialiased bilinear interpolation to 240×320,
+and reflection-padded by eight pixels above and below to form the 256×320 internal training canvas.
+The padding is removed before serialization and scoring, so all reported RECON metrics use the
+undistorted 240×320 field of view. Predictions from baselines with a different native image size are
+transformed once to this common scoring resolution.
+C.4
+CANONICAL TARGETS AND LEAKAGE CHECKS
+For each domain, the reference frames are decoded once through the frozen data preprocessing
+contract and used as the canonical target tensor for every method. We verify ordered episode
+identifiers, anchor indices, action bytes, frame count, color order, resolution, and value range before
+computing a metric. For RECON, where independently installed image libraries can produce small
+interpolation differences, baseline predictions are paired with this single canonical target tensor after
+confirming that their episode and anchor metadata match. The predicted bytes are not modified by
+this pairing.
+22
+
+
+Preprint
+The scored tensor always contains the 32 future frames ot+1:t+32. Native conditioning frames, the
+common anchor, and any preceding history are excluded. Autoregressive feedback contains only
+model predictions. All methods share at:t+31 for the scored transitions. Native multi-frame baselines
+may additionally consume actions aligned with their observed prefix, and blockwise baselines receive
+the aligned subsequence for the frames they jointly generate. No method receives a reference image
+from the scored interval or an action after the final predicted transition.
+C.5
+CLOSED-LOOP REAL2SIM POLICY EVALUATION
+Protocol. We evaluate policy discrimination under one frozen closed-loop protocol for all five world
+models. The protocol contains four RT-1 checkpoints (Begin, RT-1-X, RT-1 15%, and Converged),
+two drawer tasks (open and close), and 18 requests in every policy–task cell. This gives 144
+trajectories per method and 720 generated trajectories overall. Every method may consume only the
+native visual context required by its released interface. The first policy decision is made from the
+same current observation. Thereafter, the policy observes only the frame generated by that world
+model, and its predicted action conditions the next transition. We provide neither future dataset
+images nor future dataset actions. A rollout executes at most 113 control transitions and stores 114
+frames including the initial observation; if the policy terminates earlier, we retain its final post-action
+frame.
+Scoring and aggregation. Each generated trajectory is manually scored once under a common final-
+state criterion: the instructed drawer must be in the requested open or closed state in the retained final
+observation. Let Sm,p,k denote the success rate for method m, policy p, and task k ∈{open, close}.
+Figure 7 reports the balanced pooled rate Sm,p = 1
+2
+P
+k Sm,p,k, equivalently the mean over the 36
+trajectories for that policy. Its calibration panel reports Em,p = 1
+2
+P
+k |Sm,p,k −Sreal
+p,k | and Em =
+1
+4
+P
+p Em,p, where Sreal
+p,k is the corresponding SIMPLER physical-rollout success-rate reference for
+policy p and task k. Computing the absolute gap within each task before averaging prevents opposite
+open- and close-drawer errors from canceling.
+Results and interpretation. The pooled INERTIALWORLD success rates are 13.9%, 55.6%, 58.3%,
+and 69.4% from Begin through Converged, while the corresponding SIMPLER real-world references
+are 0.0%, 63.0%, 79.7%, and 87.1% (Li et al., 2024). INERTIALWORLD has the smallest Em,p
+for every policy. Its overall task-averaged error is 15.1 percentage points, compared with 20.6
+for WorldGym, 29.0 for Vid2World, 31.7 for RLVR-World, and 42.1 for DriftWorld. The real-
+world values are external aggregates from separate physical trials rather than paired outcomes for
+these generated requests; accordingly, we interpret the comparison as policy-level calibration and
+discrimination, not trajectory-level sim-to-real agreement.
+D
+BASELINE REPRODUCTION AND METRIC DEFINITIONS
+D.1
+RELEASED-CHECKPOINT ROLLOUT CONTRACTS
+We preserve each baseline’s released observation interface, checkpoint, and autoregressive decompo-
+sition instead of forcing all methods into our single-frame state interface. Table 8 records the native
+context and how 32 future frames are produced. In every case, the last conditioning frame is the
+common anchor ot, and all feedback after initialization is predicted by that method.
+For Vid2World, we retain the released domain-specific samplers rather than transplanting the RT-1
+schedule to CSGO or RECON. WorldGym receives the released 10-D control representation obtained
+from the common raw 13-D RT-1 actions. DriftWorld generates on its native square canvas and is
+transformed to the common RT-1 scoring geometry only after prediction. NWM and RAE-NWM
+run at their released native resolutions; their decoded predictions are resampled once to the common
+RECON geometry. These transforms affect only the exported pixels, not the action encoder or the
+recurrent latent state.
+D.2
+FRAME METRICS AND STATISTICAL AGGREGATION
+All RGB tensors are converted to [0, 1]. For predicted frame bo and target o, MSE and MAE are
+means over all pixels and channels, and PSNR = 10 log10(1/(MSE +10−8)). SSIM uses an 11×11
+23
+
+
+Preprint
+Table 8: Native baseline interfaces used in the paired 32-frame evaluation. Hk denotes k
+conditioning frames available to a released model; it does not denote scored output.
+Method
+Native context
+32-frame rollout
+Robot Manipulation: RT-1
+RLVR-World
+released H7 state
+Four 7-frame recurrent blocks followed by a final
+4-frame output chunk.
+Vid2World
+initial H1, then
+H9
+One 15-frame generation, followed by 17
+single-frame sliding-window generations.
+WorldGym
+H1
+Official one-step latent transition applied 32 times.
+DriftWorld
+H4
+Official four-frame sliding window applied
+autoregressively for 32 outputs.
+3D Game Simulation: CSGO
+Vid2World
+H9
+Official T10/H9 single-frame sliding rollout, repeated
+32 times.
+DIAMOND
+H4
+Official continuous four-frame-history rollout for 32
+outputs.
+Embodied Navigation: RECON
+Vid2World
+H4
+Two consecutive 16-frame generations with predicted
+feedback.
+NWM
+H4
+Official one-step four-frame sliding rollout, repeated
+32 times.
+RAE-NWM
+H4
+Official latent one-step rollout, repeated 32 times
+before decoding.
+Gaussian window with standard deviation 1.5 and is evaluated on RGB channels. LPIPS uses the
+VGG backbone and inputs mapped to [−1, 1] (Zhang et al., 2018).
+Metrics are computed independently for every predicted frame. We first average the 32 frame values
+within an episode and then take the arithmetic mean across episodes. The uncertainty after “±” is
+the sample standard deviation across episode-level means (ddof = 1), not a standard error and not
+variation across training seeds. PSNR is therefore a macro-average of frame-level PSNR, rather than
+PSNR obtained from a globally pooled MSE. The fourth main-table metric is MSE on RT-1 and
+MAE on CSGO and RECON, as indicated in Table 1.
+Distributed evaluation partitions complete episodes only. Episode records are restored to canonical
+request order and aggregated in double precision on the CPU; no metric is reduced in a rank-dependent
+order. Deterministic kernels are enabled and TF32 is disabled. These choices make the reported
+statistics independent of the number of evaluation workers.
+D.3
+PAIRED UNCERTAINTY FOR THE MAIN TABLE
+Statistical procedure. For every baseline in each domain–metric cell of Table 1, we compute the
+episode-wise paired difference on the same episodes, yielding 36 comparisons in total. Positive mar-
+gins always favor INERTIALWORLD: ours minus the baseline for PSNR and SSIM, and the baseline
+minus ours for LPIPS and MSE/MAE. We use 100,000 episode-level paired percentile-bootstrap
+resamples for the 95% confidence interval and 100,000 two-sided paired sign-flip permutations for the
+p-value. All 36 comparisons form one family for Holm correction; a margin is counted as supported
+only when its confidence interval lies strictly above zero and its Holm-adjusted p-value is below 0.05.
+Main-table findings. Table 9 shows that all 36 point estimates favor INERTIALWORLD, and 35 are
+supported by both analyses after joint correction. This comprises all 16 RT-1 comparisons, all 12
+RECON comparisons, and seven of eight CSGO comparisons. The sole unresolved case is CSGO
+LPIPS against Vid2World: its point estimate favors INERTIALWORLD by 0.0028, but the paired
+interval [−0.0065, 0.0119] contains zero and pHolm = 0.5599. We therefore interpret this cell as
+statistically unresolved rather than as a confirmed advantage. RT-1 is the primary domain and is trained
+24
+
+
+Preprint
+Table 9: Paired uncertainty against every baseline. Each cell reports the INERTIALWORLD-
+favorable episode-mean margin ∆and its paired 95% bootstrap interval. Positive values favor
+INERTIALWORLD. All unmarked cells also pass the jointly Holm-corrected paired sign-flip test; †
+marks the sole statistically unresolved cell.
+Baseline
+PSNR ↑
+SSIM ↑
+LPIPS ↓
+MSE/MAE ↓
+Robot Manipulation: RT-1 (n=1,024)
+RLVR-World
+2.422
+[2.330, 2.514]
+0.0592
+[0.0574, 0.0609]
+0.0214
+[0.0199, 0.0228]
+0.00355
+[0.00333, 0.00377]
+Vid2World
+3.050
+[2.947, 3.154]
+0.1144
+[0.1115, 0.1173]
+0.0967
+[0.0949, 0.0986]
+0.00501
+[0.00475, 0.00529]
+WorldGym
+2.650
+[2.564, 2.736]
+0.0567
+[0.0551, 0.0584]
+0.0577
+[0.0564, 0.0591]
+0.00435
+[0.00412, 0.00459]
+DriftWorld
+3.539
+[3.443, 3.635]
+0.1079
+[0.1053, 0.1104]
+0.1187
+[0.1166, 0.1208]
+0.00650
+[0.00622, 0.00678]
+3D Game Simulation: CSGO (n=70)
+DIAMOND
+1.317
+[1.016, 1.626]
+0.0521
+[0.0407, 0.0659]
+0.0601
+[0.0508, 0.0698]
+0.02528
+[0.01838, 0.03302]
+Vid2World
+1.675
+[1.341, 2.014]
+0.0781
+[0.0678, 0.0890]
+0.0028†
+[−0.0065, 0.0119]
+0.02996
+[0.02361, 0.03700]
+Embodied Navigation: RECON (n=128)
+NWM
+3.676
+[3.469, 3.882]
+0.1359
+[0.1293, 0.1427]
+0.1060
+[0.0991, 0.1130]
+0.07285
+[0.06811, 0.07762]
+RAE-NWM
+2.039
+[1.834, 2.246]
+0.1223
+[0.1176, 0.1271]
+0.0571
+[0.0511, 0.0634]
+0.03907
+[0.03584, 0.04233]
+Vid2World
+1.107
+[0.907, 1.311]
+0.0580
+[0.0536, 0.0625]
+0.0146
+[0.0079, 0.0214]
+0.02045
+[0.01745, 0.02358]
+for 60k steps; the independently trained CSGO and RECON models use a fixed 30k-step budget to
+test cross-domain applicability under limited compute rather than exhaustive domain-specific tuning.
+Even under this budget, 19 of their 20 baseline-specific margins are supported.
+D.4
+PREDICTION BEYOND THE TRAINING HORIZON
+Long-horizon protocol and findings. To evaluate INERTIALWORLD at temporal scales beyond
+those used for training, we extend the RT-1 rollout from the maximum training horizon of AR32
+to an uninterrupted 64-frame prediction in Table 10. Constructing this H64 benchmark without
+padding requires 64 aligned future RGB targets and the corresponding action sequence after the
+common conditioning anchor. Exactly 35 of the 1,024 episodes in the frozen test protocol satisfy
+this requirement, and we evaluate all 35 rather than sampling a subset. Eligibility is fixed solely by
+sequence length before inference and is independent of any model output or metric. All five methods
+are therefore evaluated on exactly the same ordered episodes, common anchors, action sequences,
+and future targets. Each method retains its native conditioning interface and continues a single rollout
+without being restarted at step 32; every predicted frame in ot+1:t+64 is scored using the main-table
+metrics and the same episode-first aggregation. For INERTIALWORLD, the recurrent state, action
+sequence, and logical rollout step continue through all 64 predictions, while steps 33–64 reuse the
+zero-based terminal trained time-conditioning index (t=31) rather than querying embedding rows
+outside the AR32 training horizon. INERTIALWORLD ranks first on all four metrics. Relative to the
+strongest baseline in each column, it improves PSNR by 2.36 dB and SSIM by 0.060, while reducing
+LPIPS by 0.0243 and MSE by 0.00534. Thus, its aggregate prediction-quality advantage persists at
+twice the maximum training horizon. This evaluation establishes long-horizon predictive quality;
+direct carrier correspondence, reappearance, transport-route, and write-gate analyses are provided
+over all 35 episodes in Table 11 and visualized for an occlusion–reappearance example in Figure 5.
+25
+
+
+Preprint
+Table 10: 64-step RT-1 prediction. Mean ± episode sample standard deviation over all 35 of the
+1,024 frozen test episodes that contain 64 aligned future frames. Metrics average ot+1:t+64; the
+common anchor ot and any method-native history are conditioning only. Best and second-best results
+are shown in bold and underlined.
+Robot Manipulation: RT-1 (64 Future Frames)
+Model
+PSNR ↑
+SSIM ↑
+LPIPS ↓
+MSE ↓
+RLVR-World
+20.22 ± 2.78
+0.730 ± 0.099
+0.213 ± 0.075
+0.0138 ± 0.0096
+Vid2World
+19.04 ± 2.35
+0.636 ± 0.107
+0.315 ± 0.067
+0.0175 ± 0.0116
+WorldGym
+19.98 ± 2.31
+0.736 ± 0.093
+0.250 ± 0.067
+0.0144 ± 0.0074
+DriftWorld
+19.51 ± 2.38
+0.678 ± 0.094
+0.325 ± 0.068
+0.0154 ± 0.0083
+INERTIALWORLD (Ours) 22.58 ± 2.80 0.795 ± 0.095 0.188 ± 0.076 0.0085 ± 0.0071
+Persistent-state mechanism diagnostics.
+To determine whether the recurrent state operates as
+intended rather than merely improving next-frame reconstruction, we analyze the internal mechanism
+over the same complete set of 35 H64 episodes. At every predicted step, we query both the current
+carrier descriptors and their canonical-content descriptors against all 16 slots in the bank initialized
+from the Context frame. Let ct
+i denote carrier i’s dynamic descriptor and qt
+i its canonical-content
+descriptor after predicting frame t; t = 0 denotes the Context-initialized bank. For either descriptor
+family z ∈{c, q} and slots i, j ∈{1, . . . , 16}, define
+Ct
+ij(z) = cos(zt
+i, z0
+j),
+diagt(z) = 1
+16
+X
+i
+Ct
+ii(z),
+IDt(z) = 1
+16
+
+
+i : arg max
+j
+Ct
+ij(z) = i
+ ,
+∆t(z) = 1
+16
+X
+i
+
+Ct
+ii(z) −max
+j̸=i Ct
+ij(z)
+
+.
+(13)
+Here cos is cosine similarity and | · | denotes set cardinality. In Eq. 13, diagt is mean same-slot
+similarity, IDt is same-slot retrieval—the fraction for which the corresponding Context slot is the
+nearest neighbor—and the separation margin subtracts the strongest other-slot cosine from the same-
+slot cosine, thereby distinguishing a uniquely traceable identity from a bank whose slots have merely
+become mutually similar. Reporting cosine, retrieval, and margin together is important: retrieval
+alone could reflect the fixed slot organization, whereas a positive margin and high canonical-content
+similarity show that each slot remains distinctly associated with its original stored content.
+Transport and write statistics. We measure transport using the actual per-cell continuous Lagrangian
+mixture coefficient m ∈[0, 1] in Eq. 7, rather than interpreting transport as a discrete token route.
+Here f E is dense Eulerian flow, f L is carrier-derived Lagrangian flow, and f is the committed flow.
+We report both the mean of m and the fraction of spatial locations at which the carrier-derived
+component is the majority (m > 0.5); neither quantity is a motion magnitude. We then quantify
+revision after carrying by the effective interpolation coefficient w in x+ = (1 −w)xcarry + wxnew.
+Thus w = 0 retains carried state and w = 1 replaces it. Scene, carrier, canonical-feature, and
+canonical-alpha writes all use this direction; the canonical coefficients include their evidence and
+confidence modulation and are not separate biased gates. Every statistic is first reduced over the
+indicated steps and internal slots or spatial locations within an episode. Scene-write q0.90 is the 90th
+percentile of all scene-write coefficients over those same steps and spatial cells within one episode.
+Table 11 then reports the mean and sample standard deviation of the resulting 35 episode-level values.
+The Steps 33–64 and t=64 columns therefore probe state evolution strictly beyond the AR32 training
+horizon.
+Carrier identity and content persistence. The resulting pattern separates evolving motion state
+from persistent content. Carrier-to-Context cosine decreases from 0.924 over Steps 1–32 to 0.682
+at t=64, showing that the carrier descriptors adapt throughout the rollout rather than remaining
+artificially frozen. Nevertheless, the corresponding Context slot is the nearest neighbor for every
+carrier at every horizon, and the separation margin remains clearly positive at t=64 (0.344 ± 0.006).
+Carrier identity therefore remains uniquely traceable even as its dynamic descriptor evolves. More
+importantly, the canonical content bound to those carriers is substantially more stable: its same-slot
+cosine is 0.977 ± 0.006 at t=64, its retrieval remains 100%, and its separation margin changes only
+26
+
+
+Preprint
+Table 11: Persistent-state mechanism diagnostics over 64-step RT-1 rollouts. Mean ± episode
+sample standard deviation over all 35 eligible episodes. Each statistic is reduced within an episode
+before cross-episode aggregation; percentages display shares and gate values multiplied by 100.
+These internal diagnostics are descriptive and do not share a universal better direction.
+Diagnostic
+Steps 1–32
+Steps 33–64
+t=64
+Carrier identity relative to Context
+Same-slot retrieval (%)
+100.0 ± 0.0
+100.0 ± 0.0
+100.0 ± 0.0
+Same-slot cosine
+0.924 ± 0.002
+0.753 ± 0.003
+0.682 ± 0.003
+Separation margin
+0.466 ± 0.003
+0.380 ± 0.004
+0.344 ± 0.006
+Canonical content relative to Context
+Same-slot retrieval (%)
+100.0 ± 0.0
+100.0 ± 0.0
+100.0 ± 0.0
+Same-slot cosine
+0.993 ± 0.002
+0.980 ± 0.006
+0.977 ± 0.006
+Separation margin
+0.740 ± 0.069
+0.728 ± 0.069
+0.726 ± 0.069
+Transport-route usage
+Mean Lagrangian flow share, m (%)
+85.0 ± 2.1
+76.3 ± 4.1
+69.4 ± 5.6
+Locations with m > 0.5 (%)
+99.2 ± 1.2
+92.8 ± 3.7
+82.5 ± 8.5
+Post-carry write gates
+Scene write, mean (%)
+2.64 ± 0.51
+1.84 ± 0.46
+1.76 ± 0.52
+Scene write, q0.90 (%)
+6.05 ± 0.90
+4.54 ± 0.96
+4.34 ± 1.19
+Carrier write, mean (%)
+0.46 ± 0.07
+0.54 ± 0.18
+0.58 ± 0.20
+Canonical-feature write, mean (%)
+0.97 ± 0.03
+0.18 ± 0.02
+0.11 ± 0.02
+Canonical-alpha write, mean (%)
+1.44 ± 0.02
+0.27 ± 0.02
+0.17 ± 0.03
+from 0.740 to 0.726. This separation between an evolving carrier descriptor and nearly invariant
+carried content is the behavior targeted by the persistent Lagrangian representation.
+Transport and selective writing. The forward transition also continues to use that representation
+beyond the training horizon. Mean Lagrangian flow share is 76.3% over Steps 33–64 and 69.4% at
+t=64; carrier flow is the majority component at 92.8% of late-horizon spatial locations and 82.5% of
+locations at the terminal step. These are continuous mixture shares, rather than counts of a discrete
+route, and show that the dense Eulerian fallback remains complementary without replacing carrier
+transport. Finally, the recurrent state is not rewritten wholesale after carrying. At t=64, the post-carry
+scene-write gate averages 1.76%, while the cross-episode mean of its within-episode 90th percentile is
+only 4.34%; carrier, canonical-feature, and canonical-alpha writes average 0.58%, 0.11%, and 0.17%,
+respectively. The small but nonzero gates permit localized innovations while retaining transported
+evidence as the default state-update path. Together with the H64 output advantage in Table 10 and the
+occlusion–reappearance example in Figure 5, these results support the intended carry-before-write
+mechanism: persistent content remains bound to uniquely traceable carriers, is transported through
+the recurrent state, and is updated selectively rather than regenerated at every prediction step.
+D.5
+MOTION-FIDELITY DIAGNOSTICS
+The three diagnostics in Figure 6 use one frozen RAFT estimator for every predicted and reference
+rollout (Teed & Deng, 2020). Let buτ and u⋆
+τ be flows estimated from adjacent predicted and
+reference frames. Flow EPE averages ∥buτ −u⋆
+τ∥2 over pixels and transitions. It is a discrepancy
+between two estimated flows, not an error against measured flow annotations. Flow Cosine evaluates
+their directional agreement only where the reference forward-flow magnitude is at least one pixel.
+Dynamic-region LPIPS instead uses reference backward flow to define a target-coordinate motion
+mask with the same threshold. Both masks are fixed by the reference video and shared by all methods.
+Aggregation again proceeds within episode and then across the same 1,024 episodes.
+These quantities are protocol-specific diagnostics designed to reduce the dominance of static back-
+ground. They are not substituted for the main appearance metrics, and neither their threshold nor
+their reported transition range is selected separately for an individual method.
+27
+
+
+Preprint
+Table 12: Scope of the trained RT-1 ablations. Every variant is trained independently from scratch
+for 30k steps and evaluated on the same ordered 1,024-episode protocol.
+RT-1, seed 0 (matched 30k)
+Variant
+Recurrent state
+Controlled role
+Plain AR
+Latest hard-predicted
+Dynamic state
+Removes Inertial Memory and directly predicts
+the next Dynamic state from fixed Context, the
+action, rollout step, and preceding prediction.
+Recurrent
+Memory
+Latest hard prediction +
+80×1280 GRU
+Tests generic learned recurrence without the
+structured Eulerian–Lagrangian state or persistent
+carrier transport.
+Dense-only
+320-token scene + 64
+slots + four-frame
+history
+Retains the dense state and matched update recipe
+while removing regional carriers, canonical
+content, and carrier transport.
+Full
+Dense-only state + 16
+Lagrangian carriers
+Executes the complete carry–predict–update
+transition and therefore measures the incremental
+effect of carriers relative to Dense-only.
+E
+ABLATION PROTOCOL AND PAIRED ANALYSIS
+Controlled training protocol. All variants in Table 3 are independently trained from scratch rather
+than obtained by disabling pathways in a trained checkpoint. The four RT-1 seed-0 models are all
+0.8B-scale and use the same tokenizer, training episodes, action representation, AdamW schedule,
+BF16 precision, full BPTT without teacher forcing, AR8→AR16→AR32 curriculum, global batch of
+32 on the same 4×8-GPU topology, 30k-update budget, and ordered 1,024-episode H32 evaluation
+protocol. Their active parameter counts are 824.450M (Plain AR), 819.397M (Recurrent Memory),
+808.397M (Dense-only), and 818.746M (Full). Dense-only removes the carrier-specific machinery
+without introducing an auxiliary capacity-matching module, thereby preserving a clean structural
+ablation rather than adding a new architectural component. The independent-seed RT-1 pair and the
+CSGO pair retain the matched recipe within their respective settings.
+State and objective matching. Full and Dense-only share the 320-token dense Eulerian scene, 64
+generic interaction slots, and four-frame hard-prediction history. Dense-only retains the applicable
+innovate/stationary route, slot-diversity, and dense-flow terms, but structurally removes carriers,
+canonical content, source pointers, transported routing, and all losses defined on them. Recurrent
+Memory instead uses the latest hard prediction and an 80×1280 action-conditioned GRU state,
+while Plain AR retains only the latest hard prediction; neither has a scene, slot, route, or carrier
+variable. All four retain the same applicable joint-code, generation-code, digit, ordered-value, and
+frozen-decoder targets, with identical coefficients and schedules. Terms whose state variable does not
+exist are omitted rather than replaced by a variant-specific auxiliary objective. Thus the histories are
+intentionally architecture-specific, while the data, prediction targets, optimization, sample/update
+budget, and 0.8B model scale remain controlled. Table 12 summarizes these state interventions, and
+Table 5 gives the exact Full and Plain-AR loss correspondence.
+Track and reappearance selection. Track and reappearance selection is fixed by ground-truth DINO
+ViT-B/16 features; predictions never determine which locations are scored. A Context patch is eligible
+when its cosine separation from the closest other Context patch is at least 0.02. At a later frame,
+a reliable correspondence must be a mutual nearest neighbor with cosine at least 0.60, separation
+margin at least 0.02, and at least eight reliable observations accumulated along that track. For each
+scored destination patch, let bz and z⋆be the ℓ2-normalized DINO features from the predicted frame
+and its corresponding ground-truth frame. The content error is
+e(bz, z⋆) = 1 −bzTz⋆.
+(14)
+Thus lower values indicate that predicted content at the ground-truth-defined destination retains the
+target appearance in feature space. For the track-based metrics, the H32 rollout is divided at its fixed
+midpoint: Steps 1–16 form the early half and Steps 17–32 the late half. The primary long-lived
+and late-track measures use the late half to emphasize accumulated content persistence rather than
+28
+
+
+Preprint
+Table 13: Paired persistence improvements. Each baseline cell reports the Full-model-favorable
+episode-mean difference ∆= baseline −Full and its pointwise paired 95% percentile-bootstrap
+interval obtained from 50,000 bootstrap replicates of the same eligible paired episodes, not from
+additional test episodes. Positive values favor the Full model; blue rows identify the reference method.
+RT-1, seed 0
+Model
+Long-lived
+content
+Post-reappearance
+content
+Late-track
+content
+Plain AR
+0.0999 [0.0932, 0.1067] 0.1108 [0.1007, 0.1210] 0.0133 [0.0121, 0.0145]
+Recurrent Memory
+0.0269 [0.0218, 0.0321] 0.0339 [0.0260, 0.0419] 0.0059 [0.0051, 0.0067]
+Dense-only
+0.0102 [0.0054, 0.0149] 0.0147 [0.0072, 0.0222] 0.0020 [0.0010, 0.0032]
+INERTIALWORLD (Full)
+Reference method
+RT-1, seed 1
+Plain AR
+0.1019 [0.0952, 0.1086] 0.1020 [0.0920, 0.1121] 0.0163 [0.0148, 0.0177]
+INERTIALWORLD (Full)
+Reference method
+CSGO, seed 0
+Plain AR
+0.0396 [0.0343, 0.0450] 0.0337 [0.0274, 0.0401] 0.0379 [0.0331, 0.0427]
+INERTIALWORLD (Full)
+Reference method
+short-range prediction quality; each is the episode mean of Eq. 14 over its eligible late-half track
+points. This boundary is identical for every method, seed, and domain. Post-reappearance content is
+the episode mean over all qualifying post-gap destinations anywhere in H32 and is not restricted to the
+late-half window. Long-lived points and post-reappearance events additionally require displacement
+of at least two DINO patches. A reappearance event requires at least four intervening absent steps
+and two consecutive confirmed observations immediately before and after the gap. These events are
+an automatic ground-truth feature-reappearance proxy, not manually annotated physical occlusions.
+Episode support and aggregation. On RT-1, the long-lived, post-reappearance, and late-track
+statistics contain 994, 843, and 1,024 paired episodes, respectively; the reappearance set contains
+3,123 events from 843 episodes. The corresponding CSGO counts are 359, 349, and 369 episodes,
+with 3,849 events from 349 episodes. We first average patches or events within an episode and then
+aggregate episodes, so a single rollout with many tracks cannot dominate the reported uncertainty.
+Paired findings. Every pointwise interval in Table 13 lies strictly above zero. Most importantly,
+the Full–Dense-only comparison isolates the incremental contribution of regional carriers after
+both architectures are trained from scratch: the carrier-equipped Full model reduces long-lived,
+post-reappearance, and late-track errors on the paired evaluation. The larger Full advantages over
+Recurrent Memory and Plain AR establish that the complete structured state is preferable to generic
+recurrence or direct autoregression. Finally, the independent RT-1 seed and CSGO comparisons
+reproduce the Full–Plain advantage on all three measures, showing that the result is not specific to
+one training run or interaction domain.
+29
