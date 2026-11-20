@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-11-19</span>
+      <span class="dpr-home-dashboard-kicker">2026-11-20</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 28 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 35 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>13</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>20</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>15</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-11-19 01:04:49 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-11-20 01:45:56 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,9 +69,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日共筛选 28 篇论文，精读 13 篇、速读 15 篇，聚焦机器人操作、导航与空间推理。</p>
-<p>最值得关注的是从人类视频中提炼双手灵巧操作数据，以及面向多样物体的实时长时交互。</p>
-<p>下步可先读两篇 9 分论文，了解视频先验如何辅助灵巧操作、机器人如何与多样物体持续交互。</p>
+<p>今日精选 35 篇论文，精读 20 篇、速读 15 篇，聚焦视觉与机器人前沿。</p>
+<p>最值得关注的是低冗余 3D 重建与增强训练提升机器人操作鲁棒性，另有深度排序分割和视觉任务空间学习值得速览。</p>
+<p>下步可先读两篇精读论文，了解新方法如何提升重建效率与机器人在复杂环境中的表现。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -80,12 +80,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">13 篇</strong>
+    <strong class="dpr-home-dashboard-count">20 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="From Human Videos to Bimanual Dexterous Manipulation Data: Confidence-Guided RL Refinement of Video Priors">From Human Videos to Bimanual Dexterous Manipulation Data: Confidence-Guided RL Refinement of Video Priors</span></li><li><span class="dpr-home-dashboard-paper-title" title="DreamFAR: Real-Time and Long-Horizon Interaction with Diverse Objects">DreamFAR: Real-Time and Long-Horizon Interaction with Diverse Objects</span></li><li><span class="dpr-home-dashboard-paper-title" title="Joint-ID: Transformer-based Joint Image Enhancement and Depth Estimation for Underwater Environments">Joint-ID: Transformer-based Joint Image Enhancement and Depth Estimation for Underwater Environments</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Layer-Matched Sparse Attention for Low-Redundancy 3D Reconstruction">Layer-Matched Sparse Attention for Low-Redundancy 3D Reconstruction</span></li><li><span class="dpr-home-dashboard-paper-title" title="RageVLA: Augmentation-Trained Perception and Action for State-of-the-Art Robustness on LIBERO">RageVLA: Augmentation-Trained Perception and Action for State-of-the-Art Robustness on LIBERO</span></li><li><span class="dpr-home-dashboard-paper-title" title="SPICE: Stochastic Policy for Interaction in Cluttered Environments">SPICE: Stochastic Policy for Interaction in Cluttered Environments</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>9</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>15</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>3</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -96,9 +96,9 @@
     <strong class="dpr-home-dashboard-count">15 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Sim-to-Real Room-Mediated Object-Goal Navigation with ROS 2 and Nav2">Sim-to-Real Room-Mediated Object-Goal Navigation with ROS 2 and Nav2</span></li><li><span class="dpr-home-dashboard-paper-title" title="Pros4D: Modeling Evolving 4D Worlds in Latent Space for Dynamic Spatial Reasoning">Pros4D: Modeling Evolving 4D Worlds in Latent Space for Dynamic Spatial Reasoning</span></li><li><span class="dpr-home-dashboard-paper-title" title="DiffWAM: Learning World Action Model from Consecutive Visual Difference">DiffWAM: Learning World Action Model from Consecutive Visual Difference</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="DORMS: Image Segmentation via Depth-Ordered Region Merge Trees">DORMS: Image Segmentation via Depth-Ordered Region Merge Trees</span></li><li><span class="dpr-home-dashboard-paper-title" title="Cleanly-DINO: Efficiently Learning Visual Task Spaces for Robotics">Cleanly-DINO: Efficiently Learning Visual Task Spaces for Robotics</span></li><li><span class="dpr-home-dashboard-paper-title" title="Radar Panoptic Transformer: Semantic-Guided Mask Queries for Dynamic Scene Understanding">Radar Panoptic Transformer: Semantic-Guided Mask Queries for Dynamic Scene Understanding</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>12</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>5</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>1</strong></span></div>
 </section>
 </div>
 
