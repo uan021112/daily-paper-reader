@@ -1,0 +1,1956 @@
+Cognitive-Horizon Action Chunking:
+Memory-Guided Adaptive Reasoning for Embodied Navigation
+Weile Gong1, Zijian Lu1,†, Jiahao Zheng1,†, Bo Xu1, Yiping Zuo1
+Jiajia Guo2, Xin He1, Weijun Wang3, Weibei Fan1
+1Nanjing University of Posts and Telecommunications
+2National Mobile Communications Research Laboratory, Southeast University
+3Institute for AI Industry Research, Tsinghua University
+phare111@163.com, 18818732360@163.com, jiahaozheng2005@163.com
+1226044921@njupt.edu.cn, zuoyiping@njupt.edu.cn, jiajiaguo@seu.edu.cn
+xhe@njupt.edu.cn, wangweijun@air.tsinghua.edu.cn, wbfan@njupt.edu.cn
+†Co-second authors.
+Abstract
+Multimodal foundation models are advancing embodied nav-
+igation, but frequent inference incurs substantial computa-
+tional cost. We present Cognitive-Horizon Action Chunking
+(CHAC), a training-free framework for memory-guided adap-
+tive reasoning with a frozen navigation policy. Retained visual
+context, completion cues, and controller feedback determine
+the cognitive horizon, or how many cached waypoints the
+robot executes before refreshing its prediction. At the policy’s
+stop request, local visitation history guides a bounded correc-
+tion with at most one extra movement and no additional model
+calls. CHAC reduces vision-language model calls by 33.4%
+on HM3D-OVON and 64.7% on R2R-CE, with success-rate
+decreases of 0.63 and 10.82 percentage points, respectively.
+Success rate and success weighted by path length improve
+per model call on both benchmarks. Across four physical
+navigation tasks with 40 runs per method, CHAC achieves 18
+successes versus 14 for native execution, reducing model calls
+by 54.9% and GPU inference time by 49.7%.
+Code: https://github.com/phare111/chac.
+1
+Introduction
+Recent advances in multimodal foundation models are ex-
+panding embodied intelligence. Robot-control evaluations
+of general-purpose multimodal models [4] and advances in
+manipulation with Gemini Robotics 2.5 [21] illustrate the
+promise of connecting visual understanding and language
+instructions with embodied action. For navigation, vision-
+language models (VLMs) interpret scenes, ground goals and
+instructions, and generate movement through unfamiliar en-
+vironments [12, 28, 32, 35]. Sustained navigation requires
+coordinating this inference with physical execution.
+Repeatedly invoking large vision-language policies incurs
+computational cost over many physical actions. Action chunk-
+ing amortizes this cost by predicting several future actions per
+invocation [8, 33]. Its benefit depends on execution: frequent
+refreshes limit reuse, while extended execution can carry a
+prediction beyond its supporting observations and motion con-
+ditions. Efficient navigation requires deciding how long to
+act on a prediction and when new evidence warrants another
+policy invocation.
+Existing approaches adjust inference timing or execution
+horizons using consistency or uncertainty signals [1, 10, 13,
+19, 23]. Navigation must also account for movement-induced
+changes: a turn reveals a new action direction, a completion
+cue warrants fresh inference, or the controller cannot realize
+the requested motion. Refreshing changes subsequent actions,
+observations, and execution before termination. Its computa-
+tional effect therefore extends beyond the immediate cost of a
+new call, motivating decisions based on current evidence and
+retained context.
+Our key insight is that retained visual context and visitation
+history can guide both inference timing and terminal execu-
+tion. Visual references and observation coverage preserve
+the context available when each prediction was generated.
+Completion cues and motion feedback complement this con-
+text when deciding whether to reuse or refresh a prediction.
+Executed actions also leave a position history that remains
+available after prediction replacement. Our offline trajectory
+analysis reveals episodes in which the robot enters a suitable
+stopping region but later stops outside it (Section 5.5). Nearby
+visited positions can therefore provide a geometric reference
+for a bounded terminal correction.
+We introduce Cognitive-Horizon Action Chunking
+(CHAC), a training-free framework for memory-guided adap-
+tive reasoning with a frozen navigation policy (Fig. 1). CHAC
+determines when to reuse a cached prediction and when to
+invoke the policy again. Its cognitive horizon counts the or-
+dered waypoints executed before refresh. A visual boundary
+1
+arXiv:2611.25587v1  [cs.RO]  19 Nov 2026
+
+
+? Frequent re-inference,
+underused predictions
+VLM
+●Fast VLM calls ×N
+Fast Waypoint Prediction Coordinate Tokens
+Current views
+Waypoint Head
+Wk=G?F?(Ok,Mk,g)
+ViT
+=(wk.,⋯k)
+Visual history Mk
+Frozen
+VLM
+wk
+w
+Native controller
+<Object-Goal>
+MLP
+Walk through dining area
+MOVE
+and the find mirror...
+KV Cache
+VLM
+STOP
+fearures
+Commitment Boundary
+Bedroom
+Goal
+End chunk reuse
+No forward
+Walk through dining area
+progress
+and the find mirror in the
+bedroom's bathroom.
+VLM
+wk
+calls
+End PositionBathroom
+History-guided
+terminal correction
+p=0.25m
+Dining Area
+Pti Native STOP
+①
+Visual boundary
+Pt Corrected STOP
+Pt Local centroid
+<Dining area> 82 VLM
+calls
+D.=2D+3
+Directional
+Pi=p?+ProjB?Pe-Pi)
+Start Position
+mismatch
+Executed trajectory
+Updated prediction
+Cached motion
+Visited position
+Start/end points
+Fields of view
+Figure 1. Overview of CHAC. A frozen navigation policy predicts ordered waypoints from current views, visual history, and the task
+instruction. During execution, retained visual context and commitment checks guide when to refresh the cached prediction. At native STOP,
+nearby visited positions guide a bounded terminal correction without another model call. The lower scene shows how executed motion becomes
+visitation history. Red dots mark visited positions, and the blue disk denotes the local-history neighborhood.
+compares appearance along newly observed action directions
+with retained visual context. A commitment boundary checks
+completion cues and controller-supported progress. Together
+with inherited motion feedback, they determine inference tim-
+ing. At native STOP, local visitation history guides a bounded
+correction, adding at most one movement and no model calls.
+Our contributions are threefold:
+• We introduce CHAC, a training-free framework for
+memory-guided adaptive reasoning combining an on-
+line cognitive horizon for policy invocation with history-
+guided terminal correction.
+• We identify how refresh decisions interact with subse-
+quent execution to determine inference demand, includ-
+ing a reversal of visual refresh’s computational effect
+under commitment checks.
+• We evaluate navigation quality and inference cost across
+two benchmarks and physical tasks, with matched termi-
+nal interventions testing visitation history’s directional
+information.
+2
+Related Work
+2.1
+Vision-Language-Action Models for Navi-
+gation
+Vision-and-language navigation (VLN) grounds language in
+sequential visual decisions [3], while vision-language-action
+(VLA) policies map multimodal observations and instructions
+to executable actions [16, 36]. NaVid uses observation history
+to predict actions [32]. OmniNav, SimpleVLN, and NaVIDA
+predict waypoints or action chunks [12, 28, 35]. ETPNav
+organizes waypoints in an evolving topological map [2]. These
+models supply multi-step predictions whose execution and
+refresh affect deployment cost.
+2.2
+Action Chunking and Adaptive Reasoning
+ACT combines multi-step prediction with temporal ensem-
+bling [33], and Diffusion Policy generates actions through
+conditional denoising [8]. BID selects chunks using bidirec-
+tional consistency [20]. SGAC combines self-guidance with
+agreement between predictions [23]. Adaptive horizons use
+action entropy, attention, cross-horizon agreement [15, 19, 25],
+denoising variance in DVAC [11], trajectory geometry in
+GeoAAC [7], or action-expert stability in ChunkTrust [13]. A3
+2
+
+
+verifies candidate prefixes [6], while DEHP learns a horizon
+with a frozen policy [34]. AdaNav learns uncertainty-based
+reasoning triggers [10]. ASPEN learns command persistence
+to schedule reuse or fresh inference in a frozen navigation
+VLA [1]. CHAC instead regulates ordered waypoint reuse
+with retained visual context and execution checks, without
+training a scheduler.
+2.3
+Memory and Feedback-Guided Execution
+MEM combines short-term video and long-term language
+memory for robot control [24]. In navigation, EvoNav summa-
+rizes past trajectories [9], and MSGNav selects a final view-
+point using visibility [14]. Feedback also guides inference
+and correction: RTC and LiveVLN overlap inference with mo-
+tion [5, 26], Slow4fast-VLN coordinates slow reasoning with
+control [18], and A2C2 corrects cached actions [22]. Scene-
+change triggers adapt inference timing [27]. For behavioral
+correction, CorrectNav learns from error trajectories [31], and
+SC2-WM uses world-model feedback [29]. CHAC uses exist-
+ing visual context to schedule policy calls and local visitation
+geometry for terminal correction, with frozen model weights.
+3
+Preliminaries
+OmniNav-Fast.
+OmniNav [28] combines fast waypoint pre-
+diction with slower planning. We use its standalone fast sys-
+tem, which generates continuous waypoints through a flow-
+matching head conditioned on vision-language features. Given
+a goal g, three current red-green-blue (RGB) views Ok, and
+native visual history Mk, inference k produces an ordered
+waypoint sequence:
+Wk = Gψ
+ Fθ(Ok, Mk, g)
+
+= (w1
+k, . . . , wH
+k ).
+(1)
+Here, H = 5 is the number of predicted waypoints. The
+vision-language backbone Fθ and flow-matching head Gψ
+have frozen parameters θ and ψ, respectively. Each waypoint
+wi
+k = (xi
+k, yi
+k, sin θi
+k, cos θi
+k, ci
+k) encodes planar position
+(xi
+k, yi
+k), heading θi
+k, and arrival score ci
+k, with i = 1, . . . , H.
+The native interface requests the stop action (STOP) when
+ci
+k > 0.5 for every waypoint. Otherwise, it decodes the first
+waypoint into a motion command.
+Action reuse.
+Execution uses an ordered prefix of the pre-
+dicted chunk, with length hk ≤H defining its cognitive hori-
+zon. Native execution refreshes the prediction after executing
+the first waypoint. CHAC determines this prefix online while
+preserving waypoint order and native decoding. OmniNav
+reports five Euler integration steps [28]. Our frozen evalua-
+tion configuration uses ten flow-head updates per chunk, with
+VLM calls as the principal measure of inference demand.
+4
+Cognitive-Horizon Action Chunking
+CHAC implements memory-guided adaptive reasoning
+through the online scheduling of frozen-policy invocations.
+Retained visual references and observation coverage inform
+prediction reuse. Accumulated position records provide a ge-
+ometric reference for terminal correction. New visual and
+motion evidence determines whether the remaining waypoints
+are executed or refreshed. Refreshing replaces the prediction
+while retaining navigation history. At the native STOP request,
+nearby visited positions supply the geometric reference for a
+bounded correction.
+4.1
+Memory-Guided Action Reuse
+CHAC retains a prediction while its execution checks permit
+continued motion. The cognitive horizon hk describes this
+lifetime as observations and motion feedback evolve. After
+waypoint j, a refresh event Bk,j ends reuse before the next
+cached movement. The available information Fk,j includes
+the prediction, observations, execution state, motor feedback,
+and native read-only controller previews. The first such event
+determines the executed prefix:
+hk = min{H, inf{j ≥1 : Bk,j}} .
+(2)
+Boundary checks are restricted to j < H, with inf ∅= +∞:
+absent a refresh event, the full chunk is reused. Each event
+uses information available at the check, making hk a bounded
+stopping time with {hk ≤j} ∈Fk,j (Appendix B). The
+episode budget imposes an additional execution limit.
+Commitment
+boundary.
+The
+commitment
+boundary
+checks predicted completion and whether the controller sup-
+ports the next motion. After waypoint j, an arrival score
+cj
+k > 0.5 prompts a refresh before a subsequent MOVE. This
+cue triggers a new prediction. The native STOP rule continues
+to govern episode termination. The controller also previews
+the next requested displacement u and its filtered, snapped
+outcome bv. For a nonzero MOVE request, supported progress
+along the requested direction is
+γk,j = u⊤bv
+∥u∥2
+.
+(3)
+A nonpositive γk,j indicates no forward progress along the
+request and triggers a refresh. Either a completion cue or non-
+positive previewed progress activates the commitment event
+Ck,j. Both displacements lie in the world horizontal plane.
+The read-only preview uses native controller geometry without
+executing environment actions, preserving simulator pose and
+random state.
+Visual boundary.
+Movement can expose a new view along
+the next predicted action. CHAC checks whether appearance
+in that direction differs from the visual context supporting the
+prediction. At inference k, it stores the angular coverage Ωk of
+the current views and native visual history, together with three
+32 × 32 grayscale references. Current coverage Ωt follows
+the camera configuration and command odometry.
+For a visible cached MOVE direction ϕt, CHAC selects
+the current camera closest in angle. Its image and the three
+3
+
+
+references are resampled to 32 rows and 30 columns and split
+into three vertical regions each. Let Rt,q denote a current
+region, Ak,s one of the nine reference regions, and q⋆the
+region containing ϕt. With P = 320 pixels per region, we
+first find each region’s closest reference and then contrast the
+action region with the other current regions:
+dt,q = min
+1≤s≤9
+∥Rt,q −Ak,s∥1
+P
+,
+δk,j = dt,q⋆−max
+q̸=q⋆dt,q.
+(4)
+A positive δk,j means that the action region differs from its
+closest reference more than either other region differs from
+its own match. The visual event Vk,j triggers refresh only
+when this contrast is positive and the action direction is newly
+observed: ϕt ∈Ωt \ Ωk and δk,j > 0. The reference remains
+fixed within the chunk.
+Coordinated execution.
+The two boundaries check the
+same prediction before further reuse. Before each cached
+MOVE, CHAC checks directional visual contrast, predicted
+arrival, and controller-supported progress in sequence, refresh-
+ing at the first trigger. After execution, inherited motor feed-
+back triggers Mk,j upon collision, rejection, or nonpositive
+realized progress u⊤v ≤0 for a nonzero request, where v is
+the realized displacement. These events invalidate the cache
+and jointly determine Bk,j = Ck,j ∪Vk,j ∪Mk,j and the
+horizon in Eq. (2).
+For fixed execution evidence, an additional boundary can
+only preserve or shorten the current horizon. Over a closed-
+loop episode, however, refresh changes subsequent actions, ob-
+servations, and stopping decisions. Total calls depend on both
+calls per action and the number of actions executed. A shorter
+horizon therefore need not increase total calls. Section 5.4 ex-
+amines this distinction through paired runs, including savings
+associated with earlier failed stops.
+4.2
+History-Guided Geometric Projection
+The same execution process accumulates positions that remain
+available after individual predictions are refreshed. At a native
+STOP request, CHAC uses nearby positions as a local geomet-
+ric reference for terminal correction. It retains visual-history
+positions within distance Hb of the current position pt. The
+multiset Lt preserves their native multiplicity and includes
+three copies of pt, one per current view. Native first-waypoint
+translation bounds m1, M1 give the history radius Hb and
+correction bound ρ:
+b = s0∥max(|m1|, |M1|)∥2,
+ρ = min(b, smotor).
+(5)
+The maximum is elementwise. The native scales s0 = 0.3 and
+smotor = 0.25 m give b ≈0.424 m and ρ = 0.25 m.
+Let yi = [R⊤
+t (pi −pt)]xz be the horizontal offset of each
+retained position, with Rt mapping local to world coordinates.
+These records contain no goal labels. The correction seeks
+agreement with their local geometry under a motion bound:
+∆⋆
+t = arg min
+∥∆∥2≤ρ
+1
+|Lt|
+X
+i
+∥∆−yi∥2
+2.
+(6)
+Up to a constant, the objective is ∥∆−yt∥2
+2, where yt =
+|Lt|−1 P
+i yi. Its unique minimizer projects this mean onto
+the disk Bρ = {d : ∥d∥2 ≤ρ} and stays in the convex hull of
+the retained offsets (Appendix B):
+∆⋆
+t = ProjBρ(yt),
+∆⋆
+t ∈conv{0, y1, . . . , yn} ∩Bρ.
+(7)
+For n > 0 historical offsets, the three current-view zeros
+shrink the mean to yt =
+n
+n+3yhist. For n = 0, the candi-
+date is zero. The projection bounds the requested correction.
+Section 5.5 tests its navigation benefit through matched inter-
+ventions.
+CHAC converts the candidate into a native MOVE with
+distance ∥∆⋆
+t ∥2 and heading atan2(−∆⋆
+t,x, −∆⋆
+t,z). With at
+least two action slots remaining, a nonzero candidate that
+passes the positive preview criterion in Eq. (3) precedes the
+original STOP. Otherwise, STOP executes directly. The cor-
+rection adds at most one MOVE and zero model calls.
+Unified execution.
+Algorithm 1 integrates reuse, refresh,
+and terminal correction in one execution loop. A refresh re-
+places unexecuted waypoints and renews the visual reference
+while retaining navigation history. Accepted movements up-
+date that history and receive motor feedback. A native STOP
+request invokes the bounded correction, subject to the condi-
+tions above, before stopping. Native decoding uses command
+odometry. Available motion-state estimates provide feedback
+and populate the spatial history.
+5
+Experiments
+We evaluate how prior inference remains useful during cached
+execution and as visitation history. Benchmark comparisons
+establish the trade-off between navigation quality and infer-
+ence cost. Ablations and paired analyses examine boundary
+coordination and terminal correction, followed by physical
+trials of prospective reuse.
+5.1
+Experimental Setup
+Benchmarks and policy.
+We evaluate the frozen OmniNav-
+Fast policy [28] on HM3D-OVON Val-Unseen [30] with 3,000
+object-goal episodes and R2R-CE Val-Unseen [17] with 1,839
+instruction-following episodes. Success requires an actual
+STOP with final distance below 0.25 m and 3 m, respectively.
+Both evaluations allow 500 environment actions per episode.
+Component analyses use a fixed 1,000-episode HM3D devel-
+opment subset, with terminal-direction interventions sharing
+neural execution prefixes. We fixed CHAC’s configuration
+before evaluating it on R2R-CE. The frozen policy handles
+4
+
+
+Table 1. Inference demand and navigation quality. Costs are totals over each benchmark. Gray rows identify CHAC. Bold, underlined, and
+italic entries identify the top three SR/SPL values per benchmark. For ESR and ESPL, bold and underline identify the top two. SPL and ESPL
+use the common valid subset. ESR uses all episodes.
+Method
+SR (%) ↑SPL (%) ↑VLM Calls ↓
+FlowEq ↓Env. Actions ESR ↑ESPL ↑
+HM3D-OVON Val-Unseen [30]
+OmniNav-Fast [28] (ICLR 2026)
+32.17
+21.92
+130,444
+1,304,440
+130,444
+1.000
+1.000
+AAC [19] (CVPR 2026)
+14.20
+5.28
+84,869
+16,973,800
+276,726
+0.679
+0.376
+SGAC [23] (NeurIPS 2025)
+26.23
+16.18
+330,314 ≥3,303,140
+330,314
+0.322
+0.300
+ChunkTrust-AHS [13] (arXiv 2026)
+17.13
+7.72
+98,596
+985,960
+207,696
+0.705
+0.476
+DVAC [11] (arXiv 2026)
+7.13
+1.71
+91,006
+910,060
+350,266
+0.318
+0.112
+GeoAAC [7] (arXiv 2026)
+13.77
+4.35
+99,317
+993,170
+297,977
+0.562
+0.263
+CHAC (Ours)
+31.53
+16.82
+86,846
+868,460
+280,483
+1.472
+1.198
+R2R-CE Val-Unseen [17]
+OmniNav-Fast (ICLR 2026)
+57.04
+49.30
+240,526
+2,405,260
+240,526
+1.000
+1.000
+AAC (CVPR 2026)
+36.70
+23.02
+35,236
+7,047,200
+119,000
+4.392
+3.187
+SGAC (NeurIPS 2025)
+55.46
+46.17
+255,276
+4,720,110
+255,276
+0.916
+0.882
+ChunkTrust-AHS (arXiv 2026)
+46.11
+34.68
+51,049
+510,490
+110,494
+3.809
+3.314
+DVAC (arXiv 2026)
+17.29
+9.52
+36,128
+361,280
+132,847
+2.018
+1.286
+GeoAAC (arXiv 2026)
+34.58
+22.05
+40,222
+402,220
+119,814
+3.626
+2.674
+CHAC (Ours)
+46.22
+34.17
+84,989
+849,890
+347,054
+2.293
+1.961
+Algorithm 1 Cognitive-Horizon Action Chunking
+Require: Frozen policy π from Eq. (1), goal g, native controller
+1: Initialize an empty cache, navigation histories, and k ←0
+2: while episode active and budget remains do
+3:
+if cache invalid or exhausted then
+4:
+k ←k + 1
+5:
+Wk ←π(Ok, Mk, g), j ←1, anchor visual reference
+6:
+end if
+7:
+if native STOP requested then
+8:
+Form Lt and yt as in Section 4.2
+9:
+∆⋆
+t ←ProjBρ(yt)
+10:
+Apply correction if nonzero, remaining action budget
+≥2, and preview supports positive progress (Eq. (3))
+11:
+STOP and break
+12:
+end if
+13:
+a ←Decode(wj
+k)
+14:
+if j > 1 and Ck,j−1 ∪Vk,j−1 occurs then
+15:
+Invalidate cache and continue
+16:
+end if
+17:
+Execute a, update histories, and set j ←j + 1
+18:
+Invalidate cache if motor feedback triggers Mk,j−1
+19: end while
+goal search and route following. CHAC determines how long
+to reuse its predictions.
+Comparisons.
+We compare native first-waypoint execu-
+tion of OmniNav-Fast [28] with adaptations of AAC [19],
+ChunkTrust-AHS [13], DVAC [11], GeoAAC [7], and
+SGAC [23] (Table 1). The baseline implementations retain
+their respective observation-history and decoding interfaces.
+Component studies compare fixed horizons, individual mecha-
+nisms, and their combinations on matched episode identities.
+All horizon variants retain native motor feedback.
+Metrics.
+We report success rate (SR), success weighted by
+path length (SPL), total VLM calls, flow-update equivalents
+(FlowEq), and environment actions. FlowEq includes recorded
+additional sampling, with a recorded lower bound for HM3D
+SGAC. To summarize quality per VLM invocation, we nor-
+malize to native execution:
+EQ =
+P
+i∈JQ qi / P
+i∈JQ ci
+P
+i∈JQ q0,i / P
+i∈JQ c0,i
+,
+Q ∈{SR, SPL}.
+(8)
+Here, qi is success or SPL, ci counts VLM calls, and subscript
+0 denotes native execution on the same cohort. JSR includes
+all episodes. JSPL is the common finite-SPL subset: 2,964
+HM3D episodes, all 1,839 R2R episodes, and 991 ablation
+episodes. Table costs cover the complete cohorts. ESPL uses
+calls from its corresponding valid subset.
+5.2
+Main Results
+On HM3D-OVON, CHAC preserves near-native task com-
+pletion with substantially fewer model calls (Table 1). It
+achieves 946 successes versus 965 for native execution, a
+0.63-percentage-point decrease in SR, while reducing VLM
+calls by 33.4%, from 130,444 to 86,846. This saving accompa-
+nies lower path efficiency: SPL falls from 21.92% to 16.82%,
+and environment actions rise from 130,444 to 280,483. CHAC
+achieves the highest SR and SPL among the evaluated action-
+chunking alternatives. At similar VLM call counts, CHAC
+and AAC achieve 31.53% and 14.20% SR, respectively.
+The fixed-configuration R2R-CE evaluation shows a larger
+navigation cost. CHAC reduces calls by 64.7%, from 240,526
+5
+
+
+Table 2. Component contributions on 1,000 matched HM3D episodes. Visual, Commitment, and Terminal denote the two refresh boundaries
+and terminal correction. Single-component rows extend Fixed-5. Removal rows start from Full CHAC. SPL uses 991 common valid episodes.
+Configuration
+SR (%) ↑
+SPL (%) ↑
+VLM Calls ↓
+FlowEq ↓
+Env. Actions
+ESR ↑
+ESPL ↑
+OmniNav-Fast (Native)
+30.60
+20.47
+45,286
+452,860
+45,286
+1.000
+1.000
+Fixed-3
+25.20
+15.10
+39,683
+396,830
+96,883
+0.940
+0.842
+Fixed-5
+21.40
+11.60
+33,814
+338,140
+116,014
+0.937
+0.766
+Fixed-5 + Visual
+21.00
+11.46
+35,111
+351,110
+118,311
+0.885
+0.728
+Fixed-5 + Commitment
+23.10
+13.13
+30,863
+308,630
+96,878
+1.108
+0.949
+Fixed-5 + Terminal
+29.40
+14.77
+33,814
+338,140
+116,943
+1.287
+0.975
+w/o Visual Boundary
+29.40
+15.75
+30,863
+308,630
+97,833
+1.410
+1.139
+w/o Commitment Boundary
+29.10
+14.74
+35,111
+351,110
+119,236
+1.227
+0.937
+w/o Terminal Correction
+23.00
+13.11
+29,811
+298,110
+94,369
+1.142
+0.982
+Full CHAC
+29.60
+15.93
+29,811
+298,110
+95,328
+1.469
+1.193
+Fewer
+Same
+More
+Environment actions
+Fewer
+Same
+More
+VLM calls
+31.9%
+0.9%
+0.1%
+31.9%
+9.9%
+0.0%
+4.7%
+2.6%
+18.0%
+−4k
+−2k
+0
++2k
++4k
+Change in VLM calls
+Commitment off
+Commitment on
+Interaction
++1,297
+-1,052
+-2,349
+(a) Paired cost changes
+(b) Effect of visual refresh
+Figure 2. Global cost changes and boundary interaction. (a) Full CHAC versus w/o Commitment on all 1,000 pairs. Both retain Visual
+and Terminal. Peach indicates lower cost, rose indicates higher cost, coral indicates mixed changes, and gray indicates unchanged costs. (b)
+Adding Visual with Commitment off or on, and the difference between these effects. All four configurations disable Terminal. Error bars are
+paired-bootstrap 95% intervals.
+to 84,989, while SR falls from 57.04% to 46.22% and SPL
+from 49.30% to 34.17%. ChunkTrust-AHS achieves a simi-
+lar SR of 46.11% with 51,049 calls and 34.68% SPL. Thus,
+inference savings persist across tasks, while the extent of
+navigation-quality preservation and the competitive trade-off
+are task dependent.
+Relative to native execution, CHAC achieves ESR = 1.472
+and ESPL = 1.198 on HM3D, and 2.293 and 1.961 on R2R.
+These ratios report navigation quality per VLM call at each
+method’s evaluated configuration.
+5.3
+Ablation Study
+Table 2 reveals complementary contributions during execution
+and at stopping. Moving from native execution to Fixed-5
+reduces calls from 45,286 to 33,814, while SR falls from
+30.60% to 21.40%. Adding terminal correction restores SR to
+29.40% and raises SPL from 11.60% to 14.77% without ad-
+ditional model calls. The executed history therefore supports
+successful stopping beyond the use of predictions as cached
+actions.
+With terminal correction retained, Full CHAC achieves a
+similar SR of 29.60% while reducing calls by 11.8% and
+environment actions by 18.5% relative to Fixed-5 + Terminal.
+SPL rises from 14.77% to 15.93%. The boundaries thus reduce
+inference and execution demand at a comparable observed
+success rate, while terminal correction accounts for most of the
+success recovery in this comparison. Individually removing
+Commitment or Visual from Full adds 5,300 or 1,052 calls.
+The following analyses examine this dependence on execution
+and test what information the history provides at stopping.
+5.4
+Closed-Loop Boundary Coordination
+Commitment-dependent cost reversal.
+The same visual
+refresh rule has opposite observed effects on total calls with
+Commitment off or on. With Terminal disabled, adding Visual
+increases calls by 1,297 under Fixed-5 but saves 1,052 with
+Commitment (Fig. 2(b)). Let NS denote total VLM calls with
+boundary set S. The call interaction is
+∆C,V = (NC,V −NC) −(NV −N∅)
+= −1,052 −1,297 = −2,349.
+(9)
+6
+
+
+129°
+0.12m
+Anchor view
+Refresh view
+The visual boundary triggers a 
+refresh before waypoint 5 in 
+CHAC, while w/o Visual executes 
+the cached waypoint.
+Prediction anchor
+Shared decision state
+CHAC 41 VLM calls    travelled 20.64 m less
+w/o Visual 47 VLM calls
+Goal:exercise bike
+Figure 3. Small displacement, changed visual evidence (episode 1644). Blue solid: CHAC; orange dashed: w/o Visual. Both retain
+Commitment and Terminal. Left: the anchor and refresh states are only 0.12 m apart but differ in heading by 129◦; purple and red mark the
+corresponding views. CHAC refreshes before waypoint 5, while w/o Visual executes the cached waypoint. Right: full trajectories toward the
+exercise bike, with dots marking VLM calls. CHAC uses 41 calls versus 47 and travels 20.64 m less.
+The 95% interval from 20,000 paired bootstrap resamples
+is [−4,108, −699] calls. Resampling 12 scene clusters and
+rescaling mean costs to 1,000 episodes gives [−4,641, −366].
+Both intervals place the cost interaction below zero.
+Execution connects the two boundaries. A Commitment-
+triggered refresh renews both the prediction and the visual
+reference. The resulting actions change the observations evalu-
+ated by Visual. A Visual-triggered refresh changes the motion
+requests assessed by Commitment. The reversal is consistent
+with this dependence on intervening execution. Its evidence
+concerns cost: with Terminal off, adding Visual to Commit-
+ment changes SR from 23.10% to 23.00%.
+Denser inference, lower total demand.
+Holding Visual and
+Terminal fixed, adding Commitment reduces calls from 35,111
+to 29,811 (15.1%) and actions from 119,236 to 95,328 (20.1%).
+Logs record 3,652 Commitment refreshes and 8,952 fewer
+calls in other categories, a net reduction of 5,300. These trigger
+counts aggregate each configuration’s realized trajectories.
+Meanwhile, inference density rises from 29.45 to 31.27 calls
+per 100 actions (6.2%). With N = Ar, total calls combine
+action count A and call density r = N/A. Here, the reduction
+in execution volume outweighs the increase in call density.
+Figure 2(a) shows how this aggregate change distributes
+across episode pairs. Calls and actions both decrease in 31.9%
+of pairs. Another 31.9% require fewer actions without chang-
+ing the number of calls. Overall, 74.6% increase neither cost.
+Refresh decisions therefore affect both the density of inference
+and the amount of execution before termination.
+Termination contributes materially to these savings. The
+648 pairs in which both policies fail account for 3,619 of the
+5,300 net saved calls (68.3%). In 38 of these pairs, a timeout
+without Commitment becomes an earlier failed STOP with
+Commitment. Earlier termination of unsuccessful execution
+therefore contributes to the reduction in total demand.
+Small displacement, changed visual evidence.
+In Fig. 3,
+small displacement accompanies substantially changed visual
+evidence. In episode 1644, the robot is only 0.12 m from the
+anchor but its heading differs by 129◦, bringing a staircase
+into view. At their shared decision state, CHAC refreshes
+(Eq. (4)), while w/o Visual executes the cached fifth waypoint.
+The subsequent action and observation sequences diverge.
+CHAC uses 41 VLM calls versus 47 and travels 20.64 m less
+before terminal correction. The case connects directional
+evidence, refresh, and subsequent inference demand. Positions
+reached during execution remain available as history after the
+predictions are replaced.
+5.5
+History-Guided Terminal Correction
+Table 3 tests what visitation history contributes beyond the
+latest displacement. The three correction strategies share neu-
+ral execution prefixes, requested correction radii, and native
+preview, budget, and STOP rules. Continuation follows the
+latest nonzero displacement, reversal flips it, and local con-
+sensus uses nearby visited positions. All use zero additional
+model calls. Evaluation includes all 1,000 episodes, including
+41 timeouts.
+Motion continuation reduces SR to 16.20%, while reversal
+reaches 26.40%. Local consensus achieves 29.60%, with 82
+rescues and 16 regressions, yielding 32 more successes than
+7
+
+
+Table 3. Terminal direction under matched requested radii. All
+strategies share neural prefixes, native motor/STOP conditions, and
+zero additional VLM or Flow calls. SR includes all 1,000 episodes.
+Strategy
+Rescue ↑
+Regression ↓
+SR (%) ↑
+Original STOP
+0
+0
+23.00
+Motion continuation
+12
+80
+16.20
+Motion reversal
+59
+25
+26.40
+Local consensus
+82
+16
+29.60
+reversal. Under these matched conditions, local visitation
+geometry provides useful directional information beyond the
+latest displacement.
+Among the 82 rescued episodes, 80 had previously recorded
+a goal distance below 0.25 m before stopping outside that ra-
+dius. The offline analysis uses goal distances to identify spatial
+progress lost before the final STOP. The correction uses visited
+positions. Nearby visited positions remain useful for terminal
+correction after the corresponding action predictions have ex-
+pired. The correction adds at most one bounded movement,
+with zero additional VLM or Flow calls.
+5.6
+Physical Execution
+We evaluate end-to-end navigation on a TurboPi robot with real
+camera observations, calibrated chassis control, and remote
+RTX 4090 inference. Table 4 reports navigation outcomes and
+model inference costs under the same frozen policy.
+CHAC achieves a success rate of 45.0%, compared with
+35.0% for native execution and 40.0% for Fixed-3. Rela-
+tive to native execution, it reduces VLM calls from 687 to
+310 and GPU inference time from 437.76 s to 220.00 s, cor-
+responding to reductions of 54.9% and 49.7%, respectively.
+Compared with Fixed-3, CHAC improves success by 5.0 per-
+centage points with 13.2% fewer VLM calls and 16.2% less
+GPU inference time. These aggregate results show improved
+navigation success with lower inference cost in the evaluated
+physical tasks.
+Table 4. Physical navigation with a frozen policy. Each method
+runs ten times on each of four indoor tasks. Success is reported as
+a percentage. Calls and GPU times are totals. GPU time measures
+model inference.
+Method
+Success (%) Calls GPU (s)
+OmniNav-Fast
+35.0
+687
+437.76
+Fixed-3
+40.0
+357
+262.54
+CHAC (Ours)
+45.0
+310
+220.00
+6
+Limitations
+CHAC reduces neural inference demand with task-dependent
+losses in success and SPL and increased environment actions.
+Physical latency depends on camera acquisition and executed
+motion. Terminal correction depends on the policy’s STOP
+request and local visitation geometry. The physical trials use
+calibrated motion estimates and exercise prospective reuse.
+Paired simulation interventions provide the evidence for ter-
+minal recovery. Broader deployment with measured odometry
+would clarify motion robustness and end-to-end efficiency.
+7
+Conclusion
+CHAC implements memory-guided adaptive reasoning with
+a frozen navigation policy. Retained visual context regulates
+prediction refresh, while visitation history enables bounded
+terminal correction without additional inference. Our analy-
+ses connect these decisions to navigation quality, inference
+demand, and physical execution costs.
+References
+[1] Vieri N. Akustia and Bin Hu. ASPEN: Adaptive Semantic
+Reasoning via Command Persistence Prediction for Efficient
+Navigation VLAs, 2026. 1, 3
+[2] Dong An, Hanqing Wang, Wenguan Wang, Zun Wang, Yan
+Huang, Keji He, and Liang Wang. ETPNav: Evolving Topolog-
+ical Planning for Vision-Language Navigation in Continuous
+Environments. IEEE Transactions on Pattern Analysis and
+Machine Intelligence, 47(7):5130–5145, 2025. 2
+[3] Peter Anderson, Qi Wu, Damien Teney, Jake Bruce, Mark
+Johnson, Niko Sünderhauf, Ian Reid, Stephen Gould, and Anton
+van den Hengel. Vision-and-Language Navigation: Interpreting
+visually-grounded navigation instructions in real environments,
+2018. 2
+[4] Anthropic. Claude Fable 5.2 and Mythos 5.2. Technical blog
+post, 2026. 1
+[5] Kevin Black, Manuel Y. Galliker, and Sergey Levine. Real-
+Time Execution of Action Chunking Flow Policies, 2025. 3
+[6] Feng Chen, Xianghui Wang, Yuxuan Chen, Boying Li, Yefei
+He, Zeyu Zhang, and Yicheng Wu. Dynamic Execution Com-
+mitment of Vision-Language-Action Models, 2026. 3
+[7] Xin Chen, Sen Chen, Yujuan Ding, Jian Liu, Guoqing Wang,
+Wei Ye, Heng Tao Shen, and Yi Bin. GeoAAC: Geometry-
+Based Adaptive Action Chunking from Denoising Trajectories
+in VLA Policies, 2026. 2, 5
+[8] Cheng Chi, Zhenjia Xu, Siyuan Feng, Eric Cousineau, Yilun Du,
+Benjamin Burchfiel, Russ Tedrake, and Shuran Song. Diffusion
+policy: Visuomotor policy learning via action diffusion. Int. J.
+Rob. Res., 44(10–11):1684–1704, 2025. 1, 2
+[9] Guangzhao Dai, Shuo Wang, Zihan Wang, Guo-Sen Xie, Yang
+Yang, Jinshan Pan, Qianru Sun, and Xiangbo Shu. History
+to Future: Evolving Agent with Experience and Thought for
+Zero-shot Vision-and-Language Navigation. In Proceedings
+of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), pages 15177–15187, 2026. 3
+[10] Xin Ding, Jianyu Wei, Yifan Yang, Shiqi Jiang, Qianxi Zhang,
+Hao Wu, Fucheng Jia, Liang Mi, Yuxuan Yan, Weijun Wang,
+Yunxin Liu, Zhibo Chen, and Ting Cao. AdaNav: Adaptive Rea-
+soning with Uncertainty for Vision-Language Navigation. In
+Proceedings of the 43rd International Conference on Machine
+Learning, pages 25205–25221. PMLR, 2026. 1, 3
+8
+
+
+[11] Xiangdong Feng, Yuxuan Cheng, Chen Shi, Boyao Han, Yux-
+uan Yan, Yitong Hong, Zhuotao Tian, and Li Jiang. Denoising
+Tells When to Replan: Denoising-Variance Adaptive Chunking
+for Flow-Based Robot Policies, 2026. 2, 5
+[12] Lingyi Hong, Weiren Cai, Jiayu Chen, Xinyu Zhou, Bailin He,
+Yunfei Guo, Qiao Sun, Boyu Ma, Jianfei Yang, and Wenqiang
+Zhang.
+SimpleVLN: Towards Simple and Frontier Vision-
+Language Navigation, 2026. 1, 2
+[13] Fanding Huang, Jingyan Jiang, Shifeng Bao, Mingkang Pu,
+Shiwei Li, Jing Xu, Shijia Xu, Guanbo Huang, Chenghao Gu,
+Yuzhi Huang, Chenxin Li, Faisal Nadeem Khan, Huan Yang,
+Yan Wang, Cheng Chi, and Zhi Wang. ChunkTrust: Adapt-
+ing Execution Horizons for Robot Policies with Action-Expert
+Evidence, 2026. 1, 2, 5
+[14] Xun Huang, Shijia Zhao, Yunxiang Wang, Xin Lu, Wanfa
+Zhang, Rongsheng Qu, Weixin Li, Yunhong Wang, and Chenglu
+Wen. MSGNav: Unleashing the Power of Multi-modal 3D
+Scene Graph for Zero-Shot Embodied Navigation. In Proceed-
+ings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition (CVPR), pages 37154–37163, 2026. 3
+[15] Dong Jing, Gang Wang, Jiaqi Liu, Weiliang Tang, Zelong Sun,
+Yunchao Yao, Zhenyu Wei, Yunhui Liu, Zhiwu Lu, and Mingyu
+Ding. Mixture of Horizons in Action Chunking, 2026. 2
+[16] Moo Jin Kim, Karl Pertsch, Siddharth Karamcheti, Ted Xiao,
+Ashwin Balakrishna, Suraj Nair, Rafael Rafailov, Ethan P Fos-
+ter, Pannag R Sanketi, Quan Vuong, Thomas Kollar, Benjamin
+Burchfiel, Russ Tedrake, Dorsa Sadigh, Sergey Levine, Percy
+Liang, and Chelsea Finn. OpenVLA: An Open-Source Vision-
+Language-Action Model. In Proceedings of The 8th Conference
+on Robot Learning, pages 2679–2713. PMLR, 2025. 2
+[17] Jacob Krantz, Erik Wijmans, Arjun Majumdar, Dhruv Batra,
+and Stefan Lee. Beyond the Nav-Graph: Vision-and-Language
+Navigation in Continuous Environments. In Computer Vision
+– ECCV 2020: 16th European Conference, Glasgow, UK, Au-
+gust 23–28, 2020, Proceedings, Part XXVIII, pages 104–120.
+Springer-Verlag, 2020. 4, 5
+[18] Yang Li, Aming Wu, Zihao Zhang, and Yahong Han. Towards
+Open Environments and Instructions: General Vision-Language
+Navigation via Fast-Slow Interactive Reasoning, 2026. 3
+[19] Yuanchang Liang, Xiaobo Wang, Kai Wang, Shuo Wang, Xiao-
+jiang Peng, Haoyu Chen, David Kim Huat Chua, and Prahlad
+Vadakkepat.
+Adaptive Action Chunking at Inference-time
+for Vision-Language-Action Models. In Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern Recog-
+nition (CVPR), pages 20802–20811, 2026. 1, 2, 5
+[20] Yuejiang Liu, Jubayer Ibn Hamid, Annie Xie, Yoonho Lee,
+Max Du, and Chelsea Finn. Bidirectional Decoding: Improving
+Action Chunking via Guided Test-Time Sampling. In The Thir-
+teenth International Conference on Learning Representations,
+2025. 2
+[21] Carolina Parada. Gemini Robotics 2.5 Accelerates Real-World
+General Dexterity. Google DeepMind technical blog post, 2026.
+1
+[22] Kohei Sendai, Maxime Alvarez, Tatsuya Matsushima, Yutaka
+Matsuo, and Yusuke Iwasawa. Leave No Observation Behind:
+Real-time Correction for VLA Action Chunks, 2025. 3
+[23] Junhyuk So, Chiwoong Lee, Shinyoung Lee, Jungseul Ok, and
+Eunhyeok Park. Improving Generative Behavior Cloning via
+Self-Guidance and Adaptive Chunking. In Advances in Neural
+Information Processing Systems, 2025. 1, 2, 5
+[24] Marcel Torne, Karl Pertsch, Homer Walke, Kyle Vedder, Suraj
+Nair, Brian Ichter, Allen Z. Ren, Haohuan Wang, Jiaming Tang,
+Kyle Stachowicz, Karan Dhabalia, Michael Equi, Quan Vuong,
+Jost Tobias Springenberg, Sergey Levine, Chelsea Finn, and
+Danny Driess. MEM: Multi-Scale Embodied Memory for Vi-
+sion Language Action Models. Technical report, 2026. 3
+[25] Haoxuan Wang, Gengyu Zhang, Yan Yan, Ramana Rao Kom-
+pella, and Gaowen Liu. VLA Knows its Limits: Adaptive
+Execution Horizons for Robot Policies. In Computer Vision
+– ECCV 2026, pages 607–623. Springer Nature Switzerland,
+2026. 2
+[26] Xiangchen Wang, Weiye Zhu, Teng Wang, Tiantian Geng,
+Zekai Zhang, Zhiyuan Qi, Jinyu Yang, and Feng Zheng.
+LiveVLN: Reducing Stop-and-Go Loops in Vision-Language
+Navigation. IEEE Robotics and Automation Letters, 11(11):
+13343–13350, 2026. 3
+[27] Yansong Wu, Huaqing Li, Tianding Hou, Lingyun Chen, and
+Alois Knoll. React When You Need To: Event-Triggered Asyn-
+chronous Inference for VLA Policies, 2026. 3
+[28] Xinda Xue, Junjun Hu, Minghua Luo, Shichao Xie, Jintao
+Chen, Zixun Xie, Quan Kuichen, Wei Guo, Zedong Chu, Mu
+Xu, and Zhengzhou Zhu. OmniNav: A Unified Framework for
+Prospective Exploration and Visual-Language Navigation. In
+International Conference on Learning Representations, pages
+106216–106231, 2026. 1, 2, 3, 4, 5
+[29] Xuan Yao, Yuze Zhu, Junyu Gao, Zongmeng Wang, and Chang-
+sheng Xu. SC2-WM: A Self-Correcting World Model with
+Closed-Loop Feedback for Vision-and-Language Navigation in
+Continuous Environments. In Proceedings of the 43rd Interna-
+tional Conference on Machine Learning, pages 147833–147850.
+PMLR, 2026. 3
+[30] Naoki Yokoyama, Ram Ramrakhya, Abhishek Das, Dhruv Ba-
+tra, and Sehoon Ha. HM3D-OVON: A Dataset and Benchmark
+for Open-Vocabulary Object Goal Navigation, 2024. 4, 5
+[31] Zhuoyuan Yu, Yuxing Long, Zihan Yang, Chengyan Zeng,
+Hongwei Fan, Jiyao Zhang, and Hao Dong. CorrectNav: Self-
+Correction Flywheel Empowers Vision-Language-Action Navi-
+gation Model. Proceedings of the AAAI Conference on Artificial
+Intelligence, 40(22):18737–18745, 2026. 3
+[32] Jiazhao Zhang, Kunyu Wang, Rongtao Xu, Gengze Zhou, Yi-
+cong Hong, Xiaomeng Fang, Qi Wu, Zhizheng Zhang, and
+He Wang. NaVid: Video-based VLM Plans the Next Step for
+Vision-and-Language Navigation, 2024. 1, 2
+[33] Tony Zhao, Vikash Kumar, Sergey Levine, and Chelsea Finn.
+Learning Fine-Grained Bimanual Manipulation with Low-Cost
+Hardware. ArXiv, abs/2304.13705, 2023. 1, 2
+[34] Yuchi Zhao, Miroslav Bogdanovic, Arjun Sohal, Liyu Tao,
+Kourosh Darvish, Alán Aspuru-Guzik, Florian Shkurti, and
+Animesh Garg. Dynamic Execution Horizon Prediction for
+Chunk-based Robot Policies, 2026. 3
+[35] Weiye Zhu, Zekai Zhang, Xiangchen Wang, Hewei Pan, Teng
+Wang, Tiantian Geng, Rongtao Xu, and Feng Zheng. NAVIDA:
+Vision-Language Navigation with Inverse Dynamics Augmen-
+tation, 2026. 1, 2
+[36] Brianna Zitkovich, Tianhe Yu, Sichun Xu, Peng Xu, Ted
+Xiao, Fei Xia, Jialin Wu, Paul Wohlhart, Stefan Welker,
+Ayzaan Wahid, Quan Vuong, Vincent Vanhoucke, Huong
+Tran, Radu Soricut, Anikait Singh, Jaspiar Singh, Pierre Ser-
+manet, Pannag R. Sanketi, Grecia Salazar, Michael S. Ryoo,
+Krista Reymann, Kanishka Rao, Karl Pertsch, Igor Mor-
+9
+
+
+datch, Henryk Michalewski, Yao Lu, Sergey Levine, Lisa
+Lee, Tsang-Wei Edward Lee, Isabel Leal, Yuheng Kuang,
+Dmitry Kalashnikov, Ryan Julian, Nikhil J. Joshi, Alex Irpan,
+Brian Ichter, Jasmine Hsu, Alexander Herzog, Karol Haus-
+man, Keerthana Gopalakrishnan, Chuyuan Fu, Pete Florence,
+Chelsea Finn, Kumar Avinava Dubey, Danny Driess, Tianli
+Ding, Krzysztof Marcin Choromanski, Xi Chen, Yevgen Cheb-
+otar, Justice Carbajal, Noah Brown, Anthony Brohan, Montser-
+rat Gonzalez Arenas, and Kehang Han. RT-2: Vision-Language-
+Action Models Transfer Web Knowledge to Robotic Control. In
+Proceedings of The 7th Conference on Robot Learning, pages
+2165–2183. PMLR, 2023. 2
+10
+
+
+Appendix
+A
+Real-World Robot Evaluation
+Table
+Start
+(a) A1: Black chair
+Start
+(b) A2: White backpack
+Table
+Start
+(c) A3: Black sofa
+Doorway
+Start
+(d) B1: Doorway backpack
+OmniNav-Fast
+Fixed-3
+CHAC
+Start
+Success
+Failure
+Target
+Figure 4. Navigation paths in four physical tasks. Each panel shows the first run of OmniNav-Fast, Fixed-3, and CHAC on the corresponding
+task. Stars identify target objects; circles and crosses mark successful and unsuccessful endpoints, respectively. Table 5 summarizes all ten runs
+per method and task.
+A.1
+Platform and Deployment
+We use a TurboPi mobile robot with a Raspberry Pi 5, an
+onboard RGB camera, and a pan mechanism. The robot ex-
+ecutes motion commands locally, while a remote RTX 4090
+runs the frozen OmniNav-Fast policy. The evaluation con-
+figuration acquires left, front, and right images sequentially
+through a pan sweep. Each pan movement is configured for
+400 ms, followed by frame acquisition. The sweep is a single-
+camera hardware requirement. Three synchronized cameras
+covering the same views would eliminate camera rotation and
+settling delays without changing CHAC or the policy input
+interface. The three views and visual history condition the
+same waypoint-generation interface used by the navigation
+policy.
+Native execution refreshes after its first waypoint. Fixed-3
+executes up to three ordered waypoints per inference. CHAC
+regulates the cached prefix using its boundary checks. All
+three methods use the frozen model and the same task in-
+structions. The physical adapter translates requested motion
+into calibrated chassis commands. Fixed-3 and CHAC use
+calibration-based motion estimates for their execution feed-
+back.
+A.2
+Tasks and Evaluation Protocol
+Figure 4 compares the paths from the first run of each method
+in the four task settings. A1–A3 specify direct approaches to
+a chair, backpack, and sofa. B1 specifies a backpack near a
+doorway.
+The evaluation comprises 120 runs, with ten repetitions
+per method on each task. Runs use the task-specific marked
+starting locations and a 100-action budget. A1–A3 have a 180 s
+time limit, and B1 has a 300 s limit. Success requires reaching
+the intended target and issuing an autonomous STOP within
+the limit. Timeouts, manual takeovers, and unsuccessful stops
+count as failures. The tables summarize all repetitions.
+Table 4 reports aggregate inference costs. Table 5 provides
+per-task success counts and mean inference and action statis-
+tics across all runs.
+A.3
+Per-Task Results
+CHAC uses fewer VLM calls and less GPU inference time than
+both baselines on each of the four tasks. On A1, it succeeds in
+four of ten runs, compared with three for Fixed-3 and none for
+native execution, using 5.6 calls and 4.16 s of GPU inference
+per run. On B1, it achieves five successes, compared with one
+for native execution and six for Fixed-3, while averaging 8.7
+calls and 6.42 s of GPU inference.
+Success varies across tasks. On A2, CHAC succeeds in six
+runs, while both baselines succeed in seven. On A3, CHAC
+succeeds in three runs, compared with six for native execution
+and none for Fixed-3. Together, the four tasks yield 18 suc-
+cesses for CHAC, 14 for native execution, and 16 for Fixed-3,
+with lower aggregate inference cost for CHAC.
+CHAC also executes fewer motion commands than Fixed-
+3 on all four tasks. This reduction accompanies its lower
+VLM-call counts and GPU inference costs, while the reported
+success counts reflect the same task-specific evaluation proto-
+col.
+B
+Mathematical Properties
+This section develops the equations in Section 4 in the same
+order as the method. We first analyze the online horizon, the
+commitment and visual boundaries, and their joint effect on
+11
+
+
+Table 5. Robot navigation detail per task and method.
+Task
+Method
+Success
+VLM Calls
+GPU (s)
+Actions
+Reused
+A1
+OmniNav-Fast
+0/10
+17.7
+11.57
+16.9
+0.0
+Fixed-3
+3/10
+6.4
+4.90
+16.5
+11.0
+CHAC
+4/10
+5.6
+4.16
+14.5
+8.1
+A2
+OmniNav-Fast
+7/10
+15.7
+10.17
+14.7
+0.0
+Fixed-3
+7/10
+8.8
+6.08
+23.4
+15.6
+CHAC
+6/10
+8.0
+5.52
+22.6
+14.2
+A3
+OmniNav-Fast
+6/10
+14.4
+8.54
+13.4
+0.0
+Fixed-3
+0/10
+10.3
+7.29
+29.6
+19.5
+CHAC
+3/10
+8.7
+5.96
+25.1
+16.4
+B1
+OmniNav-Fast
+1/10
+20.9
+13.50
+20.4
+0.0
+Fixed-3
+6/10
+10.2
+7.98
+27.9
+18.5
+CHAC
+5/10
+8.7
+6.42
+25.5
+16.8
+prediction reuse. We then derive the terminal projection, its
+spatial support and sensitivity, and its relationship to the native
+execution interface. All vector norms are Euclidean unless a
+subscript specifies otherwise.
+B.1
+Online Action Reuse
+Online horizon.
+Fix an inference index k whose predic-
+tion does not request native STOP. We consider its boundary-
+defined horizon before applying the episode-budget cap. The
+information sets {Fk,j}H
+j=0 form a filtration: Fk,i ⊆Fk,j
+for i ≤j. At check j, the next action may use the observa-
+tions, cached prediction, execution state, motor feedback, and
+read-only controller preview available at that check. Thus the
+index j denotes a completed-waypoint count together with
+the information acquired before deciding whether to reuse the
+next waypoint. The first waypoint is handled by the native
+decoding and execution interface.
+Proposition B.1 (Adapted first-event horizon).
+Suppose
+Ck,j, Vk,j, Mk,j ∈Fk,j for 1 ≤j < H, and let Bk,j =
+Ck,j ∪Vk,j ∪Mk,j. The horizon in Eq. (2) is a stopping time
+with values in {1, . . . , H}.
+Proof. For 1 ≤j < H, a boundary-defined horizon ends by
+j exactly when at least one boundary event occurs at a check
+no later than j. Hence
+{hk ≤j} =
+j[
+i=1
+Bk,i.
+(10)
+Every Bk,i in the union belongs to Fk,i ⊆Fk,j, so the union is
+measurable with respect to Fk,j. For j = 0 the event is empty,
+and for j ≥H it is the entire sample space. The convention
+inf ∅= +∞gives hk = H when no boundary fires. This
+proves the assertion. Once reuse ends, its record can be held
+fixed for the remaining indices; no future observations are
+needed to identify the first event.
+□
+This statement formalizes the causal use of execution ev-
+idence. The episode budget can further truncate execution,
+and a native STOP request follows the terminal branch of
+Algorithm 1.
+Commitment boundary.
+In Eq. (3), both u and bv are hor-
+izontal displacements from the same current position. The
+requested waypoint lies at offset u, while the controller pre-
+view reaches offset bv. We assume u̸ = 0, as required by the
+definition of γk,j.
+Proposition B.2 (Geometry of supported progress).
+The
+controller preview satisfies
+∥u −bv∥2 −∥u∥2
+= ∥bv∥2 −2∥u∥γk,j.
+(11)
+Consequently, γk,j ≤0 implies that the preview cannot reduce
+the distance to the requested waypoint. The distance increases
+strictly if bv̸ = 0. More generally, the preview reduces this
+distance if and only if
+γk,j > ∥bv∥2
+2∥u∥.
+(12)
+Proof. Expanding the squared distance gives ∥u −bv∥2 =
+∥u∥2 +∥bv∥2 −2u⊤bv. Substitution of Eq. (3) proves Eq. (11).
+If γk,j ≤0, both terms on its right-hand side are nonnega-
+tive, and the first is positive for nonzero bv. Solving the strict
+distance-decrease inequality yields Eq. (12).
+□
+The zero threshold used by CHAC therefore detects a ge-
+ometrically identifiable failure of the current motion request:
+the controller preview supplies no progress along that request
+and cannot approach its endpoint. Equation (12) also dis-
+tinguishes positive directional progress from strict distance
+reduction; the implemented test remains γk,j ≤0.
+12
+
+
+For a fixed request, the progress statistic has a direct pertur-
+bation bound. If two previews satisfy ∥bv′ −bv∥≤η, then
+|γ′
+k,j −γk,j| = |u⊤(bv′ −bv)|
+∥u∥
+≤η.
+(13)
+This follows from the Cauchy–Schwarz inequality.
+Thus
+γk,j > η preserves positive progress under the perturbation,
+while γk,j < −η preserves the nonpositive-progress trigger.
+The same distance identity applies to realized displacement v
+in the motor-feedback test.
+The completion-score branch has a separate role. A cached
+score cj
+k > 0.5 requests a new prediction before another
+cached MOVE. A single cached completion cue is distinct
+from the native STOP predicate, which requires all arrival
+scores of the evaluated prediction to exceed 0.5. Accordingly,
+this branch changes when the prediction is refreshed while
+preserving the native stopping rule.
+Visual boundary.
+We now analyze Eq. (4) at a fixed check
+(k, j). The selected camera, the three-region partition, the
+action-region index q⋆, and the angular novelty predicate ϕt ∈
+Ωt \Ωk are held fixed. Region indices correspond between the
+two image collections being compared. The closest reference
+region is allowed to change.
+Proposition B.3 (Stability of directional contrast).
+Let
+R′
+t,q and A′
+k,s be perturbed current and reference regions such
+that
+∥R′
+t,q −Rt,q∥1
+P
+≤εR
+for every q,
+∥A′
+k,s −Ak,s∥1
+P
+≤εA
+for every s.
+(14)
+Then the matched-region distances and directional contrast
+satisfy
+|d′
+t,q −dt,q| ≤εR + εA,
+|δ′
+k,j −δk,j| ≤2(εR + εA).
+(15)
+Writing β = 2(εR + εA), the positive-contrast condition is
+preserved when δk,j > β, and remains false when δk,j < −β.
+Proof. For each pair of regions, define the quantity already
+minimized in Eq. (4) as Dq,s = ∥Rt,q −Ak,s∥1/P. The
+reverse triangle inequality and Eq. (14) give
+|D′
+q,s −Dq,s| ≤
+∥(R′
+t,q −Rt,q) −(A′
+k,s −Ak,s)∥1
+P
+≤εR + εA.
+(16)
+For two finite collections {as}, {a′
+s} with |a′
+s −as| ≤e,
+each a′
+s lies between as −e and as + e. Taking minima
+gives | mins a′
+s −mins as| ≤e. Taking maxima gives the
+analogous bound for maxima. Applying the minimum bound
+to Dq,s establishes the first inequality in Eq. (15). Applying
+the maximum bound to the two non-action regions and then
+the triangle inequality yields
+|δ′
+k,j −δk,j| ≤|d′
+t,q⋆−dt,q⋆|
++
+max
+q̸=q⋆d′
+t,q −max
+q̸=q⋆dt,q
+
+≤2(εR + εA).
+(17)
+The sign conclusions follow by adding or subtracting this
+bound.
+□
+The magnitude of the directional contrast thus supplies a
+margin for the appearance test. If both image collections
+have perturbation bound ε, the bound is 4ε. Within a chunk,
+the cached reference is fixed; for perturbations to the current
+image alone it reduces to 2εR. With the angular predicate
+fixed, these conclusions also determine whether the full visual
+event Vk,j is preserved. A change in camera selection, action-
+region assignment, or angular novelty changes the inputs to
+this comparison and is treated as a different check.
+Coordinated execution.
+The union Bk,j = Ck,j ∪Vk,j ∪
+Mk,j connects the component tests to the horizon in Eq. (2).
+At a fixed evidence record, ending reuse at the first satisfied
+predicate implements this union. Motor feedback obtained
+after a MOVE invalidates the cache before further reuse.
+Proposition B.4 (Ordering under shared evidence).
+Con-
+sider two boundary families evaluated on the same indexed
+evidence sequence for the same prediction. If Bk,j ⊆B′
+k,j for
+every 1 ≤j < H, then
+h′
+k ≤hk
+for every outcome.
+(18)
+Proof. If hk < H, the original boundary fires at j = hk.
+The enlarged boundary also fires at that index, if not earlier, so
+h′
+k ≤hk. If hk = H, the inequality follows from h′
+k ≤H.□
+The shared-evidence condition identifies the object being
+ordered: the lifetime of one prediction. A closed-loop refresh
+instead replaces that prediction and changes later actions and
+observations. For an episode with A > 0 environment actions
+and N model calls, let d = N/A be the observed call density.
+For two runs with positive action and call counts,
+N ′
+N = d′
+d
+A′
+A .
+(19)
+Hence N ′ < N exactly when A′/A < d/d′. This account-
+ing identity explains how higher call density can coexist with
+lower total inference demand when the executed episode is
+shorter. The boundary comparisons in Section 5.4 evalu-
+ate these quantities on the realized runs and distinguish the
+recorded stopping outcomes.
+B.2
+History-Guided Geometric Projection
+Records, coordinates, and objective.
+Fix a native STOP
+request at time t. Let y1, . . . , yn be the retained historical
+offsets, expressed in the same local horizontal frame as in
+Section 4.2. The count n includes repeated records. Add
+13
+
+
+yn+1 = yn+2 = yn+3 = 0 for the three current views. Thus
+m = |Lt| = n + 3 ≥3, and
+yt =
+1
+n + 3
+n
+X
+i=1
+yi,
+Jt(∆) =
+1
+n + 3
+ n
+X
+i=1
+∥∆−yi∥2 + 3∥∆∥2
+!
+.
+(20)
+The second line is precisely the objective in Eq. (6), with
+the three zero offsets written explicitly. The current views
+therefore contribute a quadratic penalty on displacement from
+the current position. Its coefficient follows from their native
+multiplicity. The candidate remains constrained to the disk Bρ
+with the radius in Eq. (5).
+Proposition B.5 (Projection and optimality gap).
+For ρ ≥
+0, Eq. (6) has a unique minimizer
+∆⋆
+t =
+
+
+
+yt,
+∥yt∥≤ρ,
+ρ yt
+∥yt∥,
+∥yt∥> ρ.
+(21)
+It is characterized by
+⟨yt −∆⋆
+t , ∆−∆⋆
+t ⟩≤0
+(∆∈Bρ).
+(22)
+Every feasible candidate satisfies the quantitative optimality
+bound
+Jt(∆) −Jt(∆⋆
+t ) ≥∥∆−∆⋆
+t ∥2.
+(23)
+Proof. Using all m = n + 3 offsets, expand each difference
+around the mean. Since Pm
+i=1(yi −yt) = 0, the cross terms
+cancel and
+Jt(∆) = ∥∆−yt∥2 + σ2
+t ,
+σ2
+t = 1
+m
+m
+X
+i=1
+∥yi −yt∥2.
+(24)
+The dispersion σ2
+t does not depend on the candidate. The
+objective is continuous and strictly convex, and the feasible
+disk is nonempty, compact, and convex, so its minimizer exists
+and is unique.
+Write r = ∥yt∥. If r ≤ρ, the mean itself is feasible and
+minimizes the squared-distance term. If r > ρ, the reverse
+triangle inequality gives ∥∆−yt∥≥r −ρ for every feasible
+∆, with equality attained at ρyt/r. This proves Eq. (21),
+including the singleton disk when ρ = 0.
+For any feasible ∆, the segment ∆⋆
+t +s(∆−∆⋆
+t ) is feasible
+for 0 ≤s ≤1. The right derivative of the squared-distance
+objective at its minimum s = 0 is nonnegative. Dividing this
+derivative by two gives ⟨∆⋆
+t −yt, ∆−∆⋆
+t ⟩≥0, which is
+Eq. (22). Conversely, expansion gives
+Jt(∆) −Jt(∆⋆
+t )
+= ∥∆−∆⋆
+t ∥2
++ 2⟨∆⋆
+t −yt, ∆−∆⋆
+t ⟩.
+(25)
+The inner product is nonnegative by Eq. (22), proving Eq. (23).
+This also proves that the variational inequality characterizes
+the unique minimizer.
+□
+Taking ∆= 0 in Eq. (23) yields
+Jt(0) −Jt(∆⋆
+t ) ≥∥∆⋆
+t ∥2.
+(26)
+More explicitly, writing r = ∥yt∥, Eq. (21) gives
+Jt(0) −Jt(∆⋆
+t ) =
+(
+r2,
+r ≤ρ,
+2ρr −ρ2,
+r > ρ.
+(27)
+These expressions quantify the improvement in the histori-
+cal squared-distance objective relative to leaving the current
+position unchanged.
+Spatial support and current-position shrinkage.
+For n >
+0, let yhist = n−1 Pn
+i=1 yi. Equation (20) gives
+yt =
+n
+n + 3yhist.
+(28)
+Thus the current-view records shrink the historical mean to-
+ward the current position. Historical duplicates retain their
+weight in this mean.
+The mean yt is a convex combination of the historical off-
+sets and zero. Equation (21) writes ∆⋆
+t = αyt with α ∈[0, 1];
+choose α = 1 if the mean is zero. Therefore
+∆⋆
+t ∈conv{0, y1, . . . , yn} ∩Bρ.
+(29)
+Furthermore, locality filtering and horizontal projection give
+∥yi∥≤Hb for each historical record. The triangle inequality
+then yields the tighter joint bound
+∥∆⋆
+t ∥≤min
+
+ρ,
+n
+n + 3Hb
+
+.
+(30)
+For n = 0, the mean and candidate are zero. The same is true
+for a nonempty history whose offsets sum to zero. Both cases
+preserve native STOP without a correction movement.
+Proposition B.6 (Sensitivity to retained history).
+Consider
+two histories with the same retained-record indices and multi-
+plicities, the same current pose and coordinate frame, and the
+same radius ρ. Let their historical offsets be yi and y′
+i, and let
+their correction candidates be ∆⋆
+t and ∆⋆′
+t . Then
+∥∆⋆
+t −∆⋆′
+t ∥2 ≤⟨∆⋆
+t −∆⋆′
+t , yt −y′
+t⟩,
+∥∆⋆
+t −∆⋆′
+t ∥≤∥yt −y′
+t∥
+≤
+1
+n + 3
+n
+X
+i=1
+∥yi −y′
+i∥.
+(31)
+In particular, if each historical offset changes by at most ε, the
+candidate changes by at most nε/(n + 3).
+Proof. Use ∆⋆′
+t as the feasible comparison point in Eq. (22),
+and then exchange the two histories and candidates. The
+resulting inequalities are
+⟨yt −∆⋆
+t , ∆⋆′
+t −∆⋆
+t ⟩≤0,
+⟨y′
+t −∆⋆′
+t , ∆⋆
+t −∆⋆′
+t ⟩≤0.
+(32)
+14
+
+
+Adding and rearranging proves the first inequality in Eq. (31).
+If the candidates differ, apply Cauchy–Schwarz and divide by
+their distance to obtain the second; if they coincide it holds
+immediately. The last bound follows by subtracting the two
+means in Eq. (20) and applying the triangle inequality.
+□
+The fixed-membership condition can itself be checked
+through a locality margin. Consider a fixed pool of candi-
+date historical records, with current pose and Hb unchanged.
+If every candidate position changes by at most ε and every
+original distance satisfies
+∥pi −pt∥−Hb
+ > ε,
+(33)
+then no record crosses the locality cutoff. Indeed, the reverse
+triangle inequality bounds the change in each distance by ε.
+Rotation into the fixed local frame preserves norms, and hori-
+zontal projection cannot increase them, so the corresponding
+offset changes are also at most ε. Proposition B.6 therefore
+applies to the complete filtering-and-projection calculation
+under this margin. The condition is imposed on both retained
+and excluded records in the fixed pool.
+Connection to native execution.
+The projection defines a
+requested displacement. Algorithm 1 converts it to the native
+distance-and-heading command, checks positive previewed
+progress, and executes at most one correction MOVE before
+STOP. If the candidate is zero, the preview does not support
+positive progress, or fewer than two action slots remain, the
+terminal branch executes STOP directly. The decision uses the
+existing history, arithmetic projection, and controller preview,
+adding zero neural evaluations. An accepted correction uses
+one additional movement slot relative to direct STOP; the
+two-slot requirement accounts for that MOVE and the original
+STOP.
+The relation between a requested candidate and a realized
+displacement can be expressed using the same objective. Hold
+the terminal history and its coordinate frame fixed. Suppose
+the realized horizontal displacement is v = ∆⋆
+t + e, where
+∥e∥≤η. Equation (24) gives the exact identity
+Jt(v) −Jt(∆⋆
+t ) = ∥e∥2 + 2⟨∆⋆
+t −yt, e⟩.
+(34)
+Since ∥∆⋆
+t −yt∥= max(r −ρ, 0), this yields
+Jt(v) −Jt(∆⋆
+t ) ≤η2 + 2 max(r −ρ, 0)η.
+(35)
+The bound follows from Cauchy–Schwarz and applies even if
+the realized displacement lies outside the requested disk. To-
+gether with Eq. (27), it gives a sufficient condition for realized
+improvement in the historical objective: its right-hand side
+must be smaller than Jt(0)−Jt(∆⋆
+t ). This explicitly connects
+projection quality to motion-execution accuracy. The positive-
+progress check assesses the controller preview; an error bound
+η describes the separate relation between the request and the
+realized motion. Navigation outcomes of terminal correction
+are evaluated by the matched interventions in Section 5.5.
+C
+Implementation Details
+Cache and boundary checks.
+CHAC stores the five-
+waypoint prediction, its inference-frame reference, and a cur-
+sor into the ordered chunk. Continuation decodes the next
+cached waypoint in the current execution frame. Visual, task,
+and execution checks run in this order and stop at the first trig-
+ger. A refresh discards the remaining cached waypoints and
+establishes a new visual reference. Motor feedback can invali-
+date the cache after execution. The model weights, waypoint
+order, and native decoding rules remain fixed.
+Visual evidence.
+The simulation implementation caches
+three grayscale references at 32 × 32 resolution. Compar-
+isons use 32×30 images split into three vertical regions. Each
+of the three current regions is compared with nine reference
+regions, yielding a fixed-size pixel calculation per check. An-
+gular coverage includes the inference views and native visual
+history. Command odometry updates the current action di-
+rection. The image reference stays unchanged until the next
+policy invocation.
+Motion interfaces.
+Simulation previews use the native con-
+troller’s filtered and snapped displacement while preserving
+the simulator state. Physical deployment acquires the three
+views sequentially and executes calibrated chassis commands.
+Its feedback and projection interface use motion estimates
+from the calibration. Both adapters supply motion feedback to
+the execution checks.
+Terminal records.
+The simulation terminal stage reads po-
+sition records aligned with native visual history and the three
+current views. It retains multiplicity, applies the Hb local-
+ity radius, and clips the mean offset to ρ = min(b, smotor).
+For the reported simulation setting, H = 5, b ≈0.424 m,
+and smotor = 0.25 m. The local history radius is approxi-
+mately 2.12 m. A single pass over retained records computes
+the mean, followed by a constant-size projection and native
+admissibility check.
+HM3D-OVON baseline scoring.
+For AAC in Table 1, we
+rescore the recorded trajectories using the common success
+criterion of an actual STOP at a goal distance below 0.25 m.
+D
+Computational Resources
+Simulation experiments use four NVIDIA RTX PRO 5000
+GPUs with 72 GB of memory per GPU. Physical-robot infer-
+ence uses one NVIDIA RTX 4090, with image capture and
+chassis execution on the Raspberry Pi 5. The policy remains
+frozen throughout both settings. Each standard invocation
+uses one VLM forward and ten flow-head updates. Main
+benchmark tables account for VLM calls and flow-update
+equivalents, including additional sampling by the compared
+methods. The physical deployment additionally reports GPU
+15
+
+
+0
+100
+200
+300
+Total VLM calls (thousands)
+0
+10
+20
+30
+Success rate (%)
+Native
+AAC
+SGAC
+ChunkTrust-AHS
+DVAC
+GeoAAC
+CHAC
+(a) HM3D-OVON: 3,000 episodes
+0
+50
+100
+150
+200
+250
+300
+Total VLM calls (thousands)
+0
+20
+40
+60
+Success rate (%)
+Native
+AAC
+SGAC
+ChunkTrust-AHS
+DVAC
+GeoAAC
+CHAC
+(b) R2R-CE: 1,839 episodes
+Figure 5. Success rate and VLM calls. All methods and values come from Table 1. Blue stars mark CHAC; orange points mark native
+execution. Moving toward the upper left means higher success with fewer VLM calls. Each point represents one evaluated method configuration.
+inference time and executed and reused actions as per-run
+means in Table 5.
+E
+Quality and Inference Operating
+Points
+The two tasks expose different operating trade-offs.
+On
+HM3D, CHAC retains near-native success at fewer VLM calls.
+On R2R, ChunkTrust-AHS achieves similar success at fewer
+calls than CHAC. Table 1 complements these operating points
+with SPL, flow-update equivalents, and environment actions.
+16

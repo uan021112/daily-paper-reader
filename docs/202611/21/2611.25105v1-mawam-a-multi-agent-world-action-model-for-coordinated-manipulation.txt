@@ -1,0 +1,1639 @@
+2026-11-20
+MAWAM: A Multi-Agent World-Action Model for
+Coordinated Manipulation
+Xianzhe Fan1,2 Chi-Pin Huang1 Fu-En Yang1 Jing Wang1 Yecheng Wu1,3 Yu-Cheng Chou1 Johan Bjorck1
+Linxi “Jim” Fan1 Jan Kautz1 Yu-Chiang Frank Wang1 Zhiding Yu1 Hengshuang Zhao2 Zhiqi Li1
+1NVIDIA
+2 The University of Hong Kong
+3 MIT
+https://research-staging.nvidia.com/labs/lpr/mawam
+REAL ROBOTS
+Shared physical task
+Laundry-bag collection 53.3% (MA-VLA 30.0%)
+MAWAM: Joint actions and the future they create
+All robots' action chunks + future views in one joint sample
+Joint video-action denoising
+Agent 1 role: hold bag open
+3 private views + identity
+State + role
+Future + action tokens
+Dense cross-agent attention
+Agent-axis RoPE on (t, h, w, agent)
+Agent 2 role: hold bag + load garment
+Agent 1 role: hold bag open
+Agent 2 role: hold bag + load garment
+1 Approach
+2 Grasp bag
+3 Lift bag
+3 private views + identity
+State + role
+Future-video loss + per-agent action loss
+Training
+Single-robot backbone
+GR00T 2
+Future + action tokens
+4 Pick garment
+5 Bring over
+6 Release
+Warm-up
+one robot at a time
+Team training
+all robots jointly
+A joint lift opens the bag for the garment.
+The two action chunks must work together.
+Complementary physical interactions
+Bath-towel folding 63.3% (MA-VLA 46.7%)
+Umbrella handover 86.7% (MA-VLA 70.0%)
+Lift together
+Align the cloth
+Fold together
+Both robots shape the same deformable object.
+Approach
+Shared contact
+Transfer
+The receiver’s grasp enables the giver’s release.
+SIMULATION
+One joint sample
+Camera Alignment (predicted views + action chunks)
+Observed (t)
+Predicted (t + 6)
+Agent 1
+camera
+holder 1
+Agent 2
+camera
+holder 2
+Agent 3
+meat
+presenter
+Execute the first 8 of 24 steps together
+→ observe → replan
+Simulation 90.3% (MA-VLA 83.4%)
+2 arms
+3 arms
+8 RoboFactory tasks, two to four arms.
+4 arms
+Figure 1: One sample, the whole team’s future. Mawam generates every robot’s future camera views and
+action chunk together; training it to predict the whole team’s future teaches each robot to coordinate with its
+teammates. Left: two real robots, each with three private cameras and no shared global camera; in laundry-bag
+collection both lift the bag to hold it open while Agent 2 loads the garment. Right: two to four simulated
+arms; in Camera Alignment each agent’s private view is predicted six control steps ahead within a 24-step joint
+sample, whose first eight steps are executed before replanning (a read-only shared global camera provides
+context).
+Abstract
+Every move in a robot team changes the world in which its teammates must act. Coordinated manipulation
+therefore calls for predicting the team’s actions together with the physical future they jointly create. We
+introduce Mawam, a multi-agent world-action model that jointly generates each robot’s future views and
+executable action chunks in a single sample. Built from a pretrained single-robot world-action backbone,
+Mawam jointly denoises all robots’ action and future-view tokens through cross-agent attention, while
+preserving a separate control interface for each robot. Mawam achieves the highest success on all three
+real-robot tasks (laundry-bag collection, bath-towel folding, and umbrella handover), with 67.8% mean
+success, 18.9 percentage points above MA-VLA trained on the same demonstrations and cameras. In
+simulation, Mawam reaches 90.3% mean success on eight tasks with teams of up to four arms. Ablations
+show that cross-agent attention and team-stage future-video supervision both improve coordinated
+© 2026 NVIDIA. All rights reserved.
+arXiv:2611.25105v1  [cs.RO]  18 Nov 2026
+
+
+MAWAM: A Multi-Agent World-Action Model for Coordinated Manipulation
+control: without attention, a four-arm relay falls from 95.0% to 39.0%, and without this supervision,
+Place Food falls from 78.0% to 47.0%.
+1. Introduction
+Robots will increasingly work in teams to tackle complex tasks in the physical world. In homes and factories,
+robots may need to hand objects to one another, jointly manipulate deformable materials, or carry loads
+together. In these tasks, each robot observes the scene from its own viewpoint, but its actions change the
+shared environment and shape what its teammates can do next. A grasp may alter the shape of an object held
+by another robot, while a handover may enable a teammate to begin its next operation (Mandi et al., 2024;
+Qin et al., 2025). Successful collaboration therefore requires robots to coordinate their actions and timing to
+achieve a shared goal. Viewed this way, collaborative manipulation is a process in which robots jointly shape
+the future of their shared physical world. This motivates us to formulate it as a multi-agent world-modeling
+problem: jointly predicting the team’s shared future and the action sequences that produce it.
+Existing approaches to multi-robot collaboration largely fall into three categories. (1) Decentralized policy
+coordination retains a separate execution policy for each robot while learning coordination mechanisms.
+Although readily scalable, these policies may lead to idle waiting or oscillatory behavior in tightly coupled tasks
+because of mismatched coordination patterns or desynchronized execution (Dong et al., 2026; He et al., 2025;
+Park et al., 2026). (2) Joint trajectory and action generation methods model multi-agent trajectories or generate
+coordinated controls but lack explicit predictions of their visual consequences (Wang et al., 2025; Zhu et al.,
+2024). (3) Language- and logic-guided task coordination uses planning, dialogue, or temporal logic to organize
+collaboration, but does not explicitly predict the visual consequences of joint actions (Chen et al., 2024; Kannan
+et al., 2024; Mandi et al., 2024; Meng and Yin, 2026; Zhang et al., 2026b). These methods either decentralize
+decision-making, lack physical foresight, or rely on task-level guidance; none jointly generates executable team
+actions and their corresponding visual futures.
+World models offer a natural path toward addressing this lack of physical foresight, yet existing research still
+separates multi-agent future prediction from executable joint control. Multi-agent world models can reconstruct
+shared states or disentangle per-agent dynamics for planning (Zhang et al., 2025; Zhao et al., 2026b), and
+in video generation they can produce multi-view-consistent futures (Liu et al., 2026; Savva et al., 2026; Wu
+et al., 2026; Zhu et al., 2026). However, these video models treat actions only as conditioning inputs and do
+not produce policies that can be directly deployed in the physical world (Liu et al., 2026; Savva et al., 2026;
+Wu et al., 2026). In robotics, recent world-action models jointly learn visual prediction and action generation,
+demonstrating that future-prediction representations can improve control by capturing the dependencies
+between actions and anticipated scene evolution (Guo et al., 2024; Li et al., 2025; Shen et al., 2025; Ye et al.,
+2026). However, these models are still organized around a single robot’s control stream. Multi-agent video
+generation models thus predict without producing executable joint control, whereas multi-robot policies act
+without jointly modeling the visual consequences that each agent will encounter.
+This leads to a central question: how can a unified generative model jointly predict a robot team’s future
+observations and generate coordinated actions for manipulation in a shared physical world? We introduce
+Mawam, a multi-agent world-action model that learns coordinated control by jointly modeling each robot’s
+actions and the team’s future camera views. A shared Transformer connects all agents’ action and future-view
+tokens through cross-agent attention and jointly denoises them. Each generated sample pairs executable action
+chunks with synchronized future views, predicting both how the team will act and how the scene will evolve
+(Figure 1).
+Joint prediction needs to preserve which observations and controls belong to each robot while distinguishing
+its identity from its task responsibility. Mawam uses an explicit view–agent map to associate multiple private
+camera streams with their owner, together with per-agent state and action tokens that retain each robot’s
+2
+
+
+MAWAM: A Multi-Agent World-Action Model for Coordinated Manipulation
+control interface. Regular-simplex rotary identities assign the same identity code to all views of a robot,
+an action-to-video bias ties its action tokens to those views, and separate task-role embeddings specify its
+responsibility. This allows multiple robots to share a task role without merging their observations or controls:
+for example, two camera holders can share a role while retaining separate states and action outputs.
+To adapt GR00T 2 (NVIDIA et al., 2026), a single-robot world-action model, to team control, we use two
+training stages. During warm-up, the model learns from one robot’s views, state, and actions at a time, adapting
+to the cameras and controllers. Team training then enables cross-agent attention and role conditioning, using
+synchronized demonstrations to jointly supervise the robots’ actions and future views. Randomized identity
+assignments and complete-agent-group shuffling expose each role to varied identity codes and sequence
+positions while preserving each robot’s observation–action correspondence. At deployment, joint denoising
+produces the team’s future views and action chunks. The robots execute their actions in synchrony, then use
+updated observations to condition the next joint prediction.
+We evaluate Mawam on three real-robot tasks: laundry-bag collection, bath-towel folding, and umbrella
+handover. Using three private cameras per robot and no shared global camera, Mawam achieves 67.8%
+mean success, outperforming MA-VLA by 18.9 percentage points under the same demonstration and camera
+setup. We further evaluate on eight RoboFactory tasks with two to four arms, including camera alignment,
+collaborative photography, and multi-stage delivery, achieving 90.3% average success. Ablations show that
+removing cross-agent attention reduces four-arm relay success from 95.0% to 39.0%, while removing future-
+video supervision in team training lowers Place Food success from 78.0% to 47.0%. Additional ablations
+demonstrate the benefits of task-role conditioning, randomized agent identities, and single-robot warm-up for
+coordinated manipulation.
+Our main contributions are:
+• We propose Mawam, a multi-agent world-action model that jointly denoises all agents’ future-view and
+action tokens through cross-agent attention. Joint video-action flow matching enables a single sample to
+contain synchronized visual futures and executable actions for the entire team.
+• We design an agent-attributed representation that explicitly associates each robot’s private views, state, and
+actions, combining regular-simplex agent identities with separate task-role embeddings. This preserves
+each robot’s observation and control interfaces while allowing multiple robots to share a task responsibility.
+We further develop a two-stage training scheme: single-robot warm-up adapts the pretrained world-
+action backbone to the target cameras and controllers, and synchronized team training learns cross-robot
+interactions with randomized identity assignments and agent-group shuffling.
+• We demonstrate coordinated manipulation on three real-robot tasks and eight simulation tasks with two
+to four arms. Mawam improves mean success over MA-VLA by 18.9 percentage points on real robots and
+exceeds its published simulation average by 6.9 percentage points. Ablations examine the representation,
+future supervision, cross-agent interaction, and training recipe.
+2. Related Work
+Coordinating robot actions. Existing approaches can be organized around three broad coordination paradigms.
+(1) Decentralized policy coordination. These methods retain a separate execution policy for each robot and learn
+mechanisms for coordinating their behavior. LatentToM aligns consensus representations across agents, while
+MIMIC-D jointly trains decentralized diffusion policies using local information (Dong et al., 2026; He et al.,
+2025). CLS-DP distills collaborative dynamics into latent representations that condition each agent’s policy
+(Park et al., 2026). (2) Joint trajectory and action generation. MADiff models joint multi-agent trajectories with
+diffusion, supporting both centralized control and decentralized execution (Zhu et al., 2024). GauDP integrates
+agents’ observations through a shared Gaussian scene representation for coordinated control (Wang et al., 2025).
+(3) Language- and logic-guided task coordination. CMAS and SMART-LLM use LLMs for action assignment and
+task planning, while RoCo coordinates robots through dialogue (Chen et al., 2024; Kannan et al., 2024; Mandi
+3
+
+
+MAWAM: A Multi-Agent World-Action Model for Coordinated Manipulation
+et al., 2024). LTLDiff uses language-derived temporal logic to guide demonstration generation and multi-agent
+diffusion policies (Meng and Yin, 2026). MA-VLA uses a planner to produce per-arm atomic prompts and a
+shared VLA executor to generate all arms’ actions (Zhang et al., 2026b). Benchmarks such as RoboFactory
+support systematic evaluation of collaborative manipulation (Qin et al., 2025). These approaches coordinate
+robot actions or task plans, but do not jointly generate executable team actions and their corresponding visual
+futures. Mawam unifies the two in a single joint sample, coupling all agents’ action chunks with synchronized
+future views to model the visual consequences of the team’s actions.
+Predicting multi-agent worlds. Shared-world prediction provides a complementary perspective on collabora-
+tion. COMBO reconstructs shared state from egocentric observations for compositional planning, and SeqWM
+models multi-robot dynamics sequentially with intention sharing (Zhang et al., 2025; Zhao et al., 2026b).
+Solaris, ShareVerse, MultiWorld, Gamma-World, and population-scalable video models develop consistent
+multi-agent views and scalable video generation (Liu et al., 2026; Savva et al., 2026; Wu et al., 2026; Zhao
+et al., 2026a; Zhu et al., 2026). Action-conditioned video models predict how supplied robot or player controls
+change the scene. For coordinated manipulation, the policy must also generate the controls that participate in
+that change. Mawam learns a joint distribution over the team’s visual futures and low-level actions.
+Learning actions with visual futures. Joint visual and action prediction connects generative world models
+to robot control. DreamZero learns aligned visual futures and robot actions; Motus unifies world modeling,
+policy learning, inverse dynamics, and joint video-action prediction, while Motubrain develops multiview and
+cross-embodiment modeling (Bi et al., 2026; Team et al., 2026; Ye et al., 2026). Recent work also clarifies
+how a policy can use future information. Fast-WAM and Self WAM retain future supervision with action-only
+deployment paths, and RIFT constructs a future key/value interface in one backbone pass (Pan et al., 2026;
+Yuan et al., 2026; Zhang et al., 2026a). These designs connect a robot’s actions to anticipated scene evolution.
+In a team, that evolution also depends on what the other robots do. Mawam extends joint world-action
+modeling to these cross-robot dependencies: all agents’ action chunks and private-view futures interact within
+one generative process. Each robot’s predicted behavior is thereby modeled alongside the future that the team
+jointly creates.
+3. Mawam
+Mawam predicts each robot’s actions together with the future the whole team will see. It extends a pretrained
+single-robot world-action backbone to generate the whole team’s future views and action chunks in one sample
+(Figure 2). Cross-agent attention couples the robots’ predictions; simplex identities attach every view to its
+robot, and an action-to-video bias and role embeddings attach its actions and task role.
+3.1. Predicting joint actions and their consequences
+Consider 𝑁agents acting in one environment. An agent is one robot with its own cameras and controller: a
+dual-arm Galaxea R1 Pro in our real-robot experiments and a single Panda arm in simulation. Agent 𝑖has
+state s𝑖
+𝑡, action u𝑖
+𝑡, task role 𝑟𝑖, and private camera streams 𝒱𝑖. A view–agent map 𝑞(𝑣) = 𝑖assigns each stream
+to its owner; 𝑐(𝑣) specifies its camera type. The context 𝒞𝑡contains the instruction, embodiment metadata,
+observations, states, roles, and ownership labels, including optional shared global camera observations 𝒢. We
+model
+𝑝𝜃
+⎛
+⎝{o𝑣
+𝑡+3𝑘}𝑣∈∪𝑖𝒱𝑖, 𝑘=1,...,8
+⏟
+ ⏞
+ 
+O
+, {u𝑖
+𝑡:𝑡+𝐻𝑢−1}𝑁
+𝑖=1
+⏟
+ ⏞
+ 
+U⃒⃒⃒⃒⃒⃒
+𝒞𝑡
+⎞
+⎠.
+(1)
+Here, 𝐻𝑢= 24 is the action horizon in control steps. Each view is observed at 𝑡−12, 𝑡−9, . . . , 𝑡and predicted
+at 𝑡+ 3𝑘for 𝑘= 1, . . . , 8: eight future frames at a three-step interval that cover the same 24 steps (1.2 s
+at 20 Hz in simulation, 1.6 s at 15 Hz on the real robots). The future observations describe one unfolding
+interaction from the robots’ different viewpoints; the action chunks specify how each robot participates in it.
+4
+
+
+MAWAM: A Multi-Agent World-Action Model for Coordinated Manipulation
+Warm-up
+1
+One robot at a time (same demonstrations)
+From the pretrained backbone; roles, identity, cross-agent attention off
+initialize
+Team training
+2
+Synchronized team demonstrations
+TEAM TRAINING (a–c)
+Per-robot streams
+a
+Agent 1
+Camera holder 1
+State
+Role
+Actions
+Future views
+Identity
+Agent 2
+Camera holder 2
+State
+Role
+Actions
+Future views
+Identity
+Agent 3
+Meat presenter
+State
+Role
+Actions
+Future views
+Identity
+Identity: random simplex vertex on the RoPE agent axis
+b Cross-agent attention
+Query
+A1
+A2
+A3
+c Joint supervision
+Video head
+Action head
+…
+…
+…
+ℒWA
+World-action objective (Eq. 2)
+ = 𝜆ℒ
+𝑣
+A1
+A2
+A3
+Key / value
+INFERENCE (SIMULATION)
+One joint sample
+d
+Agent 1
+Camera holder 1
+FM(𝐎; 𝐌𝑣) + 𝜆𝑢ℒFM(𝐔; 𝐌𝑢)
+Shared global camera (optional, read-only)
+Agent 2
+Camera holder 2
+Agent 3
+Meat presenter
+Execute first 8 of 24 steps together  →  observe  →  sample again
+Figure 2: Joint actions, shared consequences. Each robot’s actions change the scene for its teammates.
+Warm-up adapts the pretrained single-robot backbone one robot at a time; team training (a–c) then learns
+from synchronized team demonstrations. (a) Each robot’s stream carries its views, state, role, and noisy action
+and future-view targets; a simplex identity on the RoPE agent axis marks its views, and an action-to-video bias
+(arrow) adds its action summary to its future views. (b) One shared Transformer attends densely across all
+agents. (c) Video and action heads share the world-action objective of Eq. (2). (d) One joint sample gives every
+robot’s action chunk and private-view future (Figure 3); the robots execute the first 8 of 24 steps together,
+observe, and replan. Shown: Camera Alignment in simulation, with one private view and a distinct role label
+per arm, plus a read-only shared global camera.
+Supervising them jointly teaches the model the relationship between what the team does and what its cameras
+subsequently observe. Each action chunk is assigned to its controller. Private views provide the prediction
+targets; shared global cameras supply additional context.
+3.2. Coupling the team’s predictions
+Cross-agent attention. One Transformer attends over all agents’ view, state, and action tokens (§ 3.3) and
+jointly denoises their future views and actions. It uses dense bidirectional attention across agents and prediction
+time, so each agent’s actions and future views are computed jointly with its teammates’ tokens. In Long Pipeline
+Delivery, four arms relay a shoe down a line. Each arm can attend to its teammates’ action and future-view
+tokens, allowing their handover motions to be generated jointly. The controls and visual consequences of all
+participants are generated in the same sample. Shared global camera tokens, when available, serve as read-only
+context.
+Joint world-action learning. Modality-specific heads predict private-view latents and action chunks using
+flow matching (Lipman et al., 2022):
+ℒWA = 𝜆𝑣ℒFM(O; M𝑣) + 𝜆𝑢ℒFM(U; M𝑢).
+(2)
+The visual mask M𝑣selects future targets from all valid private views, excluding observed, padded, and shared
+global camera tokens. The action mask M𝑢selects valid controller dimensions. Synchronized demonstrations
+supervise both parts of the joint sample. Appendix B.5 specifies the forward process and normalization.
+5
+
+
+MAWAM: A Multi-Agent World-Action Model for Coordinated Manipulation
+3.3. Keeping each output with its robot
+Per-robot streams. We group each robot’s private views, state, and actions into one stream. The frozen
+video VAE encodes each private view, and its latent patches form spatiotemporal tokens 𝒱𝑖,𝑣; a learned view
+embedding, indexed by input position, distinguishes an agent’s views. Encoders gather the valid state and
+action dimensions into fixed-width state and action tokens 𝒮𝑖and 𝒰𝑖:
+𝒳𝑖=
+(︃⋃︁
+𝑣∈𝒱𝑖
+𝒱𝑖,𝑣
+)︃
+∪𝒮𝑖∪𝒰𝑖.
+(3)
+An action-to-video bias adds the mean of agent 𝑖’s encoded noisy action tokens to the future tokens of its private
+views, connecting control tokens to visual predictions. Each robot can have several private cameras but has a
+single state and action interface. A weight-shared decoder maps each agent’s action tokens to its controller
+layout and returns the chunk to that controller. Appendix A.1 defines the attribution operators; Appendices B.1
+and B.2 specify controller layouts.
+Identity and role. Joint prediction must distinguish the robots that act from the functions they perform.
+Identity groups one robot’s views, and the action-to-video bias attaches its controls to them; role specifies its
+responsibility in the task. In Camera Alignment, each arm has its own role label: [0, 1, 2] for the two camera
+holders and the meat presenter. If the two holders share one label ([0, 0, 1]), each keeps its own state and
+action tokens, and success is unchanged (Table 3). A role thus marks a common responsibility without merging
+the robots that fulfill it. We add a learned role embedding 𝜌(𝑟𝑖) to agent 𝑖’s tokens and extend video RoPE on
+(𝑡, ℎ, 𝑤) with an agent axis that takes the low-frequency half of the pretrained temporal band (Appendix B.3).
+Identity phases are drawn from 𝑃vertices of a centered unit regular simplex:
+c𝑗=
+√︂
+𝑃
+𝑃−1
+(︂
+e𝑗−1
+𝑃1
+)︂
+,
+c⊤
+𝑗c𝑘=
+{︃
+1,
+𝑗= 𝑘,
+−
+1
+𝑃−1,
+𝑗̸ = 𝑘,
+(4)
+All views of an agent receive the same vertex; shared global camera tokens receive zero agent phase. The vertex
+enters RoPE as a constant rotation: the 𝑃coordinates of c𝑗are the angles, in radians, of the first 𝑃rotation
+pairs of the agent band, and the remaining agent pairs are not rotated. View tokens of agents 𝑖and 𝑗therefore
+differ by c𝑖−c𝑗in the agent band at every time and pixel position; state and action tokens carry no agent
+phase (Appendix B.3). Equal pairwise distances give distinct identities a symmetric geometric code. During
+training, we randomly assign distinct vertices and shuffle complete agent groups, exposing each role to varied
+identity phases and sequence positions. The view embedding stays with the input position, so outputs are only
+approximately permutation-equivariant (Appendix A.2).
+3.4. Training and closed-loop control
+The model first learns how one robot acts through its own cameras and controller, then how the robots’ actions
+interact. Both stages use Eq. (2). (1) Warm-up. Starting from a pretrained single-robot world-action backbone,
+the model learns from one robot’s views, state, and actions at a time, with roles, identities, and cross-agent
+attention disabled. This adapts it to the cameras and controllers. In simulation, Warm-up also predicts the
+shared global camera like a private view. (2) Team training. Initialized from the Warm-up weights, the model
+learns from synchronized team demonstrations with per-robot streams, roles, randomized identities, group
+shuffling, and cross-agent attention enabled.
+Closed-loop joint control. At deployment, joint denoising produces all private-view futures and each robot’s
+action chunk. Each controller executes its first 𝑅actions in lockstep with the others. These actions change the
+scene for the whole team, and the updated observations and states condition the next joint sample.
+6
+
+
+MAWAM: A Multi-Agent World-Action Model for Coordinated Manipulation
+4. Experiments
+We evaluate Mawam on two real robots and simulated teams with two to four arms, followed by component
+ablations.
+Table 1: Mawam is best on every real-robot task. Success rates (%) with binomial standard error over 30 trials
+per task on two Galaxea R1 Pro robots. Laundry, Towel, and Umbrella denote laundry-bag collection, bath-towel
+folding, and umbrella handover; Avg. is the three-task mean. CLS-DP (Park et al., 2026), GauDP (Wang et al.,
+2025), and a 𝜋0.5-based reimplementation of MA-VLA (Zhang et al., 2026b) use the same demonstrations,
+robots, and three private views per robot, without a shared global camera. The last row is Mawam without
+cross-agent attention (independent agents).
+Method
+Laundry
+Towel
+Umbrella
+Avg.
+CLS-DP
+23.3 ± 7.7
+33.3 ± 8.6
+56.7 ± 9.0
+37.8 ± 4.9
+GauDP
+13.3 ± 6.2
+23.3 ± 7.7
+50.0 ± 9.1
+28.9 ± 4.5
+MA-VLA (𝜋0.5)
+30.0 ± 8.4
+46.7 ± 9.1
+70.0 ± 8.4
+48.9 ± 5.0
+Mawam (ours)
+53.3 ± 9.1
+63.3 ± 8.8
+86.7 ± 6.2
+67.8 ± 4.7
+Mawam, independent agents
+36.7 ± 8.8
+50.0 ± 9.1
+70.0 ± 8.4
+52.2 ± 5.1
+Table 2: Coordinating interdependent actions across two-, three-, and four-arm teams. Success rates
+(%) on eight RoboFactory tasks; Mawam uses 100 evaluation episodes per task, with binomial standard
+errors. Team training uses 150 joint demonstrations per task. Bold and underline indicate the highest and
+second-highest reported rates.
+Decentralized policy
+coordination
+Joint trajectory
+and action generation
+Language- and logic-guided
+task coordination
+Task
+𝑁
+CLS-DP
+GauDP
+LTLDiff
+MA-VLA
+Mawam (ours)
+Lift Barrier
+2
+61.0
+72.0
+96.0
+98.0
+100.0 ± 0.0
+Pass Shoe
+2
+n/a
+n/a
+7.0
+91.0
+100.0 ± 0.0
+Place Food
+2
+43.0
+15.0
+25.0
+59.0
+78.0 ± 4.1
+Two Robots Stack Cube
+2
+39.0
+2.0
+60.0
+86.0
+93.0 ± 2.6
+Camera Alignment
+3
+55.0
+26.0
+67.0
+96.0
+100.0 ± 0.0
+Three Robots Stack Cube
+3
+20.0
+0.0
+7.0
+58.0
+59.0 ± 4.9
+Take Photo
+4
+8.0
+3.0
+24.0
+82.0
+97.0 ± 1.7
+Long Pipeline Delivery
+4
+n/a
+n/a
+0.0
+97.0
+95.0 ± 2.2
+Average over the eight tasks
+n/a
+n/a
+35.8
+83.4
+90.3 ± 0.9
+4.1. Real-world collaboration from private views
+Tasks and platform. We evaluate three collaborative tasks using two Galaxea R1 Pro robots: laundry-bag
+collection, bath-towel folding, and umbrella handover. In laundry-bag collection, both robots must keep the
+bag lifted and open while a garment is placed inside; success requires the garment to be inside the bag
+at termination, with neither robot grasping it. Bath-towel folding requires coordinated manipulation of a
+deformable object, whereas umbrella handover requires transferring support from one robot to the other. Each
+robot has one ego/head-left camera and two wrist cameras. The model therefore receives six private camera
+views, with no shared global camera, and must integrate their complementary observations to predict the
+team’s future observations and actions.
+Training and evaluation. We initialize Mawam from GR00T 2 and use Warm-up to adapt it to each robot’s
+cameras and controller. We then train on synchronized demonstrations of the robot pair, jointly supervising
+actions and future observations in all six camera views. Umbrella handover uses giver/receiver roles;
+laundry and towel roles follow the collection setup. Demonstrations are split at the synchronized-pair level
+after camera, timing, and action checks. At deployment, the robots execute the first 8 of the 24 predicted
+steps together, observe the resulting scene, and replan. We compare Mawam with CLS-DP (Park et al., 2026),
+7
+
+
+MAWAM: A Multi-Agent World-Action Model for Coordinated Manipulation
+Camera Alignment
+3 agents | shared 
+global camera 
+(read-only context)
+Agent 1
+Camera
+holder
+Agent 2
+Camera
+holder
+Shared global 
+camera at t (read-
+only context, not 
+predicted)
+Agent 3
+Meat
+presenter
+t | Input
+Observed
+t + 6 | Executed prefix
+Model prediction
+Executed rollout
+Additional coordination patterns
+Matched private views at t + 6
+Lift Barrier
+Pass Shoe
+Long Pipeline 
+Delivery
+2 agents | Agent 1 view
+Shared support
+2 agents | Agent 2 view
+Object handover
+4 agents | Agent 3 view
+Ordered relay
+Model prediction
+Model prediction
+Model prediction
+Executed rollout
+Executed rollout
+Executed rollout
+Figure 3: Predicted and executed observations. Camera Alignment in simulation: for each agent (two camera
+holders and a meat presenter), the observed private view at 𝑡, Mawam’s prediction six control steps ahead
+from one joint sample, and the executed view at the same step. The team executes the first eight steps of its
+24-step action chunks before replanning; the shared global camera is read-only context and is not predicted.
+Right: matched predicted and executed private views for Lift Barrier, Pass Shoe, and Long Pipeline Delivery.
+Quantitative evaluation in Appendix C.2.
+GauDP (Wang et al., 2025), and a 𝜋0.5-based reimplementation of MA-VLA (Zhang et al., 2026b). All methods
+use the same demonstrations, robots, and private-camera setup. Each method is evaluated over 30 trials per
+task. The robots start from a common fixed initial pose (Appendix Table 10), while object placement and state
+are randomized within bounded ranges. Success is assessed using task-specific terminal criteria; interrupted
+episodes and episodes with human intervention count as failures. For each task, we report the success rate and
+its binomial standard error
+√︀
+𝑝(1 −𝑝)/𝑛. Deployment and evaluation details are provided in Appendix E.
+Results. Mawam achieves the highest success rate on all three tasks (Table 1), averaging 67.8%, compared with
+48.9% for MA-VLA, 37.8% for CLS-DP, and 28.9% for GauDP. The largest improvement over MA-VLA occurs
+on laundry-bag collection, where success increases from 30.0% to 53.3%. Removing cross-agent attention
+(independent agents) lowers Mawam’s mean success to 52.2%, with the largest drop on laundry-bag collection
+(53.3% to 36.7%), where loading the garment depends on both robots holding the bag open.
+4.2. Simulation with two- to four-arm teams
+We evaluate all eight multi-robot RoboFactory tasks (Qin et al., 2025), spanning two, three, and four arms.
+Camera Alignment couples a camera-holder pair with a meat presenter that holds the target up to the camera;
+Take Photo adds a fourth arm responsible for triggering the camera. Long Pipeline Delivery connects four arms
+through successive handovers. Mawam is initialized from GR00T 2, with 150 synchronized demonstrations per
+task for team training. Each replan predicts a 24-step action chunk for every agent together with its future
+views; the agents execute the first eight steps in lockstep and then replan from live observations (Figure 3).
+Each task is evaluated on 100 episodes. Appendix Table 4 describes each task’s roles. Table 2 includes results
+for GauDP, CLS-DP, LTLDiff, and MA-VLA. Mawam achieves an average success rate of 90.3% across the eight
+tasks (Table 2). On the two four-arm tasks, Take Photo and Long Pipeline Delivery, it reaches 97.0% and 95.0%,
+respectively, covering both joint manipulation and sequential handovers. The largest gains over the strongest
+published baseline occur on Place Food (78.0% vs. 59.0%) and Take Photo (97.0% vs. 82.0%).
+4.3. Ablation study
+We examine, in order, coupling between agents, future prediction, information access and training, and agent
+representation. Table 3 follows the same order, and Appendix D specifies each configuration.
+8
+
+
+MAWAM: A Multi-Agent World-Action Model for Coordinated Manipulation
+Table 3: Ablation study of joint prediction and coordinated execution. Success rates (%) with binomial
+standard error over 100 episodes per task. Each panel shows the tasks its variants were evaluated on (–:
+not evaluated); the shaded row is the full model. (a) Independent agents removes cross-agent attention;
+No team-stage future-video supervision keeps the future-view tokens and inference; No shared global camera
+drops the shared global camera in team training and evaluation; No Warm-up starts team training from the
+pretrained backbone. (b) One role for all agents (No roles) or for the two camera holders only (Shared-holder
+roles). (c) Absolute slots (learned slot IDs) or Fixed simplex vertices, both with a fixed assignment, replace the
+randomized simplex identities. (d) Centralized team keeps the future-video loss and the shared global camera
+but uses one visual context and one action vector for all arms, with an interface warm-up in place of Warm-up;
+each arm’s fixed position sets its identity and role (Appendix D).
+(a) Cross-agent coupling, future prediction, information access, and training
+Variant
+Lift
+Barrier
+Place
+Food
+Camera
+Alignment
+Two Robots
+Stack Cube
+Pass
+Shoe
+Long Pipeline
+Delivery
+Mawam (full)
+100.0 ± 0.0
+78.0 ± 4.1
+100.0 ± 0.0
+93.0 ± 2.6
+100.0 ± 0.0
+95.0 ± 2.2
+Independent agents
+99.0 ± 1.0
+54.0 ± 5.0
+99.0 ± 1.0
+–
+83.0 ± 3.8
+39.0 ± 4.9
+No team-stage
+future-video supervision
+99.0 ± 1.0
+47.0 ± 5.0
+94.0 ± 2.4
+92.0 ± 2.7
+–
+91.0 ± 2.9
+No shared global camera
+96.0 ± 2.0
+62.0 ± 4.9
+96.0 ± 2.0
+95.0 ± 2.2
+–
+–
+No Warm-up
+100.0 ± 0.0
+45.0 ± 5.0
+92.0 ± 2.7
+–
+98.0 ± 1.4
+34.0 ± 4.7
+(b) Task roles
+Variant
+Place
+Food
+Camera
+Alignment
+Mawam (full)
+78.0 ± 4.1
+100.0 ± 0.0
+No roles
+0.0 ± 0.0
+8.0 ± 2.7
+Shared-holder roles
+n/a
+100.0 ± 0.0
+(c) Agent identity
+Variant
+Lift
+Barrier
+Place
+Food
+Camera
+Alignment
+Take
+Photo
+Mawam (full)
+100.0 ± 0.0
+78.0 ± 4.1
+100.0 ± 0.0
+97.0 ± 1.7
+Absolute slots
+91.0 ± 2.9
+22.0 ± 4.1
+99.0 ± 1.0
+96.0 ± 2.0
+Fixed simplex
+84.0 ± 3.7
+43.0 ± 5.0
+99.0 ± 1.0
+95.0 ± 2.2
+(d) Baseline: Centralized team
+Variant
+Place
+Food
+Pass
+Shoe
+Long Pipeline
+Delivery
+Mawam (full)
+78.0 ± 4.1
+100.0 ± 0.0
+95.0 ± 2.2
+Centralized team
+54.0 ± 5.0
+79.0 ± 4.1
+0.0 ± 0.0
+Cross-agent attention. Disabling cross-agent attention reduces success on Long Pipeline Delivery from 95.0%
+to 39.0% and on Pass Shoe from 100.0% to 83.0%. Each agent retains access to its private views and the
+read-only shared global camera but cannot attend to other agents’ tokens. With the backbone, parameter
+count, demonstrations, and training budget fixed, these results support the value of cross-agent attention
+for coordinated handovers; on the real robots the same ablation lowers mean success from 67.8% to 52.2%
+(Table 1).
+median +12
+MAWAM
+n = 99 seeds
+−5
+0
+5
+10
+15
+Receiver start delay vs. the same seed without the hold (steps)
+median +6
+Independent agents
+n = 100 seeds
+2 seeds < −6
+teammate held
+16 steps
+Figure 4: Response to a delayed teammate. In Long Pipeline Delivery, we hold the giver in the second
+handover stationary for 16 control steps after it releases the shoe. For each seed, we measure the receiver’s
+start delay relative to the same seed without the hold.
+Response to a delayed teammate. To test whether the receiving agent adjusts its timing to a teammate, we
+introduce a 16-step hold in Long Pipeline Delivery: the giver in the second handover is held stationary after
+9
+
+
+MAWAM: A Multi-Agent World-Action Model for Coordinated Manipulation
+releasing the shoe (100 paired seeds). Mawam delays the receiver’s start by a median of 12 steps; independent
+agents show a median delay of 6 steps (Figure 4). Mawam’s delay carries through to the grasp (median +9 vs.
++1.5 steps) and is still 10 steps without the 18 episodes in which its giver re-grasps; under the hold, Mawam
+succeeds in 99% of episodes vs. 44% for independent agents (Appendix D).
+Future-video supervision and tokens. Removing the future-video loss in team training, with the same
+future-view tokens, attention, and inference computation, reduces success on Place Food from 78.0% to 47.0%
+and on Camera Alignment from 100.0% to 94.0%. Team-stage future-video supervision thus helps most where
+arms must hold a shared configuration, such as keeping a lid open while another arm places the meat, or
+keeping the camera aligned with the meat the presenter raises. Where the scene changes, the predicted views
+are 4–7 dB closer (PSNR) to the executed frames than a copy of the last frame (Appendix Table 7). At test
+time, retaining the future-view tokens without denoising them yields similar success rates across all eight tasks
+(Appendix Table 8). The model is trained with these tokens in every sample, and removing them at test time
+lowers success on Long Pipeline Delivery from 95.0% to 0.0%, on Pass Shoe from 100.0% to 1.0%, and on Two
+Robots Stack Cube from 93.0% to 0.0%. This removal reduces model inference time on the real-robot setup
+from 0.32 s to 0.22 s. The future-view tokens are thus the shared space where the team’s actions are computed,
+and control does not need a finished video, consistent with recent single-robot findings that world-action
+models use their future tokens without test-time imagination (Pan et al., 2026; Yuan et al., 2026).
+Private and shared observations. Removing the shared global camera during team training and evaluation
+leaves each agent with only its private view. Success rates remain within 4 percentage points of the full model
+on Lift Barrier, Camera Alignment, and Two Robots Stack Cube. Place Food is more sensitive: success falls
+from 78.0% to 62.0% without the shared global camera, which is the only view that captures both objects
+held by the arms. Together with the real-world experiments, these results show that private observations can
+support joint control, while a shared view can help when it captures task-relevant relationships missing from
+individual views.
+Warm-up. Warm-up improves performance compared with starting team training directly from the pretrained
+backbone. Its largest gain occurs on Long Pipeline Delivery, where success increases from 34.0% to 95.0%. It
+also improves Place Food from 45.0% to 78.0%, with smaller gains on Camera Alignment and Pass Shoe.
+Task roles and agent identity. Assigning the same role to every agent reduces success on Camera Alignment
+from 100.0% to 8.0% and on Place Food from 78.0% to 0.0%. In Camera Alignment, this variant lifts the
+camera in 74 of 100 episodes but lifts the meat in only 8. Giving the two camera holders a shared role while
+retaining a separate role for the meat presenter achieves 100.0%. Thus, agents can share a task role while
+retaining distinct observations and controls. We also compare randomized simplex identities with learned
+absolute slot IDs and fixed simplex vertex assignments. The largest benefit appears on Place Food, where the
+three variants achieve 78.0%, 22.0%, and 43.0%, respectively. The improvement is smaller on Lift Barrier. Take
+Photo success rates are 97.0%, 96.0%, and 95.0%.
+Centralized team. The Centralized team baseline treats the team as one robot, with one visual context, one
+action vector, and no per-robot tokens, identity codes, or role embeddings. Each arm’s fixed position still
+encodes its role, as no arm switches sub-tasks across demonstrations. With the same backbone, demonstrations,
+and team-stage training budget, it trails Mawam on Pass Shoe and Place Food and fails on four-arm Long
+Pipeline Delivery (0.0% vs. 95.0%), where no arm grasps the shoe even after extended interface warm-up
+(Appendix D). GR00T 2 was pretrained on single-agent inputs and outputs, which the Centralized team must
+relearn in a merged four-arm format, whereas Mawam keeps every robot in the pretrained format and so
+benefits directly from that pretraining.
+10
+
+
+MAWAM: A Multi-Agent World-Action Model for Coordinated Manipulation
+5. Conclusion
+A robot team’s actions jointly create the world in which each member must act next. Mawam generates every
+robot’s next action chunk and future camera views in one sample. On two real robots that see the scene only
+through their own cameras, it is best on all three tasks with 67.8% mean success, 18.9 percentage points above
+MA-VLA; in simulation, it averages 90.3% on eight tasks with two to four arms. Cross-agent attention and
+team-stage future-video supervision both improve coordinated control: without attention, a four-arm relay
+falls from 95.0% to 39.0% and real-robot mean success from 67.8% to 52.2%; without this supervision, Place
+Food falls from 78.0% to 47.0%. Training one model to predict each robot’s next moves together with the
+future those moves create is a practical basis for coordinated manipulation.
+6. Limitations and Future Work
+Our experiments are limited to fixed robot teams of up to four agents. One joint sample serves the whole
+team, and going from two to four arms raises its time only from 1.40 s to 1.85 s (Appendix Table 11). Future
+work could extend Mawam to larger teams, allow team membership to change during execution, and support
+collaboration among robots with different embodiments and sensors. The predicted future observations and
+actions could help people understand a team’s intended behavior before it acts. Extending joint prediction to
+include human partners could also help robots anticipate human actions and coordinate with them.
+11
+
+
+MAWAM: A Multi-Agent World-Action Model for Coordinated Manipulation
+Appendix
+The appendices give the details behind the main paper. Figure, table, and equation numbers continue from
+the main paper, and references to sections, tables, and equations without the word “Appendix” point to the
+main paper. Appendix A defines the functional roles and task symmetries of the eight RoboFactory tasks
+(Table 4), shows how each private view and action coordinate is routed to its robot, and states the permutation
+properties of the simplex identity codes. Appendix B gives the implementation: the action and camera layouts
+in simulation and on the real robots, the rotary-band allocation, the Warm-up and team-training procedure and
+configurations (Tables 5 and 6), and the flow schedules and masked training objectives. Appendix C defines
+simulation success and its standard error, and measures how closely the predicted views match the executed
+frames (Table 7). Appendix D specifies every ablation in Section 4.3, including the test-time video controls
+(Table 8), the centralized-team baseline, and the teammate hold. Appendix E covers the real robots: hardware,
+initial poses, cameras, demonstration collection, post-training and deployment, success and safety accounting,
+and model size and inference time (Tables 9 and 11).
+A. Task symmetry and agent equivariance
+Role graphs. A task’s role graph records how agents depend on one another through precedence, object
+transfer, and shared-object constraints. We use a directed labeled graph with one node per agent slot, task
+roles as node labels, and these dependencies as labeled edges. An agent permutation is a task symmetry if it
+preserves node labels, edge labels, and embodiment metadata. This gives three team structures:
+1. fully symmetric teams, with one role class and admissible group 𝑆𝑁;
+2. asymmetric teams, whose role-preserving group may contain only the identity; and
+3. mixed teams, with role classes of sizes 𝑛1, . . . , 𝑛𝐽.
+The role-preserving task-symmetry group is a subgroup of ∏︀
+𝑗𝑆𝑛𝑗; equality holds when all within-role permu-
+tations preserve the dependency graph and embodiment metadata. Table 4 summarizes the categorization of
+the RoboFactory tasks used in our experiments.
+Table 4: Task roles in the eight RoboFactory tasks. The tasks span shared-object support, asymmetric
+transfers, and ordered relays. Symmetry is defined over the whole-episode role graph and is a property of the
+task, not of the role labels given to the model: the main configurations of Camera Alignment and Take Photo
+give each camera holder its own label, and grouping the two Camera Alignment holders under one label is
+evaluated in Table 3.
+Task
+𝑁
+Symmetry
+Role structure
+Pass Shoe
+2
+Asym
+giver; receiver
+Place Food
+2
+Asym
+meat handler; lid holder
+Lift Barrier
+2
+Sym
+exchangeable barrier holders, 𝑆2
+Two Robots Stack
+Cube
+2
+Asym
+shared pickup motif; then base/top roles
+Camera Alignment
+3
+Mixed
+camera-holder pair, 𝑆2; meat presenter
+Three Robots Stack
+Cube
+3
+Asym
+shared pickup motif; then base/middle/top roles
+Take Photo
+4
+Mixed
+camera-holder pair, 𝑆2; object holder; trigger
+Long Pipeline Delivery
+4
+Asym
+repeated handover motif; ordered relay stations
+A.1. View ownership and action routing
+Joint prediction retains an explicit correspondence between each robot’s views and its action tokens. Let
+𝑉be the number of private views in one batch item. In the notation of Section 3, the view–agent map is
+q ∈{1, . . . , 𝑁}𝑉; the converter serializes its zero-based equivalent
+¯q = q −1 ∈{0, . . . , 𝑁−1}𝑉,
+c ∈{1, . . . , 𝐶type}𝑉,
+(5)
+12
+
+
+MAWAM: A Multi-Agent World-Action Model for Coordinated Manipulation
+where ¯𝑞𝑣is the serialized owning-agent ID and 𝑐𝑣is the camera type. These arrays are batch-uniform after
+padding, and padded views carry a false validity mask. The representation requires:
+1. every valid private view has exactly one valid agent owner;
+2. every agent with action tokens owns at least one valid view;
+3. the number of action and state agents is identical;
+4. roles are indexed by semantic agent, not by camera;
+5. camera-type labels are preserved under agent permutation; and
+6. shared global cameras, if present, are represented separately and never assigned a private agent ID.
+Samples with a missing view–agent map, inconsistent role count, unequal token width, or unknown camera
+type are excluded during preprocessing. Agent identity is read from explicit metadata rather than inferred
+from camera names or ordering.
+Controller attribution. Let 𝐴𝑖∈{0, 1}𝑑𝑖×𝐷select agent 𝑖’s valid coordinates from a physical team-action
+vector u ∈R𝐷. The compact target is u𝑖= 𝐴𝑖u, and the decoded joint action iŝ︀
+u =
+𝑁
+∑︁
+𝑖=1
+𝐴⊤
+𝑖𝐷𝜃(𝒰𝑖).
+(6)
+The selection matrices have disjoint destinations. Compact slices are padded to the common token width
+when needed, and validity masks exclude padded or unavailable coordinates from both decoding and loss
+computation.
+For RoboFactory, the map is one private view per Panda plus one optional shared global camera. For the
+real setup,
+¯q = [0, 0, 0, 1, 1, 1],
+c = [𝑐ego, 𝑐left, 𝑐right, 𝑐ego, 𝑐left, 𝑐right],
+with no shared view. Here 0 and 1 are semantic agent indices, not global camera IDs.
+Camera and base calibration are used by the external data and control interfaces for stream association and
+coordinate conversion; they are not provided as Transformer inputs.
+A.2. Agent identity and permutation properties
+Let B = [c1, . . . , c𝑃]⊤contain the regular-simplex vertices from Equation 4. For any vertex-permutation matrix
+𝑃𝜋,
+(𝑃𝜋B)(𝑃𝜋B)⊤= 𝑃𝜋BB⊤𝑃⊤
+𝜋= BB⊤.
+(7)
+Thus simplex coordinates impose no distance-based order among agents.
+We distinguish two tests. Stream reordering moves an agent’s assigned phase, all private views, camera types,
+role, state and action tokens, diffusion noise, and scatter map together. Write the model output as 𝑓𝜃(𝒞, z, 𝜑),
+where 𝒞is the context 𝒞𝑡of Eq. (1), z is the diffusion noise on all future-view and action tokens, and 𝜑assigns a
+simplex vertex to each agent; 𝑓𝑢and 𝑓𝑣denote its action and future-video parts. For any legal complete-group
+permutation 𝜋, shared weights and an index-equivariant mask make every operation commute with 𝜋except the
+view embedding, which stays with the input position. The model is therefore only approximately equivariant:
+𝑓𝜃(𝜋·𝒞, 𝜋·z, 𝜋·𝜑) ≈𝜋· 𝑓𝜃(𝒞, z, 𝜑).
+(8)
+Training with shuffled complete groups encourages this property. Vertex reassignment is a different operation:
+it keeps each physical agent’s observations, noise, and output order fixed and changes only its identity code 𝜑,
+the simplex vertex assigned to its views. A role-only swap changes the task metadata while leaving observation
+and controller ownership fixed; Appendix D reports its results.
+13
+
+
+MAWAM: A Multi-Agent World-Action Model for Coordinated Manipulation
+B. Implementation details
+B.1. Simulation action and camera layout
+Each Panda is represented by an equal-width 17D compact slice
+[ EEF9D, gripper1D, joint7D ].
+(9)
+State and action targets use the same pose convention. Place Food gathers two slices into a 34D joint tensor;
+Camera Alignment gathers three into 51D. The model converts these source ranges to identically shaped per-
+agent tokens and inverse-scatters decoded tokens to the original controller layout. The simulator executes the
+joint and gripper coordinates under position control; EEF coordinates remain supervised auxiliary components.
+RoboFactory inputs are ordered as the optional shared global camera followed by one private view per Panda.
+In team training, the shared global camera uses current-frame repetition, read-only attention, zero future-video
+loss, and whole-stream conditioning dropout. Private views carry future targets and nonzero video loss. In
+Warm-up, each sample holds the shared global camera and one Panda’s private view, and both are predicted
+and supervised. Camera order, source-arm order, and action destination are validated against episode metadata
+before training and evaluation.
+Every view is sampled at offsets −12, −9, . . . , 24 control steps from the current step 𝑡: five observed frames
+spanning 0.6 s and eight future frames at a 0.15 s interval up to 𝑡+ 24 (1.2 s) at the 20 Hz recording rate. The
+action chunk covers steps 𝑡to 𝑡+ 23, and the state input is step 𝑡. The causal Wan 2.1 video VAE compresses
+time by 4× and gives four latent frames per view, covering {𝑡−12}, {𝑡−9, . . . , 𝑡}, {𝑡+ 3, . . . , 𝑡+ 12}, and
+{𝑡+ 15, . . . , 𝑡+ 24}. The first two are clean conditioning; the last two are generated for each private view. In
+team training, the shared global camera repeats its current latent in all four slots and is not predicted. At test
+time, the history buffer is initialized by repeating the first observation, and the team executes the first 8 steps
+(0.4 s) of each chunk before replanning.
+B.2. Real-robot observation and control layout
+Each R1 Pro contributes ego/head-left, left-wrist, and right-wrist video. Mounted cameras are agent-local even
+when they show both robots. There are six private views, zero shared views, two semantic agents, and two
+assigned simplex vertices sampled from the four-vertex pool described below. All three views of one robot use
+the same agent phase and role while retaining different view embeddings, one per input position, initialized
+from the Warm-up embeddings of the ego, left-wrist, and right-wrist views. The action-to-video bias and the
+role embedding are broadcast to all three owned views.
+The physical interface exposes 44 state and 37 command coordinates per robot. The learned action tokens
+activate 16 logical coordinates: left/right 7D relative end-effector commands and two absolute grippers. The
+two-agent physical packet is therefore 88D state / 74D command, while the learned active space is 2 × 16D.
+The action adapter writes inactive physical fields from the live controller state. The reported real-robot policy
+predicts 24-step action chunks, executes the first 8 steps, and replans from live observations. Frames use
+the same offsets as in simulation: five observed frames spanning the last 0.8 s and eight future frames at
+𝑡+ 3, . . . , 𝑡+ 24, a 0.2 s interval and a 1.6 s horizon at 15 Hz. This gives two generated latent frames per view
+and twelve across the six views. The last future frame is the observation after the final step of the predicted
+chunk, so the visual and action horizons cover the same 1.6 s.
+B.3. Rotary bands
+For a 128D attention head, the implementation allocates
+(𝑑𝑡, 𝑑𝑎, 𝑑ℎ, 𝑑𝑤) = (22, 22, 42, 42)
+(10)
+rotary dimensions to time, agent, height, and width. The 64 rotation angles of a head are ordered as 11 time,
+11 agent, 21 height, and 21 width pairs, and, following the Cosmos-Predict2.5 convention, dimension 𝑘is
+14
+
+
+MAWAM: A Multi-Agent World-Action Model for Coordinated Manipulation
+rotated together with dimension 𝑘+ 64; the agent band thus occupies dimensions 11–21 and 75–85. Time,
+height, and width use the frequencies 𝜔𝑘= 10000−2𝑘/𝑑with 𝑑= 𝑑𝑡, 𝑑ℎ, 𝑑𝑤respectively. Time positions are the
+latent-frame indices 0, . . . , 3 of each view, and height and width positions are latent patch indices. The agent
+band takes the 11 lowest-frequency temporal pairs of the GR00T 2 attention head (10−2 to 1.5 × 10−4 rad per
+latent frame). Over the four latent frames of a view these pairs rotate by at most 0.03 rad, so they carry almost
+no temporal information; the seven agent pairs without simplex coordinates stay unrotated. The remaining 11
+temporal pairs use every second frequency of the pretrained ladder, and the height and width bands drop the
+pretrained NTK rescaling (scale 3). Warm-up keeps the pretrained rotary embedding; team training introduces
+this layout.
+The agent band has no frequency ladder. A pool of 𝑃= 4 vertices c𝑗∈R4 (Eq. (4)) supports the two-, three-,
+and four-agent simulation tasks and the two-agent real setup. If agent 𝑖is assigned vertex c𝜋(𝑖), agent pair 𝑘
+of every token in its views is rotated by 𝛼[c𝜋(𝑖)]𝑘for 𝑘< 4 and by 0 for 4 ≤𝑘< 11, with 𝛼= 1. Each vertex
+has
+√
+3/2 on its own coordinate and −1/(2
+√
+3) on the other three, so in q⊤k the relative agent rotation is
+zero within an agent and ±2/
+√
+3 ≈1.15 rad on pairs 𝜋(𝑖) and 𝜋(𝑗) between agents 𝑖and 𝑗. During training, 𝜋
+maps the 𝑁agents to 𝑁distinct vertices drawn uniformly from the pool once per training step; at inference,
+agent 𝑖uses vertex 𝑖. Multiple views owned by one agent reuse its phase rather than consuming additional
+simplex vertices. Shared global camera and padding tokens have zero agent phase. State and action tokens use
+a one-dimensional rotary embedding over the chunk step, identical for all agents, and carry no agent phase;
+action tokens also receive a learned per-step embedding shared by all agents. The action-to-video bias adds the
+chunk mean of agent 𝑖’s encoded action tokens to the future tokens of its views, which carry agent 𝑖’s phase,
+so each agent’s actions are tied to its own views. When roles are defined, the role embedding is added to
+agent 𝑖’s view, state, and action tokens and marks them with the agent’s function. Agents that share a role
+receive the same embedding, so their state tokens are told apart only by content (each arm’s own normalized
+proprioception). Each decoded action chunk returns to its agent’s controller by index, and relative actions are
+applied from that agent’s own state.
+B.4. Warm-up and team training
+Training connects single-robot adaptation to joint prediction from synchronized team demonstrations (Table 5).
+Both stages use the world-action objective. Team training starts from the Warm-up weights with a fresh
+optimizer and learning-rate schedule; Table 6 specifies the inputs and mechanisms active in each stage.
+Table 5: Training procedure. Both stages optimize the joint world-action objective.
+Input: demonstrations; single-robot pretrained
+backbone.
+1
+Warm-up. Sample one robot’s observations,
+states, and actions; optimize ℒWA.
+2
+Initialize team training from the Warm-up
+weights.
+3
+Team training. Sample synchronized team data;
+permute complete agent groups and reassign
+distinct identity vertices.
+4
+Optimize ℒWA jointly over all private-view
+futures and action tokens.
+For RoboFactory, the default Warm-up budget is 6000 updates. The real-robot tasks use the same world-action
+objective with their own update budgets.
+15
+
+
+MAWAM: A Multi-Agent World-Action Model for Coordinated Manipulation
+Table 6: Training configurations. Warm-up adapts the world-action model to individual robots; team training
+jointly supervises all agents with cross-agent attention, roles, and identities enabled. Both stages use the same
+world-action loss.
+Stage
+Parent
+Agents per sample
+Cross-agent attention
+Roles / identities
+World-action loss
+Warm-up
+pretrained backbone
+one
+off
+off
+yes
+Team training
+Warm-up
+all 𝑁
+full, bidirectional
+on
+yes
+B.5. Flow schedules and masked objectives
+Let x𝑣
+0 denote clean private-view latents and x𝑢
+0 the normalized joint action chunks. For modality 𝑚∈{𝑣, 𝑢},
+its scheduler defines
+x𝑚
+𝜏= 𝛼𝑚
+𝜏x𝑚
+0 + 𝛽𝑚
+𝜏𝜖𝑚,
+v𝑚,⋆
+𝜏
+= ˙𝛼𝑚
+𝜏x𝑚
+0 + ˙𝛽𝑚
+𝜏𝜖𝑚.
+(11)
+For validity mask 𝑀𝑚
+𝑗
+and per-element weight 𝑤𝑚
+𝑗, the masked flow-matching loss is
+ℒ𝑚=
+∑︀𝑁
+𝑖=1
+∑︀
+𝑗∈𝒥𝑖𝑀𝑚
+𝑗𝑤𝑚
+𝑗⃦⃦⃦
+v𝑚
+𝜃,𝑗−v𝑚,⋆
+𝑗⃦⃦⃦
+2
+2
+∑︀𝑁
+𝑖=1
+∑︀
+𝑗∈𝒥𝑖𝑀𝑚
+𝑗𝑤𝑚
+𝑗+ 𝜖
+,
+(12)
+where 𝒥𝑖indexes the elements of agent 𝑖in the mini-batch. Equation 2 uses ℒFM(O; M𝑣) = ℒ𝑣and
+ℒFM(U; M𝑢) = ℒ𝑢. The video mask excludes observed, padded, and read-only shared global camera el-
+ements; the action mask excludes padding and unavailable controller dimensions. Both losses use a single
+normalization over the valid elements of all agents in the mini-batch, with 𝑤𝑚
+𝑗
+= 1 in all our experiments.
+Every agent has the same number of valid action elements (the same 24-step chunk and controller width:
+17 dimensions per arm in simulation and 16 logical dimensions per robot on the real robots), so ℒ𝑢equals
+the average over agents of the per-agent masked means. Video and action noise levels are sampled with
+modality-specific schedulers.
+C. Evaluation details
+C.1. Simulation success and uncertainty
+A crash, timeout, or missing episode counts as a failure. For 𝑘successes in 𝑛trials, we report the success rate
+ˆ𝑝= 𝑘/𝑛in percent with its binomial standard error
+s.e.(ˆ𝑝) =
+√︂
+ˆ𝑝(1 −ˆ𝑝)
+𝑛
+.
+(13)
+Task-group scores are unweighted means of task rates. For equal-sized task sets, the reported uncertainty of
+the mean is propagated from the task-wise binomial standard errors.
+C.2. Video-prediction accuracy
+We measure how closely the generated private views match the frames the team actually produces. On Lift
+Barrier, Pass Shoe, Camera Alignment, and Long Pipeline Delivery, we roll out the paper checkpoints on the
+first 25 evaluation seeds and execute all 24 predicted steps before replanning, so the executed frame at each
+of 𝑡+ 3, . . . , 𝑡+ 24 results from the actions sampled together with the prediction. Frames are compared in
+the model’s input geometry. We compare the prediction with two baselines: the last observed frame, and its
+VAE reconstruction, which carries the same compression blur as the prediction. Separately, reconstructing
+the executed target frames at +12 and +24 with the VAE yields 30.5–34.0 dB, providing a reference for
+compression-related error. Most of each view is static: on average 1–6% of the pixels change within 1.2 s.
+Copying the last frame therefore scores higher on full-frame PSNR at most horizons. On frames where at least
+5% of the pixels change (a per-channel difference above 25/255), the prediction is closer to the executed frame
+16
+
+
+MAWAM: A Multi-Agent World-Action Model for Coordinated Manipulation
+by 4–7 dB at every horizon. The timing column reports, among those frames, how often the executed frame
+closest to the prediction for 𝑡+ ℎis the one at 𝑡+ ℎ(out of 𝑡, 𝑡+ 3, . . . , 𝑡+ 24). Camera Alignment’s lower
+timing scores at long horizons come from the hold after the task is complete, where the model predicts a still
+pose while small corrections keep moving the image; during the task, the score at +24 is 62%.
+Table 7: Video-prediction accuracy over 25 seeds per task. PSNR (dB) of the predicted private view at 𝑡+ ℎ
+(20 Hz control steps; +24 is 1.2 s) against the executed frame, for the prediction (Pred.), the last observed
+frame (Copy), and its VAE reconstruction (Copy-VAE). “Moving frames” restricts to frames where at least 5% of
+the pixels change. Timing: % of moving frames whose closest executed frame is at 𝑡+ ℎ.
+All frames
+Moving frames
+Task
+ℎ
+Pred. Copy Copy-VAE Pred.
+Copy
+Timing
+Lift Barrier
++6
+31.3
+35.9
+31.2
+27.9
+23.5
+84
++12
+30.3
+34.1
+30.5
+26.6
+20.6
+69
++24
+29.7
+32.2
+29.6
+26.5
+19.5
+72
+Pass Shoe
++6
+29.6
+29.8
+27.3
+27.8
+21.5
+83
++12
+28.5
+27.4
+25.9
+27.0
+21.5
+75
++24
+27.2
+25.1
+24.3
+26.2
+21.3
+69
+Camera Alignment
++6
+28.1
+31.3
+28.5
+25.9
+20.8
+47
++12
+26.6
+27.7
+26.3
+24.7
+19.2
+20
++24
+24.4
+23.4
+23.1
+23.6
+19.2
+15
+Long Pipeline Delivery
++6
+31.0
+34.6
+30.7
+27.7
+22.6
+68
++12
+29.8
+31.7
+29.5
+27.2
+22.3
+65
++24
+28.8
+29.8
+28.2
+26.6
+22.5
+58
+D. Ablation configurations
+The ablation results appear in Section 4.3 and Table 3. This section specifies the interventions and evaluation
+quantities.
+Team-stage future-video supervision. The No team-stage future-video supervision variant sets the future-video
+loss weight to zero during team training. Everything else is unchanged: Warm-up initialization, demonstrations,
+training budget, each robot’s action tokens, the future-view tokens, the attention masks, and the denoising of
+all tokens at inference. This control therefore matches Mawam in tokens and test-time compute and differs
+only in whether the future views are supervised in team training. Both models start from the same Warm-up
+weights, trained with the future-video loss one robot at a time, so the comparison isolates supervision of the
+team’s joint future views.
+Test-time video generation. Frozen future keeps every future-view token at its initial noise level for all
+denoising steps, so the token layout, attention masks, and random draws match the full model while no future
+view is formed. No future tokens removes the future-view tokens from the sequence and denoises the actions
+from the observed views, states, and action tokens alone. Every training sample contains future-view tokens, so
+this second control also tests an input layout the model never saw. On the real robots, the laundry-bag model
+takes 0.320 s per inference with the full model, 0.215 s without future tokens, and 0.328 s with a frozen future
+on one H100.
+Information access. Independent agents use shared weights and retain each robot’s private views plus the
+read-only shared global camera, with no cross-agent private-token attention. The No shared global camera
+variant removes the shared global camera during team training and evaluation. These interventions address
+cross-agent token exchange and shared visual context, respectively.
+Centralized team. The Centralized team baseline uses the same backbone, demonstrations, and team-stage
+training budget as Mawam, but concatenates all robots’ views into one visual context and all arm actions
+into one vector, without identity codes or role embeddings. Each arm keeps a fixed position in training and
+17
+
+
+MAWAM: A Multi-Agent World-Action Model for Coordinated Manipulation
+Table 8: Test-time video generation. Success rates (%) with binomial standard error over 100 evaluation
+episodes per task. Differences from the full model are tested with an exact two-sided sign test on paired seeds;
+no frozen-future change is significant at 𝑝< 0.05 (Place Food 78 vs. 70, 𝑝= 0.17). The no-future-tokens
+control is not available in the Place Food serving stack.
+Task
+Full model Frozen future No future tokens
+Lift Barrier
+100.0 ± 0.0
+100.0 ± 0.0
+100.0 ± 0.0
+Pass Shoe
+100.0 ± 0.0
+100.0 ± 0.0
+1.0 ± 1.0
+Place Food
+78.0 ± 4.1
+70.0 ± 4.6
+–
+Two Robots Stack Cube
+93.0 ± 2.6
+98.0 ± 1.4
+0.0 ± 0.0
+Camera Alignment
+100.0 ± 0.0
+100.0 ± 0.0
+98.0 ± 1.4
+Three Robots Stack Cube
+59.0 ± 4.9
+54.0 ± 5.0
+20.0 ± 4.0
+Take Photo
+97.0 ± 1.7
+98.0 ± 1.4
+90.0 ± 3.0
+Long Pipeline Delivery
+95.0 ± 2.2
+98.0 ± 1.4
+0.0 ± 0.0
+evaluation: the same camera slots and the same coordinates in the state and action vectors. In Place Food, Pass
+Shoe, and Long Pipeline Delivery, each arm performs the same sub-task in every demonstration, so this position
+also determines its role. To adapt the pretrained single-robot interface, we first warm up the new state/action
+encoders and action decoder at ten times the base learning rate while updating the backbone at half rate. It
+proceeds in 2000-update increments until every arm’s action loss has settled near the first arm’s. On Pass Shoe
+and Place Food, 4000 updates sufficed: every arm’s action loss was within 0.01 of the first arm’s. Long Pipeline
+Delivery adapted more slowly: at 6000 updates its worst arm’s action loss was still 0.34 against 0.03 for the first
+arm. Team training from this checkpoint yielded 0/100. To examine whether insufficient interface adaptation
+accounted for this result, we extended interface warm-up by another 2000 updates, keeping the optimization
+settings unchanged. After 8000 updates, all four arms’ late-stage action losses were within 0.07 of the first
+arm’s, and the team stage trained normally: the arms’ action losses stayed close together (worst arm 0.08 at
+update 1000) and the joint commands were smooth (0.02–0.07 rad per step at the first checkpoint). Table 3
+reports this run; the evaluation set is the same as for every other row.
+Agent identity. Absolute slots use learned ordered slot identities with a fixed assignment. Fixed simplex
+retains the simplex coordinates with a fixed assignment. The full model reassigns distinct simplex vertices to
+complete agent groups. The full model and Fixed simplex therefore share the code and differ in the assignment,
+and Fixed simplex and Absolute slots share the fixed assignment and differ in the code. Success rates for all
+three variants on Lift Barrier, Place Food, Camera Alignment, and the four-arm Take Photo task are reported in
+Table 3.
+Task roles. The no-roles variant assigns the same role label to every agent. Like the full model, it randomizes
+identity assignment and shuffles complete agent groups in training, so no identity label or sequence position
+stays tied to an arm; the centralized team instead keeps every arm in one position. Camera Alignment’s shared-
+holder variant uses roles [0, 0, 1] instead of the main configuration’s [0, 1, 2], grouping the two camera holders
+by function. Role-only swaps exchange asymmetric role labels at evaluation while fixing the observations and
+controller destinations. They test sensitivity to the supplied assignment under the original task’s success criteria
+and give 0.0 ± 0.0% on Place Food and 0.0 ± 0.0% on Camera Alignment.
+Response to a delayed teammate. The hold uses the same 100 Long Pipeline Delivery evaluation seeds as
+Table 2. When the giver releases the shoe at the second handover, the evaluation replaces its commands with
+its current joint positions and an open gripper for 16 steps; the policy then resumes control. The receiver’s
+start is the first step after the release at which its joints move faster than 0.002 rad per step for at least three
+consecutive steps. One MAWAM seed, its only failure under the hold, never reaches the second handover, so
+it has no release, hold, or start delay; MAWAM’s 99 delays and 99 successes therefore come from the same
+episodes, and independent agents have a delay on all 100 seeds. MAWAM’s receiver also grasps later (median
+18
+
+
+MAWAM: A Multi-Agent World-Action Model for Coordinated Manipulation
++9 steps; independent agents +1.5), no episode has contact between the two arms, and success changes from
+95 to 99 for MAWAM and from 39 to 44 for independent agents. Excluding the 18 episodes in which MAWAM’s
+giver grasps the shoe again after the hold, the median start delay is 10 steps. Of the 99 paired seeds, MAWAM’s
+delay is longer on 86, shorter on 10, and equal on 3; an exact two-sided sign test excluding ties (𝑛= 96) gives
+𝑝= 3.2 × 10−16.
+Warm-up. The no-Warm-up configuration starts team training directly from the pretrained backbone. The full
+configuration initializes team training from the Warm-up weights.
+E. Real-robot data and evaluation details
+Table 9: Model size and deployment schedule of the real-robot policies. Trainable params counts the
+parameters updated during training; frozen pretrained encoders are excluded. Horizon gives predicted and
+executed action steps per inference at 15 Hz. Latency is the median model time over 60 inferences after
+warm-up on one NVIDIA H100 (fp32). Mawam generates the team action chunks in two joint denoising
+forwards.
+Method
+Trainable params
+Sampling per inference
+Horizon (pred. →
+exec.)
+Latency
+CLS-DP
+244M (SigLIP-B/16 frozen)
+100-step DDPM: 1 contextualizer forward + 100 UNet
+forwards per agent, both agents on one GPU
+8 →6 (0.4 s)
+0.77 s
+GauDP
+131M (NoPoSplat encoder
+frozen)
+100-step DDPM: 1 NoPoSplat encoder forward + 100 UNet
+forwards
+8 →6 (0.4 s)
+0.48 s
+MA-VLA (𝜋0.5)
+3.35B (full fine-tuning)
+10-step flow: 1 prefix forward + 10 action-expert forwards
+50 →8 (0.53 s)
+0.065 s
+Mawam (ours)
+2.76B (2.06B DiT + 0.70B
+state/action encoders and
+action decoder;
+Cosmos-Reason1 and VAE
+frozen)
+2-step flow matching: 2 joint forwards
+24 →8 (0.53 s)
+0.32 s
+E.1. Hardware and setup
+Robots. We use two Galaxea R1 Pro robots per task. Each robot has two 7-DoF arms with two-finger grippers,
+a 4-DoF torso, and a wheeled base; the base and torso are not commanded by the policy, and the policy sends
+end-effector poses and gripper commands only. The two robots in any pair face each other.
+Initial pose. Before every episode both robots are driven to the same fixed pose (Table 10). The torso leans
+forward and is then held fixed for the whole episode. Each arm starts with the elbow at about −93∘and the
+wrist rotated ±90∘, which places both grippers about 0.42 m in front of the torso and 0.25 m to either side,
+level with the table.
+Table 10: Initial joint configuration used for each of the two robots. Joint angles are given in radians, with
+degree equivalents in parentheses. Left and right refer to the arms of each robot; arm joints are listed in J1–J7
+order.
+Group
+Joint targets
+Torso (4 joints)
+0.451, −0.750, −0.850, 0.000
+(25.8∘, −43.0∘, −48.7∘, 0∘)
+Left arm
+0, 0, 0, −1.620, +𝜋/2, 0, 0
+(J4: −92.8∘; J5: +90∘)
+Right arm
+0, 0, 0, −1.620, −𝜋/2, 0, 0
+(J4: −92.8∘; J5: −90∘)
+Both grippers
+Fully open
+Cameras. Each robot contributes three RGB streams at 15 Hz: the left image of the stereo head camera
+(640×360, center-cropped to 480×360) and one Intel RealSense D405 on each wrist (640×480). All six
+19
+
+
+MAWAM: A Multi-Agent World-Action Model for Coordinated Manipulation
+streams are center-cropped to 95% and resized to 224×320 (height×width) before entering the model, which
+sees five frames per stream spanning the last 0.8 s. No shared global camera is used.
+Control and serving. The policy outputs, per robot, a relative end-effector pose (position and quaternion) for
+each arm and one opening value per gripper, at 15 Hz in 24-step chunks. Commands go to the vendor inverse-
+kinematics and joint tracker on each robot. One synchronized coordinator collects both robots’ observations,
+queries the policy server (one NVIDIA H100) over the network, and dispatches both action chunks together;
+the compiled model uses 0.32 s for two joint denoising forwards. The controllers execute the first 8 steps of
+each 24-step chunk in lockstep, observe, and replan (Table 9).
+Synchronized demonstrations. Demonstrations are collected by one operator per robot using a Meta Quest
+headset and controllers through the vendor’s VR interface, and recorded at 15 Hz with the same three cameras
+per robot. For umbrella handover, each pair consists of one giver and one receiver. Their role labels are attached
+to the source trajectories and preserved when complete agent groups are reordered. For laundry-bag collection
+and bath-towel folding, the role vocabulary and mapping are defined by the collection protocol and fixed
+before training. Before splitting the data, we store task identities in the pair metadata and exclude records
+with missing source identifiers or required camera streams.
+E.2. Post-training and deployment
+On the real robots, Mawam training starts from GR00T 2 and uses the same two-stage recipe and world-action
+objective as simulation. The single-robot Warm-up uses the same three private views and 16D logical action
+definition as team training. Team training receives synchronized team trajectories and supervises the futures of
+all six private views together with both robots’ actions. Both stages use the robot-mounted cameras without
+introducing a shared global camera.
+At inference, one joint sampling call with two denoising forwards generates private-view futures and both
+robots’ action chunks from the synchronized six-view input. Before execution, we jointly validate timestamp
+skew, ownership and role metadata, validity masks, finite command values, controller ranges, command age,
+workspace limits, and collision status. A failed check triggers a coordinated stop for both robots.
+E.3. Task success and safety accounting
+Before every trial, both robots return to the fixed pose in Table 10. We randomize the initial object pose,
+garment position, and folding direction within a certain range. Every model is evaluated for 30 trials per task.
+The task-specific terminal success criteria are:
+• Umbrella handover: the receiver stably holds the umbrella, and the giver has released it.
+• Laundry-bag collection: the garment is inside the bag at termination, and neither robot still grasps it.
+• Bath-towel folding: the towel is folded in the intended direction with its edges and corners aligned, and
+both robots have released it.
+We report the success rate with its standard error over 30 trials per task.
+E.4. Model size and inference schedule
+Table 9 specifies how each deployed policy converts one inference call into an executable action horizon.
+Mawam’s model time covers two joint denoising forwards; the 8 executed steps correspond to 0.53 s of motion
+at 15 Hz. Network transport and physical execution are outside this model-time measurement.
+In simulation, one joint sample serves the whole team, and its cost follows the number of camera views
+(Table 11). Doubling the team from two to four arms adds about a third to the time per sample (1.40 s to
+1.85 s), and removing the shared global camera from a two-arm team brings it to 0.76 s. Fewer denoising steps
+shorten it further: Camera Alignment uses two steps and takes 0.81 s.
+20
+
+
+MAWAM: A Multi-Agent World-Action Model for Coordinated Manipulation
+Table 11: Simulation inference latency. Median model time per joint sample on one NVIDIA L40 (bf16, four
+denoising steps, no compilation). View slots count the model’s camera inputs; two-arm models with the shared
+global camera pad to four slots. Real-robot timing (Table 9) uses an H100, two steps, and a compiled DiT.
+Arms
+Shared global
+camera
+View
+slots
+Tasks
+Latency
+(s)
+2
+–
+2
+Lift Barrier, Place Food, Two Robots Stack Cube
+0.76
+2
+✓
+4
+Lift Barrier, Place Food, Pass Shoe, Two Robots Stack
+Cube
+1.40
+3
+✓
+4
+Three Robots Stack Cube
+1.44
+4
+✓
+5
+Take Photo, Long Pipeline Delivery
+1.85
+21
+
+
+MAWAM: A Multi-Agent World-Action Model for Coordinated Manipulation
+References
+[1] Hongzhe Bi, Hengkai Tan, Shenghao Xie, Zeyuan Wang, Shuhe Huang, Haitian Liu, Ruowen Zhao, Yao
+Feng, Chendong Xiang, Yinze Rong, et al. Motus: A unified latent action world model. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 35101–35113, 2026. 4
+[2] Yongchao Chen, Jacob Arkin, Yang Zhang, Nicholas Roy, and Chuchu Fan. Scalable multi-robot collabo-
+ration with large language models: Centralized or decentralized systems? In 2024 IEEE International
+Conference on Robotics and Automation (ICRA), pages 4311–4317. IEEE, 2024. 2, 3
+[3] Dayi Dong, Maulik Bhatt, Seoyeon Choi, and Negar Mehr. Mimic-d: Multi-modal imitation for multi-agent
+coordination with decentralized diffusion policies. In 2026 IEEE International Conference on Robotics and
+Automation (ICRA), pages 17193–17200. IEEE, 2026. 2, 3
+[4] Yanjiang Guo, Yucheng Hu, Jianke Zhang, Yen-Jen Wang, Xiaoyu Chen, Chaochao Lu, and Jianyu Chen.
+Prediction with action: Visual policy learning via joint denoising process. Advances in Neural Information
+Processing Systems, 37:112386–112410, 2024. 2
+[5] Chengyang He, Gadiel Mark Sznaier Camps, Xu Liu, Mac Schwager, and Guillaume Adrien Sartoretti.
+Latent theory of mind: A decentralized diffusion architecture for cooperative manipulation. In Proceedings
+of The 9th Conference on Robot Learning, pages 392–405. PMLR, 2025. 2, 3
+[6] Shyam Sundar Kannan, Vishnunandan LN Venkatesh, and Byung-Cheol Min. Smart-llm: Smart multi-
+agent robot task planning using large language models. In 2024 IEEE/RSJ International Conference on
+Intelligent Robots and Systems (IROS), pages 12140–12147. IEEE, 2024. 2, 3
+[7] Shuang Li, Yihuai Gao, Dorsa Sadigh, and Shuran Song. Unified video action model, 2025. 2
+[8] Yaron Lipman, Ricky TQ Chen, Heli Ben-Hamu, Maximilian Nickel, and Matt Le. Flow matching for
+generative modeling. arXiv preprint arXiv:2210.02747, 2022. 5
+[9] Fangfu Liu, Kai He, Tianchang Shen, Tianshi Cao, Sanja Fidler, Yueqi Duan, Jun Gao, Igor Gilitschenski,
+Zian Wang, and Xuanchi Ren. Gamma-world: Generative multi-agent world modeling beyond two players.
+arXiv preprint arXiv:2605.28816, 2026. 2, 4
+[10] Zhao Mandi, Shreeya Jain, and Shuran Song. Roco: Dialectic multi-robot collaboration with large
+language models. In 2024 IEEE International Conference on Robotics and Automation (ICRA), pages
+286–299. IEEE, 2024. 2, 3
+[11] Chuhan Meng and Haiyan Yin. Ltldiff: Finite linear temporal logic-guided data generation and diffusion
+policies for multi-agent robotic manipulation. arXiv preprint arXiv:2609.11043, 2026. 2, 4
+[12] NVIDIA et al. GR00T 2: Scaling robot foundation models for generalization, dexterity, and adaptation.
+Whitepaper, NVIDIA, 2026. 3
+[13] Bikang Pan, Fan Liu, Haotao Lu, Jingya Wang, and Ye Shi. Selfwam: A self-grounded unified world action
+model for fast robot control. arXiv preprint arXiv:2608.00725, 2026. 4, 10
+[14] Chanyoung Park, Minsung Yoon, Andrew Jeong, and Sung-eui Yoon. Distilling collaborative dynamics
+into latent space for implicit coordination in decentralized multi-agent manipulation. arXiv preprint
+arXiv:2606.22982, 2026. 2, 3, 7
+[15] Yiran Qin, Li Kang, Xiufeng Song, Zhenfei Yin, Xiaohong Liu, Xihui Liu, Ruimao Zhang, and Lei Bai.
+Robofactory: Exploring embodied agent collaboration with compositional constraints. In 2025 IEEE/CVF
+International Conference on Computer Vision (ICCV), pages 10075–10085. IEEE, 2025. 2, 4, 8
+22
+
+
+MAWAM: A Multi-Agent World-Action Model for Coordinated Manipulation
+[16] Georgy Savva, Oscar Michel, Daohan Lu, Suppakit Waiwitlikhit, Timothy Meehan, Dhairya Mishra, Srivats
+Poddar, Jack Lu, and Saining Xie. Solaris: Building a multiplayer video world model in minecraft. arXiv
+preprint arXiv:2602.22208, 2026. 2, 4
+[17] Yichao Shen, Fangyun Wei, Zhiying Du, Yaobo Liang, Yan Lu, Jiaolong Yang, Nanning Zheng, and
+Baining Guo. Videovla: Video generators can be generalizable robot manipulators. In Advances in Neural
+Information Processing Systems, pages 95597–95621. Curran Associates, Inc., 2025. 2
+[18] MotuBrain Team, Chendong Xiang, Fan Bao, Haitian Liu, Hengkai Tan, Hongzhe Bi, James Li, Jiabao
+Liu, Jingrui Pang, Kiro Jing, et al. Motubrain: An advanced world action model for robot control. arXiv
+preprint arXiv:2604.27792, 2026. 4
+[19] Ziye Wang, Li Kang, Yiran Qin, Jiahua Ma, zhanglin peng, LEI BAI, and Ruimao Zhang. Gaudp: Reinventing
+multi-agent collaboration through gaussian-image synergy in diffusion policies. In Advances in Neural
+Information Processing Systems, pages 5620–5639. Curran Associates, Inc., 2025. 2, 3, 7, 8
+[20] Haoyu Wu, Jiwen Yu, Yingtian Zou, and Xihui Liu. Multiworld: Scalable multi-agent multi-view video
+world models. arXiv preprint arXiv:2604.18564, 2026. 2, 4
+[21] Seonghyeon Ye, Yunhao Ge, Kaiyuan Zheng, Shenyuan Gao, Sihyun Yu, George Kurian, Suneel Indupuru,
+You Liang Tan, Chuning Zhu, Jiannan Xiang, et al. World action models are zero-shot policies. arXiv
+preprint arXiv:2602.15922, 2026. 2, 4
+[22] Tianyuan Yuan, Zibin Dong, Yicheng Liu, and Hang Zhao. Fast-wam: Do world action models need
+test-time future imagination? arXiv preprint arXiv:2603.16666, 2026. 4, 10
+[23] Chushan Zhang, Jinguang Tong, Xuesong Li, Yikai Wang, and Hongdong Li. Keep the future, drop the
+rollout: Rift for world action models. arXiv preprint arXiv:2608.11521, 2026a. 4
+[24] Hongxin Zhang, Zeyuan Wang, Qiushi Lyu, Zheyuan Zhang, Sunli Chen, Tianmin Shu, Behzad Dariush,
+Kwonjoon Lee, Yilun Du, and Chuang Gan. Combo: Compositional world models for embodied multi-agent
+cooperation. In International Conference on Learning Representations, pages 49996–50019, 2025. 2, 4
+[25] Zaibin Zhang, Junlan Xiao, Zhongbo Zhang, Yifan Wang, Li Kang, Yiran Qin, Changxing Xia, Heng Zhou,
+Talas Fu, Enshen Zhou, et al. Ma-vla: Multi-arm vision-language-action model for collaboration and
+compositional generalization. In European Conference on Computer Vision, pages 399–417. Springer,
+2026b. 2, 4, 7, 8
+[26] Renjie Zhao, Yuxiang Wu, Mingyu Zhang, Jiaxin Li, Sisi Li, He Li, Yimin Sheng, Tianxi Tan, Zhenkai Zhang,
+Jiao Liang, et al. Population-scalable multi-agent world modeling. arXiv preprint arXiv:2608.08600,
+2026a. 4
+[27] Zijie Zhao, Honglei Guo, Shengqian Chen, Kaixuan Xu, Bo Jiang, Yuanheng Zhu, and Dongbin Zhao.
+Empowering multi-robot cooperation via sequential world models. In International Conference on Learning
+Representations, pages 13262–13280, 2026b. 2, 4
+[28] Jiayi Zhu, Jianing Zhang, Yiying Yang, Wei Cheng, and Xiaoyun Yuan. Shareverse: Multi-agent consistent
+video generation for shared world modeling. arXiv preprint arXiv:2603.02697, 2026. 2, 4
+[29] Zhengbang Zhu, Minghuan Liu, Liyuan Mao, Bingyi Kang, Minkai Xu, Yong Yu, Stefano Ermon, and
+Weinan Zhang. Madiff: Offline multi-agent learning with diffusion models. Advances in Neural Information
+Processing Systems, 37:4177–4206, 2024. 2, 3
+23

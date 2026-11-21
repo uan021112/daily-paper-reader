@@ -1,0 +1,2078 @@
+HIERARCHICAL SPATIOTEMPORAL WORLD MODEL-
+ING WITH CONTENT-ADAPTIVE SPATIAL ADDRESSING
+Tiantian Li1
+Junfeng Lu2
+Yifei Wang1
+Zhaoyang Zhang1
+Lei Wang3,∗
+Tianyi Qian1,∗
+1QiYuanLab
+2Peking University
+3Academy of Military Sciences
+∗Corresponding authors
+ABSTRACT
+Long-horizon world modeling in partially observable environments requires com-
+pact memories that preserve spatial structure despite accumulated localization
+drift. Inspired by hippocampal episodic and spatial memory and the multi-periodic
+coding of entorhinal grid cells, we propose HiSTFormer, a hierarchical spatiotem-
+poral world model, which adopts a layer-wise organization of local temporal RoPE
+and multi-periodic spatial RoPE, together with content-conditioned address off-
+sets, to capture recent temporal context and long-range spatial structure. A fixed-
+capacity memory keeps KV storage and per-step attention cost bounded as the
+sequence grows. On MemoryMaze and HM3D, HiSTFormer outperforms strong
+world-model baselines within the training sequence length and generalizes sub-
+stantially better to prediction horizons far beyond those seen during training, while
+using a compact model. The hierarchical spatiotemporal design remains effective
+across deeper Transformer stacks, with consistent gains as depth increases. These
+results show that hierarchical spatiotemporal organization and content-adaptive
+spatial addressing provide effective inductive biases for efficient long-horizon
+world modeling.
+1
+INTRODUCTION
+First-person world models must predict local dynamics from consecutive observations and actions
+while maintaining scene consistency over long interactions using spatial information from past tra-
+jectories. Studies such as MemoryMaze and TECO highlight the challenges of long-term memory
+and visual consistency during scene revisits (Pasukonis et al., 2023; Yan et al., 2023). How to or-
+ganize and effectively utilize spatiotemporal information has therefore become an important
+question for long-horizon visual prediction.
+Recent studies have increasingly recognized the importance of spatial memory and explored diverse
+approaches. Geometry-based methods maintain historical scene information through explicit or
+latent 3D representations. SpMem, 3D Persistent World Model, PERSIST, and Spatia employ 3D
+maps, geometric indexing, or persistent scene states to maintain spatial consistency (Wu et al., 2025;
+Zhou et al., 2026; Garcin et al., 2026; Zhao et al., 2026). LSM-World and MosaicMem further asso-
+ciate visual latent features with 3D space, recovering historical content through viewpoint transfor-
+mations and feature alignment (Wang et al., 2026; Yu et al., 2026b). While these approaches provide
+cross-view spatial constraints, they typically require additional geometric estimation, 3D mapping,
+or spatial memory maintenance.
+Another line of research focuses on establishing spatial associations through pose information
+and latent memory mechanisms. ReMind introduces camera-aware RoPE to establish spatial rela-
+tionships across time (Xu et al., 2026); ReWorld combines pose-aware attention with a pose-indexed
+Landmark Bank for long-term memory retrieval (Chen et al., 2026); WorldCrafter retrieves relevant
+content from implicit 3D-aware memory conditioned on target camera poses (Yu et al., 2026a);
+and MemoryVLN integrates pose, visual, and geometric features to enhance historical memory re-
+trieval for navigation (Wei et al., 2026). Other studies explore the division of computational roles
+across memory mechanisms. CoME combines short-term dynamics, long-term experience, and spa-
+tial information through specialized memory experts (Stapf et al., 2026), while the concurrent work
+1
+arXiv:2611.25610v1  [cs.NE]  19 Nov 2026
+
+
+LOCI integrates geometry-conditioned recurrent memory and historical KV attention across differ-
+ent Transformer blocks (Xia et al., 2026). These approaches demonstrate diverse ways to incorporate
+spatial information into memory retrieval and organization. However, how temporal and spatial
+relationships should be coordinated across Transformer depth remains insufficiently explored.
+Biological neural systems provide insights into the organization and use of spatial information. En-
+torhinal grid cells exhibit multi-scale spatial representations associated with path integration, while
+the hippocampus integrates spatial, temporal, and episodic information (Hafting et al., 2005; Moser
+et al., 2014; Eichenbaum, 2017). Computational models such as TEM, Hippoformer, and HPC-MEC
+have further explored associations between spatial structure and experience-specific content (Whit-
+tington et al., 2020; Kymn et al., 2024; Zhang et al., 2026; Li et al., 2026b).
+We investigate two further questions. First, local temporal integration and long-range spatial
+retrieval have distinct information requirements: the former relies on consecutive observations
+and actions, while the latter accesses spatially related experiences across time. How to coordinate
+them within a Transformer remains underexplored. Second, spatial addresses do not necessarily
+correspond one-to-one with visual content: visual features may encode information from multiple
+locations, and fixed camera-centered addresses may limit retrieval accuracy, motivating content-
+adaptive spatial addressing.
+Additionally, GridPE, nD-RoPE, M-RoPE, and VideoRoPE provide technical foundations for en-
+coding multidimensional spatiotemporal relationships in Transformers (Li et al., 2024; 2026a; Wang
+et al., 2024; Wei et al., 2025).
+Building on these insights, we introduce HiSTFormer, a hierarchical Transformer for long-horizon
+visual prediction. Using grid-cell-inspired multi-periodic spatial encoding, HiSTFormer focuses
+on hierarchical spatiotemporal organization and content-adaptive spatial addressing. First,
+HiSTFormer organizes temporal and spatial processing into successive stages. Temporal layers use
+standard temporal RoPE to integrate consecutive observations and actions, capturing local dynam-
+ics (Su et al., 2021). Spatial layers then employ multi-periodic spatial RoPE to retrieve historical
+experiences through path-integrated spatial addresses, enabling scene recovery across temporal gaps.
+Second, HiSTFormer introduces content-conditioned per-head spatial address offsets, allowing
+individual attention heads to adapt their retrieval addresses to the represented content. A fixed-
+capacity structured memory further supports long-range retrieval without unbounded cache growth.
+On long-horizon visual prediction in MemoryMaze, HiSTFormer, trained on 320-frame sequences,
+generalizes reliably to 1,000-frame rollouts and outperforms the compared baselines both within
+and beyond the training range. Further analyses show that hierarchical temporal–spatial encoding
+outperforms single-type and within-layer joint encodings, with increasing benefits as Transformer
+depth grows. Moreover, content-conditioned offsets introduce only 0.05M additional parameters,
+yet improve historical memory retrieval and learn spatial adjustments that tend to align with salient
+walls.
+Overall, these results demonstrate that effective spatiotemporal organization and content-adaptive
+addressing can improve long-horizon prediction and memory utilization in world models.
+2
+METHOD
+HiSTFormer is a hierarchical spatiotemporal world model for long-horizon visual prediction, as
+illustrated in Figure 1. At time t, the observation ot is encoded into a visual representation zt. Given
+zt and the next action at+1, the temporal Transformer integrates local observations and actions into
+a context-aware experience representation. The spatial Transformer then retrieves and integrates
+relevant historical experiences to predict ˆzt+1.
+Spatial addresses are maintained through path integration. A motion encoder estimates the dis-
+placement ˆst+1 from at+1 and the visual representation zt+1 when available. The displacement is
+transformed into world coordinates using the ground-truth heading and integrated into multi-periodic
+spatial phases ct+1 for spatial RoPE. Additionally, a lightweight MLP predicts content-conditioned,
+per-head offsets ∆ph from the temporal Transformer output, adapting spatial attention addresses to
+the content represented by each experience.
+2
+
+
+Observation
+o t
+Scene / trajectory
+AE
+Enc.
+zt
+at+1
+Motion
+Encoder
+Coordinate
+Transformer
+Temporal Transformer
+Time RoPE
+Head 1
+Head 2
+Head 3
+Head 4
+p1
+p2
+p3
+p4
+Space RoPE1
+Space RoPE2
+Space RoPE3
+Space RoPE4
+Head 1
+Head 2
+Head 3
+Head 4
+ct+1
+zt+1
+AE
+Dec.
+Predicted frames
+ot+1
+Grid-like
+State c t+1
+Spatial Transformer
+start
+Figure 1: Overview of HiSTFormer. Observation frames are encoded into compact visual represen-
+tations, while the motion encoder and coordinate transformation update a path-integrated grid-like
+spatial state. The temporal Transformer first extracts local context using temporal RoPE. Content-
+conditioned per-head offsets then adjust the grid-like spatial addresses used by the spatial Trans-
+former to retrieve historical experience. The resulting latent representations are decoded autoregres-
+sively into future frames.
+2.1
+HIERARCHICAL SPATIOTEMPORAL TRANSFORMER
+Temporal and spatial RoPE are organized hierarchically. The temporal layers extract local contex-
+tual information from recent actions and observations, whereas the spatial layers retrieve historical
+information according to relative spatial relationships. At each step, the model takes the current
+visual representation zt and the next action at+1 as input and produces the predicted ˆzt+1. Dur-
+ing observation, zt is encoded from the ground-truth observation; during open-loop prediction, the
+model instead uses the predicted representation ˆzt from the previous step.
+Both layer types use standard pre-layer-normalization (Pre-LN) Transformer blocks composed of
+multi-head self-attention and feed-forward networks, with a residual connection around each sub-
+layer. Each attention module uses four heads, with 256-dimensional query, key, and value represen-
+tations per head.
+The temporal layers combine standard temporal RoPE (Su et al., 2024) with sliding-window atten-
+tion and, by default, attend to the 32 most recent tokens. The spatial layers use a bounded KV cache
+containing entries from the 32 most recent time steps and up to 96 earlier time steps. As shown in
+Appendix A.4, performance is insensitive to the specific memory-selection rule provided that broad
+temporal coverage is maintained.
+Each retained spatial-layer entry already contains the local context extracted by the temporal layers
+and can therefore carry information beyond that of a single frame.
+2.2
+SPATIAL REPRESENTATION ROPE
+The coordinate transformer rotates the predicted displacement from the egocentric to the world
+coordinate frame using the ground-truth head direction. A causal temporal convolution estimates
+the motion displacement ˆst+1 from at+1 alone during imagination, or from both at+1 and zt+1
+during observation. Architectural and training details are provided in Appendix A.2.
+Let the ground-truth head direction be represented by the unit vector dt = [cos θt, sin θt]⊤. Given
+the predicted displacement ˆst, the corresponding displacement in world coordinates is ∆rt =
+ˆstdt−1
+Position is represented using structured multi-period Fourier phases. The model uses p spatial pe-
+riods spaced logarithmically in scale and w uniformly distributed plane-wave directions for each
+3
+
+
+period, where w is a multiple of three. The wave vectors are organized into groups of three direc-
+tions separated by 120◦, following the directional structure of hexagonal spatial codes. Each plane
+wave maintains an independent complex phase and corresponding sine/cosine components, yielding
+Dr = 2pw rotary dimensions.
+For each wave vector k, the corresponding unit-complex phase is updated through path integration:
+ct(k) = ct−1(k) exp
+ i k⊤∆rt
+
+,
+c0(k) = 1.
+(1)
+Using each unit-complex phase to rotate a two-dimensional channel pair of the query and key yields
+the spatial RoPE. This operation explicitly introduces the relative displacement between estimated
+positions into the attention computation, allowing the model to exploit spatial relationships directly.
+Combining multiple spatial periods provides position-phase information at multiple scales, support-
+ing both local positional discrimination and disambiguation over larger spatial ranges.
+The head direction θt is repeated across 16 channel pairs and combined with the position phases
+above to form the spatial RoPE.
+2.3
+CONTENT-CONDITIONED SPATIAL ADDRESSING
+A single observation frame may contain content associated with multiple physical locations, while
+a local experience representation aggregates information across multiple frames. To adapt spatial
+addressing to the represented content, we predict a two-dimensional positional offset ∆ph for each
+spatial-attention head h from the output of the temporal layers.
+Specifically, path integration produces the shared base phase ct,g,j for all spatial-attention heads.
+The content-conditioned offset then generates a head-specific spatial address through an additional
+rotation:
+ec h
+t (k) = ct(k) exp
+ i k⊤∆ph
+.
+(2)
+This design allows different attention heads to learn distinct content-conditioned spatial associations
+for the same experience representation.
+2.4
+TRAINING OBJECTIVE
+Training is performed on 320-frame sequences divided into chunks of K = 16 frames. After ob-
+serving each chunk, the model autoregressively predicts the next K frames using the observation
+memory accumulated up to the current point, together with the actions and head directions from the
+subsequent chunk. The model then observes the ground-truth frames of the predicted chunk, and this
+observe–predict cycle repeats throughout the sequence. The training objective consists of an image-
+reconstruction loss Lrecon, an open-loop prediction loss Lpred, a pairwise spatial representation loss
+Lpair, and a teacher–student motion loss Lstudent. The complete objective is
+L = Lrecon + Lpred + Lstudent + 0.03Lpair.
+(3)
+Let Dψ denote visual decoder, the reconstruction loss for an observed frame t is
+Lt
+recon = MSE(Dψ(zt) , ot) .
+(4)
+The open-loop prediction loss is defined as the average reconstruction error over all predicted frames,
+where T = 320 is the training sequence length.
+Lpred =
+PT
+t=K+1 MSE(Dψ(ˆzt) , ot)
+T −K
+,
+(5)
+Without ground-truth position supervision, we use visual similarity to encourage spatial consistency
+in path-integrated representations. The pair loss is applied only to observed trajectories, supervising
+the visual-action motion encoder. We select frame pairs separated by more than K frames with a
+circular heading difference of at most 15◦. Pairs with visual cosine similarity Vij ≥0.98 are positive
+(P+), while those with Vij < 0.1 are negative (P−); intermediate pairs are ignored. Let Sij denote
+the cosine similarity between the corresponding path-integrated spatial representations.
+4
+
+
+Lpair =
+Avg
+(i,j)∈P+[0.9 −Sij]+ +
+Avg
+(i,j)∈P−[Sij −0.7]+,
+(6)
+Here, [x]+ = max(x, 0), and averages over empty sets are defined as zero. The loss encourages
+similar observations to have consistent spatial representations while separating visually dissimilar
+ones.
+The student loss aligns the output of the action-only motion encoder sact
+t
+with the output of the
+visual-action motion encoder sobs
+t
+during training, using a SmoothL1 loss with gradients stopped
+through the teacher, where sg[·] denotes the stop-gradient operation. The reconstruction and student
+losses are averaged over their respective valid time steps and batch elements.
+Lstudent = SmoothL1
+ sact
+t
+, sg
+
+sobs
+t
+
+,
+(7)
+3
+EXPERIMENTS
+We collect trajectories from the 9×9 MemoryMaze and HM3D environments (Ramakrishnan et al.,
+2021) and evaluate open-loop visual prediction conditioned on actions and head directions. Each
+model observes historical RGB frames, actions, and ground-truth head directions, and autoregres-
+sively predicts future visual sequences from future actions and ground-truth head directions. All
+models are trained on continuous 320-frame trajectories using a K = 16 frame open-loop pre-
+diction objective for 30,000 gradient steps on MemoryMaze and 100,000 steps on HM3D; CoME
+instead retains its original diffusion-based training scheme. All models use a batch size of 16 and
+are trained over three random seeds. Except for CoME (approximately 297M parameters), model
+sizes are controlled to 7–8M on MemoryMaze and approximately 100M on HM3D. We consider
+two continuous open-loop evaluation protocols: predicting 64 frames from 256 context frames and
+predicting 500 frames from 500 context frames.
+3.1
+BASELINES
+We compare HiSTFormer with recent world models equipped with spatial or long-term memory
+mechanisms, as well as general-purpose sequence models with comparable parameter counts. All
+baselines are adapted to a common observation, action, and head-direction interface, while their
+original architectures and training procedures are preserved whenever possible.
+HPC–MEC. We reimplement and adapt HPC–MEC (Zhang et al., 2026), a hippocampal–
+entorhinal-inspired world model, using the same head-direction-based coordinate transformation
+and data interface as HiSTFormer. The resulting model contains approximately 8.15 M parameters.
+CoME. We adapt and train CoME on our dataset following its official implementation (Stapf et al.,
+2026). To avoid discrepancies arising from different pose-estimation implementations, we pro-
+vide ground-truth poses directly. CoME has substantially more parameters than HiSTFormer. Ap-
+pendix E further reports results under a longer training budget; the additional training improves
+performance but does not change the main conclusions.
+General-purpose world models. We construct three latent-space world models based on Trans-
+former, RSSM, and Mamba (Vaswani et al., 2017; Hafner et al., 2019; Gu & Dao, 2024; Hafner
+et al., 2025). They share the same visual encoder–decoder framework and input and output inter-
+faces. All three models are trained with the same open-loop prediction and image-reconstruction
+losses, while retaining their architecture-specific auxiliary latent-space objectives. Each model con-
+tains approximately 8 M parameters.
+4
+RESULTS
+4.1
+LONG-HORIZON VISUAL PREDICTION
+Table 1 compares visual prediction performance on MemoryMaze and HM3D under the 256 →64
+and 500→500 protocols (Wang et al., 2004; Zhang et al., 2018). The 256→64 protocol fits within
+the 320-frame training length but uses a fourfold longer open-loop horizon. On MemoryMaze,
+5
+
+
+Table 1: Open-loop visual prediction on 9 × 9 MemoryMaze and HM3D. We report mean ± sample
+standard deviation over three training seeds. Best and second-best results are shown in bold and
+underlined, respectively, based on unrounded values.
+MemoryMaze
+HM3D
+Model
+MSE ↓
+SSIM ↑
+LPIPS ↓
+PSNR ↑
+MSE ↓
+LPIPS ↓
+256 context frames →64 predicted frames
+Transformer
+0.0100 ± 0.0006
+0.7092 ± 0.0094
+0.2886 ± 0.0137
+22.02 ± 0.47
+0.0137 ± 0.0004
+0.557 ± 0.004
+Mamba
+0.0171 ± 0.0060
+0.6568 ± 0.0348
+0.3873 ± 0.0813
+19.01 ± 2.14
+0.0340 ± 0.0004
+0.739 ± 0.003
+RSSM
+0.0184 ± 0.0011
+0.6269 ± 0.0024
+0.3914 ± 0.0035
+18.64 ± 0.08
+0.0423 ± 0.0012
+0.771 ± 0.003
+HPC–MEC
+0.0082 ± 0.0001
+0.7392 ± 0.0015
+0.2447 ± 0.0030
+23.42 ± 0.11
+0.0137 ± 0.0004
+0.573 ± 0.004
+CoME
+0.0171 ± 0.0004
+0.5738 ± 0.0017
+0.2345 ± 0.0050
+17.67 ± 0.10
+0.0483 ± 0.0035
+0.465 ± 0.010
+HiSTFormer (ours) 0.0059 ± 0.0002 0.7639 ± 0.0026 0.2124 ± 0.0027 24.72 ± 0.16 0.0115 ± 0.0003 0.462 ± 0.002
+500 context frames →500 predicted frames
+Transformer
+0.0281 ± 0.0022
+0.5931 ± 0.0097
+0.4063 ± 0.0069
+16.95 ± 0.33
+0.0141 ± 0.0013
+0.538 ± 0.018
+Mamba
+0.0244 ± 0.0003
+0.6171 ± 0.0027
+0.4354 ± 0.0379
+17.02 ± 0.38
+0.0491 ± 0.0043
+0.786 ± 0.003
+RSSM
+0.0269 ± 0.0038
+0.5752 ± 0.0292
+0.4451 ± 0.0160
+16.70 ± 0.57
+0.0504 ± 0.0054
+0.805 ± 0.005
+HPC–MEC
+0.0159 ± 0.0004
+0.6657 ± 0.0012
+0.3573 ± 0.0064
+19.54 ± 0.09
+0.0115 ± 0.0002
+0.523 ± 0.006
+CoME
+0.0263 ± 0.0007
+0.4880 ± 0.0059
+0.3169 ± 0.0020
+15.80 ± 0.12
+0.0621 ± 0.0045
+0.605 ± 0.016
+HiSTFormer (ours) 0.0133 ± 0.0005 0.7013 ± 0.0047 0.2920 ± 0.0037 21.15 ± 0.17 0.0078 ± 0.0004 0.401 ± 0.009
+HiSTFormer remains robust and reduces LPIPS by 9.4% relative to CoME. The 500→500 protocol
+exceeds the training regime in both total sequence length and prediction horizon. HiSTFormer
+again achieves the best overall performance on MemoryMaze and widens its margin over most
+baselines, with HPC–MEC remaining the closest competitor. CoME remains competitive only in
+LPIPS, whereas HiSTFormer provides balanced gains in both pixel-level fidelity and perceptual
+quality.
+On HM3D, HiSTFormer also achieves the lowest MSE and LPIPS among the baselines in Table 1
+under both protocols, demonstrating consistent performance across diverse environments. Qualita-
+tive comparisons and further analysis are provided in the Appendix C.
+HiSTFormer’s fixed-capacity structured memory keeps KV storage and per-step attention cost
+bounded as the sequence grows. Appendix A.4 further shows that bounding the spatial cache pre-
+vents KV growth with negligible impact on prediction quality.
+The qualitative comparison on MemoryMaze in Figure 2A further illustrates how prediction qual-
+ity evolves with the rollout horizon. HiSTFormer more consistently preserves scene layout, wall
+appearance, and viewpoint evolution. CoME produces sharp images, but some long-horizon pre-
+dictions contain incorrect colors or scene geometry. Figure 2B reports per-step LPIPS under the
+256 →64 protocol. Beyond the 16-step open-loop horizon used during training, HiSTFormer ex-
+hibits the slowest error accumulation, and its advantage increases with the rollout horizon. Although
+CoME achieves low LPIPS during the first few prediction steps, its error subsequently grows more
+rapidly.
+To determine whether these long-horizon gains arise from exploiting additional history, we fix the
+prediction target to the next 64 frames and progressively increase the available context length (Fig-
+ure 2C). HiSTFormer’s error decreases as the context grows and then remains stable when the con-
+text extends beyond the training sequence length, despite accumulated path-integration error and a
+fixed-capacity KV cache. This behavior indicates a stronger ability to extract useful information
+from long histories. HPC–MEC and CoME also benefit from additional context, whereas Mamba
+and RSSM show only limited improvement. Transformer benefits from longer context within the
+training range, but its performance degrades when the context is extended further.
+Finally, we separately evaluate predictions at spatially revisited and spatially novel locations (Fig-
+ure 2D). A target is revisited if a context observation occurred at least 32 frames earlier within 2 m
+of its position and with a heading difference of at most 45◦; it is novel if every context observa-
+tion is more than 2 m away. Other targets are excluded. HiSTFormer achieves the lowest MSE on
+both subsets and outperforms most baselines in LPIPS, although its LPIPS difference from CoME
+on novel targets is not statistically significant. These results demonstrate robust prediction at both
+revisited and novel locations under a constrained memory budget.
+6
+
+
++1
++4
++16
++32
++64
+GT
+Context=256 predict=64      Fixed best checkpoints
++1
++4
++16
++32
+HiSTFormer
+Transformer
+Mamba
+RSSM
+HPC_MEC
+CoME
++64
+A
+C
+B
+D
+0
+256
+512
+Context length
+0.2
+0.3
+0.4
+Next-64 LPIPS ↓
+0
+32
+64
+Prediction step
+0.2
+0.4
+LPIPS ↓
+256 → 64
+HiSTFormer
+Transformer
+RSSM
+HPC-MEC
+Mamba
+CoME
+0.00
+0.25
+0.50
+LPIPS ↓
+0.00
+0.04
+0.08
+MSE ↓
+HiSTFormer
+HPC-MEC
+Transformer
+Mamba
+RSSM
+CoME
+Novel
+Revisit
+Figure 2: Analysis of long-horizon visual prediction in Memory Maze. A: Qualitative predictions
+at selected rollout horizons under the 256→64 protocol. B: Per-step LPIPS over the 64-frame pre-
+diction horizon. C: LPIPS for the next 64 predicted frames as the available context length increases.
+D: MSE and LPIPS on spatially novel and revisited prediction frames.
+4.2
+HIERARCHICAL TEMPORAL–SPATIAL ENCODING ENABLES SCALABLE LONG-HORIZON
+PREDICTION
+Local temporal continuity and long-range spatial relationships exhibit different structures, motivat-
+ing us to examine whether these two types of positional information should be organized differently
+within a Transformer. We systematically compare temporal RoPE (T), spatial RoPE (S), within-
+layer joint encoding (J) (Wang et al., 2024), no positional encoding (N), and different layer-wise
+temporal–spatial arrangements, evaluating both in-range performance and long-horizon generaliza-
+tion.
+All configurations use the same 128-token memory budget. Temporal layers use a contiguous FIFO
+window, whereas spatial layers use recent-plus-coverage (R+C): 32 recent tokens and 96 earlier
+memories retained for temporal coverage. Unless cache organization is under study, each layer uses
+its default policy; content-conditioned spatial offsets are disabled to isolate positional encoding and
+layer-wise organization. We report LPIPS under the 256 →64 and 500 →500 protocols to assess
+long-horizon generalization within and beyond the training sequence length.
+Temporal and spatial positional structures are complementary.
+Figure 3A compares the main
+encoding schemes at the same two-layer depth. TT, which uses only temporal RoPE, and NN, which
+uses no positional encoding, both perform poorly on long-horizon prediction. In contrast, SS, which
+7
+
+
+0.20
+0.24
+0.28
+0.32
+256 → 64 LPIPS ↓
+0.28
+0.32
+0.36
+0.40
+500 → 500 LPIPS ↓
+T
+S
+J
+N
+NN
+SS
+TT
+TS
+ST
+TTSS
+JJ
+0.20
+0.21
+0.22
+0.23
+256 → 64 LPIPS ↓
+0.25
+0.27
+0.29
+0.31
+500 → 500 LPIPS ↓
+ST
+TSTS
+TSTSTS
+TS
+TTSS
+TTTSSS
+0.22
+0.25
+0.28
+0.31
+256 → 64 LPIPS ↓
+0.28
+0.33
+0.38
+0.43
+500 → 500 LPIPS ↓
+T(R+C)T(R+C)
+TS(FIFO)
+J(R+C)J(R+C)
+TS
+TT
+SS
+JJ
+0.18
+0.23
+0.28
+0.33
+256 → 64 LPIPS ↓
+0.25
+0.31
+0.37
+0.43
+500 → 500 LPIPS ↓
+NN
+SS
+TT
+TS
+ST
+TTSS
+JJ
+T(R+C)T(R+C)
+TS(FIFO)
+J(R+C)J(R+C)
+TSTS
+TSTSTS
+TTTSSS
+9×9
+11×11
+13×13
+Environment size
+0.20
+0.22
+0.24
+0.26
+0.28
+LPIPS ↓
+256 → 64
+Grid-like
+Cartesian
+Single-period
+9×9
+11×11
+13×13
+Environment size
+0.28
+0.30
+0.32
+0.34
+LPIPS ↓
+500 → 500
+A
+B
+C
+D
+E
+Figure 3: Analysis of hierarchical temporal–spatial encoding. A: Comparison of positional encod-
+ings in two-layer models. B: Temporal–spatial layer arrangements at depths of 2, 4, and 6 layers. C:
+Effects of exchanging the default cache organizations of temporal and spatial layers. D: Combined
+comparison of positional encoding, hierarchy, and cache-organization variants. E: Zero-shot gener-
+alization of different spatial encodings from the 9 × 9 training environment to larger environments
+under the 256→64 and 500→500 protocols.
+uses only spatial RoPE, substantially reduces the error under the 500 →500 protocol, highlighting
+the importance of explicit spatial indexing for long-range prediction. JJ, which directly combines
+temporal and spatial signals within each layer, fails to realize the full benefit of both and performs
+between the purely temporal and purely spatial variants. When temporal and spatial relations are
+instead assigned to different Transformer layers, both TS and ST achieve stronger overall perfor-
+mance, with TS—temporal contextualization followed by spatial organization—performing better.
+These results indicate that temporal and spatial positional structures provide complementary infor-
+mation, but the benefit depends on how they are organized within the network; simple within-layer
+mixing is insufficient to fully exploit their complementarity.
+Hierarchical organization consistently benefits from increased depth.
+We further compare
+temporal–spatial Transformers with different depths and layer arrangements (Figure 3B). As the net-
+work is scaled from 2 to 4 and 6 layers, LPIPS consistently decreases under both the 256→64 and
+500 →500 protocols, indicating that the hierarchical temporal–spatial design continues to benefit
+from increased model depth. At six layers, the blockwise TTTSSS arrangement achieves lower pre-
+diction error than the alternating TSTSTS arrangement. At both four and six layers, the blockwise
+arrangements (TTSS and TTTSSS) also exhibit smaller variation across random seeds than their
+alternating counterparts (TSTS and TSTSTS). Within the tested range of two to six layers, these
+results show that placing local temporal processing before long-range spatial organization provides
+stable depth scaling.
+Temporal and spatial layers benefit from different memory organizations.
+In the experiments
+above, temporal layers access a contiguous window of recent history by default, whereas spatial
+layers combine a recent window with long-term memories selected to provide broad temporal cov-
+erage. To examine the effect of this asymmetric design, we further swap the cache organization used
+by the two layer types (Figure 3C). Applying R+C coverage sampling to temporal layers does not
+yield consistent improvements and leads to a clear degradation in long-horizon prediction. Likewise,
+8
+
+
+replacing the coverage-based memory of spatial layers with a pure FIFO cache degrades the perfor-
+mance of TS. In contrast, the default configuration—contiguous recent history for temporal layers
+and long-range coverage for spatial layers—achieves the best overall performance. This asymme-
+try suggests that, under a limited memory budget, local temporal modeling relies more strongly on
+contiguous context, whereas spatial retrieval benefits more from broad coverage over long histories.
+Figure 3D summarizes all variants discussed above for a complete comparison.
+Taken together with the spatial-cache organization experiments in Appendix A.4, these results show
+that spatial indexing allows the model to exploit information spanning long temporal ranges without
+retaining the full history. Consequently, KV storage and per-step attention cost remain bounded as
+the sequence grows.
+Spatial modeling is robust across encoding choices.
+Keeping all other settings unchanged, we
+compare the multi-periodic grid encoding with two alternatives: Cartesian, which uses orthogonal
+wave directions, and Single-period, which retains the grid-like wave directions but uses a single
+period (Figure 3E). We evaluate zero-shot transfer from the 9 × 9 training environment to larger
+11 × 11 and 13 × 13 environments, averaging results over three training seeds. Under the 256→64
+protocol, the multi-periodic encoding achieves the lowest LPIPS across all environment sizes. Under
+the more challenging 500 →500 setting, the differences among encodings narrow, while the multi-
+periodic representation remains stable and competitive across environment scales. Overall, these
+results suggest that HiSTFormer’s spatial modeling is robust to the tested encoding choices, while
+the multi-periodic grid-like representation provides a reliable default. Multi-scale spatial codes have
+theoretical support for reducing periodic positional ambiguity (Mathis et al., 2012; Stemmler et al.,
+2015). Further implementation details and distance-stratified analyses are provided in Appendix F.
+4.3
+LEARNABLE ADDRESS OFFSETS IMPROVE SPATIAL ORGANIZATION
+Temporal layers aggregate visual information across frames, so their contextual representations may
+not correspond to a single agent-centered position from path integration. HiSTFormer therefore
+predicts a content-conditioned two-dimensional offset from the temporal output for each spatial-
+attention head, adapting the base path-integrated address to the represented content.
+0.0
+0.2
+0.4
+LPIPS ↓
+0.2080.2290.2390.2490.279
+256 → 64
+0.0
+0.2
+0.4
+LPIPS ↓
+0.2490.2630.2750.2850.308
+500 → 500
+0
+10
+20
+Distance to Wall
+before learn (m)
+0
+10
+20
+Distance to Wall
+after learn (m)
+92.4% closer
+A
+B
+C
+GT
+H0 #132
+5.85 m to target
+H2 #138
+4.40 m to target
+Full prediction
+H0 shuffle
+H2 shuffle
+HiSTFormer
+Mean offset
+Zeroed
+No offset
+Shuffled offset
+Figure 4: Analysis of content-conditioned learnable address offsets. A: LPIPS of the full HiST-
+Former, a model trained without address offsets, and three test-time interventions applied after nor-
+mal training: replacing the learned offsets with their mean, shuffling them, or setting them to zero.
+B: Distance from the base and offset-adjusted spatial addresses to the wall intersected by the current
+viewing direction. C: A qualitative example showing the ground-truth target, high-attention memo-
+ries retrieved by spatial heads H0 and H2, the full prediction, and predictions obtained after shuffling
+the retrieval results of either head.
+Learnable address offsets consistently improve visual prediction.
+We compare the full HiST-
+Former with learned address offsets, a No-offset variant trained from scratch with offsets disabled,
+and three variants obtained by modifying the learned offsets only at test time after normal train-
+ing: taking their mean, shuffling them, or setting them to zero (Figure 4A). The full HiSTFormer
+9
+
+
+achieves the lowest LPIPS under both the 256 →64 and 500 →500 protocols, reducing LPIPS
+by approximately 9.0% and 5.5%, respectively, relative to the No-offset model. All three test-time
+interventions degrade performance. These results show that content-conditioned offsets improve the
+learned representations and actively adjust spatial addresses during inference.
+The learned address offsets align with visible scene geometry.
+We measure the distance from
+both the path-integrated base address and the head-specific adjusted address to the wall intersected
+by the current viewing direction (Figure 4B). After applying the learned offset, 92.4% of samples
+move closer to the corresponding wall location, despite receiving no direct supervision of wall posi-
+tions. Together with the performance degradation under offset interventions in Figure 4A, this result
+indicates that the offsets are structured, content-dependent spatial adjustments rather than arbitrary
+perturbations. Further head-wise analysis (Appendix Figure 12 A) reveals relatively stable direc-
+tional preferences, with the four heads distributed approximately uniformly across the 80° field of
+view and each head’s directions concentrated within a 20° range. Offset magnitudes are positively
+correlated with the distance to the nearest wall along the corresponding direction, most strongly
+within 3 environment cells, before gradually saturating. Representative offset patterns are shown in
+Appendix Figure 12 B.
+Adjusted spatial addresses retrieve historical visual cues relevant to the current prediction.
+Finally, we examine how these address adjustments contribute to visual prediction in practice. To re-
+duce the effect of directly retrieving historical views from the same location, we select target frames
+whose positions are more than 4 m away from all ground-truth context observations. Figure 4C
+shows a representative example. High-attention memory entries retrieved by spatial heads H0 and
+H2 are located 5.85 m and 4.40 m from the target position, respectively, and contain partial informa-
+tion about the target wall observed from different viewpoints, while neither contains the complete
+target view. The full model reconstructs the wall structure and color of the target scene reasonably
+well, whereas shuffling the retrieval results of either H0 or H2 leads to clear prediction errors. This
+example suggests that content-conditioned addressing helps the model retrieve prediction-relevant
+information from spatially distinct historical experiences that provide complementary visual cues,
+and incorporate these cues into subsequent visual generation. Appendix Figure 12 C/D/E further an-
+alyzes the head-specific attended content and memory perturbations in this case, yielding consistent
+findings.
+Overall, these results indicate that the learnable address offsets do more than simply introduce addi-
+tional degrees of freedom. Instead, they provide content-dependent spatial adjustments to the base
+positions obtained through path integration. These adjustments yield consistent prediction gains,
+exhibit interpretable structure aligned with scene geometry, and influence the historical memories
+actually used by the model, thereby enabling a more flexible binding between temporal context and
+spatial memory.
+5
+CONCLUSION
+We introduced HiSTFormer, a hierarchical Transformer that organizes local temporal integration
+and long-range spatial retrieval into successive stages, with content-conditioned offsets for adaptive
+memory addressing. Using a fixed-capacity memory and grid-like spatial encoding, HiSTFormer
+improves long-horizon visual prediction both within and beyond the training sequence length.
+6
+LIMITATIONS
+HiSTFormer assumes reliable ground-truth head directions. Its robustness to noisy heading esti-
+mates and generalization to downstream tasks remain to be explored.
+10
+
+
+AI USE STATEMENT
+We used generative AI tools to assist with research ideation, literature discovery, drafting of some
+paper sections, and language refinement. AI tools were used to help explore research directions,
+identify related work, and improve the clarity and presentation of the manuscript. All AI-assisted
+content, including generated text and suggestions, was carefully reviewed and verified by the au-
+thors. The authors take full responsibility for the final content, claims, experimental results, and
+conclusions presented in this paper.
+REPRODUCIBILITY STATEMENT
+We provide implementation details of HiSTFormer, training configurations, and evaluation proto-
+cols in the appendix. We also provide detailed descriptions of the dataset construction, baseline
+implementations, and experimental settings to facilitate reproduction of our results.
+REFERENCES
+Zhifei Chen, Luozhou Wang, Guibao Shen, Dongyu Yan, Shuai Yang, Tianshuo Xu, Yihua Du,
+Wei Wang, Tianyi Gui, Lianghua Huang, et al. Reworld: An interactive world model with long-
+horizon memory. arXiv preprint arXiv:2608.23565, 2026.
+Howard Eichenbaum. On the integration of space, time, and memory. Neuron, 95(5):1007–1018,
+2017. doi: 10.1016/j.neuron.2017.06.036.
+Samuel Garcin, Thomas Walker, Steven McDonagh, Tim Pearce, Hakan Bilen, Tianyu He, Kaixin
+Wang, and Jiang Bian. Beyond pixel histories: World models with persistent 3d state. arXiv
+preprint arXiv:2603.03482, 2026.
+Albert Gu and Tri Dao. Mamba: Linear-time sequence modeling with selective state spaces. In First
+conference on language modeling, 2024.
+Alexis Guanella and Paul F. M. J. Verschure. Prediction of the position of an animal based on popula-
+tions of grid and place cells: A comparative simulation study. Journal of Integrative Neuroscience,
+6(3):433–446, 2007. doi: 10.1142/S0219635207001556.
+Danijar Hafner, Timothy Lillicrap, Ian Fischer, Ruben Villegas, David Ha, Honglak Lee, and James
+Davidson. Learning latent dynamics for planning from pixels. In International conference on
+machine learning, pp. 2555–2565. PMLR, 2019.
+Danijar Hafner, Jurgis Pasukonis, Jimmy Ba, and Timothy Lillicrap. Mastering diverse control tasks
+through world models. Nature, 640(8059):647–653, 2025.
+Torkel Hafting, Marianne Fyhn, Sturla Molden, May-Britt Moser, and Edvard I. Moser.
+Mi-
+crostructure of a spatial map in the entorhinal cortex. Nature, 436(7052):801–806, 2005. doi:
+10.1038/nature03721.
+Zizhan He, Maxime Daigle, and Pouya Bashivan. Building spatial world models from sparse tran-
+sitional episodic memories. In International Conference on Learning Representations, volume
+2026, pp. 21251–21286, 2026.
+Christopher
+J.
+Kymn,
+Sonia
+Mazelet,
+Anthony
+Thomas,
+Denis
+Kleyko,
+E.
+Paxon
+Frady,
+Friedrich T. Sommer,
+and Bruno A. Olshausen.
+Binding in hippocampal–
+entorhinal circuits enables compositionality in cognitive maps.
+In Advances in Neural
+Information Processing Systems, volume 37, 2024.
+doi:
+10.52202/079017-1235.
+URL
+https://proceedings.neurips.cc/paper_files/paper/2024/hash/
+4526cfacdbca6b6e184568dac91bf070-Abstract-Conference.html.
+Boyang Li, Yulin Wu, Nuoxian Huang, and Wenjia Zhang. Gridpe: A grid cell-inspired unified
+position embedding for arbitrary-dimensional spaces. arXiv preprint arXiv:2406.07049, 2024.
+Boyang Li, Yulin Wu, Sizhe Xu, Nuoxian Huang, Zhonghang Yuan, Shangyi Guo, Shu Yang,
+and Takahiro Yabe. nd-rope: A generalized rope for n-dimensional position embedding. arXiv
+preprint arXiv:2606.12146, 2026a.
+11
+
+
+Tiantian Li, Xingxing Cao, Yifei Wang, Xiaojiao Yang, Xiaolong Zou, and Bo Hong.
+Hippo-
+former: Integrating hippocampus-inspired spatial memory with transformers. In The Fourteenth
+International Conference on Learning Representations, 2026b. URL https://openreview.
+net/forum?id=hxwV5EubAw.
+Alexander Mathis, Andreas V. M. Herz, and Martin B. Stemmler. Optimal population codes for
+space: Grid cells outperform place cells. Neural Computation, 24(9):2280–2317, 2012. doi:
+10.1162/NECO a 00319.
+Taahaa Mir, Peipei Yao, Kateri Duranceau, and Isabeau Pr´emont-Schwarz. Are grid cells hexagonal
+for performance or by convenience?
+arXiv preprint arXiv:2410.11886, 2024. URL https:
+//arxiv.org/abs/2410.11886.
+Edvard I. Moser, Yasser Roudi, Menno P. Witter, Clifford Kentros, Tobias Bonhoeffer, and May-
+Britt Moser. Grid cells and cortical representation. Nature Reviews Neuroscience, 15(7):466–481,
+2014. doi: 10.1038/nrn3766.
+Jurgis Pasukonis, Timothy Lillicrap, and Danijar Hafner. Evaluating long-term memory in 3d mazes.
+In International Conference on Learning Representations, 2023.
+Santhosh Kumar Ramakrishnan, Aaron Gokaslan, Erik Wijmans, Oleksandr Maksymets, Alexander
+Clegg, John Turner, Eric Undersander, Wojciech Galuba, Andrew Westbury, Angel X. Chang,
+Manolis Savva, Yili Zhao, and Dhruv Batra.
+Habitat-matterport 3d dataset (hm3d): 1000
+large-scale 3d environments for embodied ai. In Thirty-fifth Conference on Neural Information
+Processing Systems Datasets and Benchmarks Track, 2021.
+Robin Rombach, Andreas Blattmann, Dominik Lorenz, Patrick Esser, and Bjorn Ommer. High-
+resolution image synthesis with latent diffusion models.
+In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition, pp. 10684–10695, 2022.
+Vemund Sigmundson Schøyen, Kosio Beshkov, Markus Borud Pettersen, Erik Hermansen, Kon-
+stantin Holzhausen, Anders Malthe-Sørenssen, Marianne Fyhn, and Mikkel Elle Lepperød.
+Hexagons all the way down:
+Grid cells as a conformal isometric map of space.
+PLOS
+Computational Biology, 21(2):e1012804, 2025. doi: 10.1371/journal.pcbi.1012804.
+Sebastian Stapf, Pablo Acuaviva Huertos, Aram Davtyan, and Paolo Favaro. Composition of mem-
+ory experts for diffusion world models. In The Fourteenth International Conference on Learning
+Representations, 2026. URL https://openreview.net/forum?id=sUEdpZCHdp.
+Martin Stemmler, Alexander Mathis, and Andreas V. M. Herz. Connecting multiple spatial scales
+to decode the population activity of grid cells. Science Advances, 1(11):e1500816, 2015. doi:
+10.1126/science.1500816.
+Jianlin Su, Yu Lu, Shengfeng Pan, Ahmed Murtadha, Bo Wen, and Yunfeng Liu. RoFormer: En-
+hanced transformer with rotary position embedding, 2021. URL https://arxiv.org/abs/
+2104.09864.
+Jianlin Su, Yu Lu, Shengfeng Pan, Ahmed Murtadha, Bo Wen, and Yunfeng Liu. Roformer: En-
+hanced transformer with rotary position embedding. Neurocomputing, 568:127063, 2024.
+Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N Gomez,
+Łukasz Kaiser, and Illia Polosukhin. Attention is all you need. Advances in neural information
+processing systems, 30, 2017.
+Peng Wang, Shuai Bai, Sinan Tan, Shijie Wang, Zhihao Fan, Jinze Bai, Keqin Chen, Xuejing Liu,
+Jialin Wang, Wenbin Ge, et al. Qwen2-vl: Enhancing vision-language model’s perception of the
+world at any resolution. arXiv preprint arXiv:2409.12191, 2024.
+Weijie Wang, Haoyu Zhao, Yifan Yang, Feng Chen, Zeyu Zhang, Yefei He, Zicheng Duan, Donny Y
+Chen, Yuqing Yang, and Bohan Zhuang. Latent spatial memory for video world models. arXiv
+preprint arXiv:2606.09828, 2026.
+12
+
+
+Zhou Wang, Alan C. Bovik, Hamid R. Sheikh, and Eero P. Simoncelli. Image quality assessment:
+From error visibility to structural similarity. IEEE Transactions on Image Processing, 13(4):600–
+612, 2004. doi: 10.1109/TIP.2003.819861.
+Xilin Wei, Xiaoran Liu, Yuhang Zang, Xiaoyi Dong, Pan Zhang, Yuhang Cao, Jian Tong, Haodong
+Duan, Qipeng Guo, Jiaqi Wang, et al. Videorope: What makes for good video rotary position
+embedding? arXiv preprint arXiv:2502.05173, 2025.
+Xueyao Wei, Yifei Wang, Delun Li, Shaoan Wang, Junzhi Yu, Wenjie Song, and Xingyu Chen.
+Memoryvln: From ego-aware memory representation to cross-context memory reuse in vision-
+language navigation. arXiv preprint arXiv:2610.18478, 2026.
+James C. R. Whittington, Timothy H. Muller, Shirley Mark, Guifen Chen, Caswell Barry, Neil
+Burgess, and Timothy E. J. Behrens. The tolman–eichenbaum machine: Unifying space and
+relational memory through generalization in the hippocampal formation.
+Cell, 183(5):1249–
+1263.e23, 2020. doi: 10.1016/j.cell.2020.10.024.
+Tong
+Wu,
+Shuai
+Yang,
+Ryan
+Po,
+Yinghao
+Xu,
+Ziwei
+Liu,
+Dahua
+Lin,
+and
+Gor-
+don
+Wetzstein.
+Video
+world
+models
+with
+long-term
+spatial
+memory.
+In
+Advances
+in
+Neural
+Information
+Processing
+Systems,
+volume
+38,
+2025.
+URL
+https://proceedings.neurips.cc/paper_files/paper/2025/hash/
+467655d26fcc207bca08915dc91964c6-Abstract-Conference.html.
+Ji Xia, Tingting Liao, Xuezhi Liang, Hao Li, and Guangyi Liu. Loci: Spatial linear memory for
+streaming world models. arXiv preprint arXiv:2609.40222, 2026.
+Tianshuo Xu, Yichen Xie, Depu Meng, Chensheng Peng, Quentin Herau, Bo Jiang, Yihan Hu, and
+Wei Zhan. Teaching video generators to remember: Eliciting dynamic memory for out-of-sight
+state evolution. arXiv preprint arXiv:2605.25333, 2026.
+Wilson Yan, Danijar Hafner, Stephen James, and Pieter Abbeel. Temporally consistent transform-
+ers for video generation. In International Conference on Machine Learning, pp. 39062–39098.
+PMLR, 2023.
+Wangbo Yu, Kunhao Liu, Wenbo Hu, Shenghai Yuan, Chaoran Feng, Haiyang Zhou, Yukun Huang,
+Yiran Wang, Wang Zhao, Yingmin Luo, et al. Worldcrafter: Consistent video world model with
+implicit 3d-aware memory. arXiv preprint arXiv:2609.24984, 2026a.
+Wei Yu, Runjia Qian, Yumeng Li, Liquan Wang, Songheng Yin, Dennis Anthony, Yang Ye, Yidi Li,
+Weiwei Wan, Animesh Garg, et al. Mosaicmem: Hybrid spatial memory for controllable video
+world models. arXiv preprint arXiv:2603.17117, 2026b.
+Richard Zhang, Phillip Isola, Alexei A. Efros, Eli Shechtman, and Oliver Wang. The unreasonable
+effectiveness of deep features as a perceptual metric. In Proceedings of the IEEE Conference on
+Computer Vision and Pattern Recognition, pp. 586–595, 2018.
+Tianqiu Zhang, Muyang Lyu, Xiao Liu, and Si Wu. Structure abstraction and generalization in
+a hippocampal–entorhinal inspired world model.
+In Forty-Third International Conference on
+Machine Learning, 2026. URL https://openreview.net/forum?id=AYXgo5FjYz.
+Jinjing Zhao, Fangyun Wei, Zhening Liu, Hongyang Zhang, Chang Xu, and Yan Lu.
+Spatia:
+Video generation with updatable spatial memory. In Proceedings of the IEEE/cvf conference
+on computer vision and pattern recognition, pp. 4245–4257, 2026.
+Siyuan Zhou, Yilun Du, Yuncong Yang, Lei Han, Peihao Chen, Dit-Yan Yeung, and Chuang Gan.
+Learning 3d persistent embodied world models.
+Advances in Neural Information Processing
+Systems, 38:104807–104829, 2026.
+13
+
+
+A
+IMPLEMENTATION AND TRAINING DETAILS
+A.1
+VISUAL ENCODER AND DECODER
+HiSTFormer uses a convolutional encoder–decoder. The encoder takes a 64 × 64 × 3 RGB image
+as input and consists of four downsampling convolutional blocks. Each block contains a 3 × 3
+convolution with stride 2, followed by GroupNorm and SiLU. The channel dimensions are 32, 64,
+128, and 128, respectively.
+The resulting 4×4×128 feature map is flattened and passed through a multilayer perceptron (MLP),
+producing an ZD = 234-dimensional visual representation:
+zt = Eϕ(ot).
+(8)
+The decoder first maps the latent representation back to a 4 × 4 × 128 feature map through a linear
+layer, followed by four stages of nearest-neighbor upsampling and convolution to recover a 64 × 64
+RGB image. A sigmoid activation is applied at the output:
+ˆot+1 = Dψ(ˆzt+1) .
+(9)
+The encoder, predictive model, and decoder are trained jointly from scratch.
+A.2
+MOTION ENCODER AND TEACHER–STUDENT ALIGNMENT
+The motion encoder uses a causal temporal convolution with kernel size 9 and dilation 1, cover-
+ing the current input and the preceding eight steps. Given the action at and, when available, the
+visual representation zt, the observation branch predicts the displacement sobs
+t
+. During open-loop
+prediction, an action-only branch predicts sact
+t
+.
+The observation branch acts as the teacher and the action-only branch as the student. Their outputs
+are aligned using a smooth L1 loss, with gradients stopped through the teacher:
+Lstudent = SmoothL1
+ sact
+t
+, sg
+
+sobs
+t
+
+,
+(10)
+where sg[·] denotes the stop-gradient operation.
+A.3
+MAIN MODEL CONFIGURATION
+The main HiSTFormer model on MemoryMaze reported in Table 1 contains approximately 7.72
+million trainable parameters and uses a two-layer TS Transformer, with one temporal layer followed
+by one spatial layer. The temporal layer maintains a 32-entry FIFO KV cache.
+For each spatial-attention head, the spatial layer applies RoPE to 128 of the 256 query and key
+dimensions. Positional RoPE occupies 96 dimensions, using eight spatial periods with six rotary
+channel pairs per period. Head direction occupies a further 32 dimensions by repeating the corre-
+sponding rotation across 16 channel pairs. The remaining 128 dimensions are not rotated.
+The spatial layer receives the complete output of the temporal layer. For each token, a content-
+conditioned address network with dimensions 384→128→8 produces eight scalars(0.05M), which
+are reshaped into four two-dimensional position offsets, one for each attention head. These offsets
+adjust the spatial rotary phases used by the corresponding heads.
+A.4
+LONG-TERM MEMORY MANAGEMENT
+By default, HiSTFormer manages its fixed-capacity long-term memory using temporal-redundancy-
+based eviction. Let the retained entries be ordered by their timestamps. When the long-term memory
+is full, we assign each interior candidate at timestamp τj the temporal-redundancy score
+Cj = (τj −τj−1)(τj+1 −τj)(τj+1 −τj−1).
+(11)
+The entry with the smallest Cj is removed, while the two temporal endpoints are always retained.
+This strategy preferentially removes temporally redundant entries and maintains coverage over a
+broad temporal range.
+14
+
+
+Sensitivity to the memory-management strategy.
+To assess whether HiSTFormer depends on
+a particular eviction heuristic, we keep the checkpoints trained with the default temporal-coverage
+strategy fixed and modify only the memory-management policy used at test time. The fixed-interval
+strategy retains one long-term entry every k frames, with k = 4 for the 256 →64 protocol and
+k = 8 for the 500 →500 protocol. The random strategy discards 80% of the candidate entries. As
+shown in Table 2, prediction quality remains stable despite substantial differences in the number and
+distribution of retained memories. Relative to the default strategy, MSE changes by at most 4.3%
+under the 256 →64 protocol and 0.9% under the 500 →500 protocol. These results indicate that
+HiSTFormer can flexibly exploit its spatial memory and is not strongly tied to a specific eviction
+rule.
+Table 2: Sensitivity to the test-time long-term memory-management strategy. All results use check-
+points trained with the default temporal-coverage strategy. The number of long-term entries is aver-
+aged over evaluation sequences.
+Protocol
+Strategy
+Long-term entries
+MSE ↓SSIM ↑LPIPS ↓PSNR ↑
+256→64
+Temporal coverage (default)
+96 0.006216
+0.7587
+0.2205
+24.400
+Fixed interval (k = 4)
+56 0.006142
+0.7582
+0.2218
+24.323
+Random eviction (80%)
+43.56 0.006480
+0.7531
+0.2294
+24.095
+500→500 Temporal coverage (default)
+96 0.013600
+0.6989
+0.2926
+21.166
+Fixed interval (k = 8)
+59 0.013712
+0.6961
+0.2973
+21.037
+Random eviction (80%)
+89.58 0.013623
+0.6985
+0.2945
+21.100
+Bounded versus full spatial memory.
+Beyond changing the cache policy only at test time, we also
+conduct a from-scratch comparison using the SS model. The full-memory variant uses the complete
+spatial KV cache during both training and inference, whereas the bounded variant uses recent-plus-
+coverage (R+C) memory with at most 128 cached entries in both stages. As shown in Table 3, the
+four image-prediction metrics exhibit negligible degradation overall, with several metrics showing
+modest improvements. R+C also keeps the peak spatial KV cache at 1.000 MiB under both pro-
+tocols, whereas the full cache grows from 2.492 to 7.805 MiB as the sequence length increases.
+Thus, explicit spatial memory management bounds KV storage without sacrificing prediction qual-
+ity, highlighting its empirical importance for long-horizon prediction. We further hypothesize that
+such sparse memory may help mitigate memory interference caused by accumulated path-integration
+errors, although directly validating this effect remains future work.
+Table 3: From-scratch comparison of full and bounded spatial KV caches using the SS model. R+C
+retains at most 128 entries during both training and inference. Peak spatial KV-cache memory is
+reported in MiB.
+Protocol
+Training / inference cache
+Peak KV (MiB) ↓
+MSE ↓
+SSIM ↑
+LPIPS ↓
+PSNR ↑
+256→64
+Full / Full
+2.492
+0.006856
+0.747846
+0.234693
+23.844
+R+C / R+C
+1.000
+0.006602
+0.749573
+0.231666
+23.922
+500→500
+Full / Full
+7.805
+0.014121
+0.689286
+0.307988
+20.648
+R+C / R+C
+1.000
+0.014261
+0.689550
+0.304276
+20.582
+B
+DATASET DETAILS
+B.1
+MEMORYMAZE DATASET DETAILS
+We collect 2,368 training episodes and 112 test episodes in Memory Maze. Each episode is gen-
+erated from an environment initialized with a different random seed and contains 1,000 frames.
+Figure 5 shows representative layouts and sampled trajectories for the 9 × 9, 11 × 11, and 13 × 13
+Memory Maze environments.
+15
+
+
+GT
+Figure 5: Representative layouts and sampled trajectories in 9 × 9, 11 × 11, and 13 × 13 Memory
+Maze environments. The dashed segment marks a 256-step ground-truth window, and the cross
+marks its endpoint.
+1
+100
+250
+500
+Observed frames
+0.00
+0.25
+0.50
+0.75
+1.00
+1.25
+Position error (grid units)
+HiSTFormer (self-collected)
+HiSTFormer(official)
+Figure 6: Accumulation of path-integration error in the main HiSTFormer model on our collected
+and the official datasets. Position is decoded from the largest-period component of the grid-like
+representation and compared with the ground-truth position over the first 500 observed frames. The
+larger error on our collected trajectories indicates more severe localization drift and a more chal-
+lenging setting for long-horizon visual prediction.
+In the training set, 4.4% of actions result in wall collisions, leading to relatively large discrepan-
+cies between the intended action-induced motion and the actual displacement. Consequently, path-
+integration errors are difficult to avoid over long trajectories, testing the model’s ability to integrate
+spatial memories and resolve ambiguity as the underlying spatial representation drifts.
+Figure 6 compares the path-integration error decoded from the main HiSTFormer model on our col-
+lected dataset and the official dataset. For both datasets, we decode the estimated position from the
+largest-period component of the grid-like representation and measure its deviation from the ground-
+truth position over the first 500 observed frames. Although the error accumulates with context length
+in both settings, the drift is substantially more pronounced on our collected trajectories, making long-
+horizon visual prediction more challenging. The multi-periodic representation, content-conditioned
+offsets, and visual content inputs provide complementary mechanisms that may partially mitigate
+the resulting performance loss by helping disambiguate drifting spatial states, although they do not
+eliminate the underlying localization error.
+16
+
+
+The trajectories also contain frequent revisits: for 70.98% of frames, the agent had previously visited
+a location within 1 m of its current position more than 32 frames earlier. This setting therefore places
+stronger demands on how models organize and retrieve spatial information.
+Unless otherwise specified, we report experiments on our collected 9 × 9 Memory Maze dataset.
+All experiments in Section 4.3 instead use the official Memory Maze dataset. Its less severe path-
+integration drift provides a cleaner setting for isolating the effect of the learnable address offsets and
+also results in lower overall prediction error.
+B.2
+HM3D DATASET DETAILS
+We collect an egocentric video dataset in HM3D v0.2 using Habitat-Sim. Our exploration con-
+troller, adapted from EgoEnv, initializes each episode at a sampled navigable location with a random
+heading and navigates among up to eight nearby reachable goals, reshuffling the goals to induce re-
+peated visits. Each trajectory contains 1,024 consecutive observations, with RGB images rendered
+at 128 × 128 and downsampled to 64 × 64. The action space consists of moving forward by 0.25
+m and turning left or right by 30°. We record the executed actions together with ground-truth agent
+positions, camera poses, and headings. The final dataset contains 8,080 trajectories and 8,273,920
+frames across 888 scenes. We use mutually disjoint sets of 788, 90, and 10 scenes for training,
+validation, and testing, comprising 7,880, 180, and 20 trajectories, respectively. Training scenes
+come from the HM3D training split, excluding 12 scenes with insufficient reachable goals. We
+reserve HM3D minival for our internal test set and remove these scenes from the validation split.
+All trajectories undergo geometric consistency checks and image/action replay verification at four
+checkpoints per trajectory.
+High Spatial Revisit Rates in HM3D. HM3D trajectories exhibit substantial spatial revisits, as
+agents sequentially navigate to eight random goals. Figure 7 illustrates 20 test trajectories from 10
+scenes and their historical observation coverage. We measure whether each predicted state matches
+an observed position (distance ≤0.5), position and heading (angular difference ≤30◦), or state-
+action transition (matching start/end states and action). Only observed history is considered, exclud-
+ing predicted states.
+Table 4 reports the matching rates on both datasets. On HM3D, the three rates reach 87.27%,
+71.95%, and 65.39% under the 256 →64 protocol, increasing to 99.27%, 96.06%, and 92.32%
+under 500→500, all higher than on MemoryMaze. The previously reported 70.98% position revisit
+rate on MemoryMaze was computed over 1,000 frames and thus differs slightly from the table. The
+two datasets also use different spatial units: maze coordinates for MemoryMaze and meters for
+HM3D.
+C
+ADAPTATION TO COMPLEX INDOOR ENVIRONMENTS
+To assess HiSTFormer’s adaptability to more complex indoor environments, we conduct additional
+experiments on a first-person trajectory dataset built from HM3D. Visual observations are repre-
+sented using the pretrained Stable Diffusion VAE (Rombach et al., 2022) sd-vae-ft-mse. We
+freeze its encoder and decoder and train only the latent-space prediction model. The HiSTFormer
+model uses a TTSS layer arrangement with eight attention heads and a head dimension of 512, re-
+sulting in 106.49 million trainable parameters; the spatial RoPE design remains unchanged. Ground-
+truth x, y, z positions and headings are provided during both observation and prediction, while fu-
+ture RGB frames are never given to the predictor. Training uses 16-step autoregressive rollouts with
+latent-space MSE and runs for 100,000 gradient updates.
+Figure 8 shows qualitative comparisons across different models and test scenes. HiSTFormer cap-
+tures the major spatial layouts and viewpoint changes, although fine details remain blurrier than the
+frozen VAE reconstructions. When rollouts extend beyond the 16-frame training horizon to 32 and
+64 frames, recognizable structure persists in some scenes. In comparison, CoME consistently pro-
+duces better predictions for the first 1–4 frames but exhibits more pronounced errors over longer roll-
+outs. Transformer and HPC–MEC maintain relatively coherent predictions, although some frames
+lose more visual details than HiSTFormer, potentially indicating HiSTFormer’s more effective use
+of historical observations. These results provide preliminary evidence that HiSTFormer can adapt
+to complex indoor environments.
+17
+
+
+Figure 7: HM3D test trajectories and historical observation coverage. Twenty ground-truth trajec-
+tories from 10 test scenes are shown under the 500 →500 protocol. Blue and orange lines indicate
+the observed 500-frame trajectories and the subsequent 500-frame ground-truth trajectories, respec-
+tively. Green circles, black diamonds, and red crosses mark the start, observation endpoint, and
+prediction endpoint. Each panel reports the position and pose matching rates against observed his-
+tory, using thresholds of 0.5 m and 30◦.
+Table 4: Historical observation coverage on MemoryMaze and HM3D. We report the percentage
+of predicted frames matching an observed position (distance ≤0.5), position and heading (angular
+difference ≤30◦), or state-action transition (matching start/end states and action). Only observed
+history is used for matching. Distance is measured in maze coordinate units for MemoryMaze and
+meters for HM3D.
+256→64
+500→500
+Matching criterion
+MemoryMaze
+HM3D
+MemoryMaze
+HM3D
+Position
+69.27%
+87.27%
+84.78%
+99.27%
+Position and heading
+53.27%
+71.95%
+71.99%
+96.06%
+State-action transition
+42.09%
+65.39%
+59.43%
+92.32%
+D
+BASELINE IMPLEMENTATION DETAILS
+The following implementation details are based on the MemoryMaze setting. For HM3D, we retain
+the same overall configurations, with adjustments only to model capacity and input data character-
+istics.
+18
+
+
+HM3D  |  Visual prediction comparison
+256 context frames  →  64 forecast frames
+(a)  TEEsavR23oF
+t+ 1
+t+ 4
+t+ 8
+t+ 12
+t+ 16
+(b)  k1cupFYWXJ6
+t+ 1
+t+ 4
+t+ 8
+t+ 12
+t+ 16
+GT
+VAE recon.
+HPC-MEC
+Transformer
+Mamba
+RSSM
+CoME
+HiSTFormer
+Episode 0 · window start 0 · training seed 0 for every model · CoME: equal-weight mean of four experts
+Saved 64×64 RGB frames; identical frame offsets; no image enhancement. VAE reconstruction is a target-image reference.
+Figure 8: Qualitative predictions on HM3D-based trajectories. HiSTFormer preserves major scene
+structure and viewpoint evolution across multiple test scenes. The 32- and 64-frame predictions
+extend beyond the 16-frame training horizon; frozen-VAE reconstructions are shown as a reference
+for representation quality.
+D.1
+HPC–MEC
+HPC–MEC uses the same visual encoding framework and motion-processing module as HiST-
+Former. The main differences lie in the MEC component and memory mechanism, both of which
+follow the design of the original method.
+For the MEC component, we compare two variants: (i) continuously propagating the MEC state
+within each chunk, and (ii) re-inferring the MEC state from the HPC state at every step. Based on a
+preliminary single-seed experiment, we use the second variant in the reported experiments. During
+open-loop prediction, the HPC state is driven by the model’s predicted visual representations and
+does not access future ground-truth images.
+D.2
+COME
+The main text reports CoME under a training budget approximately matched to that of HiSTFormer.
+Specifically, ImageVAE, Base, STM, and Spatial Base are trained for 20,000, 10,000, 30,000, and
+30,000 gradient steps, respectively. Following the original setup, ImageVAE is frozen after training.
+LTM and SLTM perform online LoRA adaptation using the observed context of each trajectory.
+Extended-training results are reported in Appendix E. Under the 500 →500 evaluation protocol,
+evaluating a single sequence takes approximately 278 seconds.
+19
+
+
+D.3
+GENERAL-PURPOSE WORLD MODELS
+Transformer, RSSM, and Mamba take the previous visual latent, the current transition action, and
+the ground-truth head direction at the target time as inputs. Each model updates its latent state and
+autoregressively predicts the subsequent visual latents.
+The Transformer baseline is a two-layer causal model with eight attention heads and a hidden width
+of 480. It uses learnable absolute positional embeddings along the temporal axis. The Mamba
+baseline uses three Mamba-1 layers with a hidden width of 464. The RSSM baseline uses a 768-
+dimensional deterministic state together with a 234-dimensional continuous Gaussian latent state.
+All three models contain approximately 8 million parameters.
+Because learnable absolute positions may be unfavorable for extrapolation beyond the training se-
+quence length, we additionally consider a more controlled relative-position comparison. The TT
+configuration in Figure 3A is a two-layer temporal-only Transformer using relative temporal RoPE
+and the same 128-token memory budget as the other positional-encoding variants. Despite removing
+the absolute-position extrapolation issue, TT still performs poorly under long-horizon evaluation,
+particularly the 500 →500 protocol. Thus, replacing absolute embeddings with temporal RoPE
+alone does not yield strong long-horizon generalization; the gains of HiSTFormer additionally rely
+on explicit spatial indexing and layer-wise temporal–spatial organization.
+E
+EXTENDED BASELINE EXPERIMENTS
+E.1
+HPC–MEC
+The original HPC–MEC formulation combines observation feedback with recurrent MEC-state
+propagation. Our setting instead requires continuous open-loop prediction after a fixed observation
+history, making it necessary to specify how the MEC state is updated when no new image observa-
+tions are available. We therefore compare two update protocols: CI-R, which preserves recurrent
+MEC-state propagation, and SI, which re-estimates the MEC state at every step from the current
+HPC state. Under SI, the HPC state is updated autoregressively using the model’s own predicted
+visual representations and never accesses future ground-truth images.
+Both variants are trained from scratch for 10,000 gradient steps using identical training configu-
+rations and the same random seed. As shown in Table 5, SI achieves lower MSE under both the
+short- and long-horizon protocols and consistently improves the long-horizon perceptual metrics.
+We therefore adopt SI in the main experiments, while reporting CI-R to make the effect of this
+implementation choice explicit.
+Table 5: Comparison of HPC–MEC update protocols. Both variants are trained from scratch for
+10,000 gradient steps using identical configurations and the same random seed. LPIPS, SSIM, and
+PSNR are reported under the 500→500 protocol.
+MEC update
+MSE (256→64) ↓
+MSE (500→500) ↓
+LPIPS ↓
+SSIM ↑
+PSNR ↑
+CI-R
+0.012053
+0.018827
+0.410430
+0.647472
+17.2523
+SI
+0.009785
+0.015406
+0.369950
+0.662986
+18.1231
+E.2
+COME
+The original CoME study uses a substantially larger training budget, with up to one million gradient
+steps. To examine the effect of additional optimization, we extend the training of Base, STM, and
+Spatial Base to 30,000, 50,000, and 50,000 gradient steps, respectively, while keeping the remaining
+setup unchanged. We report results under the original 200 →17 protocol as well as the 256 →64
+and 500→500 protocols used in our main evaluation.
+As shown in Table 6, the extended budget improves all four prediction metrics across the three
+protocols. Nevertheless, CoME does not surpass HiSTFormer under either of the main evaluation
+protocols. CoME also contains more than 293 million trainable parameters, substantially more than
+20
+
+
+HiSTFormer. Thus, even with additional optimization and a much larger model, the performance
+gap is not closed, indicating lower training efficiency than HiSTFormer.
+Table 6: CoME performance under the matched and extended training budgets. The extended setting
+trains Base, STM, and Spatial Base for 30,000, 50,000, and 50,000 gradient steps, respectively.
+Protocol
+Training setting
+MSE ↓
+PSNR ↑
+SSIM ↑
+LPIPS ↓
+200→17
+Matched budget
+0.006815
+21.672
+0.6869
+0.1143
+Extended training
+0.005252
+22.797
+0.7257
+0.0927
+256→64
+Matched budget
+0.017093
+17.672
+0.5738
+0.2345
+Extended training
+0.015293
+18.155
+0.5954
+0.2150
+500→500
+Matched budget
+0.026328
+15.797
+0.4880
+0.3169
+Extended training
+0.025996
+15.851
+0.4909
+0.3120
+E.3
+TRANSFORMER WITH SPATIAL CONTENT INPUTS
+To determine whether HiSTFormer benefits merely from access to a grid-like spatial representation,
+rather than from using it through spatial RoPE, we train two additional Transformer variants. HEX96
++ Full injects the same 96-dimensional, path-integrated grid-like representation used by HiSTFormer
+into the token content, whereas XY + Full injects the path-integrated Cartesian coordinates directly.
+Both variants use relative temporal RoPE and a full KV cache, following a standard Transformer
+setting and providing access to the complete history. All results are averaged over three training
+seeds.
+Table 7 shows that spatial content inputs provide modest improvements in MSE and short-horizon
+LPIPS over the original Transformer. However, neither variant improves long-horizon LPIPS, and
+both remain substantially behind HiSTFormer under both protocols. Thus, simply adding grid-like
+or Cartesian position information to token content is insufficient. The grid-like representation is
+most effective when used as a rotary spatial address that directly structures attention.
+Table 7: Comparison of spatial RoPE with spatial representations injected as Transformer content.
+HEX96 + Full and XY + Full use relative temporal RoPE and a full KV cache. Values are means
+over three training seeds.
+Model
+MSE (256→64) ↓
+LPIPS (256→64) ↓
+MSE (500→500) ↓
+LPIPS (500→500) ↓
+HiSTFormer (ours)
+0.005850
+0.212404
+0.013286
+0.292006
+Transformer
+0.010017
+0.288581
+0.028135
+0.406308
+HEX96 + Full
+0.009399
+0.280305
+0.025517
+0.411359
+XY + Full
+0.009054
+0.276214
+0.025456
+0.418372
+E.4
+ADDITIONAL COMPARISON WITH ESWM
+ESWM is a biologically inspired spatial world model that infers environmental structure by stor-
+ing and integrating state–action transition memories (He et al., 2026). To compare different spa-
+tial memory mechanisms for long-horizon visual prediction, we implement an adapted version of
+ESWM following the original paper and pseudocode, and evaluate it on MemoryMaze and HM3D.
+The original method constructs a sparse memory bank using a minimum spanning tree based on
+environment topology. Since this requires explicit topological information, we retain all observed
+transitions as episodic memory. For a controlled comparison, we match HiSTFormer’s visual en-
+coder–decoder, 16-step autoregressive training protocol, and parameter count.
+Table 8 presents quantitative comparisons. On MemoryMaze, HiSTFormer outperforms ESWM
+across all metrics under the 256→64 protocol, reducing LPIPS by approximately 19.8%. Under
+500→500, their performance is comparable, with HiSTFormer achieving lower LPIPS. On HM3D,
+where spatial revisits are more frequent, both models perform similarly under 256→64, with HiST-
+21
+
+
+Former achieving slightly better mean values across all four metrics. Under 500→500, ESWM
+achieves better results across all four metrics.
+Historical revisit frequency may partly explain these differences. Under HM3D’s 500→500 proto-
+col, approximately 96% of predicted frames have matching poses in the observed history, and 92%
+have matching state–action transitions. Since ESWM retains all observed transitions, it may ben-
+efit more directly from repeated experiences. In contrast, HiSTFormer remains highly competitive
+under such extensive historical coverage while using fixed-capacity spatial memory.
+Revisit-stratified analysis further reveals their different strengths. Figure 9 compares MSE and
+LPIPS across groups defined by the number of historical pose matches. Both models generally
+improve as revisit frequency increases. Under 256→64, HiSTFormer achieves lower LPIPS across
+all revisit groups and remains competitive in MSE. Under 500→500, ESWM performs better on
+samples with historical revisits. Notably, HiSTFormer achieves lower LPIPS under both protocols
+for frames without matching historical poses, indicating stronger perceptual prediction when direct
+historical correspondences are unavailable.
+Overall, HiSTFormer demonstrates a clear advantage under limited historical coverage while
+maintaining prediction quality comparable to a full-transition-memory model even in highly
+repetitive environments, despite its fixed memory capacity. These findings further support the
+effectiveness of HiSTFormer’s spatiotemporal organization and historical memory retrieval mecha-
+nisms.
+F
+SPATIAL ENCODING DESIGN AND ROBUSTNESS
+HiSTFormer adopts a biologically inspired multi-periodic grid-like encoding as its default spatial
+representation. This section examines two key design choices: multiple spatial periods and hexag-
+onal plane-wave geometry. The ablations in the main text show that HiSTFormer is robust to dif-
+ferent spatial encodings, with the grid-like representation achieving stable and generally favorable
+performance across the evaluated environment scales and prediction protocols. Here, we detail the
+encoding variants and further examine their theoretical motivations and empirical behavior.
+F.1
+SPATIAL ENCODING VARIANTS.
+For a controlled comparison, all three encodings use 96-dimensional representations and share the
+same path-integration procedure based on predicted displacements and ground-truth head directions.
+Only the encoding configurations differ:
+Grid-like (HiSTFormer): Uses 8 logarithmically spaced periods, each containing 2 groups of 3
+plane waves with directions separated by 120°. This yields 48 complex phases, corresponding to 96
+real-valued dimensions.
+Cartesian: Uses 2 orthogonal plane-wave directions (90°). To preserve the representation dimen-
+sion, the number of periods is increased to 24, with 2 complex phases per period. The minimum and
+maximum periods match those of HiSTFormer, resulting in denser period sampling.
+Single-period: Retains the three-direction grid-like geometry but fixes the spatial period to nearly
+64 environment units. It uses 16 groups of 3 plane waves with randomized initial phase offsets,
+yielding 48 complex phases.
+These variants examine the effects of wave geometry and period diversity under matched representa-
+tion dimensions. Notably, Cartesian changes both the wave directions and period sampling density;
+therefore, this comparison does not isolate the effect of hexagonal geometry alone.
+F.2
+SPATIAL RELEVANCE OF MEMORY ATTENTION.
+To examine how spatial encoding affects historical retrieval, we compare the spatial attention distri-
+butions of Grid-like, Cartesian, and Single-period under the MemoryMaze 256→64 protocol. Only
+ground-truth observed memories are considered for spatial matching, excluding generated frames
+and the current token. Nearby locations are defined by a distance below 0.5 environment units, with
+a heading difference below 15◦.
+22
+
+
+0 visits
+718 frames / 28 windows
+1 visit
+921 frames / 36 windows
+2–3 visits
+736 frames / 31 windows
+4+ visits
+185 frames / 10 windows
+0.3
+0.4
+0.5
+0.6
+0.7
+A
+256 → 64 · LPIPS ↓
+0 visits
+718 frames / 28 windows
+1 visit
+921 frames / 36 windows
+2–3 visits
+736 frames / 31 windows
+4+ visits
+185 frames / 10 windows
+0.005
+0.010
+0.015
+0.020
+B
+256 → 64 · MSE ↓
+0 visits
+394 frames / 14 windows
+1 visit
+2,248 frames / 20 windows
+2–3 visits
+4,465 frames / 20 windows
+4+ visits
+2,893 frames / 15 windows
+0.3
+0.4
+0.5
+0.6
+0.7
+C
+500 → 500 · LPIPS ↓
+0 visits
+394 frames / 14 windows
+1 visit
+2,248 frames / 20 windows
+2–3 visits
+4,465 frames / 20 windows
+4+ visits
+2,893 frames / 15 windows
+0.005
+0.010
+0.015
+0.020
+D
+500 → 500 · MSE ↓
+Training seed 42 · Within-window bin means, then equal-window averages
+HiSTFormer
+ESWM
+Figure 9: Visual Prediction Performance across Historical Revisit Frequencies. On HM3D, pre-
+dicted frames are grouped by the number of historical pose-matching visits: 0, 1, 2–3, and 4 or more
+visits, using thresholds of 0.5 m in position and 30◦in heading. (A–B) LPIPS and MSE under the
+256 →64 protocol; (C–D) the corresponding metrics under 500 →500. Both models are evaluated
+using the same training seed (Seed 42). Metrics are first averaged within each revisit group per test
+window, then averaged equally across windows containing that group. Prediction errors generally
+decrease with increasing revisit frequency for both models.
+Table 8: Comparison of HiSTFormer and adapted ESWM on MemoryMaze and HM3D under two
+open-loop prediction protocols. Results are reported as mean ± standard deviation over three seeds.
+Best values are highlighted in bold.
+Protocol
+Model
+MSE ↓
+LPIPS ↓
+SSIM ↑
+PSNR ↑
+MemoryMaze
+256→64
+HiSTFormer
+0.005850 ± 0.000250
+0.2124 ± 0.0027
+0.7639 ± 0.0027
+24.723 ± 0.160
+ESWM
+0.008594 ± 0.000532
+0.2647 ± 0.0068
+0.7287 ± 0.0083
+22.997 ± 0.356
+500→500
+HiSTFormer
+0.013286 ± 0.000454
+0.2920 ± 0.0037
+0.7013 ± 0.0047
+21.146 ± 0.168
+ESWM
+0.012702 ± 0.000860
+0.2973 ± 0.0085
+0.7023 ± 0.0093
+21.288 ± 0.370
+HM3D
+256→64
+HiSTFormer
+0.01153 ± 0.00035
+0.4617 ± 0.0018
+0.5989 ± 0.0017
+21.448 ± 0.064
+ESWM
+0.011556 ± 0.000353
+0.484517 ± 0.014441
+0.587461 ± 0.009815
+21.316096 ± 0.190845
+500→500
+HiSTFormer
+0.00784 ± 0.00041
+0.4007 ± 0.0093
+0.6422 ± 0.0087
+22.367 ± 0.203
+ESWM
+0.006841 ± 0.000278
+0.378921 ± 0.018619
+0.663350 ± 0.011288
+22.865731 ± 0.205280
+Table 9 shows modest advantages for Grid-like in spatially relevant retrieval. Nearby observations
+with matching headings receive 6.81% of the attention within observed memories, compared with
+6.51% for Cartesian and 5.70% for Single-period. Grid-like also achieves the shortest attention-
+weighted spatial distance (2.93 vs. 3.00/3.12). These results suggest slightly more spatially focused
+retrieval, consistent with downstream prediction performance, while confirming that HiSTFormer’s
+effectiveness is not strongly dependent on a particular encoding geometry.
+F.3
+MULTI-PERIODIC ENCODING AND LONG-RANGE PREDICTION.
+Periodic spatial codes can assign similar phases to distant locations, resulting in positional ambigu-
+ity. Previous theoretical studies have shown that combining multiple spatial periods can extend the
+effective encoding range and reduce large-scale localization errors (Mathis et al., 2012; Stemmler
+et al., 2015). To examine the implications for visual prediction, we analyze the prediction-error dif-
+ferences between Single-period and HiSTFormer under the 256–64 protocol, grouped by the spatial
+distance between each predicted position and the last observed position.
+Figure 10 reports the differences in MSE and LPIPS, computed as Single-period minus HiSTFormer,
+where positive values indicate lower prediction errors for HiSTFormer. The mean differences are
+generally positive and tend to increase with distance from the last observation. This trend is consis-
+tent with the theoretical expectation that single-period encodings are more susceptible to long-range
+phase ambiguity, providing further empirical support for multi-periodic spatial encoding.
+23
+
+
+Table 9: Spatial relevance of memory attention on MemoryMaze (256 →64). Nearby locations
+have a ground-truth distance below 0.5 environment units, and matching headings differ by less than
+15◦. All-attention fractions use the full attention distribution, while observed-memory fractions are
+normalized within ground-truth observed memories. Results are mean ± standard deviation over
+three seeds.
+Metric
+Grid-like
+Cartesian
+Single-period
+Observed memory / all attention (%)
+53.13 ± 2.16
+54.20 ± 3.18
+55.75 ± 1.80
+Nearby + heading / all attention (%) ↑
+4.79 ± 0.10
+4.64 ± 0.33
+4.37 ± 0.34
+Nearby + heading / observed attention (%) ↑
+6.81 ± 0.18
+6.51 ± 0.11
+5.70 ± 0.12
+Nearby / observed attention (%) ↑
+11.59 ± 0.31
+11.09 ± 0.10
+10.23 ± 0.11
+Attention-weighted distance (cells) ↓
+2.93 ± 0.07
+3.00 ± 0.09
+3.12 ± 0.08
+0
+3
+6
+9
+Distance from last observation
+(environment units)
+0
+1
+2
+3
+Δ MSE (×10−3)
+0
+3
+6
+9
+Distance from last observation
+(environment units)
+0.00
+0.01
+0.02
+0.03
+0.04
+Δ LPIPS
+256 → 64    |    Δ = Single-period − HiSTFormer
+A
+B
+Mean
+95% CI
+Individual seeds
+Figure 10: Distance-stratified prediction errors of single-period and multi-periodic spatial encod-
+ings. Under the 256-to-64 protocol, the horizontal axis shows the spatial distance from each pre-
+dicted position to the last observed position. The vertical axis reports the error difference (Single-
+period minus HiSTFormer) in (A) MSE and (B) LPIPS. Orange curves show the mean over three
+training seeds, shaded regions indicate 95% confidence intervals, and gray curves show individual
+seeds. Positive values indicate lower prediction errors for HiSTFormer.
+F.4
+MOTIVATION FOR HEXAGONAL PLANE-WAVE GEOMETRY.
+Hexagonal spatial structure has a well-established biological basis, as observed in the firing pat-
+terns of entorhinal grid cells (Hafting et al., 2005). Theoretical and simulation studies also suggest
+potential geometric advantages. Guanella and Verschure reported favorable position reconstruction
+using triangular grid patterns compared with other regular two-dimensional tessellations (Guanella
+& Verschure, 2007). Schøyen et al. further showed that hexagonal grid patterns can offer im-
+proved spatial resolution and noise robustness over square patterns under conformal-isometry as-
+sumptions (Schøyen et al., 2025).
+However, these advantages depend on specific encoding models and theoretical assumptions and do
+not necessarily translate into superior prediction performance in Transformer world models. Mir
+et al. found comparable performance between hexagonal and square grid representations in spatial
+memory storage and retrieval tasks (Mir et al., 2024). This agrees with our observations: although
+24
+
+
+Grid-like achieves lower errors in some settings, its advantage over Cartesian is modest and less
+consistent, particularly under more challenging long-horizon prediction protocols.
+Overall, HiSTFormer’s effectiveness is not tied to a particular spatial encoding. Multi-periodic
+encoding is theoretically motivated by its ability to mitigate long-range positional ambiguity and
+shows corresponding empirical benefits in our experiments. Hexagonal plane-wave geometry pro-
+vides a biologically grounded design with potential advantages under specific theoretical condi-
+tions. Considering these factors and the observed performance, we adopt the multi-periodic grid-
+like encoding as a reliable default, while emphasizing hierarchical spatiotemporal organization and
+content-adaptive spatial addressing as HiSTFormer’s primary methodological contributions.
+G
+INTERPRETABILITY ANALYSIS OF CONTENT-CONDITIONED SPATIAL
+ADDRESSING
+Content-conditioned offsets introduce only 0.051M additional parameters (approximately 0.67%),
+reducing LPIPS by 9.00% and 5.56% under short- and long-horizon prediction, respectively. We fur-
+ther investigate their role through motion representations, head-specific offset patterns, and targeted
+memory interventions.
+G.1
+THE MOTION ENCODER LEARNS SPATIALLY MEANINGFUL DISPLACEMENT
+REPRESENTATIONS
+We first examine the relationship between the forward displacement predicted by the action-only
+motion encoder and the ground-truth displacement. Figure 11 shows approximately linear relation-
+ships across three training seeds, with seed-dependent differences in scale and sign. This suggests
+that the encoder captures relative variations in physical motion. Since spatial phases are obtained
+by integrating predicted displacements, with content-conditioned offsets further adjusting these ad-
+dresses, this result provides a basis for interpreting the learned spatial addressing geometrically.
+G.2
+ATTENTION HEADS LEARN STABLE, CONTENT-ADAPTIVE SPATIAL OFFSETS.
+Figure 12A shows the offset direction distributions of four heads across three seeds, together with
+the relationship between offset magnitude and the nearest-wall distance along each head’s mean
+preferred direction. Most heads exhibit stable directional preferences, distributed approximately
+uniformly across the 80° field of view. Offset magnitudes are positively correlated with wall dis-
+tances within approximately three environment cells, before gradually saturating. These results sug-
+gest that individual heads maintain directional preferences while adapting their retrieval distances
+to scene geometry. Figure 12(B) presents three representative examples illustrating the alignment of
+learned offsets with visible walls.
+G.3
+SPATIAL OFFSETS EXHIBIT GEOMETRIC CONSISTENCY WITH RETRIEVED MEMORIES.
+Figure 12(C–E) further examines the representative case presented in the main text. In Figure 12C,
+H2’s adjusted address lies near the left red wall, while H0 points toward the distant green wall, albeit
+with some distance error. Figure 12D shows historical frames receiving over 10% attention from H0
+or H2. H0 retrieves visual cues from the green wall, whereas H2 primarily attends to the red wall,
+suggesting complementary spatial information across heads.
+G.4
+TARGETED MEMORY INTERVENTIONS FURTHER REVEAL THE ROLE OF RETRIEVED
+INFORMATION.
+Figure 12E compares the full model, No Offset, and predictions obtained by replacing high-attention
+memory slots in H0, H2, or both. The full model recovers the scene structure reasonably well,
+whereas No Offset exhibits clear errors in both walls. Replacing H0’s high-attention slots primarily
+degrades reconstruction of the distant green region, while replacing H2’s slots more strongly affects
+the left red wall. Intervening on both produces larger prediction errors. These changes align with
+the content attended by each head, providing further evidence that different heads exploit comple-
+mentary spatial cues.
+25
+
+
+0.00
+0.08
+0.16
+0.24
+True forward step (cells)
+−0.30
+−0.15
+0.00
+Predicted forward step
+Seed 0
+0.00
+0.08
+0.16
+0.24
+True forward step (cells)
+0.00
+0.15
+0.30
+Seed 1
+0.00
+0.08
+0.16
+0.24
+True forward step (cells)
+0.00
+0.15
+0.30
+Seed 2
+100
+101
+102
+103
+104
+Sample count
+A
+B
+C
+Figure 11: Motion Displacement Prediction Analysis. Comparison of forward displacements pre-
+dicted by the action-only motion encoder and ground-truth forward steps across three training seeds.
+The horizontal and vertical axes represent ground-truth and predicted displacements, respectively,
+both in environment units. Blue hexagonal bins indicate sample density, with color intensity and
+opacity increasing logarithmically with sample count. Orange lines show linear fits. All three seeds
+exhibit approximately linear relationships, with differences in scale and sign.
+Overall, these analyses suggest that learned offsets establish geometrically meaningful, head-
+specific addressing patterns and adapt retrieval distances to scene content, enabling selective access
+to long-term memories and improving future visual prediction.
+26
+
+
+0
+9
+x (cells)
+0
+9
+H0
+H1
+H2
+H3
+0
+2
+x (cells)
+4
+8
+H0
+H1
+H2
+H3
+0
+9
+x (cells)
+0
+9
+0
+9
+x (cells)
+0
+9
+0
+9
+x (cells)
+0
+9
+−40 0 40
+H0
+H1
+H2
+H3
+Seed 0
+0
+4
+8
+0
+1
+2
+3
+Offset length (cells)
+Seed 0
+−40 0 40
+H0
+H1
+H2
+H3
+Seed 1
+0
+4
+8
+0
+1
+2
+3
+Seed 1
+−40 0 40
+H0
+H1
+H2
+H3
+Seed 2
+0
+4
+8
+0
+1
+2
+3
+Seed 2
+D
+High-attention content
+Ground truth
+H0: 28.3%
+H0: 25.7%
+H2: 67.0%
+H2: 17.2%
+All frames with >10% attention in H0 or H2 are shown.
+Hi: x% is this frame's share of head i's total attention.
+C
+Spatial addresses
+Map overview
+Partial view
+H2 lands near the red wall; H0 points
+toward green but has a length error.
+B
+Head-offset examples
+Case 1
+V = 0.32
+Case 2
+V = 0.67
+Case 3
+V = 0.51
+A
+Direction preference and distance adaptation
+Stable direction preferences
+Lengths track nearby wall distance
+Ego direction (°; 0 = forward)
+Median / IQR / 5–95%; diamond: preference
+Preferred-ray wall distance (cells)
+E
+Prediction and high-weight-slot replacement
+Full prediction
+MSE 0.00154
+LPIPS 0.114
+No Offset
+MSE 0.00458
+LPIPS 0.251
+H0
+MSE 0.00190
+LPIPS 0.132
+H2
+MSE 0.00182
+LPIPS 0.148
+H0 + H2
+MSE 0.00243
+LPIPS 0.175
+Green region
+Red region
+H0
+H1
+H2
+H3
+Visible wall
+H0
+H1
+H2
+H3
+Figure 12: Geometric Alignment and Memory Retrieval of Content-Conditioned Spatial Offsets.
+(A) Head-specific directional preferences across three training seeds and the relationship between
+offset magnitude and nearest-wall distance along each head’s preferred direction. Thin lines, thick
+lines, and white ticks indicate the 5th–95th percentile range, 25th–75th percentile range, and me-
+dian, respectively. Black diamonds mark preferred directions estimated from separate calibration
+trajectories. (B) Head-specific spatial offsets in three representative scenes. (C) Spatial addresses
+and their relationships to the red and green walls in a representative case. (D) Historical memory
+frames receiving over 10% attention from H0 or H2, with their attention weights. (E) Predictions
+from the full model, No Offset, and targeted replacement of high-attention memory slots in H0, H2,
+or both.
+27

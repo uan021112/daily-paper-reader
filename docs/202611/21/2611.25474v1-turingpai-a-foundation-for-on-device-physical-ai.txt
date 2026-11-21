@@ -1,0 +1,1899 @@
+TuringPAI: A Foundation for On-Device Physical AI
+Foundation Model Team, XPeng Inc.
+Abstract
+Physical AI requires models that understand spatial relationships and dynamic en-
+vironments and translate observations into actions under limited onboard compute.
+We present TuringPAI, a family of models for on-device Physical AI comprising
+TuringPAI-VL for shared vision-language understanding, TuringPAI-Drive for au-
+tonomous driving, and TuringPAI-Embodied for robotic manipulation. TuringPAI-
+VL is a 0.65B model built on HybridViT-MLQ, which combines convolutional
+local aggregation with Transformer-based global modeling. Multi-scale Latent
+Queries integrate spatial features and observation history within the same visual
+Transformer, providing a compact, structured interface to the language model.
+Training combines general vision-language data with geometric, cross-view, and
+temporal supervision. TuringPAI-VL supports general multimodal understand-
+ing and improves quantitative geometric perception over Qwen2-VL-2B, while
+providing a shared initialization for the two downstream VLA models. For au-
+tonomous driving, TuringPAI-Drive maintains all evaluated ADE/FDE metrics
+within 1.2% of a full-token HybridViT baseline using the MLQ interface and
+achieves comparable aggregate scores in an in-house simulation evaluation. Us-
+ing XPeng Native Runtime (XNRT) on a single NVIDIA Orin-X SoC, TuringPAI-
+Drive generates trajectories at 12 Hz in on-vehicle operation. For robotic manipu-
+lation, TuringPAI-Embodied achieves a 96.8% average success rate across the four
+LIBERO suites. These results demonstrate a shared vision-language foundation
+for driving and robotic manipulation under practical on-device constraints.
+(a) TuringPAI-Drive
+End-to-end driving with vision–language model and trajectory planning.
+Input: 7-view surround cameras
+Front-left
+Front (narrow)
+Front-right
+Front (fisheye)
+Rear-left
+Rear (narrow)
+Rear-right
+TuringPAI-Drive
+TuringPAI-VL
+HybridViT-MLQ + Qwen2.5
++
+Action head
+Trajectory prediction
+Output: Trajectory
+(b) VLM prefill GPU latency on Orin-X
+Unified TuringPAI-Drive evaluation framework
+Model architecture comparison
+Deployment configuration comparison
+Same backend and precision: TensorRT 8.6 FP16
+Same model: TuringPAI-VL · runtime and precision configurations
+Qwen2-VL (2B)
+InternVL3 (1B)
+TuringPAI-VL (0.65B)
+2845.06 ms
+2668.44 ms
+180.49 ms
+GPU latency (ms)
+TensorRT
+FP32 + INT8 (QAT)
+XNRT
+BF16 + INT8 (QAT)
+257.27 ms
+69.77 ms
+GPU latency (ms)
+3.69×
+speedup
+vs. TensorRT
+mixed-QAT
+0
+1000
+2000
+3000
+0
+100
+200
+300
+15.76×
+speedup
+vs. Qwen2-VL (2B)
+Figure 1: TuringPAI-Drive and on-device VLM inference. (a) Seven-camera trajectory predic-
+tion with TuringPAI-VL and an action head. (b) GPU-side VLM preﬁll latency on one NVIDIA
+Orin-X SoC in the TuringPAI-Drive evaluation framework. Left: TensorRT 8.6 FP16 timings with
+model-speciﬁc inputs (not accuracy-matched). Right: On the same TuringPAI-VL backbone, XNRT
+BF16+INT8 is 3.69× faster than TensorRT FP32+INT8 (both with QAT).
+Technical Report.
+arXiv:2611.25474v1  [cs.CV]  19 Nov 2026
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+1
+Introduction
+Physical AI systems must understand changing environments and translate observations into deci-
+sions and actions under real-world computational and latency constraints [1–3]. Vision-language
+models (VLMs) provide a reusable foundation by connecting visual perception with language in-
+structions and reasoning [4–6]. Autonomous driving, a mature and practically important application
+of Physical AI, serves as a major setting for developing and evaluating such models [7, 8]. It requires
+spatial understanding, reasoning over observations across cameras and time, and timely responses
+within limited onboard resources. Robotic manipulation presents complementary demands on object
+geometry, interaction state, and instruction following [9].
+Visual inputs in Physical AI applications often consist of high-resolution observations collected
+across multiple cameras and time steps [10, 11]. These observations contain substantial redundancy,
+yet local geometry and small temporal changes can affect downstream actions. VLM pipelines that
+encode each observation as a dense patch sequence can spend substantial computation on spatially
+correlated content [12, 13]. Forwarding separate visual sequences for successive frames further
+expands the language-model context with overlapping scene information [14, 15]. Under limited
+onboard compute and strict latency constraints, this redundancy increases the cost of using rich
+observation histories. These requirements motivate VLM designs that aggregate local evidence
+before global modeling and integrate complementary information across spatial scales and time,
+while retaining the cues needed for downstream action.
+Architecture alone, however, does not ensure that a VLM learns the physical information required
+by these tasks. General image–text alignment and instruction learning support broad semantic un-
+derstanding, but do not necessarily provide explicit supervision for metric geometry or temporal
+changes. For example, a caption may identify a vehicle ahead without specifying its distance or
+whether the gap is closing, although both quantities matter for driving decisions. Prior work shows
+that explicit spatial and temporal training tasks can strengthen the corresponding capabilities of
+VLMs [16, 17]. Architecture and training data thus play complementary roles: the architecture orga-
+nizes observations efﬁciently, while the data guide the learning of information relevant to physical
+interaction.
+To address these challenges, we present TuringPAI, a family of models for on-device Physical AI
+built around a shared vision-language foundation. At its core, TuringPAI-VL combines HybridViT-
+MLQ with a training mixture tailored to Physical AI. TuringPAI-VL provides the pretrained foun-
+dation for TuringPAI-Drive and TuringPAI-Embodied, which adapt it to autonomous driving and
+robotic manipulation, respectively.
+HybridViT-MLQ organizes local features, scene context, and observation history into a multi-scale
+representation of the current observation. HybridViT ﬁrst uses a convolutional front end to form
+locally condensed patch tokens, over which the visual Transformer models global relationships. We
+then introduce Multi-scale Latent Queries (MLQ), a hierarchy of feature-conditioned queries that
+aggregates visual evidence within the same Transformer. The queries occupy spatial grids at mul-
+tiple resolutions and share a spatiotemporal positional encoding with patch tokens. For video, one
+query hierarchy is initialized from the current frame and aggregates evidence from both current and
+preceding frames. Only the updated query features are passed to the language model. For a ﬁxed
+query layout, this interface incorporates observation history without increasing the output sequence
+length. HybridViT thus reduces the sequence length used for visual encoding, while MLQ organizes
+multi-scale and temporal evidence within a controlled language-model input budget. MLQ can also
+be adapted to other ViT backbones with compatible feature, positional, and attention interfaces. As
+an additional deployment beneﬁt, the convolutional front end supports heterogeneous execution on
+NVIDIA Orin-X hardware [18], including DLA and GPU overlap in our implementation.
+To train TuringPAI-VL, we complement general vision–language data with geometric, cross-view,
+and temporal tasks. Following the data-construction approach of VLM3 [19], we use pixel-depth
+questions and camera-conditioned 3D object localization to supervise distance, position, size, and
+orientation, providing geometric cues for driving clearance and object placement. Cross-view cor-
+respondence and relative camera-pose data support associations across observations, while multi-
+frame driving and manipulation examples provide signals about motion and state changes.
+We evaluate TuringPAI-VL on general multimodal benchmarks and spatial and geometric under-
+standing tasks relevant to Physical AI. Driving evaluations of TuringPAI-Drive cover open-loop
+2
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+trajectory prediction and XPeng’s in-house simulation. For deployment, we use XPeng Native
+Runtime (XNRT), our in-house inference runtime that combines mixed-precision execution with
+hardware-aware optimization, enabling 12 Hz trajectory generation on a single NVIDIA Orin-X
+SoC. TuringPAI-Drive is scheduled for rollout to XPeng vehicles equipped with NVIDIA Orin-X as
+part of the VLA 2.0 system. Beyond driving, TuringPAI-Embodied, initialized from TuringPAI-VL,
+achieves a 96.8% average success rate across the four LIBERO [20] suites. These results support
+TuringPAI-VL as a shared vision-language foundation for driving and manipulation under practical
+deployment constraints.
+2
+Methodology
+TuringPAI-VL is the shared vision-language foundation of the TuringPAI family. Its design centers
+on three elements: HybridViT, Multi-scale Latent Queries (MLQ), and training data for Physical
+AI. First, HybridViT combines convolutional aggregation of local image structure with Transformer-
+based global modeling over condensed patch tokens (Section 2.1). Second, MLQ aggregates multi-
+scale spatial features and observation history into a structured visual interface for the language model
+within the same visual Transformer (Section 2.2). Third, we supplement general vision–language
+data with geometric, cross-view, and temporal tasks to develop capabilities relevant to physical
+interaction (Section 2.3). Together, these elements support spatial and temporal understanding while
+enabling efﬁcient visual processing for downstream Physical AI tasks. Figure 2 presents the overall
+architecture, downstream adaptation, and representative training examples. Figure 3 details the
+MLQ mechanism.
+(a) TuringPAI overview
+Driving observations
+or
+Manipulation observations
+TuringPAI-VL: Vision-Language Foundation
+CNN
+MLQ-augmented
+Transformer
+···
+···
+···
+Language
+model
+Multimodal
+understanding
+Text / instructions
+HybridViT-MLQ
+Driving adaptation
+Manipulation adaptation
+Initialize
+downstream VLAs
+Deployment: Orin-X
+VLM training
+Inference
+Training / adaptation
+General multimodal data
+OCR, visual knowledge, etc.
+Physical AI-oriented data
+Spatial reasoning, metric depth, cross-view grounding, cross-view synchronization, etc.
+Text reading / OCR
+Q: Store location?
+A: Ningyuan
+Visual knowledge QA
+Q: Name his play
+A: Boris Godunov
+Spatial reasoning
+Q: Which object is rightmost?
+A: White watering can
+Metric depth
+Q: Distance to query pixel?
+A: 15.11 m
+Cross-view grounding
+Q: Match the box across views
+A: (440, 448), (681, 564)
+Cross-view synchronization
+Q: Which view is out of sync?
+A: View 4
+(b) Training data for Physical AI
+Figure 2: Overview of TuringPAI-VL. (a) HybridViT-MLQ combines convolutional local aggre-
+gation with a visual Transformer augmented by latent queries, supplying multi-scale visual features
+to the language model. (b) General multimodal data are complemented by Physical-AI-oriented
+tasks, illustrated through spatial reasoning, metric depth, cross-view grounding, and cross-view syn-
+chronization examples. Solid arrows denote inference ﬂow; dashed arrows denote training or down-
+stream adaptation. The visual-to-language projector is omitted for clarity.
+2.1
+HybridViT: Local Aggregation and Global Modeling
+HybridViT combines convolutional local feature extraction with Transformer-based global model-
+ing. The convolutional front end in Figure 2(a) aggregates local image content into locally con-
+densed patch tokens. The encoder supports dynamic-resolution inputs by adjusting image height
+and width to multiples of 128. The resized image is partitioned into 128 × 128 computation regions.
+3
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+Multi-scale pooling
+Language
+Model
+Patch tokens
+Unified 
+3D RoPE
+allowed
+masked
+Patch
+Query
+Attention Mask
+Shared vision Transformer
+……
+……
+……
+NqQueries (Coarse à Fine) 
+Nq ≈ 0.3N
+4 × N
+Nq Queries 
+……
+History
+Current
+t − 3
+t − 2
+t − 1
+t
+Shared CNN Output
+Figure 3: Multi-scale Latent Queries (MLQ). Current-frame features initialize coarse-to-ﬁne
+queries, processed with observation-window patches using uniﬁed 3D RoPE. Masking preserves
+patch-to-patch attention while queries aggregate patch and earlier-query features; only updated
+queries pass to the language model. Rows and columns of the attention mask correspond to query
+and key positions, respectively. The linear projection used to initialize latent queries is omitted for
+clarity. Frame labels show temporal order; token counts are schematic.
+With a total spatial stride of 32 along each axis, the convolutional front end produces a 4 × 4 fea-
+ture grid for each region. These regional features are reassembled into a full-image feature map
+F ∈RHv×Wv×C, where Hv = eH/32 and Wv = f
+W/32 for a resized input of dimensions eH × f
+W.
+We ﬂatten this grid and project its features to the Transformer embedding dimension:
+V = ϕin
+ Flatten(F)
+
+∈RN×D,
+N = HvWv =
+eHf
+W
+322 .
+(1)
+Here, C and D are the CNN and Transformer feature dimensions, respectively. The input projection
+ϕin applies the same linear map from C to D dimensions to each feature vector. At the same input
+resolution, a patch-size-16 ViT [21, 22] produces N16 = eHf
+W/162 tokens. HybridViT therefore
+supplies one quarter as many patch tokens to the Transformer.
+The Transformer component follows the mixed-attention design of TuringViT [23], combining ef-
+ﬁcient and standard self-attention. It models relationships across the condensed patch sequence to
+incorporate global scene context. MLQ operates within this same Transformer, as described next.
+2.2
+Multi-scale Latent Queries
+Backbone reuse and query construction.
+Multi-scale Latent Queries (MLQ) provide a query-
+based plug-in that aggregates visual features within a pretrained Transformer. MLQ reuses the
+backbone’s attention and feed-forward weights without adding a separate Transformer stack. It can
+be incorporated during VLM training without an additional visual pretraining stage. The design is
+not speciﬁc to HybridViT; adaptation to another ViT requires compatible feature, positional, and
+attention interfaces.
+In HybridViT-MLQ, multi-scale pooling and linear projection of convolutional features initialize
+latent query grids at different spatial resolutions, as illustrated in Figure 3. The grid sizes adapt to
+the spatial dimensions of the input feature map. The grids are ﬂattened and concatenated in coarse-
+to-ﬁne order, forming a feature-conditioned query hierarchy spanning global, regional, and local
+spatial scales.
+Uniﬁed spatiotemporal positioning.
+We organize video inputs into four-frame observation win-
+dows, taking the last frame in each window as the current observation. Each window uses one
+latent-query hierarchy initialized from the current frame’s features. A single image is treated as
+a one-frame window, with queries initialized from its own features. To position patch tokens and
+queries consistently across scales and frames, we extend the DINO-style 2D RoPE [24] used by
+TuringViT to three dimensions by introducing a temporal coordinate.
+4
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+For a token at row r and column c of a spatial grid g, we assign the following coordinate for 3D
+RoPE:
+pg(r, c; τ) =
+
+τ, 2r + 1
+2
+Hg
+−1, 2c + 1
+2
+Wg
+−1
+
+,
+(2)
+where Hg × Wg is the grid resolution and r, c are zero-based indices. Cell centers in both patch
+and query grids are normalized to the same image domain [−1, 1]2, providing a common spatial
+reference across scales.
+Inspired by the use of physical time in LLaVA-OneVision-2 [25], the temporal coordinate τ records
+the actual acquisition timestamp in a consistent time unit. Patch tokens retain the timestamps of their
+respective frames, while all latent queries use the current frame’s timestamp. This preserves elapsed
+time between observations and anchors the query hierarchy to the current scene. In the single-image
+case, all tokens share one timestamp.
+Query-based aggregation.
+The asymmetric attention mask in Figure 3 prevents patch tokens from
+attending to latent queries, leaving the backbone’s patch-to-patch attention pattern unchanged. La-
+tent queries attend to all input patch tokens and to themselves and preceding queries in coarse-to-ﬁne
+order. This allows queries to aggregate visual evidence and coarser context without feeding query
+states back into patch-token updates. Only the updated query features are projected into the lan-
+guage embedding space, forming multi-scale visual tokens that represent the current observation
+with evidence from the available history.
+Let N denote the number of HybridViT patch tokens per frame and Nq the number of latent queries.
+For T frames with the same spatial resolution, the sequence lengths are
+NViT = TN + Nq,
+N vis
+LLM = Nq,
+(3)
+where N vis
+LLM counts only the visual tokens passed to the language model. Our evaluated conﬁgura-
+tions use T ∈{1, 4} and Nq ≈0.3N. For a ﬁxed spatial resolution and query layout, the output
+token count is independent of the number of frames in the observation window. For a single image,
+convolutional aggregation keeps the combined patch-and-query sequence approximately one third
+as long as patch-size-16 tokenization at the same input resolution. The language model receives only
+Nq visual tokens rather than the full TN patch sequence, consolidating multi-scale and historical
+evidence within a controlled output budget.
+2.3
+Training Data for Physical AI Capabilities
+To train TuringPAI-VL as a foundation for downstream driving and manipulation models, we com-
+bine general vision–language data with tasks that provide explicit training signals for spatial geom-
+etry, cross-view association, and temporal understanding.
+The training data cover three complementary capabilities: general understanding, spatial perception
+and reasoning, and multi-image and temporal understanding. These capabilities are learned jointly
+within a single VLM. The resulting model directly generates spatial predictions from visual inputs
+and task prompts, without additional task-speciﬁc ﬁne-tuning for spatial evaluation. Figure 2(b)
+illustrates representative training tasks. Figure 4 summarizes the overall data-pool composition, and
+Appendix A provides further examples.
+General understanding.
+General image–text and instruction data establish vision–language align-
+ment and broad semantic understanding. They cover referring-expression grounding, visual ques-
+tion answering, text and document understanding, knowledge and STEM, and language interaction.
+These tasks support scene interpretation, environmental text reading, and instruction following, pro-
+viding a semantic foundation for spatial, geometric, and temporal learning.
+Spatial perception and reasoning.
+Building on general visual grounding and spatial-relation un-
+derstanding, we introduce quantitative geometric supervision following VLM3 [19]. Depth estima-
+tion and 3D object localization provide information about distance, size, and orientation, offering
+geometric cues for assessing following distances, safety margins, and driving clearance, as well as
+5
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+29.8%
+21.2%
+16.0%
+9.7%
+6.1%
+8.9%
+8.3%
+General
+Understanding
+Spatial Perception
+& Reasoning
+Temporal
+General Visual
+Understanding
+Text and Document
+Understanding
+Knowledge and STEM
+Language and
+Interaction
+Spatial Understanding
+& Reasoning
+Geometric Perception
+Multi-image & Temporal
+Understanding
+VLM Training
+Data
+Figure 4: Composition of the TuringPAI-VL training pool across general understanding, spa-
+tial perception and reasoning, and multi-image and temporal understanding.
+approaching and placing objects in embodied manipulation. Cross-view pixel correspondence con-
+strains local matching of the same scene point, while camera-pose estimation supervises relative
+rotation and translation between observations, aiming to strengthen geometric association across
+cameras and moving viewpoints. These tasks encourage compact visual representations to capture
+both object semantics and ﬁne-grained spatial structure.
+Multi-image and temporal understanding.
+We further incorporate multi-view question answer-
+ing, videos, and multi-frame sequences from road-trafﬁc and robotic-manipulation scenarios. Multi-
+view tasks emphasize object association and consistency across observations, training the model to
+combine complementary camera information and interpret scenes using both global layout and local
+details. Temporal tasks focus on motion trends, state changes, and interaction dynamics, providing
+historical context for assessing approaching objects and relative motion in driving, as well as ma-
+nipulation progress and task stages in robotics. This design complements MLQ’s aggregation of
+historical information into current-observation representations, aiming to capture both spatial and
+dynamic information within a limited visual token budget.
+3
+Experiments
+This section evaluates three models within the TuringPAI family:
+TuringPAI-VL, the vision-
+language foundation model, and two domain-speciﬁc extensions, TuringPAI-Drive and TuringPAI-
+Embodied. TuringPAI-VL combines HybridViT-MLQ with a Qwen2.5-0.5B [26] language model
+and is evaluated against comparable VLMs for general multimodal and physical-world understand-
+ing. TuringPAI-Drive extends the foundation model with a trajectory planning head. It maintains
+driving ADE/FDE metrics within 1.2% of the full-token HybridViT baseline, with comparable
+driving-quality scores. On a single NVIDIA Orin-X SoC, TuringPAI-Drive generates trajectories
+at 12 Hz in on-vehicle operation. TuringPAI-Embodied integrates a ﬂow-matching action expert
+with the same foundation model for robotic manipulation. It achieves 96.8% average success on
+LIBERO, close to the published OpenPI π0.5 result. On a single NVIDIA Orin-X SoC, its measured
+inference stages after CNN patch embedding sum to 168.3 ms. Together, these results demonstrate
+the versatility of the TuringPAI foundation across autonomous driving and robotic manipulation. All
+on-device deployment and latency results reported in this work use a single NVIDIA Orin-X SoC.
+6
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+3.1
+TuringPAI-VL: Foundation Model Training and Evaluation
+TuringPAI-VL is the compact VLM designed to meet the on-device budget of XPeng’s Orin-X-
+based in-vehicle computing platform while supporting real-time inference. It pairs HybridViT-MLQ
+(156M) with Qwen2.5-0.5B [26], for approximately 0.65B parameters in total. Training proceeds
+in two stages: visual-token alignment with the language model frozen, followed by joint training on
+the full data pool. We then evaluate TuringPAI-VL on general multimodal benchmarks, including
+image and video understanding, and on spatial-perception benchmarks. The pretrained TuringPAI-
+VL checkpoint, including both the visual encoder and language model, initializes the driving and
+robotic-manipulation VLAs.
+3.1.1
+Training Paradigm and Data Composition
+To balance general-purpose vision-language capabilities with the physical-world understanding re-
+quired by Physical AI, TuringPAI-VL adopts a two-stage training paradigm. The ﬁrst stage estab-
+lishes vision-language alignment using a general image–text corpus, with the language model frozen
+and only the visual encoder and adapter trained. Building on this initialization, the second stage
+jointly optimizes all model parameters using a broader image/video–text mixture that combines gen-
+eral multimodal tasks with Physical-AI-oriented supervision. In particular, the training data cover
+geometric and spatial perception, cross-view understanding, and temporal reasoning, alongside cap-
+tioning, VQA, text and document understanding, knowledge, and STEM. These tasks span both
+autonomous-driving environments and robotic-manipulation scenarios. Furthermore, logit-level dis-
+tillation from a larger TuringViT-based VLM is incorporated into the second stage to transfer its
+multimodal capabilities to the compact model. Both stages use native dynamic resolution. Table 1
+summarizes the training conﬁgurations for both stages, including their objectives, batch sizes, learn-
+ing rates, and computational costs.
+Table 1: VLM training setup. Stage 1 trains the encoder and adapter with the language model
+frozen; Stage 2 trains all parameters. ∗The H800 GPU-hours indicate total training cost, measured
+as the number of H800 GPUs multiplied by wall-clock training hours.
+Conﬁguration
+Stage 1 (alignment)
+Stage 2 (joint)
+Data type
+general image–text
+image/video–text: grounding,
+text-rich, spatial, temporal
+Resolution
+native dynamic
+native dynamic
+Objective
+image–text alignment
+joint + logit distillation
+Global batch
+2,048
+4,096
+Peak LR
+2.0×10−4
+5.0×10−5
+Final LR
+4.0×10−5
+5.0×10−6
+H800 GPU-hours∗
+1,640
+9,870
+3.1.2
+Benchmark Results
+Following the three capability areas introduced in Section 2.3, we evaluate general understanding,
+spatial perception and reasoning, and multi-image and temporal understanding. We use the same
+jointly trained 0.65B-parameter TuringPAI-VL checkpoint for all tasks, without task-speciﬁc ﬁne-
+tuning.
+General understanding.
+TuringPAI-VL supports a range of image understanding tasks (Table 2).
+We use InternVL3-1B Base [27] as the primary reference because it is closer in parameter count to
+TuringPAI-VL. TuringPAI-VL scores higher on chart interpretation (76.96 vs. 62.92 on ChartQA),
+document understanding (80.52 vs. 74.75 on DocVQA), and visual mathematical reasoning (54.20
+vs. 36.60 on MathVista mini). InternVL3-1B Base remains stronger on TextVQA and MMMU.
+We include the larger Qwen2-VL-2B Base [5] as an additional reference. TuringPAI-VL retains
+advantages in chart interpretation and visual mathematical reasoning, while Qwen2-VL-2B Base
+is stronger in counting, document understanding, and several general VQA tasks, as illustrated by
+CountBenchQA, DocVQA, and MMBench. For 2D referring-expression grounding, TuringPAI-VL
+achieves an average score of 80.91 on RefCOCO, outperforming InternVL3-1B Base (77.88).
+7
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+Table 2: VLM benchmark results for TuringPAI-VL and public models. Bold and underlined
+mark the best and second-best among the three compared models. Results for Qwen2-VL-2B Base
+and InternVL3-1B Base are from our own evaluations.
+Group
+Benchmark
+Qwen2-VL-2B
+Base [5]
+InternVL3-1B
+Base [27]
+TuringPAI-VL
+Grounding
+& Counting
+RefCOCO avg [28, 29]
+64.16
+77.88
+80.91
+CountBenchQA [30, 31]
+83.57
+56.67
+69.61
+Text-rich
+Perception
+OCRBench V1 [32]
+724
+716
+727
+OCRBench V2 en [33]
+32.59
+25.29
+32.10
+OCRBench V2 cn [33]
+12.79
+21.36
+29.33
+ChartQA test [34]
+54.52
+62.92
+76.96
+TextVQA val [35]
+64.55
+70.15
+65.89
+DocVQA val [36]
+84.44
+74.75
+80.52
+AI2D test [37]
+72.12
+63.60
+69.56
+Multimodal
+Reasoning
+MMMU val [38]
+38.89
+37.78
+34.11
+MathVision mini [39]
+17.43
+13.82
+17.76
+MathVista mini [40]
+42.70
+36.60
+54.20
+DynaMath [41]
+19.40
+23.45
+19.56
+LogicVista [42]
+24.61
+27.52
+26.40
+General
+VQA
+MMBench-EN [43]
+69.93
+63.83
+67.34
+MMBench-CN [43]
+66.58
+59.54
+65.33
+RealWorldQA [44]
+61.18
+51.24
+57.91
+MMStar [45]
+46.40
+42.67
+47.40
+MM-Vet [46]
+39.17
+32.80
+39.91
+HallusionBench (aAcc) [47]
+53.73
+54.36
+54.99
+MME-RealWorld-Lite [48]
+28.71
+38.56
+29.91
+SEEDBench_IMG [49]
+72.26
+68.14
+71.70
+Video
+Understanding
+MVBench [50]
+60.89
+55.13
+61.95
+MLVU [51]
+55.71
+47.21
+51.50
+LongVideoBench val total [52]
+45.47
+40.24
+45.60
+Spatial perception and reasoning.
+The clearest advantages are in depth and relative camera pose
+(Table 3). On the NYU Depth V2 test split [53], TuringPAI-VL achieves a mean per-image absolute
+relative depth error (AbsRel) of 0.146, compared with 0.38 for InternVL3-1B Base. For cross-view
+point correspondence on ETH3D image pairs [54], the gain is smaller: mean endpoint error is 193.49
+pixels, versus 199.05 for the same baseline. For relative pose, we evaluate 180 image pairs from six
+scenes in 7-Scenes [55] using the AUC@30◦metric from Depth Anything 3 [56]. TuringPAI-VL
+scores 19.99, compared with 2.03 for the strongest baseline, Qwen2-VL-2B Base.
+The same checkpoint directly predicts 3D boxes on all four localization benchmarks, with mAP
+ranging from 20.00 to 39.55 at a 3D IoU threshold of 0.15. We use the Omni3D evaluator [57]
+and the Qwen3-VL evaluation setup [6] with conﬁdence ﬁxed at 1.0. None of the reference models
+yields a valid score under this protocol. TuringPAI-VL achieves the highest BLINK score among the
+three evaluated models (49.50). On EmbSpatial, it scores 48.27, above InternVL3-1B Base (39.86)
+and slightly below Qwen2-VL-2B Base (48.74).
+Multi-image and temporal understanding.
+We evaluate understanding across sequences of
+frames on three video benchmarks (Table 2). TuringPAI-VL outperforms InternVL3-1B Base on
+all three: MVBench (61.95 vs. 55.13), MLVU (51.50 vs. 47.21), and LongVideoBench (45.60 vs.
+40.24).
+8
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+Table 3: Spatial perception and reasoning results for TuringPAI-VL and two public reference
+VLMs. Bold and underlined mark the best and second-best valid scores among the displayed mod-
+els.
+Category
+Benchmark / Metric
+Qwen2-VL-2B
+Base [5]
+InternVL3-1B
+Base [27]
+TuringPAI-VL
+Geometric
+Perception
+NYU Depth V2 [53] (AbsRel ↓)
+0.70
+0.38
+0.146
+ETH3D [54] (EPE in px ↓)
+235.57
+199.05
+193.49
+7-Scenes [55] (AUC@30◦↑)
+2.03
+0.35
+19.99
+3D Object
+Localization
+ARKitScenes [58] (n = 1,090)
+N/V
+N/V
+33.76
+ScanNet [59] (n = 910)
+N/V
+N/V
+39.55
+SUN RGB-D [60] (n = 1,859)
+N/V
+N/V
+30.12
+nuScenes [10] (n = 2,000)
+N/V
+N/V
+20.00
+Spatial
+Understanding
+BLINK [61] (score ↑)
+42.30
+42.14
+49.50
+EmbSpatial [62] (score ↑)
+48.74
+39.86
+48.27
+ERQA [63] (score ↑)
+32.5
+33
+30.0
+RoboSpatial [64] (score ↑)
+38.0
+40.0
+30.0
+VSI [65] (score ↑)
+20.60
+31.37
+26.23
+Note. Arrows show metric direction. N/V denotes an attempted evaluation without a valid score; – denotes
+unavailable scores. 3D localization is mAP at IoU 0.15; case counts are in parentheses.
+3.2
+TuringPAI-Drive: Autonomous Driving VLA Training and Evaluation
+TuringPAI-Drive is initialized from the TuringPAI-VL checkpoint described in Section 3.1, with a
+trajectory-planning head added for end-to-end trajectory prediction. This section presents a com-
+prehensive evaluation of TuringPAI-Drive from four aspects. We ﬁrst introduce the driving inputs
+and training data, covering the multi-camera temporal observations and large-scale in-house driving
+dataset. We then evaluate driving performance through open-loop trajectory prediction and XPeng’s
+in-house CCES suite, with particular emphasis on comparing HybridViT and HybridViT-MLQ to
+assess the impact of MLQ-based visual token compression. Next, we present the on-device deploy-
+ment and runtime optimizations enabled by XPeng Native Runtime (XNRT), focusing on inference
+efﬁciency and numerical accuracy on a single NVIDIA Orin-X SoC. Finally, we conduct an attri-
+bution analysis with qualitative visual comparisons between HybridViT and HybridViT-MLQ to
+further examine the effects of visual representation compression.
+3.2.1
+Driving Inputs and Training Data
+TuringPAI-Drive takes four consecutive frames, including the current frame from a seven-camera
+surround-view system covering 360 degrees, sampled at 12 Hz, as input and predicts a 6 s ego trajec-
+tory represented by 72 waypoints. The driving model uses the HybridViT-MLQ encoder described in
+Section 2.2 to form a compact visual representation of the seven-camera input sequence. The model
+is initially trained on XPeng’s in-house driving dataset, comprising approximately 298,000 hours
+of recordings segmented into 35M clips. The data cover diverse driving environments, including
+highways, urban roads, and parking scenarios. They encompass a broad range of driving behaviors,
+including lateral maneuvers such as automatic lane changes (ALC), navigation lane changes (NLC),
+U-turns, and sharp curves; longitudinal maneuvers such as stopping at red lights and starting from
+a standstill; and challenging scenarios such as narrow-road negotiation, yielding to vulnerable road
+users, and driver takeovers.
+3.2.2
+Driving Evaluation and Results
+The driving results in Tables 5 and 6 are evaluated in PyTorch. Trajectory accuracy is measured by
+ADE and FDE in metres, each split into lateral and longitudinal components and evaluated over the
+full 6 s horizon and the ﬁrst 2 s; mean per-point heading error (yaw error, in radians) is also reported.
+Frames whose lateral endpoint error at 6 s exceeds 0.5 m or whose longitudinal endpoint error ex-
+ceeds 4.0 m count toward the miss rate. Driving quality is evaluated on an in-house simulation set.
+9
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+Each CCES axis—Compliance, Comfort, Efﬁciency, and Safety—aggregates scenario-speciﬁc com-
+posite costs; Navigation is reported separately as a route-following cost. Lower costs indicate better
+performance. The per-frame collision-failure rate is the proportion of evaluation frames ﬂagged as
+failures by the collision detector.
+Table 4: Driving-VLA evaluation protocol. Open-loop metrics are evaluated frame by frame on
+the 436k-frame validation split; driving-quality metrics are evaluated on an in-house simulation set.
+Lower values indicate better performance for all metrics.
+Evaluation axis
+Metric / suite
+Deﬁnition
+Open loop
+ADE / FDE
+Lateral and longitudinal displacement errors (m), over the 6 s and
+2 s horizons
+Yaw error
+Mean per-point heading error (rad)
+Miss rate
+Frames whose lateral endpoint error at 6 s exceeds 0.5 m or
+whose longitudinal endpoint error exceeds 4.0 m
+Driving quality
+Compliance
+Trafﬁc-rule adherence, e.g., off-center driving and
+oncoming-lane entry
+Comfort
+e.g., acceleration jerk, swaying, and abnormal deceleration
+Efﬁciency
+e.g., speed-limit shortfall and slow acceleration
+Safety
+e.g., insufﬁcient braking, roadside collision, and rear-collision
+risk from over-braking
+Navigation
+Route following, e.g., navigation-required lane changes,
+main/side-road splits, and intersections
+Table 5: Open-loop trajectory prediction performance on the held-out validation set. Results
+are reported at 2 s and 6 s prediction horizons. ADE and FDE are measured in meters, yaw error in
+radians, and miss rate in percent. ↓indicates that lower values are better, and bold denotes the best
+result in each column.
+6 s horizon
+2 s horizon
+ADE (m) ↓
+FDE (m) ↓
+ADE (m) ↓
+FDE (m) ↓
+Model
+lat.
+long.
+lat.
+long.
+Yaw ↓
+Miss (%) ↓
+lat.
+long.
+lat.
+long.
+HybridViT
+.1591
+.9858
+.4076
+2.7249
+.0129
+37.58
+.0245
+.1457
+.0686
+.3573
+HybridViT-MLQ
+.1572
+.9910
+.4031
+2.7345
+.0128
+37.48
+.0243
+.1469
+.0678
+.3605
+Open-loop trajectory prediction.
+We evaluate trajectory prediction accuracy using Average Dis-
+placement Error (ADE) and Final Displacement Error (FDE), measured separately in the lateral and
+longitudinal directions over the full 6 s horizon and the ﬁrst 2 s. We also report mean per-point
+heading error (yaw error, in radians) and miss rate, deﬁned as the proportion of frames whose 6 s
+endpoint error exceeds 0.5 m laterally or 4.0 m longitudinally.
+We evaluate the effect of MLQ-based token compression by comparing HybridViT-MLQ under the
+on-device token budget with the full-token HybridViT. At the 6 s horizon, HybridViT-MLQ achieves
+1.2% lower lateral ADE and 1.1% lower lateral FDE, while incurring only marginal increases of
+0.5% and 0.4% in longitudinal ADE and FDE, respectively. Across both prediction horizons, all
+ADE and FDE metrics remain within 1.2% of those of the full-token HybridViT. Moreover, yaw
+error and miss rate are slightly reduced. These results demonstrate that MLQ effectively compresses
+the visual-token representation while largely preserving, and in some metrics slightly improving,
+trajectory prediction accuracy (Table 5).
+Driving quality.
+We further evaluate driving quality using XPeng’s in-house simulation suite. The
+evaluation covers four CCES dimensions: Compliance, Comfort, Efﬁciency, and Safety, with Nav-
+igation assessed separately through route-following costs. For each metric, we report the ratio of
+its original, unnormalized cost to that of the full-token HybridViT reference (1.0). Category-level
+10
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+Table 6: Per-metric ratios of unnormalized driving-quality costs, with HybridViT as the refer-
+ence (1.00); lower ratios indicate lower costs for HybridViT-MLQ. Bold indicates ratios below
+1.0. Each Avg. is the geometric mean over all subclasses in its category, not only those shown.
+Navigation reports the aggregate route-following cost.
+Compliance ↓
+Comfort ↓
+Navi. ↓
+Off-Ctr.
+Onc. Ln.
+Tra. Lig.
+Line X
+Avg.
+Jerk
+Sway
+Decel.
+Avg.
+Avg.
+1.009
+1.010
+0.997
+1.004
+1.002
+1.061
+0.977
+0.976
+1.004
+0.991
+Efﬁciency ↓
+Safety ↓
+Sl. Acc.
+Spd. Sh.
+Late LC
+Long F.
+Avg.
+Ins. Brk.
+Roadside Risky LC Rear Risk
+Avg.
+0.992
+0.973
+0.996
+1.003
+0.992
+0.998
+1.015
+0.997
+0.962
+0.995
+Abbreviations: Navi., Navigation (aggregate route-following cost); Off-Ctr., off-center driving; Onc. Ln.,
+oncoming-lane entry; Tra. Lig., trafﬁc-light issues; Line X, line crossing; Decel., abnormal deceleration; Sl.
+Acc., slow acceleration; Spd. Sh., speed-limit shortfall; Late LC, delayed lane change; Long F., long following
+distance; Ins. Brk., insufﬁcient braking; Roadside, roadside collision; Risky LC, risky lane change; Rear Risk,
+rear-collision risk. Jerk, acceleration jerk; Sway, swaying.
+scores are computed as the geometric mean of the corresponding per-metric ratios, with lower values
+indicating better performance. We additionally report the collision-failure rate as the percentage of
+evaluation frames ﬂagged by the collision detector.
+As shown in Table 6, HybridViT-MLQ maintains comparable driving quality to HybridViT, with all
+ﬁve category-level ratios within 0.9% of the reference: Safety (0.995), Comfort (1.004), Efﬁciency
+(0.992), Compliance (1.002), and Navigation (0.991). At the per-metric level, HybridViT-MLQ
+reduces costs associated with rear collision risk (0.962), abnormal deceleration (0.976), speed-
+limit shortfall (0.973), and swaying (0.977), while showing small regressions in acceleration jerk
+(1.061), roadside collision (1.015), oncoming-lane entry (1.010), and off-center driving (1.009). The
+collision-failure rate increases slightly from 0.258% to 0.263%. Overall, these results indicate that
+the compact visual representation preserves aggregate driving quality, although some individual met-
+rics exhibit trade-offs (Table 6). A full per-metric breakdown is provided in Appendix B (Table 10).
+3.2.3
+On-Device Deployment and Runtime Optimization
+TuringPAI-Drive is XPeng’s VLA 2.0 Lite model and uses a 0.65B VLM backbone.
+XPeng’s
+NVIDIA Orin-X-based in-vehicle computing platform contains two Orin-X SoCs; TuringPAI-Drive
+deployment and all latency measurements reported here use a single Orin-X SoC. The GPU and
+DLA stages of the model execute within that same SoC. Deploying TuringPAI-Drive on automotive-
+grade hardware presents signiﬁcant challenges in balancing inference latency, numerical accuracy,
+and computational efﬁciency. This optimization reduces the GPU-side VLM preﬁll latency to 69.773
+ms, bringing the VLM backbone below the 83.3 ms reference period corresponding to 12 Hz. At the
+system level, TuringPAI-Drive generates trajectories at 12 Hz in on-vehicle operation.
+To address these challenges, we deploy TuringPAI-Drive using the XPeng Native Runtime (XNRT),
+an in-house inference runtime speciﬁcally designed for efﬁcient on-device AI deployment. Unlike
+conventional deployment frameworks that primarily rely on general-purpose operator optimization,
+XNRT provides a uniﬁed optimization framework across model architecture, numerical precision,
+and target hardware. It is designed to be quantization-aware-training (QAT)-friendly and supports
+model-speciﬁc, precision-aware, and hardware-aware optimizations. Through these capabilities,
+XNRT enables aggressive computational acceleration while preserving numerical ﬁdelity, making
+it possible to deploy TuringPAI-Drive on a single Orin-X SoC within the required real-time latency
+budget.
+Evaluation Setup.
+We evaluate the ViT and LLM components of TuringPAI-Drive on a single
+NVIDIA Orin-X SoC. We compare two deployment frameworks, NVIDIA TensorRT 8.6 and XPeng
+XNRT, under four conﬁgurations: TensorRT FP32, TensorRT FP32+INT8 mixed precision with
+QAT, TensorRT FP16, and XNRT BF16+INT8 with QAT. Reported VLM preﬁll inference latency
+is the sum of the GPU-side ViT and LLM inference times, excluding preprocessing, data transfers,
+11
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+(a) Inference latency
+(b) Numerical fidelity
+0.00
+50.00
+100.00
+150.00
+200.00
+250.00
+300.00
+350.00
+400.00
+TRT
+FP32
+TRT FP32+INT8
+(QAT)
+TRT
+FP16
+XNRT
+BF16+INT8
+(QAT)
+VLM inference latency (ms) ↓
+83.3 ms: 12 Hz period
+10⁰
+10⁻²
+10⁻⁴
+10⁻⁶
+Cosine error 1 − cosine ↓ (log scale)
+TRT
+FP32
+5.54e-7
+5.93e-7
+TRT FP32+INT8
+(QAT)
+0.0325
+0.035
+TRT
+FP16
+0.321
+0.342
+XNRT BF16+INT8
+(QAT)
+0.00163
+0.00189
+Cosine similarity = 0.99 (reference)
+1 − cosine mean
+1 − cosine min
+XNRT speedup
+4.93× vs. TRT FP32
+3.69× vs. TRT FP32+INT8
+343.86
+257.27
+180.49
+69.77
+Figure 5: On-device latency and numerical ﬁdelity of the TuringPAI-Drive VLM backbone on
+a single NVIDIA Orin-X SoC. (a) GPU-side VLM preﬁll inference latency across four deployment
+conﬁgurations. The dashed line marks the 83.3 ms period corresponding to 12 Hz. (b) Cosine errors
+derived from mean and minimum cosine similarities, shown on a logarithmic scale. The dashed
+line corresponds to cosine similarity 0.99. Lower values are better in both panels. TRT denotes
+TensorRT 8.6.
+DLA execution, and the action head. Numerical ﬁdelity is evaluated on real-world data against
+reference outputs produced by the original model in PyTorch FP32.
+The two INT8 conﬁgurations use QAT and SmoothQuant to mitigate quantization-induced numeri-
+cal degradation, while differing in quantization granularity and execution precision. TensorRT FP32
+and FP16 serve as additional precision baselines.
+For the TensorRT FP32+INT8 conﬁguration, per-tensor INT8 quantization is applied to Linear and
+Convolution operators, while the remaining operators primarily execute in FP32. The FP16 con-
+ﬁguration exhibits substantial numerical degradation, as reﬂected by its low cosine similarity and
+extremely large maximum absolute error. Therefore, FP32+INT8 mixed precision is adopted as the
+TensorRT mixed-precision baseline.
+In contrast, XNRT adopts a more ﬂexible mixed-precision execution strategy. It applies dynamic
+per-token INT8 quantization to Linear and Convolution operators, while executing most remain-
+ing operators in BF16. FP32 precision is retained for numerically sensitive operations, including
+LayerNorm, RMSNorm, and operators involving transcendental functions such as Tanh. Beyond
+quantization, XNRT further incorporates operator fusion and dimension-aware custom optimiza-
+tions to reduce memory-access overhead and kernel scheduling costs. This combination of ﬁne-
+grained quantization, mixed-precision execution, and hardware-speciﬁc operator optimization en-
+ables XNRT to achieve substantially higher inference efﬁciency while maintaining high numerical
+ﬁdelity. In particular, XNRT preserves mean and minimum cosine similarities of 0.998369 and
+0.998106, respectively, relative to the PyTorch FP32 reference, substantially outperforming the Ten-
+sorRT FP32+INT8 conﬁguration.
+We evaluate deployment performance using VLM preﬁll inference latency and numerical ﬁdelity
+metrics, including cosine mean, cosine minimum, mean absolute error (MAE), root mean squared
+error (RMSE), worst-case maximum absolute error, and mean relative L2 error.
+Latency and Accuracy Evaluation.
+Table 7 and Fig. 5 summarize the comparison across the four
+deployment conﬁgurations.
+TensorRT FP32 achieves a VLM preﬁll latency of 343.863 ms and a cosine mean of 0.999999,
+providing a near-lossless reference for numerical accuracy.
+Introducing FP32+INT8 mixed precision reduces the latency to 257.270 ms. However, its cosine
+mean and cosine minimum decrease substantially to 0.967537 and 0.964966, respectively, both
+falling below the 0.99 reference shown in Fig. 5(b), indicating reduced numerical ﬁdelity.
+12
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+Table 7: VLM inference latency and numerical ﬁdelity on a single NVIDIA Orin-X SoC. La-
+tency sums GPU-side ViT and LLM times, excluding preprocessing, transfers, DLA execution, and
+the action head. Outputs are compared with the original model’s PyTorch FP32 reference. QAT:
+quantization-aware training; –: unreported. Best values are bold.
+Latency
+Cosine
+Cosine
+MAE
+RMSE
+Max. abs.
+Relative L2
+Conﬁguration
+(ms)↓
+mean↑
+min↑
+mean↓
+mean↓
+worst↓
+mean↓
+TensorRT FP32
+343.863
+0.999999
+0.999999
+0.000631
+0.001150
+0.102601
+0.001068
+TensorRT FP32+INT8 (QAT)
+257.270
+0.967537
+0.964966
+0.155759
+0.276348
+24.122121
+0.253196
+TensorRT FP16
+180.489
+0.678869
+0.657518
+0.568197
+0.852783
+125.000000
+–
+XNRT BF16+INT8 (QAT)
+69.773
+0.998369
+0.998106
+0.035446
+0.062417
+6.312500
+0.057103
+TensorRT FP16 further reduces latency to 180.489 ms, but exhibits substantially larger numerical
+deviations. Its cosine mean and minimum are 0.678869 and 0.657518, respectively, and its worst-
+case maximum absolute error reaches 125.0. These results show that lower execution precision
+alone does not provide a satisfactory balance between latency and numerical ﬁdelity for this model.
+In comparison, XNRT BF16+INT8 achieves a VLM preﬁll latency of only 69.773 ms, while main-
+taining a cosine mean of 0.998369 and a cosine minimum of 0.998106. Both metrics remain above
+0.99, and the cosine mean is only 0.001630 below that of the TensorRT FP32 baseline. Importantly,
+XNRT’s VLM preﬁll latency is approximately 13.5 ms below the 83.3 ms period corresponding to
+12 Hz. This places the measured VLM stage within the target execution budget while maintaining
+high numerical ﬁdelity.
+In terms of inference efﬁciency, XNRT achieves a 4.93× speedup over TensorRT FP32, correspond-
+ing to a 79.71% reduction in VLM preﬁll latency. Compared with TensorRT FP32+INT8 mixed
+precision, XNRT delivers a further 3.69× speedup, reducing latency by 72.88%. These improve-
+ments demonstrate the effectiveness of XNRT’s combined optimization strategy, particularly its
+dynamic per-token quantization, BF16 execution for non-GEMM operators, operator fusion, and
+hardware-aware kernel optimization.
+The accuracy comparison further highlights the advantage of XNRT. Relative to TensorRT
+FP32+INT8 mixed precision, XNRT improves cosine mean by 0.030832, reducing the cosine er-
+ror (1 −cosine mean) to approximately 1/19.9 of that of the TensorRT conﬁguration. Meanwhile,
+its MAE, RMSE, maximum absolute error, and relative L2 error are approximately 4.39×, 4.43×,
+3.82×, and 4.43× lower, respectively. These results indicate that the latency reduction achieved by
+XNRT does not come at the expense of substantial numerical accuracy loss. Instead, its ﬁne-grained
+quantization and heterogeneous precision execution provide a more favorable balance between com-
+putational efﬁciency and numerical ﬁdelity.
+Deployment Signiﬁcance.
+Taken together, XNRT establishes a substantially improved latency–
+accuracy Pareto frontier for on-device VLA inference on a single Orin-X SoC. While TensorRT
+FP32 provides the highest numerical accuracy, its 343.863 ms latency is approximately 4.93 times
+that of XNRT and is far beyond the 12 FPS requirement. TensorRT FP32+INT8 mixed precision
+reduces latency but suffers from considerable accuracy degradation. In contrast, XNRT achieves
+both a sub-70 ms VLM preﬁll latency and cosine accuracy metrics above 0.99, outperforming the
+TensorRT mixed-precision conﬁguration in both latency and numerical accuracy.
+These results establish XNRT as a key enabling component for deploying large-scale VLA models
+on resource-constrained automotive platforms. By jointly optimizing quantization granularity, nu-
+merical precision, operator execution, and hardware-speciﬁc scheduling, XNRT makes it feasible
+to run TuringPAI-Drive on a single NVIDIA Orin-X SoC while meeting the real-time requirements
+of XPeng’s Max intelligent vehicles. These vehicles use a two-SoC Orin-X computing platform,
+whereas the model deployment and reported evaluation use one Orin-X SoC. Future work will fur-
+ther investigate the generalization of these optimizations across different vehicle platforms, input
+distributions, and VLA model scales.
+13
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+3.2.4
+Attribution Analysis
+To complement the quantitative driving evaluation above, we conduct a qualitative analysis of the
+visual evidence associated with the planned trajectory in HybridViT and HybridViT-MLQ, asking
+whether HybridViT-MLQ’s efﬁcient, multi-scale aggregation of visual evidence retains the key vi-
+sual cues associated with the planned trajectory. Attribution maps (or saliency maps) are a standard
+post-hoc tool for explaining vision models [66–69], but have been less explored in driving-VLA
+evaluation [70]. We apply Integrated Gradients, which attributes a model output to its input features
+by integrating gradients along a straight-line path from a baseline input to the observed input [71].
+Speciﬁcally, we compute pixel-level attributions with respect to the planned trajectory and visualize
+them for all seven camera views at the last frame of the input sequence. Figure 6 presents two repre-
+sentative scenes; for each scene, the rows show the original images, followed by the HybridViT and
+HybridViT-MLQ attribution maps.
+Across the cases we examined, HybridViT and HybridViT-MLQ assign attribution to broadly similar
+objects at similar image locations and HybridViT-MLQ tends to produce more spatially concentrated
+attribution around key objects, with weaker responses over background regions such as the sky,
+buildings, and vegetation, although this pattern varies across camera views. In Figure 6(a), both
+models highlight the car directly ahead, the cyclist on the right, and the pedestrian at the front left
+near the crossing. In Figure 6(b), both highlight the trafﬁc signal, the rear wheel or taillights of
+the lead SUV, while showing weaker responses in the darker surroundings. In the front ﬁsheye
+view, HybridViT-MLQ also shows attribution around a front-left VRU that is less apparent in the
+HybridViT maps; this may indicate an additional visual cue associated with the planned trajectory.
+This is a qualitative difference in the attribution maps; further examples are provided in Appendix C.
+Left rear
+Left front
+Front narrow
+Front ﬁsheye
+Rear
+Right front
+Right rear
+Camera
+HybridViT
+HybridViT-MLQ
+(a) Daytime left turn
+Camera
+HybridViT
+HybridViT-MLQ
+(b) Nighttime left turn
+Figure 6: Integrated Gradients attribution maps for the planned trajectory across seven cam-
+era views in two driving scenes: (a) a daytime left turn and (b) a nighttime left turn. For
+each scene, rows from top to bottom show the original camera images, HybridViT attributions, and
+HybridViT-MLQ attributions; camera views are labeled above. The visualizations correspond to the
+ﬁnal frame of the four-frame input sequence.
+14
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+3.3
+TuringPAI-Embodied: Robotic Manipulation VLA
+TuringPAI-Embodied combines the pretrained TuringPAI-VL backbone from Section 3.1 with a π0-
+style ﬂow-matching action expert [9]. Each observation includes two 256 × 256 camera views and
+an 80-dimensional canonical robot state. The action expert uses ten denoising steps to generate a
+chunk of six consecutive actions in a canonical action representation. We pretrain the policy on
+roughly 500 hours of manipulation data from multiple robot embodiments and then ﬁne-tune it with
+supervision from LIBERO demonstrations. We use the resulting policy for the LIBERO evaluation
+and the on-device timing measurements below.
+TuringPAI-Embodied succeeded in 1,936 of 2,000 LIBERO [20] trials (96.8%), with 500 trials per
+suite (Table 8). Per-suite success rates range from 93.2% on LIBERO-10 to 99.6% on Object. The
+overall rate is close to the 96.85% OpenPI reports for its LIBERO-ﬁne-tuned π0.5 policy [72, 73].
+Table 8: LIBERO success rates (%) by suite and overall. TuringPAI-Embodied was evaluated
+on 500 trials per suite. The π0.5 scores are the published results for the OpenPI pi05_libero
+checkpoint [73].
+Model
+Spatial
+Object
+Goal
+LIBERO-10
+Overall
+OpenPI π0.5 (published)
+98.8
+98.2
+98.0
+92.4
+96.85
+TuringPAI-Embodied (ours)
+98.4
+99.6
+96.0
+93.2
+96.8
+Table 9: Reference inference-stage timings (ms) on a single NVIDIA Orin-X SoC. TuringPAI-
+Embodied can run CNN patch embedding on the DLA. To compare the subsequent stages, vision
+timing starts after patch embedding for both policies. These timings are provided for reference only.
+Policy
+Vision
+LLM
+Action expert
+Sum
+OpenPI π0.5(published)
+84.1
+220.6
+117.5
+422.2
+TuringPAI-Embodied (ours)
+27.3
+60.8
+80.2
+168.3
+TuringPAI-Embodied’s CNN patch embedding can run on the DLA, allowing it to overlap with GPU
+work from another inference cycle in a pipelined deployment. To isolate the stages that follow this
+front end, we start vision timing after patch embedding and use the same timing boundary for the
+π0.5 reference (Table 9). We proﬁle both policies on a single NVIDIA Orin-X SoC in MAXN mode
+using their respective LIBERO input conﬁgurations. Both LLMs run in PyTorch eager mode, and
+both action experts use CUDA Graph replay for ten denoising steps. The measured vision, LLM,
+and action-expert times sum to 168.3 ms for TuringPAI-Embodied and 422.2 ms for π0.5.
+Asynchronous action execution can overlap prediction of the next chunk with execution of the cur-
+rent one. The predicted actions can then be based on observations acquired before the intended
+execution time, creating perception–execution misalignment [74]. Future work will evaluate asyn-
+chronous action execution for TuringPAI-Embodied, drawing on approaches such as VLASH [75]
+and RTC [2].
+4
+Conclusion and Future Work
+In this work, we presented TuringPAI, a foundation for on-device Physical AI that connects gen-
+eral vision-language understanding with real-world autonomous driving and robotic intelligence.
+At its core, TuringPAI-VL combines HybridViT-MLQ with Physical-AI-oriented training to de-
+velop general multimodal, spatial, geometric, and temporal understanding within a compact 0.65B-
+parameter model. By integrating convolutional local aggregation with multi-scale latent queries,
+HybridViT-MLQ substantially reduces the visual-token budget while preserving the spatial and tem-
+poral evidence required by downstream physical tasks. Building on this foundation, we developed
+two domain-speciﬁc VLA systems, TuringPAI-Drive and TuringPAI-Embodied, demonstrating the
+transfer of shared vision-language capabilities to autonomous driving and robotic manipulation.
+TuringPAI-Drive preserves trajectory prediction accuracy within 1.2% of the full-token Hybrid-
+ViT baseline and generates trajectories at 12 Hz on a single NVIDIA Orin-X SoC in on-vehicle
+operation. TuringPAI-Embodied achieves a 96.8% average success rate across the four LIBERO
+15
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+suites. On a single NVIDIA Orin-X SoC, the measured inference stages after CNN patch embed-
+ding sum to 168.3 ms for TuringPAI-Embodied. Together, these results demonstrate the feasibility
+of a shared Physical AI foundation supporting distinct driving and robotic systems under practical
+edge-computing constraints.
+Looking ahead, we see several opportunities to advance TuringPAI toward more general and
+autonomous Physical AI. First, we aim to extend temporal modeling beyond short observation
+windows toward long-horizon physical understanding, incorporating persistent temporal memory,
+streaming representations, and action-conditioned future prediction to model evolving environments
+and interaction dynamics. Second, we plan to strengthen the embodied foundation through large-
+scale cross-embodiment and cross-task learning, incorporating richer proprioceptive and contact
+information to improve generalization across robot platforms and interaction scenarios. Finally, we
+aim to develop closed-loop Physical AI systems that integrate world models, outcome evaluation,
+and failure-aware recovery, enabling policies to predict, act, evaluate, and adapt through sustained
+real-world interaction. Together with continued advances in asynchronous inference and heteroge-
+neous edge computing, these directions will move TuringPAI toward more capable, adaptive, and
+reliable Physical AI systems.
+5
+Contributors
+Advisors: Hang Zhang, Honggou Yang, Xianming Liu
+Project Lead: Qiman Wu
+Contributors: Hanlin Chen, Yuhua Wei, Mingyuan Wang, Shaman Tang, Minghao Li, Rui Xin,
+Xingye Liu, Zhichao Yang, Yiqi Yu, Hongyan Pei, Xiaowen Tian, YingYing Liu, Shiwen Liu, Jiahui
+Hu, Yizhao Wang, Yuheng Zhang, Anhua Liu, Yue He, Shuang Su, Da Zhu, Hua Zhou, Pengfei
+Diao, Haojie Yang, Weichao Huang
+References
+[1] Mustafa Shukor, Dana Aubakirova, Francesco Capuano, Pepijn Kooijmans, Steven Palma,
+Adil Zouitine, Michel Aractingi, Caroline Pascal, Martino Russi, Andres Maraﬁoti, et al.
+SmolVLA: A Vision-Language-Action Model for Affordable and Efﬁcient Robotics. arXiv
+preprint arXiv:2506.01844, 2025.
+[2] Kevin Black, Manuel Galliker, and Sergey Levine. Real-time execution of action chunking
+ﬂow policies. Advances in Neural Information Processing Systems, 38:33383–33407, 2025.
+doi: 10.52202/085713-1122.
+[3] Yuheng Zhang, Yizhao Wang, Da Zhu, Hua Zhou, Yue He, Jiahui Hu, Shaman Tang, Han-
+lin Chen, Yuhua Wei, Anhua Liu, et al. TuringLLM: Efﬁciently Scaling Foundation Models
+Toward Physical AI. arXiv preprint arXiv:2608.30567, 2026.
+[4] Haotian Liu, Chunyuan Li, Qingyang Wu, and Yong Jae Lee. Visual instruction tuning, 2023.
+URL https://arxiv.org/abs/2304.08485.
+[5] Peng Wang, Shuai Bai, Sinan Tan, Shijie Wang, Zhihao Fan, Jinze Bai, Keqin Chen, Xuejing
+Liu, Jialin Wang, Wenbin Ge, Yang Fan, Kai Dang, Mengfei Du, Xuancheng Ren, Rui Men,
+Dayiheng Liu, Chang Zhou, Jingren Zhou, and Junyang Lin. Qwen2-VL: Enhancing vision-
+language model’s perception of the world at any resolution, 2024. URL https://arxiv.
+org/abs/2409.12191.
+[6] Shuai Bai et al. Qwen3-VL Technical Report. arXiv preprint arXiv:2511.21631, 2025. URL
+https://arxiv.org/abs/2511.21631.
+[7] Foundation Model Team and XPeng Inc.
+XCoT-VLA: Executable Chain-of-Thought for
+Vision-Language-Action Driving. arXiv preprint arXiv:2608.10976, 2026.
+[8] Xiaoyu Tian, Junru Gu, Bailin Li, Yicheng Liu, Yang Wang, Zhiyong Zhao, Kun Zhan, Peng
+Jia, Xianpeng Lang, and Hang Zhao. DriveVLM: The convergence of autonomous driving and
+large vision-language models, 2024. URL https://arxiv.org/abs/2402.12289.
+[9] Kevin Black, Noah Brown, Danny Driess, Adnan Esmail, Michael Equi, Chelsea Finn, Niccolo
+Fusai, Lachy Groom, Karol Hausman, Brian Ichter, et al. π0: A vision-language-action ﬂow
+model for general robot control. arXiv preprint arXiv:2410.24164, 2024. URL https://
+arxiv.org/abs/2410.24164.
+16
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+[10] Holger Caesar, Varun Bankiti, Alex H. Lang, Sourabh Vora, Venice Erin Liong, Qiang Xu,
+Anush Krishnan, Yu Pan, Giancarlo Baldan, and Oscar Beijbom. nuScenes: A multimodal
+dataset for autonomous driving, 2020. URL https://arxiv.org/abs/1903.11027.
+[11] Alexander Khazatsky, Karl Pertsch, Suraj Nair, Ashwin Balakrishna, Sudeep Dasari, Siddharth
+Karamcheti, Soroush Nasiriany, Mohan Kumar Srirama, Lawrence Yunliang Chen, Kirsty El-
+lis, et al. DROID: A Large-Scale In-The-Wild Robot Manipulation Dataset. arXiv preprint
+arXiv:2403.12945, 2024.
+[12] Daniel Bolya, Cheng-Yang Fu, Xiaoliang Dai, Peizhao Zhang, Christoph Feichtenhofer, and
+Judy Hoffman. Token merging: Your ViT but faster, 2023. URL https://arxiv.org/abs/
+2210.09461.
+[13] Yuzhang Shang, Mu Cai, Bingxin Xu, Yong Jae Lee, and Yan Yan. LLaVA-PruMerge: Adap-
+tive token reduction for efﬁcient large multimodal models. In 2025 IEEE/CVF International
+Conference on Computer Vision (ICCV), pages 22857–22867. IEEE, 2025.
+[14] Xiaohu Huang, Hao Zhou, and Kai Han.
+PruneVid:
+Visual token pruning for efﬁ-
+cient video large language models.
+In Findings of the Association for Computational
+Linguistics:
+ACL 2025, pages 19959–19973. Association for Computational Linguistics,
+2025. doi: 10.18653/v1/2025.ﬁndings-acl.1024. URL https://aclanthology.org/2025.
+findings-acl.1024/.
+[15] Leqi Shen, Guoqiang Gong, Tao He, Yifeng Zhang, Pengzhang Liu, Sicheng Zhao, and
+Guiguang Ding.
+FastVID: Dynamic density pruning for fast video large language mod-
+els.
+Advances in Neural Information Processing Systems, 38:123553–123581, 2025.
+doi:
+10.52202/085713-4118.
+[16] Boyuan Chen, Zhuo Xu, Sean Kirmani, Brian Ichter, Danny Driess, Pete Florence, Dorsa
+Sadigh, Leonidas Guibas, and Fei Xia. SpatialVLM: Endowing vision-language models with
+spatial reasoning capabilities, 2024. URL https://arxiv.org/abs/2401.12168.
+[17] Shuhuai Ren, Linli Yao, Shicheng Li, Xu Sun, and Lu Hou. TimeChat: A time-sensitive mul-
+timodal large language model for long video understanding. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition (CVPR), pages 14313–14323,
+2024. doi: 10.1109/CVPR52733.2024.01357. URL https://openaccess.thecvf.com/
+content/CVPR2024/html/Ren_TimeChat_A_Time-sensitive_Multimodal_Large_
+Language_Model_for_Long_Video_CVPR_2024_paper.html.
+[18] NVIDIA. DRIVE AGX Developer Kits. https://developer.nvidia.com/drive/agx/,
+n.d. DRIVE AGX Orin section. Accessed: 2026-11-05.
+[19] Zhipeng Cai, Zhuang Liu, Yunyang Xiong, Zechun Liu, Vikas Chandra, and Yangyang Shi.
+VLM3: Vision language models are native 3D learners. arXiv preprint arXiv:2605.30561,
+2026. URL https://arxiv.org/abs/2605.30561.
+[20] Bo Liu, Yifeng Zhu, Chongkai Gao, Yihao Feng, Qiang Liu, Yuke Zhu, and Peter Stone.
+LIBERO: Benchmarking knowledge transfer for lifelong robot learning. In Advances in Neural
+Information Processing Systems, volume 36, pages 44776–44791, 2023.
+[21] Fartash Faghri et al.
+MobileCLIP2: Improving Multi-Modal Reinforced Training.
+arXiv
+preprint arXiv:2508.20691, 2025. URL https://arxiv.org/abs/2508.20691.
+[22] Michael Tschannen, Alexey Gritsenko, Xiao Wang, Muhammad Ferjad Naeem, Ibrahim Al-
+abdulmohsin, Nikhil Parthasarathy, Talfan Evans, Lucas Beyer, Ye Xia, Basil Mustafa, et al.
+SigLIP 2: Multilingual Vision-Language Encoders with Improved Semantic Understanding,
+Localization, and Dense Features. arXiv preprint arXiv:2502.14786, 2025.
+[23] Qiman Wu, Hanlin Chen, et al. TuringViT: Making SOTA Vision Transformers Accessible to
+All. arXiv preprint arXiv:2606.24253, 2026. URL https://arxiv.org/abs/2606.24253.
+[24] Oriane Siméoni, Huy V. Vo, Maximilian Seitzer, Federico Baldassarre, Maxime Oquab, Cijo
+Jose, Vasil Khalidov, Marc Szafraniec, Seungeun Yi, Michaël Ramamonjisoa, et al. DINOv3.
+arXiv preprint arXiv:2508.10104, 2025.
+[25] Xiang An, Yin Xie, Feilong Tang, Yunyao Yan, Huajie Tan, Didi Zhu, Changrui Chen, Xi-
+uwei Zhao, Bin Qin, Kaicheng Yang, Yifei Shen, Yuanhan Zhang, Kaichen Zhang, Wenkang
+Zhang, Zheng Cheng, Nansen Zhang, Chunsheng Wu, Chunjiang Ge, Zimin Ran, Dehua
+Song, Chunyuan Li, Shikun Feng, Ming Hu, Zhangquan Chen, Junbo Niu, Bo Li, Ziy-
+ong Feng, Ziwei Liu, Zongyuan Ge, and Jiankang Deng.
+LLaVA-OneVision-2: Towards
+Next-Generation Perceptual Intelligence.
+arXiv preprint arXiv:2605.25979, 2026.
+URL
+https://arxiv.org/abs/2605.25979.
+17
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+[26] Qwen, An Yang, et al. Qwen2.5 technical report. arXiv preprint arXiv:2412.15115, 2024.
+URL https://arxiv.org/abs/2412.15115.
+[27] Jinguo Zhu et al. InternVL3: Exploring advanced training and test-time recipes for open-
+source multimodal models. arXiv preprint arXiv:2504.10479, 2025. URL https://arxiv.
+org/abs/2504.10479.
+[28] Sahar Kazemzadeh, Vicente Ordonez, Mark Matten, and Tamara L. Berg. Referitgame: Re-
+ferring to objects in photographs of natural scenes. In Proceedings of the 2014 Conference on
+Empirical Methods in Natural Language Processing, pages 787–798, 2014.
+[29] Licheng Yu, Patrick Poirson, Shan Yang, Alexander C. Berg, and Tamara L. Berg. Modeling
+context in referring expressions. In Computer Vision – ECCV 2016, pages 69–85. Springer,
+2016.
+[30] Roni Paiss, Ariel Ephrat, Omer Tov, Shiran Zada, Inbar Mosseri, Michal Irani, and Tali Dekel.
+Teaching CLIP to Count to Ten. In Proceedings of the IEEE/CVF International Conference on
+Computer Vision (ICCV), 2023.
+[31] Lucas Beyer, Andreas Steiner, André Susano Pinto, et al. PaliGemma: A versatile 3B VLM
+for transfer. arXiv preprint arXiv:2407.07726, 2024. URL https://arxiv.org/abs/2407.
+07726.
+[32] Yuliang Liu et al. OCRBench: On the hidden mystery of OCR in large multimodal models.
+Science China Information Sciences, 67, 2024.
+[33] Ling Fu, Zhebin Kuang, Jiajun Song, Mingxin Huang, Biao Yang, Yuzhe Li, Linghao Zhu,
+Qidi Luo, Xinyu Wang, Hao Lu, et al. OCRBench v2: An Improved Benchmark for Evalu-
+ating Large Multimodal Models on Visual Text Localization and Reasoning. arXiv preprint
+arXiv:2501.00321, 2025.
+[34] Ahmed Masry, Do Xuan Long, Jia Qing Tan, Shaﬁq Joty, and Enamul Hoque. ChartQA: A
+benchmark for question answering about charts with visual and logical reasoning. In Findings
+of the Association for Computational Linguistics: ACL 2022, pages 2263–2279, 2022. doi:
+10.18653/v1/2022.ﬁndings-acl.177.
+[35] Amanpreet Singh, Vivek Natarajan, Meet Shah, Yu Jiang, Xinlei Chen, Dhruv Batra, Devi
+Parikh, and Marcus Rohrbach. Towards VQA models that can read. In Proceedings of the
+IEEE/CVF International Conference on Computer Vision, 2019.
+[36] Minesh Mathew, Dimosthenis Karatzas, and C. V. Jawahar. DocVQA: A dataset for VQA
+on document images. In Proceedings of the IEEE/CVF Winter Conference on Applications of
+Computer Vision, pages 2200–2209, 2021.
+[37] Aniruddha Kembhavi, Mike Salvato, Eric Kolve, Minjoon Seo, Hannaneh Hajishirzi, and Ali
+Farhadi. A Diagram Is Worth A Dozen Images. In Computer Vision – ECCV 2016, pages
+235–251, 2016.
+[38] Xiang Yue et al. MMMU: A massive multi-discipline multimodal understanding and reasoning
+benchmark for expert AGI. In Proceedings of the IEEE/CVF Conference on Computer Vision
+and Pattern Recognition, 2024.
+[39] Ke Wang, Junting Pan, Weikang Shi, Zimu Lu, Mingjie Zhan, and Hongsheng Li.
+Mea-
+suring Multimodal Mathematical Reasoning with MATH-Vision Dataset.
+arXiv preprint
+arXiv:2402.14804, 2024. URL https://arxiv.org/abs/2402.14804.
+[40] Pan Lu, Hritik Bansal, Tony Xia, Jiacheng Liu, Chunyuan Li, Hannaneh Hajishirzi, Hao Cheng,
+Kai-Wei Chang, Michel Galley, and Jianfeng Gao. MathVista: Evaluating Mathematical Rea-
+soning of Foundation Models in Visual Contexts. In Proceedings of the International Confer-
+ence on Learning Representations, 2024.
+[41] Chengke Zou, Xingang Guo, Rui Yang, Junyu Zhang, Bin Hu, and Huan Zhang. DynaMath:
+A Dynamic Visual Benchmark for Evaluating Mathematical Reasoning Robustness of Vision
+Language Models. arXiv preprint arXiv:2411.00836, 2024. URL https://arxiv.org/abs/
+2411.00836.
+[42] Yijia Xiao, Edward Sun, Tianyu Liu, and Wei Wang. LogicVista: Multimodal LLM Logical
+Reasoning Benchmark in Visual Contexts. arXiv preprint arXiv:2407.04973, 2024.
+[43] Yuan Liu et al. MMBench: Is your multi-modal model an all-around player? arXiv preprint
+arXiv:2307.06281, 2023.
+[44] xAI.
+RealWorldQA benchmark, 2024.
+URL https://x.ai/news/grok-1.5v.
+Dataset
+release.
+18
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+[45] Lin Chen et al. Are we on the right way for evaluating large vision-language models? arXiv
+preprint arXiv:2403.20330, 2024.
+[46] Weihao Yu, Zhengyuan Yang, Linjie Li, Jianfeng Wang, Kevin Lin, Zicheng Liu, Xinchao
+Wang, and Lijuan Wang. MM-Vet: Evaluating Large Multimodal Models for Integrated Capa-
+bilities. arXiv preprint arXiv:2308.02490, 2023.
+[47] Tianrui Guan et al. HallusionBench: An advanced diagnostic suite for entangled language hal-
+lucination and visual illusion in large vision-language models. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition, 2024.
+[48] Yi-Fan Zhang et al.
+MME-RealWorld: Could Your Multimodal LLM Challenge High-
+Resolution Real-World Scenarios that are Difﬁcult for Humans?
+arXiv preprint
+arXiv:2408.13257, 2024. URL https://arxiv.org/abs/2408.13257.
+[49] Bohao Li et al. SEED-Bench: Benchmarking multimodal llms with generative comprehension.
+arXiv preprint arXiv:2307.16125, 2023.
+[50] Kunchang Li et al. MVBench: A comprehensive multi-modal video understanding benchmark.
+In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition,
+2024.
+[51] Junjie Zhou, Yan Shu, Bo Zhao, Boya Wu, Zhengyang Liang, Shitao Xiao, Minghao Qin,
+Xi Yang, Yongping Xiong, Bo Zhang, et al. MLVU: Benchmarking Multi-task Long Video
+Understanding. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, 2025.
+[52] Haoning Wu et al.
+LongVideoBench: A benchmark for long-context interleaved video-
+language understanding. arXiv preprint arXiv:2407.15754, 2024.
+[53] Nathan Silberman, Derek Hoiem, Pushmeet Kohli, and Rob Fergus. Indoor segmentation and
+support inference from RGBD images. In European Conference on Computer Vision (ECCV),
+pages 746–760. Springer, 2012.
+[54] Thomas Schöps, Johannes L. Schönberger, Silvano Galliani, Torsten Sattler, Konrad Schindler,
+Marc Pollefeys, and Andreas Geiger. A multi-view stereo benchmark with high-resolution
+images and multi-camera videos. In Proceedings of the IEEE Conference on Computer Vision
+and Pattern Recognition (CVPR), pages 3260–3269, 2017.
+[55] Jamie Shotton, Ben Glocker, Christopher Zach, Shahram Izadi, Antonio Criminisi, and Andrew
+Fitzgibbon. Scene coordinate regression forests for camera relocalization in RGB-D images.
+In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR),
+pages 2930–2937, 2013.
+[56] Haotong Lin, Sili Chen, Junhao Liew, Donny Y. Chen, Zhenyu Li, Guang Shi, Jiashi Feng,
+and Bingyi Kang. Depth Anything 3: Recovering the Visual Space from Any Views. arXiv
+preprint arXiv:2511.10647, 2025. URL https://arxiv.org/abs/2511.10647.
+[57] Garrick Brazil, Abhinav Kumar, Julian Straub, Nikhila Ravi, Justin Johnson, and Georgia
+Gkioxari. Omni3D: A large benchmark and model for 3D object detection in the wild. In Pro-
+ceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR),
+pages 13154–13164, 2023.
+[58] Gilad Baruch, Zhuoyuan Chen, Afshin Dehghan, Tal Dimry, Yuri Feigin, Peter Fu, Thomas
+Gebauer, Brandon Joffe, Daniel Kurz, Arik Schwartz, and Elad Shulman. ARKitScenes: A
+diverse real-world dataset for 3D indoor scene understanding using mobile RGB-D data. In
+Advances in Neural Information Processing Systems: Datasets and Benchmarks, 2021.
+[59] Angela Dai, Angel X. Chang, Manolis Savva, Maciej Halber, Thomas Funkhouser, and
+Matthias Nießner. ScanNet: Richly-annotated 3D reconstructions of indoor scenes. In Pro-
+ceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR), 2017.
+[60] Shuran Song, Samuel P. Lichtenberg, and Jianxiong Xiao. SUN RGB-D: A RGB-D scene
+understanding benchmark suite. In Proceedings of the IEEE Conference on Computer Vision
+and Pattern Recognition (CVPR), 2015.
+[61] Xingyu Fu et al. BLINK: Multimodal large language models can see but not perceive. In
+European Conference on Computer Vision, 2024.
+[62] Mengfei Du, Binhao Wu, Zejun Li, Xuanjing Huang, and Zhongyu Wei. EmbSpatial-Bench:
+Benchmarking spatial understanding for embodied tasks with large vision-language models.
+arXiv preprint arXiv:2406.05756, 2024.
+[63] Gemini Robotics Team. Gemini robotics: Bringing AI into the physical world. arXiv preprint
+arXiv:2503.20020, 2025.
+19
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+[64] Chan Hee Song, Valts Blukis, Jonathan Tremblay, Stephen Tyree, Yu Su, and Stan Birch-
+ﬁeld. RoboSpatial: Teaching spatial understanding to 2D and 3D vision-language models
+for robotics. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), pages 15768–15780, 2025.
+[65] Jihan Yang, Shusheng Yang, Anjali W. Gupta, Rilyn Han, Li Fei-Fei, and Saining Xie. Think-
+ing in space: How multimodal large language models see, remember, and recall spaces. In Pro-
+ceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR),
+pages 10632–10643, 2025.
+[66] Huiqi Deng, Hongbin Pei, Quanshi Zhang, and Mengnan Du. Attribution explanations for
+deep neural networks: A theoretical perspective. arXiv preprint arXiv:2508.07636, 2025. URL
+https://arxiv.org/abs/2508.07636.
+[67] Laurent Itti and Christof Koch. Computational modelling of visual attention. Nature Reviews
+Neuroscience, 2(3):194–203, 2001. doi: 10.1038/35058500.
+[68] Karen Simonyan, Andrea Vedaldi, and Andrew Zisserman.
+Deep inside convolutional
+networks:
+Visualising image classiﬁcation models and saliency maps.
+arXiv preprint
+arXiv:1312.6034, 2013. URL https://arxiv.org/abs/1312.6034.
+[69] Julius Adebayo, Justin Gilmer, Michael Muelly, Ian Goodfellow, Moritz Hardt, and Been Kim.
+Sanity checks for saliency maps.
+In Advances in Neural Information Processing Systems,
+volume 31, 2018.
+[70] Sicong Jiang, Zilin Huang, Kangan Qian, Ziang Luo, Tianze Zhu, Yang Zhong, Yihong Tang,
+Menglin Kong, Yunlong Wang, Siwen Jiao, et al. A survey on vision-language-action models
+for autonomous driving. arXiv preprint arXiv:2506.24044, 2025. URL https://arxiv.org/
+abs/2506.24044.
+[71] Mukund Sundararajan, Ankur Taly, and Qiqi Yan. Axiomatic attribution for deep networks. In
+Proceedings of the International Conference on Machine Learning (ICML), 2017.
+[72] Physical Intelligence, Kevin Black, Noah Brown, James Darpinian, Karan Dhabalia, Danny
+Driess, Adnan Esmail, Michael Equi, Chelsea Finn, Niccolo Fusai, et al.
+π0.5: A vision-
+language-action model with open-world generalization.
+arXiv preprint arXiv:2504.16054,
+2025. URL https://arxiv.org/abs/2504.16054.
+[73] Physical Intelligence. OpenPI LIBERO Benchmark Results, n.d. URL https://github.
+com/Physical-Intelligence/openpi/tree/main/examples/libero#results.
+Ac-
+cessed 2026-11-18.
+[74] Zebin Yang, Qi Wang, Yunhe Wang, Xiurui Guo, Bo Yu, Shaoshan Liu, Jiafeng Xu, Hao Dong,
+and Meng Li. EagleVLA: Towards Onboard Real-Time Robot Control via Foresight-Aligned
+Asynchronous Inference. arXiv preprint arXiv:2607.12659, 2026. URL https://arxiv.
+org/abs/2607.12659.
+[75] Jiaming Tang, Yufei Sun, Yilong Zhao, Shang Yang, Yujun Lin, Zhuoyang Zhang, James
+Hou, Yao Lu, Zhijian Liu, and Song Han.
+VLASH: Real-Time VLAs via Future-State-
+Aware Asynchronous Inference.
+arXiv preprint arXiv:2512.01031, 2025.
+URL https:
+//arxiv.org/abs/2512.01031.
+20
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+Appendix
+A
+Spatial Supervision Case Figures
+A
+B
+Q: Is region A positioned above region B?
+A: Yes. Region A is above region B.
+Figure 7: Box-grounded spatial-relation example.
+query
+Q:
+the queried pixel at (818, 765)? Coordinates are
+normalized per axis to [0, 2000).
+A: 15.11 m
+ What is the absolute depth at
+Figure 8: Metric-depth estimation example.
+Q: Given the camera parameters, detect the truck
+and output its 3D bounding box.
+A: (-10.5922, 0.7195, 25.5148,
+2.7820, 3.5620, 9.9290,
+0.0000, -0.9856, 0.0000)
+Format: (x, y, z) position; (dx, dy, dz) size;
+(rx, ry, rz) rotation.
+Figure 9: Camera-conditioned 3D object-localization example.
+21
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+View 1
+View 2
+Q: What is the relative rotation angle?
+A:
+Q: What are the yaw, pitch and roll?
+A: (+9.5°, -59.1°, +22.9°).
+Q: What is the translation direction?
+A: Down, forward; unit vector (-0.13, +0.85, +0.51).
+Q: What is the translation distance?
+A: 2.82 m.
+65.4°.
+Camera motion: View 1 → View 2
+Reference frame: View 1
+X: right, Y: down, Z: forward
+Intrinsic rotation order: yaw → pitch → roll
+(Y → X → Z)
+Figure 10: Relative camera-pose example with rotation and translation questions.
+View 1
+query
+View 2
+GT
+Q: Given pixel (1604, 771) in View 1, predict the
+corresponding pixel in View 2. Coordinates are
+normalized per axis to [0, 2000).
+A: (1644, 873).
+Figure 11: Cross-view pixel-correspondence example. The query pixel and its labeled match are
+shown in separate views.
+1: Left fixed camera
+2: Right fixed camera
+3: Ego view (right)
+4: Ego view (left)
+GT
+Q: These four views show the same robotic
+manipulation task. One may have been captured
+at a different time. Which view appears
+temporally out of sync with the others?
+A: View 4.
+Figure 12: Cross-view synchronization example for a robotic-manipulation scene. Numbered
+images identify camera views; the highlighted view indicates the answer.
+22
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+Q: Among the blue-and-white carton,
+black-and-grey digital camera, and white
+watering can, which is rightmost in the image?
+Which is closer to the viewer, the carton or the
+digital camera?
+A: The watering can is rightmost. The carton is
+closer to the viewer than the digital camera.
+Figure 13: Tabletop embodied spatial-reasoning example involving object identiﬁcation, rela-
+tive position, and proximity.
+Front telephoto
+Front camera
+Frame 1   |   t = 0.00 s
+Frame 2   |   t = 0.25 s
+Frame 3   |   t = 0.50 s
+Frame 4   |   t = 0.75 s
+Q: The left column shows front telephoto images,
+and the right column shows front-camera images.
+Four frames are sampled at intervals of 0.25
+seconds. In the last frame, a row of traffic lights
+controlling traffic flow is approximately 23
+meters straight ahead. Describe the color and
+direction of each light from left to right. If a
+countdown is shown and it is 10 seconds or less,
+also provide the remaining time.
+A: Left: green downward arrow; vehicles can
+proceed straight.
+Middle: green downward arrow; vehicles can
+proceed straight.
+Right: green downward arrow; vehicles can
+proceed straight.
+Figure 14: Example from XPeng’s internal alignment data for trafﬁc-light-state understand-
+ing. The left and right columns show front-telephoto and front-camera views, respectively, over four
+frames sampled at 0.25 s intervals. The prompt asks for each signal’s color and direction and any
+countdown of 10 s or less.
+Front-right view
+Query box
+Rear-right view
+GT box
+A: Rear-right view: (440, 448), (681, 564).
+Q: The object in the front-right view has bounding
+box (368, 372), (700, 522). What are its 2D
+bounding-box coordinates in the rear-right view?
+Coordinates are normalized per axis to [0, 1000).
+Figure 15: Example from XPeng’s internal alignment data for cross-view box grounding.
+Given an object’s 2D bounding box in the front-right view, the task predicts its corresponding box
+in the rear-right view.
+23
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+B
+Per-Metric CCES Breakdown
+Table 10: Per-metric CCES breakdown of HybridViT-MLQ against HybridViT (1.00). Each
+Score is the ratio of an unnormalized cost to that of HybridViT; values below 1.00 indicate lower
+costs. ∆Score (%) is computed from displayed Score values as 100(Score −1). Class averages are
+in italics.
+Category
+Subclass
+Score
+∆Score (%)
+Compliance
+Off-center driving
+1.009
++0.9
+Oncoming-lane entry
+1.010
++1.0
+Trafﬁc-light issues
+0.997
+−0.3
+Waiting-area adherence
+0.992
+−0.8
+Restricted-lane entry
+0.999
+−0.1
+Line crossing
+1.004
++0.4
+Class average
+1.002
++0.2
+Comfort
+Acceleration jerk
+1.061
++6.1
+Swaying
+0.977
+−2.3
+Abnormal decel.
+0.976
+−2.4
+Class average
+1.004
++0.4
+Efﬁciency
+Slow acceleration
+0.992
+−0.8
+Speed-limit shortfall
+0.973
+−2.7
+Delayed lane change
+0.996
+−0.4
+Irregular detour
+0.984
+−1.6
+Long following dist.
+1.003
++0.3
+Long stopping dist.
+1.002
++0.2
+Class average
+0.992
+−0.8
+Safety
+Insufﬁcient braking
+0.998
+−0.2
+Roadside collision
+1.015
++1.5
+Oncoming avoidance
+0.995
+−0.5
+Risky lane change
+0.997
+−0.3
+Close following
+1.002
++0.2
+Rear collision risk
+0.962
+−3.8
+Class average
+0.995
+−0.5
+Navigation
+Missed/late lane change
+0.938
+−6.2
+Main/side-road merge
+1.008
++0.8
+Intersection
+0.972
+−2.8
+No-gap lane changes
+1.111
++11.1
+Wrong route
+0.934
+−6.6
+Class average
+0.991
+−0.9
+24
+
+
+FOUNDATION MODEL TEAM
+TuringPAI
+TECHNICAL REPORT
+C
+Further Attribution Cases
+Left rear
+Left front
+Front narrow
+Front ﬁsheye
+Rear
+Right front
+Right rear
+Camera
+HybridViT
+HybridViT-MLQ
+Camera
+HybridViT
+HybridViT-MLQ
+Camera
+HybridViT
+HybridViT-MLQ
+Camera
+HybridViT
+HybridViT-MLQ
+Camera
+HybridViT
+HybridViT-MLQ
+Figure 16: Integrated Gradients maps for the planned trajectory across seven camera views
+in ﬁve driving scenes (top to bottom: split merge, parked-vehicle bypass, cut-in, car following,
+and dense urban-bridge trafﬁc). Rows show input images, HybridViT attributions, and HybridViT-
+MLQ attributions for the ﬁnal frame of each four-frame input sequence.
+25

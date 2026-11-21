@@ -1,0 +1,1018 @@
+1
+MIR-Depth: Multi-Range Refinement for
+Single-View RGB-D Depth Completion of
+Transparent Objects
+Xinzhe Fu∗, Qi Shao∗†, Yuanfei Xie∗, Taoyu Wu, Zhihao Cao, Long Hu, Hong Liang, Xianzhi Li, Anh Nguyen,
+Baoru Huang, and Rongsheng Li
+Fig. 1. Single-view depth completion of transparent objects for robotic grasping. Given a transparent cup captured by a wrist-mounted RGB-D camera
+(left), raw sensor depth suffers from specular holes and refracted background readings. Benefiting from a prior-guided initial anchor, MIR-Depth (middle)
+pairs one shared global and two pixel-wise local inverse-depth volumes with validity-masked 1D lookup and spatial gating, recovering accurate visible surfaces
+over single-pass baselines for 6-DoF grasp pose prediction (right).
+Abstract—Recovering accurate visible-surface depth from a
+single RGB-D image and an object mask is essential for robotic
+grasping and manipulation of transparent objects. Specular
+reflections cause missing depth, while refraction corrupts nonzero
+returns with background depth, making raw measurements
+unreliable as surface anchors. Under a fixed sampling budget,
+refining an initial single-view prediction within a single search
+interval either misses large refraction offsets or sacrifices fine
+local resolution. To resolve this single-view trade-off, MIR-
+Depth constructs Coordinate-Aware Multi-Range Hypotheses:
+a 3D-aggregated global inverse-depth volume and depth-axis-
+filtered pixel-wise local volumes around a prior-guided initial
+depth. Selective Recurrent Refinement then introduces out-of-
+bounds lookup masking and validity-masked softmax fusion to
+iteratively update inverse depth from these volumes using a
+multi-scale ConvGRU. Finally, Spatially Gated Correction applies
+a learned per-pixel spatial gate to the full-resolution residual,
+preserving accurate initial geometry without imposing raw sensor
+∗X. Fu, Q. Shao, and Y. Xie contributed equally to this work. †Q. Shao is
+the project leader. X. Fu developed the algorithm, and Y. Xie deployed the
+system on the real robot.
+X. Fu, Q. Shao, Y. Xie, H. Liang, and R. Li are with Harbin Engineering
+University, Harbin, China. Q. Shao is also with the University of Liverpool,
+Liverpool, UK (e-mail: shaoqi@liverpool.ac.uk).
+T. Wu is with the University of Liverpool, Liverpool, UK, and also with
+Xi’an Jiaotong-Liverpool University, Suzhou, China.
+Z. Cao is with ETH Zurich, Zurich, Switzerland.
+L. Hu and X. Li are with Huazhong University of Science and Technology,
+Wuhan, China.
+A. Nguyen and B. Huang are with the University of Liverpool, Liverpool,
+UK, and also with Imperial College London, London, UK.
+readings as hard constraints. Experiments on TransCG, TODD,
+TRansPose, ClearPose, and HouseCat6D show that MIR-Depth
+achieves lower error than ReMake, DFNet, BP-Net, and PSD.
+Real-robot evaluations confirm accurate surface geometry for 6-
+DoF grasp pose prediction. Code and pretrained models will be
+publicly available.
+I. INTRODUCTION
+Transparent objects are common in household and labora-
+tory settings, yet recovering their surface geometry remains
+challenging for robotic manipulation (Fig. 1). Accurate visible-
+surface depth supports grasp planning [1], but reflection and
+refraction cause missing or erroneous nonzero RGB-D mea-
+surements that may correspond to background surfaces [2]–[4].
+Opaque-scene depth completion often uses observed depths as
+geometric anchors [5]–[7], whereas transparent-region read-
+ings may lie behind the surface a gripper must contact [8].
+An object mask localizes the target but cannot establish the
+reliability of nonzero readings, so single-view completion must
+fill missing depth and correct corrupted measurements without
+treating them as reliable surface constraints.
+Single-view networks predict dense depth from RGB-D
+inputs in one forward pass [9]–[11], while prior-guided meth-
+ods incorporate monocular depth estimates [12]–[14], as in
+ReMake, which combines a relative-depth prior with an object
+arXiv:2611.25417v1  [cs.CV]  19 Nov 2026
+
+
+2
+mask [8]. Despite providing a useful metric reference, prior-
+guided predictions can have residual errors ranging from a few
+millimeters along thin rims to tens of centimeters in strongly
+refracted interiors. With a fixed per-pixel sampling budget,
+narrow search intervals miss large refraction offsets, whereas
+workspace-wide intervals reduce local sampling resolution.
+Multi-range disparity volumes address a similar trade-off in
+stereo matching [15], [16], but single-view RGB-D completion
+lacks epipolar correlation and must score candidates using
+monocular context and unreliable raw depth.
+MIR-Depth (Fig. 2) iteratively refines single-view depth
+across multiple inverse-depth volumes using metric initializa-
+tion and multi-scale context from RGB, raw depth, the object
+mask, and a frozen Depth Anything V2 prior [14]. Coordinate-
+Aware Multi-Range Hypotheses combines one shared global
+volume with two pixel-wise local volumes around the ini-
+tial reference inverse depth, using validity-masked raw-depth
+residuals as soft evidence. Since global bins share scene-wide
+planes while local bins shift per pixel, a 3D hourglass aggre-
+gates the global volume spatially, whereas depth-axis convo-
+lutions filter local volumes without cross-pixel depth mixing.
+Selective Recurrent Refinement uses out-of-bounds lookup
+masking and validity-masked softmax fusion to combine fine
+local detail and wide global corrections through a multi-scale
+ConvGRU. Spatially Gated Correction applies a learned per-
+pixel gate to the full-resolution residual, preserving accurate
+initial regions without clamping to raw depth. Together, these
+designs reduce depth error on TransCG and four unseen zero-
+shot benchmarks while supporting reliable 6-DoF grasping on
+a physical robot.
+Our main contributions are:
+• We propose Coordinate-Aware Multi-Range Hypotheses,
+pairing a 3D-aggregated global inverse-depth volume
+with depth-axis-filtered pixel-wise local volumes to cover
+large refraction offsets and fine surface detail.
+• We design Selective Recurrent Refinement, introducing
+out-of-bounds lookup masking and validity-masked soft-
+max fusion to iteratively update single-view inverse depth
+from monocular context and soft raw-depth residuals.
+• We introduce Spatially Gated Correction, learning a full-
+resolution per-pixel spatial gate to blend recurrent depth
+residuals into the initial estimate without treating nonzero
+raw depth as a hard constraint.
+II. RELATED WORK
+A. Transparent Object Depth Completion
+Conventional RGB-D and LiDAR completion methods re-
+cover dense depth through spatial propagation [5], [6] or
+learned feature fusion [7], [17], [18]. For transparent objects,
+reflection and refraction cause missing depth and erroneous
+nonzero measurements that may correspond to background
+surfaces, requiring both hole filling and correction of unre-
+liable observations [2], [3].
+ClearGrasp [2] uses predicted surface normals and occlusion
+boundaries to guide depth optimization. Other methods learn
+local implicit representations over ray–voxel pairs [4] or
+jointly complete point clouds and depth maps [19]. RGB-D
+regression networks [9]–[11], [20], [21] predict dense depth
+from image and sensor features. This line of work uses
+synthetic data [20] and real-world datasets [9], [22]–[24] for
+training and evaluation, with completed geometry supporting
+6-DoF grasp detection [1].
+Stereo-based methods [25], [26] use cross-view observa-
+tions, while monocular multi-layer estimation [27] predicts
+multiple surfaces along each viewing ray. For single-view
+completion, pretrained monocular depth estimators [12]–[14]
+provide scene priors that complement raw depth. ReMake [8]
+combines a relative-depth prior and an object mask for RGB-
+D depth prediction, while MIR-Depth refines a prior-guided
+initial estimate to recover visible-surface depth from a single
+RGB-D image and object mask.
+B. Iterative Depth Refinement
+PSMNet [28] aggregates disparity cost volumes with
+stacked 3D hourglass networks, while CasMVSNet [15] pro-
+gressively narrows depth intervals in a coarse-to-fine cascade.
+Building on RAFT’s recurrent lookup framework [29], RAFT-
+Stereo [30] and IGEV-Stereo [31] update disparity through lo-
+cal volume queries and multi-level ConvGRUs. IGEV++ [16]
+extends this approach with multiple disparity ranges to retain
+fine detail while covering large disparities. These methods
+derive candidate evidence from cross-view feature matching,
+unavailable in single-view RGB-D completion.
+In monocular depth estimation, IEBins [32] progressively
+adjusts depth bins based on estimated depth and uncertainty.
+For transparent-object completion, LIDF [4] refines its ini-
+tial prediction through self-correcting updates, DCIRNet [33]
+combines refinement with multi-stage supervision, and Trans-
+Diff [34] uses iterative diffusion denoising conditioned on
+RGB-D information.
+With a fixed sampling budget, candidate-based refinement
+trades off large-error coverage and fine local resolution. MIR-
+Depth combines a shared global inverse-depth range with two
+pixel-wise local ranges around a prior-guided reference for
+single-view transparent-object completion. It scores candidates
+using image features and raw-depth residuals, adapting volume
+aggregation and recurrent lookup to shared global and pixel-
+dependent local coordinates.
+III. METHOD
+Given an RGB image I ∈R3×H×W , aligned raw depth
+Draw ∈R1×H×W in meters, and an object mask M ∈
+{0, 1}1×H×W , MIR-Depth predicts visible-surface depth bD ∈
+R1×H×W , omitting batch indices throughout. As shown in
+Fig. 2, MIR-Depth predicts initial depth and multi-scale fea-
+tures, builds global and pixel-wise local candidate volumes
+with raw depth as soft evidence, refines inverse depth through
+valid-range lookup fusion, and gates the final residual.
+Prior-guided initialization. Let Draw = 0 indicate missing
+depth and Vraw = 1[Draw > 0] mark nonzero returns. A
+frozen Depth Anything V2 model [14] produces a relative-
+depth prior R
+=
+fDAv2−S(I)
+∈
+R1×H×W . Following
+
+
+3
+Fig. 2. Overview of MIR-Depth. A frozen Depth Anything V2 model provides the relative-depth prior. Transformer and CNN encoders extract RGB-mask,
+relative-depth, and raw-depth features, which are summed at each scale. The summed features provide multi-scale context, while a decoder and depth head
+predict initial depth D0. Coordinate-Aware Multi-Range Hypotheses construct one shared global inverse-depth volume aggregated by a 3D hourglass alongside
+medium and fine pixel-wise local volumes filtered by depth-axis convolutions. Selective Recurrent Refinement queries these volumes, encodes lookup features
+together with per-offset validity indicators, and fuses active ranges to update inverse depth through a multi-scale ConvGRU. Spatially Gated Correction weights
+the full-resolution residual relative to D0 to produce completed depth for 6-DoF grasp pose prediction.
+ReMake [8], the initializer combines this prior with RGB, raw
+depth, and the object mask:
+(D0, F4, F8, F16) = finit(I, Draw, R, M),
+(1)
+where D0 ∈R1×H×W
+≥0
+is the initial metric depth for candidate
+construction and residual correction. Context features Fs ∈
+RCs×H/s×W/s, s ∈{4, 8, 16}, sum corresponding encoder
+features; the decoder and depth head produce D0.
+A. Coordinate-Aware Multi-Range Hypotheses
+Coordinate-Aware Multi-Range Hypotheses combine a
+shared global range g with medium and fine pixel-wise local
+ranges m and f constructed from D0. We resize D0 to obtain
+B and downsample Draw and Vraw to obtain draw and vraw on
+the same working grid; nearest-neighbor sampling of the raw
+inputs avoids averaging missing and nonzero measurements.
+At pixel p, the reference inverse depth is ¯q(p) = sg[Q(B(p))],
+where Q(B) = clip(1/ max(B, ϵ), q−, q+), ϵ > 0 is a depth
+floor, and 0 < q−< q+ bound the allowed inverse depth.
+The operator sg[·] stops gradients through the reference; p is
+omitted below when clear.
+Candidate ranges. For each range r
+∈
+{g, m, f}, we
+uniformly sample K
+≥
+2 inverse-depth candidates on
+[ar(p), br(p)] with ar(p) < br(p):
+qr,k(p) = ar(p) +
+k
+K −1
+ br(p) −ar(p)
+
+,
+(2)
+for k ∈{0, . . . , K −1}. The global bounds (ag, bg) are
+shared across pixels and lie within the allowed inverse-
+depth range: q−< ag < bg < q+. For r ∈{m, f},
+local bounds are ar(p) = clip((1 −ρr)¯q(p), q−, q+) and
+br(p) = clip((1 + ρr)¯q(p), q−, q+), where 0 < ρf < ρm < 1
+controls their relative widths. All candidate grids remain
+fixed during recurrent refinement. We set mg(p) = 1 and
+mm(p) = mf(p) = 1[B(p) > 0], invalidating local ranges
+at zero initial depth while retaining global candidates.
+Candidate evidence. Without stereo feature correlation, we
+combine pointwise context features ϕ projected from F4 and
+resized I, R with geometric compatibility cues. For candidate
+inverse depth q with d = 1/q and validity-masked raw residual
+δobs = vraw(d −draw), we encode absolute depth, deviation
+from the initial estimate, and raw-depth agreement as
+c(q, p) = Nc
+
+[q, d, q −¯q, d −B,
+δobs, |δobs|, vraw, 1[B > 0]]
+
+,
+(3)
+where Nc divides inverse-depth components q, q−¯q by sq > 0
+and depth components d, d −B, δobs, |δobs| by sd
+> 0,
+preserves validity indicators, and clips each component to
+[−cmax, cmax], with cmax
+≥
+1. Range-specific pointwise
+projection encodes [ϕ(p), c(qr,k(p), p)] into candidate volume
+Cr, using raw-depth agreement as soft evidence without con-
+straining the predicted surface.
+Coordinate-aware aggregation. In the global volume Cg,
+bins share inverse depths across pixels, enabling joint spatial
+and inverse-depth aggregation into Ag [28]. Local bins depend
+on ¯q(p) and can represent different depths at neighboring
+pixels, so Cm and Cf are filtered only along the inverse-depth
+axis to obtain Am and Af. A pointwise scoring head ψr then
+produces
+Pr(p, k) = mr(p) softmaxk
+ ψr(Ar(p, k))
+
+,
+(4)
+summing to one when mr(p) = 1 and zero otherwise. For
+downstream range selection, we compute normalized entropy
+Hr(p) = −P
+k Pr(p, k) log Pr(p, k)/ log K using 0 log 0 = 0
+and peak probability πr(p) = maxk Pr(p, k), setting both to
+zero when mr(p) = 0.
+B. Selective Recurrent Refinement
+Using (Ar, Pr), we refine inverse-depth query qt(p) over
+t = 1, . . . , T steps, initializing q0(p) = ¯q(p) when B(p) > 0
+and using global expectation q0(p) = P
+k Pg(p, k)qg,k other-
+wise.
+Coordinate-consistent lookup. At step t, query qt−1(p) maps
+to xt
+r(p) = (K −1)(qt−1(p) −ar(p))/(br(p) −ar(p)) in
+each range. Following recurrent lookup [29], [30], we linearly
+interpolate [Ar, Pr] at xt
+r(p) + ∆for offsets ∆∈D =
+{−rl, . . . , rl}, where rl is a nonnegative integer lookup radius.
+
+
+4
+Clamping a query outside a local interval would return edge-
+bin features for a depth beyond that interval. An offset has
+validity indicator vt
+r,∆(p) = 1 only when mr(p) = 1,
+qt−1(p) ∈[ar(p), br(p)], and xt
+r(p)+∆∈[0, K−1]; otherwise
+vt
+r,∆(p) = 0. Invalid samples are zeroed, and sampled features
+are concatenated over D into Lt
+r(p).
+Fusion over valid ranges. Each range-specific encoder maps
+Lt
+r and per-offset indicators {vt
+r,∆}∆∈D to et
+r, with et
+r = 0
+where no offset is valid. A learned pointwise head uses
+[et
+r, Hr, πr, vraw] to predict selection logits ℓt
+r(p). Let St(p)
+contain ranges with at least one valid lookup offset. For
+St(p)̸ = ∅and r ∈St(p), validity-masked softmax fusion
+gives
+αt
+r =
+exp(ℓt
+r)
+P
+j∈St exp(ℓt
+j),
+et =
+X
+r∈St
+αt
+ret
+r,
+(5)
+with αt
+r(p) = 0 outside St(p) and et(p) = 0 if St(p) = ∅.
+Inverse-depth updates. A multi-scale ConvGRU, initialized
+and conditioned by F4, F8, F16, combines spatial context by
+updating hidden states in the order 1/16, 1/8, and 1/4 of
+input resolution. At step t, the normalized query state is st =
+Ns([qt−1, ¯q, draw, vraw]), where Ns divides the two inverse-
+depth components by sq and raw depth by sd, retains the
+validity indicator, and clips all components to [−cmax, cmax].
+Using st, fused embedding et, and {αt
+r, Hr, πr}r∈{g,m,f}, the
+updater predicts ut for the multiplicative inverse-depth update:
+qt = clip
+ qt−1 exp
+ η tanh(ut)
+
+, q−, q+
+
+,
+(6)
+where η > 0 controls step magnitude while preserving positive
+inverse depth within [q−, q+]; upsampling U to input resolution
+yields Dt = 1/U(qt) at each step.
+C. Spatially Gated Correction
+To limit changes where D0 is already accurate, Spatially
+Gated Correction predicts a per-pixel weight for the residual
+DT −D0. The gate head uses the final recurrent hidden state,
+last lookup embedding eT , summaries {Hr, πr}r∈{g,m,f},
+and last pre-update query state sT , which contains qT −1.
+Upsampled logits pass through sigmoid σ to form a per-pixel
+gate G ∈[0, 1]1×H×W :
+bD = D0 + G ⊙(DT −D0),
+(7)
+with ⊙denoting element-wise multiplication. The weights
+αt
+r combine valid-range features during lookup, while G
+interpolates between D0 and DT per pixel. The final correction
+applies across the image without masking by M or clamping
+to Draw.
+D. Training Objective
+The objective combines final and intermediate supervision
+with correction regularization relative to D0. For ground-truth
+depth D∗and a binary target-validity mask V ∗, define Ω=
+{p : V ∗(p) = 1, D∗(p) > 0}, ΩM = {p ∈Ω: M(p) =
+1}, and ⟨X⟩S = P
+p∈S X(p)/ max(1, |S|). The reconstruction
+loss combines depth errors on Ωand ΩM with a gradient loss:
+Lrec = ⟨| bD −D∗|⟩Ω+ ⟨| bD −D∗|⟩ΩM + λgradLgrad,
+(8)
+Let E contain each horizontal or vertical adjacent pixel pair
+with both endpoints in Ω, counted once. The gradient loss is
+Lgrad =
+P
+(p,p′)∈E
+
+  bD(p′) −bD(p)
+
+−
+ D∗(p′) −D∗(p)
+
+max(1, |E|)
+.
+(9)
+For T ≥2, the sequence loss supervises D1, . . . , DT −1 with
+exponentially increasing weights controlled by γ ∈(0, 1):
+Lseq =
+PT −1
+t=1 γT −1−t⟨|Dt −D∗|⟩Ω
+PT −1
+t=1 γT −1−t
+.
+(10)
+The correction regularizer Lcorr = ⟨| bD −D0|⟩Ωpenalizes the
+magnitude of the final depth correction. The total loss is
+L = Lrec + λseqLseq + λcorrLcorr.
+(11)
+Losses are computed per image and averaged across the batch.
+Valid ground-truth targets outside the candidate bounds remain
+included.
+IV. EXPERIMENTS
+We evaluate MIR-Depth on TransCG [9], zero-shot trans-
+fer to TODD [19], TRansPose [23], ClearPose [22], and
+HouseCat6D [24], real-world 6-DoF grasp pose prediction,
+and component ablations. MAE and RMSE are reported in
+millimeters, REL is dimensionless, and δτ is in percent.
+A. Implementation Details
+We train MIR-Depth on the official TransCG split [9],
+containing 34,191 single-view 640×480 RGB-D frames from
+78 scenes, using RGB, raw depth, precomputed Depth Any-
+thing V2 Small priors, and dataset-provided transparent-object
+masks. The masks serve as input M and define ΩM; processed
+training targets use V ∗(p) = 1[D∗(p) ≥0.01 m]. Following
+ReMake [8], features from two Transformer encoders and
+one CNN encoder are summed at each scale and passed to
+a pyramid decoder and depth head. At quarter resolution,
+a three-level 3D hourglass aggregates the global volume,
+depth-axis convolutions filter local volumes, and a multi-scale
+ConvGRU updates inverse depth before spatial gating. Raw
+depth and validity masks use nearest-neighbor downsampling,
+lookup uses linear interpolation, and D0 resizing and inverse-
+depth and gate-logit upsampling use bilinear interpolation.
+Feature widths are (C4, C8, C16)
+=
+(48, 96, 192) for
+(F4, F8, F16), Cϕ = 4 for ϕ, and Cv = 8 for candidate
+volumes. We use K = 24 candidates, T = 8 iterations,
+and lookup offsets D = {−rl, . . . , rl} with rl = 2. We
+set ϵ
+=
+1/q+
+=
+0.01 m, [q−, q+]
+=
+[0.05, 100] m−1,
+(ag, bg) = (0.5, 10) m−1, and (ρm, ρf) = (0.4, 0.1). Normal-
+ization scales are (sq, sd) = (10 m−1, 2 m), with component-
+wise clipping at cmax = 5. We use η = log 2, giving pre-
+clipping update factors in [1/2, 2], and (λgrad, γ, λseq, λcorr) =
+(0.1, 0.9, 0.5, 0.001).
+The gate head is initialized with zero weights and bias −4,
+giving G ≈0.018 to limit initial changes to D0. We train
+refinement and gating for 5 epochs with finit frozen, then
+jointly fine-tune them with the initializer decoder and depth
+
+
+5
+Method
+MAE↓RMSE↓
+REL↓δ1.05 ↑δ1.10 ↑δ1.25 ↑
+DFNet [9]
+12.567
+17.543 0.02567
+84.94
+96.57
+99.85
+BP-Net [17]
+37.855
+61.796 0.07680
+51.68
+69.33
+97.98
+PSD [18]
+37.693
+59.735 0.07660
+51.34
+68.81
+97.96
+ReMake [8]
+8.040
+11.363 0.01660
+93.63
+98.65
+99.99
+MIR-Depth (Ours)
+6.833
+10.504 0.01397
+94.41
+98.76
+99.99
+TABLE I
+QUANTITATIVE COMPARISON ON TRANSCG. ACCURACY IS AVERAGED
+PER IMAGE ACROSS ALL 23,524 TEST FRAMES AT 320 × 240 FOLLOWING
+THE OFFICIAL EVALUATION PROTOCOL.
+head for 15 epochs, keeping the encoders, batch-normalization
+statistics, and Depth Anything V2 frozen. AdamW uses weight
+decay 10−4 and learning rates 10−4 for refinement and gating
+and 10−5 for trainable initializer layers. The optimizer and
+learning-rate schedule are initialized separately for each stage,
+with learning rates halved every 10 epochs within each stage.
+Training uses FP32, batch size 16, and four NVIDIA RTX
+4090 GPUs.
+B. Evaluation on TransCG
+Setup and baselines. The TransCG test split contains 23,524
+frames from 52 scenes (11,766 D435 and 11,758 L515
+frames). Predictions are bilinearly resized to 320 × 240 and
+evaluated on Ωe = {p : Me(p) = 1, Ve(p) = 1}, where Me
+is the evaluation transparent-object mask, Ve is the validity
+mask retained before depth inpainting in the official prepro-
+cessing, and D∗denotes the processed evaluation target. Per-
+image MAE, RMSE, REL = ⟨| bD −D∗|/(D∗+ ϵe)⟩Ωe, and
+threshold accuracy δτ are averaged across images. The official
+implementation uses ϵe = 10−8 m and counts pixels satisfying
+max( bD/(D∗+ ϵe), D∗/ bD) < τ for τ ∈{1.05, 1.10, 1.25},
+normalizing percentages by |Ωe|. For nonnegative predictions,
+zero predictions fail the ratio test; empty Ωe gives zero per-
+image errors and 100% threshold accuracy. The baselines
+cover three categories: DFNet [9] performs in-domain single-
+pass regression without external priors; BP-Net [17] (NYUv2)
+and PSD [18] (NYUv2 and KITTI with Depth Anything
+V2) evaluate opaque-scene propagation under refraction; and
+ReMake [8] provides prior-guided single-pass prediction using
+the same Depth Anything V2 Small prior and mask inputs as
+MIR-Depth.
+Main results. Table I shows that BP-Net and PSD prop-
+agate refracted background depth across foreground ob-
+jects by treating nonzero sensor returns as reliable surface
+seeds, yielding 37.855/61.796 mm and 37.693/59.735 mm
+MAE/RMSE, respectively, even with Depth Anything V2
+priors in PSD. Trained on transparent scenes, DFNet reduces
+error to 12.567/17.543 mm, but its single-pass CNN without
+monocular shape priors struggles with large specular holes.
+ReMake combines the same Depth Anything V2 prior and ob-
+ject mask to reach 8.040/11.363 mm, but its one-shot decoder
+cannot jointly resolve large interior refraction and millimeter-
+scale rim detail. Using this prior-guided initial anchor, MIR-
+Depth redesigns single-view estimation through Coordinate-
+Aware Multi-Range Hypotheses, whose 3D-aggregated global
+volume captures large interior offsets, reducing MAE/RMSE
+to 6.833/10.504 mm and REL to 0.01397, compared with
+0.01660 for ReMake. Selective Recurrent Refinement fuses
+active-range lookup features for inverse-depth updates, with
+MIR-Depth achieving δ1.05 = 94.41% and δ1.10 = 98.76%,
+compared with 93.63% and 98.65% for ReMake. Fig. 3 fur-
+ther shows that global hypothesis aggregation pulls refracted
+vessel interiors back to the visible surface in D435 captures
+(Scenes 78 and 94, 2.50 and 2.07 mm MAE versus 4.46 and
+3.55 mm for ReMake) and L515 captures (Scene 47, 4.29 mm
+versus 5.96 mm), while depth-axis local filtering preserves
+sharp container rims.
+Hole filling and refraction correction. Table III separately
+evaluates missing depth and nonzero returns. Anchoring pre-
+dictions to raw measurements leaves PSD modifying 0.00%
+of nonzero pixels by more than 1 mm, with MAE remain-
+ing at the raw value, while BP-Net repairs only 0.80% of
+outliers. MIR-Depth predicts positive depth at all evaluated
+holes, whereas ReMake leaves 33 nonpositive predictions;
+their within-20 mm hole accuracies are 92.32% and 91.26%,
+respectively. Using the masked raw-depth residual δobs as soft
+evidence, MIR-Depth repairs 89.74% of > 20 mm outliers
+on nonzero returns and achieves 5.584 mm MAE (82.62%
+reduction), compared with 88.52% repair and 7.137 mm MAE
+(77.78% reduction) for ReMake. Relative to raw sensor depth,
+MIR-Depth modifies 72.06% of nonzero pixels by more than
+1 mm and reduces error at 64.80%.
+C. Cross-Dataset Evaluation
+To evaluate zero-shot generalization across sensors, ob-
+ject categories, and clutter densities, we compare MIR-
+Depth with general-purpose depth completion methods BP-
+Net (trained on NYUv2) and PSD (trained on NYUv2 and
+KITTI), and transparent-object completion methods DFNet
+and ReMake (both trained on TransCG). Without fine-tuning,
+all five models are evaluated on TODD [19] (4,339 frames),
+TRansPose [23] (32,734 right-camera frames across 26 se-
+quences), ClearPose [22] (132,598 frames across labels 1–
+63), and HouseCat6D [24] (2,929 frames). Errors are aggre-
+gated pixel-wise at native resolution over the intersection of
+transparent-object masks and valid ground-truth depth (D∗≥
+0.01 m on TODD, ClearPose, and HouseCat6D; CAD depth
+D∗> 0.01 m for categories C, H, and T on TRansPose).
+Table II shows that opaque-scene propagation in BP-Net
+and PSD amplifies outliers under unseen refraction patterns,
+reaching 1291.105 and 1305.920 mm RMSE on TODD and
+306.267 mm MAE for PSD on TRansPose. Despite shar-
+ing the Depth Anything V2 prior, ReMake’s single-pass
+absolute-depth regression from domain-coupled features in-
+duces severe scale drift on ClearPose (309.147/378.079 mm
+MAE/RMSE). Through explicit candidate conditioning c(q, p)
+in Coordinate-Aware Multi-Range Hypotheses, MIR-Depth
+evaluates inverse-depth candidates using the raw-depth resid-
+ual δobs normalized within c(q, p) to re-anchor metric scale
+across camera domains, reducing ClearPose MAE/RMSE to
+122.294/238.050 mm and achieving lower MAE than DFNet
+(127.729 mm). Selective Recurrent Refinement masks out-of-
+bounds local lookups and re-weights valid intervals to fuse fea-
+tures from fixed candidate grids, reducing MAE/RMSE against
+
+
+6
+Fig. 3. Qualitative comparison on TransCG. Examples span D435 and L515 test scenes, where yellow boxes mark zoomed regions and bottom error maps
+visualize pixel-wise absolute error in millimeters on valid transparent-object pixels alongside full-frame ROI MAE and RMSE.
+TODD (4,339)
+TRansPose (32,734)
+ClearPose (132,598)
+HouseCat6D (2,929)
+Method
+MAE ↓
+RMSE ↓
+MAE ↓
+RMSE ↓
+MAE ↓
+RMSE ↓
+MAE ↓
+RMSE ↓
+DFNet [9]
+69.459
+101.206
+116.499
+138.225
+127.729
+224.717
+45.048
+64.050
+BP-Net [17]
+87.924
+1291.105
+148.073
+223.566
+177.845
+416.147
+104.314
+245.017
+PSD [18]
+88.464
+1305.920
+306.267
+651.240
+172.320‡
+412.012‡
+100.743
+245.879
+ReMake [8]
+37.177
+54.402
+77.890
+100.471
+309.147
+378.079
+40.192
+52.405
+MIR-Depth (Ours)
+32.915
+49.797
+72.591
+95.128
+122.294
+238.050
+36.429
+48.035
+TABLE II
+ZERO-SHOT CROSS-DATASET EVALUATION. DEPTH ERRORS IN MILLIMETERS ARE AGGREGATED PIXEL-WISE OVER VALID TRANSPARENT-OBJECT
+PIXELS AT NATIVE RESOLUTION WITHOUT FINE-TUNING (‡132,596 VALID PSD PREDICTIONS ON CLEARPOSE).
+Method
+Hole Acc.↑
+Chg. Impr.↑Repair↑Out. MAE↓rMAE ↑
+DFNet [9]
+63.26 88.36
+51.71
+41.46
+22.511
+29.92
+BP-Net [17]
+48.45 21.36
+32.93
+0.80
+32.297
+−0.55
+PSD [18]
+43.17
+0.00
+34.48
+0.00
+32.121
+0.00
+ReMake [8]
+91.26 93.79
+62.47
+88.52
+7.137
+77.78
+MIR-Depth
+92.32 72.06
+64.80
+89.74
+5.584
+82.62
+TABLE III
+HOLE FILLING AND REFRACTION CORRECTION ON TRANSCG.
+ACROSS 23,524 FRAMES AT 640 × 480, 19.06% OF ROI PIXELS ARE
+HOLES (Draw = 0), WHILE NONZERO RETURNS (Draw > 0) HAVE
+32.121 mm RAW MAE. METRICS INCLUDE WITHIN-20 mm HOLE
+ACCURACY (HOLE ACC.), NONZERO PIXELS MODIFIED BY > 1 mm
+(CHG.), ERROR-REDUCED NONZERO PIXELS (IMPR.), > 20 mm OUTLIERS
+CORRECTED TO WITHIN 20 mm (REPAIR), NONZERO OUTPUT MAE IN
+MILLIMETERS (OUT. MAE), AND MAE REDUCTION rMAE.
+ReMake on TODD (32.915/49.797 vs. 37.177/54.402 mm),
+TRansPose (72.591/95.128 vs. 77.890/100.471 mm), and
+HouseCat6D (36.429/48.035 vs. 40.192/52.405 mm).
+D. Real-World Evaluation
+Real-world depth completion. We evaluate all models on
+our AgileX PIPER platform with a wrist-mounted RealSense
+D435i (Fig. 4), using R = fDAv2−S(I) and masks M =
+MSAM ∈{0, 1}1×H×W generated by the Segment Anything
+Model (SAM) [35]. In Fig. 5, DFNet blurs object silhouettes
+into the tabletop, while BP-Net and PSD propagate refracted
+background readings across hollow interiors. ReMake recovers
+overall object presence but over-smooths thin container walls
+and merges adjacent transparent boundaries in clutter. MIR-
+Fig. 4. Real-world tabletop platform. Our setup comprises a 6-DoF AgileX
+PIPER robot arm, a wrist-mounted Intel RealSense D435i camera, and eight
+household transparent objects shown in the inset.
+Depth recovers curved bottle walls, preserves sharper container
+boundaries, and reduces residual overshoot along imperfect
+SAM mask borders.
+6-DoF grasp pose prediction. Using a shared GraspNet-based
+6-DoF grasp detector [1] (the Grasp rows in Fig. 5), depth
+maps from DFNet, BP-Net, and PSD produce predicted grip-
+pers that collide with the tabletop or miss collapsed cavities.
+MIR-Depth recovers crisp rim thickness and separated object
+surfaces, enabling clean antipodal jaw placement along curved
+bottle bodies, thin container rims, and cluttered transparent
+objects.
+
+
+7
+Fig. 5. Real-world depth completion and 6-DoF grasp pose prediction. Comparison across an upright bottle, a hollow container, and multi-object clutter
+captured on the platform in Fig. 4, where black pixels in Raw denote missing sensor returns.
+Variant
+MAE↓
+RMSE↓
+REL↓
+δ1.05 ↑
+w/o Iterative refinement
+8.040
+11.363
+0.01660
+93.63
+w/o Local ranges
+6.895
+10.540
+0.01412
+94.30
+w/o Selective fusion
+6.906
+10.597
+0.01412
+94.17
+w/o Sequence loss
+6.882
+10.554
+0.01409
+94.29
+w/o gating
+6.810
+10.245
+0.01396
+94.45
+MIR-Depth (Ours)
+6.833
+10.504
+0.01397
+94.41
+TABLE IV
+ABLATION STUDY ON TRANSCG. ALL VARIANTS ARE EVALUATED ON
+23,524 TEST FRAMES AT 320 × 240. MAE AND RMSE ARE REPORTED IN
+MILLIMETERS, AND δ1.05 IN PERCENT. UNDERLINED VALUES INDICATE
+THE BEST RESULTS; BOLDFACE HIGHLIGHTS THE FULL MODEL.
+E. Ablation Study
+Component ablations. Table IV compares MIR-Depth with
+five ablated variants on 23,524 TransCG test frames at 320 ×
+240. Removing iterative refinement increases MAE/RMSE
+from 6.833/10.504 to 8.040/11.363 mm, showing the contri-
+bution of recurrent candidate lookup and depth updates to cor-
+recting initial errors. Replacing the medium and fine candidate
+grids with the global grid, while retaining all branches, aggre-
+gation operators, and per-branch candidate counts, increases
+MAE/RMSE to 6.895/10.540 mm and reduces δ1.05 from
+94.41% to 94.30%, supporting local ranges at a fixed candidate
+count. Replacing learned selection with uniform weights over
+active ranges, while preserving candidate grids and lookup
+validity masking, increases MAE/RMSE to 6.906/10.597 mm
+and reduces δ1.05 to 94.17%, showing the benefit of weighting
+ranges using lookup features, entropy, and peak probability.
+Removing intermediate supervision increases MAE/RMSE
+to 6.882/10.554 mm, supporting supervision of intermediate
+refinement outputs.
+The w/o gating variant achieves the best TransCG results
+(6.810/10.245 mm MAE/RMSE, 0.01396 REL, and 94.45%
+δ1.05). Compared with full MIR-Depth, MAE and RMSE
+decrease by 0.023 mm (0.34%) and 0.259 mm (2.47%), while
+δ1.05 increases by 0.04 percentage points. Setting G ≡1
+directly outputs DT , whereas G < 1 retains part of D0 (Eq. 7).
+In the ungated variant, gate parameters are frozen and the
+correction regularizer remains active on DT −D0. When DT
+is accurate, residual attenuation can retain initialization errors,
+which may contribute to the advantage of the ungated variant
+on TransCG.
+In real-world captures with predicted SAM masks (Fig. 6),
+ungated output produces abrupt depth changes near the hol-
+low container and fragmented surfaces in clutter, whereas
+full MIR-Depth preserves more continuous contours. Spa-
+tially Gated Correction uses recurrent features and candidate-
+distribution cues to attenuate the residual, reducing boundary
+depth jumps and surface fragmentation.
+V. CONCLUSION
+We present MIR-Depth for single-view RGB-D depth com-
+pletion of transparent objects through prior-guided initial depth
+refinement. Coordinate-Aware Multi-Range Hypotheses com-
+bine shared global and pixel-wise local volumes to capture
+large refraction offsets and fine geometry. Selective Recurrent
+Refinement updates inverse depth through valid-range lookup,
+while Spatially Gated Correction preserves accurate initial
+regions. Experiments on TransCG, four zero-shot benchmarks,
+and a real robotic grasping platform show that MIR-Depth
+achieves the best results among compared baselines on multi-
+ple transparent-object datasets.
+
+
+8
+Fig. 6. Spatial-gating ablation in real scenes. The w/o gating variant (Direct
+Output, left), which sets G ≡1 and directly outputs DT , is compared with
+full MIR-Depth (Ours) (right) on the bottle, container, and clutter scenes
+(top to bottom) from Fig. 5. In the zoomed yellow boxes, full MIR-Depth
+exhibits fewer boundary depth jumps and less surface fragmentation than the
+ungated variant.
+Limitations. MIR-Depth recovers visible surfaces from a
+single RGB-D frame despite mostly missing or refraction-
+corrupted sensor measurements, but cannot reveal unobserved
+geometry. A fully transparent object against a uniform back-
+ground may have almost no visible boundaries, with its far
+side hidden; even a human cannot determine its exact shape
+from that frame. Future work will extend MIR-Depth to
+temporal RGB-D streams, using views captured during robot
+arm motion to reveal hidden surfaces and enable closed-loop
+manipulation of transparent objects.
+REFERENCES
+[1] H.-S. Fang, C. Wang, M. Gou, and C. Lu, “Graspnet-1billion: A large-
+scale benchmark for general object grasping,” in 2020 IEEE/CVF Con-
+ference on Computer Vision and Pattern Recognition (CVPR).
+IEEE,
+2020, pp. 11 441–11 450.
+[2] S. Sajjan, M. Moore, M. Pan, G. Nagaraja, J. Lee, A. Zeng, and
+S. Song, “Clear grasp: 3d shape estimation of transparent objects for
+manipulation,” in 2020 IEEE international conference on robotics and
+automation (ICRA).
+IEEE, 2020, pp. 3634–3642.
+[3] X. Liu, R. Jonschkowski, A. Angelova, and K. Konolige, “Keypose:
+Multi-view 3d labeling and keypoint estimation for transparent objects,”
+in 2020 IEEE/CVF Conference on Computer Vision and Pattern Recog-
+nition (CVPR).
+IEEE, 2020, pp. 11 599–11 607.
+[4] L. Zhu, A. Mousavian, Y. Xiang, H. Mazhar, J. van Eenbergen, S. Deb-
+nath, and D. Fox, “Rgb-d local implicit function for depth completion
+of transparent objects,” arXiv preprint arXiv:2104.00622, 2021.
+[5] X. Cheng, P. Wang, and R. Yang, “Depth estimation via affinity
+learned with convolutional spatial propagation network,” in European
+Conference on Computer Vision.
+Springer, 2018, pp. 108–125.
+[6] J. Park, K. Joo, Z. Hu, C.-K. Liu, and I. So Kweon, “Non-local spatial
+propagation network for depth completion,” in European conference on
+computer vision.
+Springer, 2020, pp. 120–136.
+[7] Y. Zhang, X. Guo, M. Poggi, Z. Zhu, G. Huang, and S. Mattoccia,
+“Completionformer: Depth completion with convolutions and vision
+transformers,” in 2023 IEEE/CVF Conference on Computer Vision and
+Pattern Recognition (CVPR).
+IEEE, 2023, pp. 18 527–18 536.
+[8] Y. Cheng, X. Gao, S. Zhang, C. Zeng, F. Zha, L. Sun, and C. Yang, “Re-
+thinking transparent object grasping: Depth completion with monocular
+depth estimation and instance mask,” IEEE Robotics and Automation
+Letters, 2026.
+[9] H. Fang, H.-S. Fang, S. Xu, and C. Lu, “Transcg: A large-scale real-
+world dataset for transparent object depth completion and a grasping
+baseline,” IEEE Robotics and Automation Letters, vol. 7, no. 3, pp.
+7383–7390, 2022.
+[10] K. Chen, S. Wang, B. Xia, D. Li, Z. Kan, and B. Li, “Tode-trans:
+Transparent object depth estimation with transformer,” arXiv preprint
+arXiv:2209.08455, 2022.
+[11] T. Li, Z. Chen, H. Liu, and C. Wang, “Fdct: Fast depth completion
+for transparent objects,” IEEE Robotics and Automation Letters, vol. 8,
+no. 9, pp. 5823–5830, 2023.
+[12] R. Ranftl, K. Lasinger, D. Hafner, K. Schindler, and V. Koltun, “Towards
+robust monocular depth estimation: Mixing datasets for zero-shot cross-
+dataset transfer,” IEEE transactions on pattern analysis and machine
+intelligence, vol. 44, no. 3, pp. 1623–1637, 2020.
+[13] L. Yang, B. Kang, Z. Huang, X. Xu, J. Feng, and H. Zhao, “Depth
+anything: Unleashing the power of large-scale unlabeled data,” in 2024
+IEEE/CVF Conference on Computer Vision and Pattern Recognition
+(CVPR).
+IEEE, 2024, pp. 10 371–10 381.
+[14] L. Yang, B. Kang, Z. Huang, Z. Zhao, X. Xu, J. Feng, and H. Zhao,
+“Depth anything v2,” Advances in neural information processing sys-
+tems, vol. 37, pp. 21 875–21 911, 2024.
+[15] X. Gu, Z. Fan, S. Zhu, Z. Dai, F. Tan, and P. Tan, “Cascade cost volume
+for high-resolution multi-view stereo and stereo matching,” in 2020
+IEEE/CVF Conference on Computer Vision and Pattern Recognition
+(CVPR).
+IEEE, 2020, pp. 2492–2501.
+[16] G. Xu, X. Wang, Z. Zhang, J. Cheng, C. Liao, and X. Yang, “Igev++:
+Iterative multi-range geometry encoding volumes for stereo match-
+ing,” IEEE Transactions on Pattern Analysis and Machine Intelligence,
+vol. 47, no. 8, pp. 7108–7122, 2025.
+[17] J. Tang, F.-P. Tian, B. An, J. Li, and P. Tan, “Bilateral propagation
+network for depth completion,” in 2024 IEEE/CVF Conference on
+Computer Vision and Pattern Recognition (CVPR).
+IEEE, 2024, pp.
+9763–9772.
+[18] S. Chen, X. Ma, H. Zhang, H. Li, and Z. Wang, “Propagating sparse
+depth via depth foundation model for out-of-distribution depth comple-
+tion,” IEEE Transactions on Image Processing, 2025.
+[19] H. Xu, Y. R. Wang, S. Eppel, A. Aspuru-Guzik, F. Shkurti, and A. Garg,
+“Seeing glass: Joint point-cloud and depth completion for transparent
+objects,” in Proceedings of the 5th Conference on Robot Learning, ser.
+Proceedings of Machine Learning Research, A. Faust, D. Hsu, and
+G. Neumann, Eds., vol. 164.
+PMLR, 08–11 Nov 2022, pp. 827–838.
+[Online]. Available: https://proceedings.mlr.press/v164/xu22b.html
+[20] Q. Dai, J. Zhang, Q. Li, T. Wu, H. Dong, Z. Liu, P. Tan, and H. Wang,
+“Domain randomization-enhanced depth simulation and restoration for
+perceiving and grasping specular and transparent objects,” in European
+Conference on Computer Vision.
+Springer, 2022, pp. 374–391.
+[21] Y. Hong, J. Chen, Y. Cheng, Y. Han, F. V. Reeth, L. Claesen, and W. Liu,
+“Cluedepth grasp: Leveraging positional clues of depth for completing
+depth of transparent objects,” Frontiers in Neurorobotics, vol. 16, p.
+1041702, 2022.
+[22] X. Chen, H. Zhang, Z. Yu, A. Opipari, and O. Chadwicke Jenkins,
+“Clearpose: Large-scale transparent object dataset and benchmark,” in
+European conference on computer vision. Springer, 2022, pp. 381–396.
+[23] J. Kim, M.-H. Jeon, S. Jung, W. Yang, M. Jung, J. Shin, and A. Kim,
+“Transpose: Large-scale multispectral dataset for transparent object,”
+The International Journal of Robotics Research, vol. 43, no. 6, pp. 731–
+738, 2024.
+[24] H. Jung, S.-C. Wu, P. Ruhkamp, G. Zhai, H. Schieber, G. Rizzoli,
+P. Wang, H. Zhao, L. Garattoni, S. Meier et al., “Housecat6d-a
+large-scale multi-modal category level 6d object perception dataset
+with household objects in realistic scenarios,” in Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern Recognition,
+2024, pp. 22 498–22 508.
+[25] J. Shi, A. Yong, Y. Jin, D. Li, H. Niu, Z. Jin, and H. Wang, “As-
+grasp: Generalizable transparent object reconstruction and 6-dof grasp
+detection from rgb-d active stereo camera,” in 2024 IEEE international
+conference on robotics and automation (ICRA). IEEE, 2024, pp. 5441–
+5447.
+[26] J. Min, J. Kim, M. Kim, C.-H. Min, Y. Jeon, and M. Choi, “Depthfocus:
+Controllable depth estimation for see-through scenes,” in Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern Recognition
+(CVPR), June 2026, pp. 12 595–12 605.
+[27] H. Wen and J. Deng, “Seegroup: Multi-layer depth estimation of
+transparent surfaces via self-determined grouping,” in Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern Recognition
+(CVPR), June 2026, pp. 7299–7309.
+[28] J.-R. Chang and Y.-S. Chen, “Pyramid stereo matching network,” in
+2018 IEEE/CVF conference on computer vision and pattern recognition.
+IEEE, 2018, pp. 5410–5418.
+[29] Z. Teed and J. Deng, “Raft: Recurrent all-pairs field transforms for
+optical flow,” in European conference on computer vision.
+Springer,
+2020, pp. 402–419.
+[30] L. Lipson, Z. Teed, and J. Deng, “Raft-stereo: Multilevel recurrent field
+transforms for stereo matching,” in 2021 International conference on
+3D vision (3DV).
+IEEE, 2021, pp. 218–227.
+[31] G. Xu, X. Wang, X. Ding, and X. Yang, “Iterative geometry encod-
+ing volume for stereo matching,” in 2023 IEEE/CVF Conference on
+
+
+9
+Computer Vision and Pattern Recognition (CVPR).
+IEEE, 2023, pp.
+21 919–21 928.
+[32] S. Shao, Z. Pei, X. Wu, Z. Liu, W. Chen, and Z. Li, “Iebins:
+Iterative elastic bins for monocular depth estimation,” in Advances
+in Neural Information Processing Systems, A. Oh, T. Naumann,
+A.
+Globerson,
+K.
+Saenko,
+M.
+Hardt,
+and
+S.
+Levine,
+Eds.,
+vol.
+36.
+Curran
+Associates,
+Inc.,
+2023,
+pp.
+53 025–53 037.
+[Online].
+Available:
+https://proceedings.neurips.cc/paper files/paper/
+2023/file/a61023ce36d21010f1423304f8ec49af-Paper-Conference.pdf
+[33] G. Xie, Z. Jiang, M. Li, Y. Zhang, Y. Liu, Z. Xie, and B. Cao, “Dcirnet:
+Depth completion with iterative refinement for dexterous grasping of
+transparent and reflective objects,” Neurocomputing, p. 134792, 2026.
+[34] H. Wang, K. Zhou, B. Gu, Z. Feng, W. Wang, P. Sun, Y. Xiao, J. Zhang,
+and H. Dong, “Transdiff: Diffusion-based method for manipulating
+transparent objects using a single rgb-d image,” in 2025 IEEE Inter-
+national Conference on Robotics and Automation (ICRA).
+IEEE, 2025,
+pp. 7277–7283.
+[35] A. Kirillov, E. Mintun, N. Ravi, H. Mao, C. Rolland, L. Gustafson,
+T. Xiao, S. Whitehead, A. C. Berg, W.-Y. Lo, P. Dollar, and R. Girshick,
+“Segment anything,” in Proceedings of the IEEE/CVF International
+Conference on Computer Vision (ICCV), October 2023, pp. 4015–4026.
