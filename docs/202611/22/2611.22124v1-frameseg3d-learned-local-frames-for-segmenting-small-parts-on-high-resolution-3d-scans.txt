@@ -1,0 +1,2210 @@
+Altum Tech
+FrameSeg3D: Learned Local Frames for Segmenting
+Small Parts on High-Resolution 3D Scans
+Xinwen Zhang1,†
+Tongyan Wang2
+Huawei Lin3,‡
+1Altum Technology
+2Purdue University
+3Rochester Institute of Technology
+†Project Lead
+‡Corresponding Author: hl3352@rit.edu
+ABSTRACT
+Segmenting small parts on high-resolution 3D scans, such as nails on hand scans and teeth on
+intraoral scans, poses three challenges: 1) each part covers a tiny fraction of the scan, 2) its
+boundary is only a subtle change of height and curvature, and 3) it faces its own direction. Existing
+methods fall into two groups, and both fall short. The first group processes the whole scan at once
+and sees each part too coarsely. Point and mesh networks must shrink the scan to fit in memory, so
+a small part keeps only a few of its points. Multi-view methods render images of the whole object,
+so each part fills only a few pixels and a tilted part is seen from the side. The second group first
+finds each part and then segments it up close. But these methods find the parts with knowledge
+about one kind of part, for example the shape of the dental arch for teeth. Such knowledge does
+not carry over to other kinds of parts. We find that accuracy is limited by how a part is seen,
+from which direction and at what scale, not by how many points land on it. We therefore present
+FrameSeg3D. It first predicts a local frame for every part, its center and the direction it faces,
+from a low-resolution view of the whole scan. It then segments the part in views around its frame
+normal at the scanner’s resolution, so covering the whole scan no longer costs resolution. Because
+every part arrives centered, facing the camera, and at a fixed scale, one segmentation network
+can serve different kinds of parts and learn from few labeled masks. We test FrameSeg3D on two
+kinds of parts, nails and teeth. It outperforms state-of-the-art methods on hand scans (mean Dice
+0.970 on nails) and on the Teeth3DS+ test fold (per-tooth IoU 96.5), with the most accurate tooth
+boundaries (boundary IoU 70.5).
+a Frame prediction
+0.46–0.58 mm/px
+b In-frame segmentation
+0.08 mm/px
+Nail
+segmentation
+zk
+Tooth
+segmentation
+zk
+3D scan
+Overview
+Frame
+network
+Heatmap
++ normal map
+Frames (ck, zk)
+Cameras
+around zk
+12 views
+Segmentation
+network
+2D masks
+Lift to 3D
+Per-vertex labels
+re-center once
+Figure 1. Overview of FrameSeg3D. (a) Frame prediction. A frame network sees a low-resolution, top-down
+overview of the whole scan. It predicts a heatmap peaking at each part’s center c𝑘, a normal map that gives
+the part’s direction z𝑘there (color), and a name map (not shown). Together they give each part’s local frame
+(arrows). The circled thumb’s nail is tilted 49◦from the mat. (b) In-frame segmentation. Twelve cameras
+within 60◦of z𝑘render each part at 0.08 mm per pixel, so it is seen centered, facing the camera, and at a fixed
+scale. A segmentation network segments every view, the masks are lifted back to the vertices, and the frame is
+re-centered once. Each task trains its own frame network; one segmentation network serves both. All panels
+but the camera insets are real outputs of FrameSeg3D on test scans.
+arXiv:2611.22124v1  [cs.CV]  17 Nov 2026
+
+
+1
+Introduction
+Small parts on high-resolution scans. 3D scanners capture surfaces in fine detail, from large
+statues [28] to the inside of the mouth [34], and many scans are taken to measure one small part of a
+larger surface. Examples are a fingernail on a hand scanned for a custom-fit artificial nail [8, 12] and
+a tooth on an intraoral scan used to plan a crown [2, 3, 35]. Parts in shape collections [4, 5, 36, 61]
+are large, have sharp edges, and often come on aligned shapes. In contrast, these parts are tiny: a
+nail holds about 6,000 of a hand scan’s two million vertices (0.3%). Their boundaries are subtle
+changes of height and curvature, with no color to help. Each part also faces its own direction. On a
+hand lying flat, the thumb’s nail faces a median 56◦away from the mat. Segmenting them vertex by
+vertex requires seeing each part at the scanner’s resolution and from roughly the direction it faces.
+Existing methods. No existing family of methods sees every part at the scanner’s resolution and from
+the direction it faces. Point and mesh networks [15, 29, 38, 39, 45, 54, 56, 64] fit the whole scan into
+a fixed budget of samples. On a hand, this leaves 41 to 671 samples on a nail, too few to trace its
+boundary. Multi-view methods [3, 25, 33, 49, 58], including zero-shot ones built on 2D foundation
+models [1, 30, 50, 67], place their cameras for the whole object. A part gets few pixels, and a tilted
+part is seen at a grazing angle. On our hand scans, finer pixels even make a whole-hand render
+slightly worse. Two-stage dental methods first find each tooth, then segment it in a 3D crop [3, 7, 53],
+a landmark-aligned patch [27], a 2D parameterization [42], or views placed by the dental arch or
+the occlusal plane [20, 23]. They come closest to seeing each part on its own, but they have two
+limits. They find the teeth through the structure of the dentition, such as the arch, landmarks and
+tooth positions, which other parts lack. And their crops or views are set by the whole jaw, not by
+the direction each part faces. On our nails, ToothGroupNetwork, the winner of the 3DTeethSeg’22
+challenge [3], reaches a mean Dice of only 0.797.
+How a part is seen. We argue that small parts are limited by how they are seen, from which direction
+and at what scale, rather than by how many samples land on them. With about as many pixels on a
+nail, views around the nail’s own normal reach a mean Dice of 0.970, against 0.956 for views of the
+whole hand. In images and medical volumes, small objects are handled by zooming in [11, 37, 59, 66]
+or by processing each object at a fixed scale [17, 46, 47]. On a 3D surface, a small part must also
+be turned toward the camera. Views centered on a nail but placed around the mat’s normal fall
+to 0.927 on nails tilted more than 45◦, against 0.965 around the nail’s own normal. So each part
+needs a frame: its center and the direction it faces. Finding the frame is hard. It is defined by the
+part itself, yet needed before the part is segmented. So local reference frames computed from the
+surface around a point [18, 51, 52] cannot provide it, and learned alignment [21, 38, 44] and view
+selection [14] act on the whole input, not on each part. It must be found in a view where the part is
+small. And it must not rely on the structure of one kind of part, such as the dental arch.
+Segmenting each part in its own frame. We present FrameSeg3D, which predicts a coarse frame for
+every part and segments each part in its own frame (Fig. 1). Frame prediction looks at the whole scan
+once, at low resolution. A frame network [43] on a top-down render finds every part as a heatmap
+peak [65], names it, and predicts the direction it faces. Unlike two-stage dental methods, it needs
+2
+
+
+no arch curve, landmark detector, or shape model, and no extra labels: we compute the training
+frames from the segmentation masks. In-frame segmentation renders each part from 12 directions
+around its own frame normal at 0.08 mm per pixel, finer than the scan’s vertex spacing. So the pixel
+size no longer depends on the size of the scan, and the view direction no longer depends on where
+the part lies. A 2D network segments every view, and we lift the masks back to the vertices [25]. A
+coarse frame is enough, because the segmentation network is trained on perturbed frames and we
+re-center the frame once on the first result. Every part then arrives centered, facing the camera, and
+at a fixed scale. So one segmentation network serves nails and teeth alike and learns from few labels.
+FrameSeg3D reaches a mean Dice of 0.970 on the nails of held-out people, ahead of point, mesh,
+and multi-view networks. On the Teeth3DS+ test fold [2], it has the best per-tooth IoU (96.5) and
+the most accurate tooth boundaries. With both stages trained on a quarter of the hands or a tenth of
+the patients, it still beats the strongest baselines trained on all of them.
+Contributions. Our contributions are as follows:
+• We propose FrameSeg3D, which segments small parts on high-resolution 3D scans in learned
+local frames. It predicts a coarse frame for each part, its center and the direction it faces, from a
+low-resolution view of the whole scan, with no domain prior and no labels beyond the segmentation
+masks. It then segments 2D views around the frame normal at the scanner’s resolution and lifts
+the masks back to the vertices.
+• We observe, in controlled experiments, that small-part accuracy is limited by viewing geometry,
+not by the number of samples. At matched pixels per part and the same crop center, the part’s
+own frame wins. On hand scans, finer pixels help only inside the frame, and the gain grows with
+the part’s tilt.
+• We present a segmentation network that does not depend on the part and learns from few labels.
+Trained on nails and teeth together, it matches two dedicated networks.
+• Our experimental results show that FrameSeg3D is the most accurate method on nails and on
+the Teeth3DS+ test fold, and draws the most accurate tooth boundaries on both Teeth3DS+ test
+sets. On the 3DTeethSeg’22 challenge test set, it trails ToothInstanceNet [53] by 0.4 per-tooth
+IoU, mostly on third molars, which are rare in the training fold, so our frame network often places
+no frame on them.
+2
+Related Work
+Segmenting the whole scan. Point networks [38, 39, 54, 56, 57, 62, 64] and mesh networks [15, 45]
+segment a scan from sampled points, faces or vertices. On intraoral scans (Teeth3DS+ and the
+3DTeethSeg’22 challenge [2, 3]), MeshSegNet [29] and TSGCNet [63] label a downsampled mesh,
+and recent methods add boundary-preserving sampling [58] or a B-spline model of the dental
+arch [55]. All of them fit a scan into a fixed sample budget, so a small part gets samples only in
+proportion to its share of the surface. Multi-view methods render the shape, segment the images, and
+fuse the 2D predictions on the surface [22, 25, 49], also with 2D foundation models for zero-shot
+part segmentation [1, 30, 31, 50, 60]. For teeth, they render the jaw from random [3] or fixed
+viewpoints [33, 58, 67]. Their cameras are placed for the whole object, so a part’s pixel count and
+3
+
+
+viewing angle depend on where it lies. FrameSeg3D keeps the render-and-lift pipeline but places the
+cameras per part, around its own normal, at a fixed metric resolution.
+Finding the parts first. Zooming into a region is an established idea for images [17, 59]. Two-stage
+dental methods bring it to intraoral scans. They locate the teeth and segment each one in a 3D
+crop [3, 7, 41, 53], a landmark-aligned patch [27], a 2D parameterization of the crown [42], or
+views along the dental arch [20]. Closest to our design, LMVSegRNN segments each tooth from
+views that circle the occlusal axis above two detected landmarks [23]. These methods rely on dental
+structure to find the teeth, and their crops or views are set by the whole jaw, not by the direction
+each tooth faces. For nails, prior work made custom-fit artificial nails from 3D scans [12] and grew
+the nail region on a finger scan [8], our classical baseline. Canonical frames are common in learning:
+alignment modules align a whole input [21, 38], local reference frames make descriptors invariant
+to rotation [52], tangent convolutions view each point along its normal [51], Frustum PointNets
+rotate each detected object [40], and FrameNet predicts a frame at every pixel [19]. FrameSeg3D
+instead learns one frame per part, its center and facing direction, from a coarse view of the whole
+scan, with no dental structure. The frame places the cameras, the scanner’s resolution sets the pixel
+size, and the frame labels come for free from the segmentation masks.
+3
+Method
+Problem setting. The input is a triangle mesh M = (V, F ) from a 3D scanner, with vertices V,
+triangular faces F , and no color. Vertex 𝑖has position v𝑖∈ℝ3, unit normal n𝑖, area 𝑎𝑖(a third of its
+faces’ area), and mean curvature 𝜅𝑖. The output is a label 𝑦𝑖∈{0, 1, . . . , 𝐾} per vertex: background,
+or one of 𝐾named parts, such as the five nails of a hand (𝐾= 5) or the up to 16 teeth of a jaw
+(𝐾= 16). Part 𝑘covers the vertex set S𝑘⊂V. Its frame T𝑘= (c𝑘, z𝑘) is its area-weighted centroid
+and mean normal, that is, where the part lies and the direction its surface faces on average:
+c𝑘=
+Í
+𝑖∈S𝑘𝑎𝑖v𝑖
+Í
+𝑖∈S𝑘𝑎𝑖
+,
+z𝑘=
+Í
+𝑖∈S𝑘𝑎𝑖n𝑖
+Í
+𝑖∈S𝑘𝑎𝑖n𝑖
+.
+(1)
+We compute ground-truth frames from the labels with Eq. (1). A rotation R𝑘= [x𝑘y𝑘z𝑘]⊤∈𝑆𝑂(3)
+adds two in-plane axes x𝑘, y𝑘, chosen freely. It maps a point to frame coordinates, v(𝑘) = R𝑘(v −c𝑘).
+Equation (1) also shows the difficulty: the frame depends on S𝑘, the set we want to find.
+Pipeline. FrameSeg3D breaks this circle with two networks (Fig. 1). Frame prediction Φ estimates
+every frame from a low-resolution view of the whole scan. In-frame segmentation Ψ then segments
+each part in its estimated frame, one part at a time:
+{ ˆT𝑘}𝐾
+𝑘=1 = Φ(M),
+p𝑘= Ψ M, ˆT𝑘
+ ∈[0, 1] |V|,
+(2)
+where hats mark estimates and 𝑝𝑘,𝑖is the probability that vertex 𝑖belongs to part 𝑘. Sections 3.1
+and 3.2 describe Φ and Ψ, and Sec. 3.3 shows how Ψ copes with Φ’s errors.
+Why a frame. Consider an orthographic view along a direction d with pixel size 𝛿. A surface patch of
+area 𝐴with normal n is seen at the angle 𝛾= ∠(n, d). The patch gets 𝑁pixels, spaced Δ𝑠apart on
+4
+
+
+the surface along the direction in which it tilts away from the camera:
+𝑁= 𝐴cos 𝛾
+𝛿2
+,
+Δ𝑠=
+𝛿
+cos 𝛾.
+(3)
+In a view of the whole object, the object’s size sets 𝛿, and where the part lies sets 𝛾. A hand lying
+flat shows this well: seen from above, the thumb’s nail is at 𝛾≈56◦, so Δ𝑠≈1.8 𝛿, and its far side
+is compressed further. Views within a cone around z𝑘bound 𝛾wherever the part lies, and we can
+set 𝛿for the part alone, at the scanner’s resolution. The frame says where to look and from which
+direction: it sets both the crop and the cone of views.
+3.1 Frame prediction
+Goal. Frame prediction Φ takes the whole scan and returns a name 𝑘and a frame ˆT𝑘= (ˆc𝑘, ˆz𝑘) for
+every part present. It must find every part, including tilted ones, and name it correctly. The frame
+only needs to be close: in-frame segmentation tolerates a center off by 4 mm or a normal off by 20◦
+(Sec. 4.5).
+Part size. One number, the part size 𝐷, sets every length in frame prediction and the crop radius
+in Sec. 3.2. We set 𝐷to the median, over the labeled parts of the training scans, of twice the 90th
+percentile of the distance from a part’s centroid to its vertices (𝐷= 11.5 mm for nails, 9.2 mm for
+teeth). Twice the 90th percentile approximates a part’s diameter while ignoring stray vertices, and
+the median over parts ignores unusual ones. So 𝐷is measured from the labels, not tuned. Nothing
+else in the method depends on the kind of part: nails and teeth share every other setting.
+Overview image. We take the scan’s up direction u to be its area-weighted mean normal, because it
+needs no landmarks: for a hand on a mat it is the mat’s normal, and for a jaw it lies 9◦from the biting
+direction. We ray-cast the scan orthographically along u, center the image on the scan’s centroid
+and align it with the scan’s principal axes. To keep every part about 20 pixels across, enough to
+find it but not to segment it, we set the pixel size to 𝛿0 = 𝐷/20 (0.58 mm for hands, 0.46 mm for
+jaws). The overview image I0 has three channels: the height above the local floor, the upward normal
+component |n · u|, and coverage.
+Finding and naming parts. The frame network 𝑓is a U-Net [43] with an ImageNet-pretrained [9]
+ResNet-34 encoder [16]. A part may be missing, and neighbors can look alike, so 𝑓does not predict
+one heatmap per part. It predicts one center heatmap ˆ𝐶for all parts, a map ˆS of the 𝐾part names,
+and a normal map ˆZ. The heatmap finds the parts, so the name map is trained only on the part
+pixels: small parts cover a tiny share of the image (a nail covers 0.1% of a hand’s image), and with
+background pixels in its loss the network never learned to name them. We train the three outputs
+together with one loss, a weighted sum of one standard term per output (a focal loss, a cross-entropy
+and a weighted L1 loss):
+Lframe = Lfocal( ˆ𝐶) + LCE(ˆS) + 0.1 Lz,
+Lz =
+Í
+q 𝑤(q)
+ˆZ(q) −z𝑘(q)
+
+1
+Í
+q 𝑤(q)
+,
+(4)
+5
+
+
+(a) Frame and cameras
+60°
+zk
+ck
+R
+(b) 12 view directions
+zk
+60°
+30°
+top view: equal area on the cap
+(c) Visibility
+pixels, ± = 0.08 mm
+Hj
+seen
+hidden
+seen if hi ¸ Hj ¡ ¿
+Figure 2. Geometry of in-frame segmentation. (a) The crop is the surface within 𝑅of the frame center c𝑘,
+seen by cameras within 60◦of the frame normal z𝑘. (b) The 12 view directions (Eq. (6)), seen from above. (c)
+A vertex takes a view’s prediction only if the view sees it (Eq. (8)); a vertex under an overhang (here, a nail’s
+free edge) is labeled by the other views, those that see it.
+where q runs over the image’s pixels, Lfocal is the heatmap loss of CenterNet [65] (a focal loss that
+down-weights background pixels) on Gaussians at the projected centroids, LCE is the cross-entropy,
+and 𝑤(q) = 1 near the center of a part 𝑘(q), else 0. We follow CenterNet in scaling the Gaussians
+with the object size, here 𝐷, and in giving the regression term the weight 0.1. The parts are the
+peaks of ˆ𝐶, and the Hungarian algorithm [24] gives them distinct names from ˆS. Appendix C gives
+the remaining constants, all set once as fractions of 𝐷and shared by every kind of part.
+From a peak to a frame. A ray cast along −u through a peak hits the scan at the point m. The frame
+center lies below this point, by the typical depth of the part’s centroid under the surface seen from
+above, that is, along −u:
+ˆc𝑘= m −¯𝑑𝑘u,
+(5)
+where ¯𝑑𝑘is the median depth of part 𝑘’s centroid below the surface seen from above, in the training
+scans (close to zero for a thin part like a nail, inside the crown for a tooth). We read ˆz𝑘from ˆZ
+around the peak. Before finding peaks, we average the outputs of three frame networks trained with
+different random seeds, a small deep ensemble [26].
+3.2 In-frame segmentation
+Goal. In-frame segmentation Ψ takes the scan and one estimated frame ˆT𝑘and returns the probability
+𝑝𝑘,𝑖that each vertex 𝑖near the frame belongs to part 𝑘. It must place the part’s boundary to a fraction
+of a millimeter, at the scanner’s resolution. It sees only a crop around the frame, not the rest of the
+scan, so each part is handled on its own.
+Crop and views. The crop C𝑘is the connected piece of the scan within 𝑅of ˆc𝑘that holds the topmost
+surface along ˆz𝑘. We set 𝑅= 1.39𝐷, which is 16 mm for nails and 12.8 mm for teeth. This is the
+radius we first chose for nails, written in units of 𝐷so that one rule serves every kind of part. It leaves
+room for a frame center that is off by several millimeters. We express it in frame coordinates and
+view it from 𝐽= 12 directions on a Fibonacci spiral [13], which cover the cap within 𝜃max of ˆz𝑘with
+equal area (Fig. 2a,b). To sample a surface element facing ˆz𝑘at most 2𝛿apart (Eq. (3)) while still
+6
+
+
+reaching the part’s side walls, we set 𝜃max = 60◦:
+cos 𝜃𝑗= 1 −(1 −cos 𝜃max)
+𝑗+ 1
+2
+𝐽
+,
+𝜙𝑗= 𝑗𝜋 3 −
+√
+5
+,
+𝑗= 0, . . . , 𝐽−1.
+(6)
+View 𝑗turns the crop by 𝜙𝑗about ˆz𝑘(R𝑧), tilts it by 𝜃𝑗about the 𝑥axis (R𝑥), and looks down the new
+𝑧axis: vertex 𝑖moves to w( 𝑗)
+𝑖
+= R𝑥(𝜃𝑗) R𝑧(𝜙𝑗) v(𝑘)
+𝑖
+= (𝑥𝑖, 𝑦𝑖, ℎ𝑖), with height ℎ𝑖. By Eq. (3), every view
+sees a surface element facing ˆz𝑘at 𝛾≤60◦, however the part is tilted.
+Rendering. Each view is an orthographic ray cast from above onto a 384 × 384 grid. To see the part
+at the scanner’s resolution, we set its pixel size to 𝛿= 0.08 mm, finer than the scan’s vertex spacing.
+The field of view is then 𝑊= 384 𝛿= 30.7 mm, wide enough for the part and its surroundings. The
+ray through the pixel in row 𝑟and column 𝑠starts at  (𝑠+ 1
+2)𝛿−𝑊
+2 , (𝑟+ 1
+2)𝛿−𝑊
+2
+ and returns the
+height 𝐻𝑗(𝑟, 𝑠) of its first hit. There, we interpolate the vertex attributes over the hit triangle into the
+six input channels of the network:
+I𝑗(𝑟, 𝑠) =
+
+𝐻𝑗/5, n( 𝑗), 𝜅, 1hit
+
+∈ℝ6,
+(7)
+the height, the normal in view coordinates, the mean curvature, and coverage. Covering a whole
+scan at this pixel size would take far larger images: about 25002 pixels per view for a hand, some 42
+times as many as our 3842 views.
+Segmentation and lifting. The segmentation network 𝑔is a U-Net like 𝑓with six input channels. It
+predicts a probability image P𝑗= 𝜎 𝑔(I𝑗) for every view, where 𝜎is the sigmoid. A vertex projects to
+the continuous pixel position (𝜌𝑖, 𝜍𝑖) =  (𝑦𝑖+ 𝑊
+2 )/𝛿−1
+2, (𝑥𝑖+ 𝑊
+2 )/𝛿−1
+2
+ and is visible in view 𝑗if it
+lies on the rendered surface, that is, if no closer surface hides it from that view:
+𝜈𝑖𝑗= 1
+
+ℎ𝑖≥𝐻𝑗(𝜌𝑖, 𝜍𝑖) −𝜏
+
+,
+(8)
+where 1[·] is 1 if the condition holds, else 0, and 𝜏is a tolerance. We set 𝜏= 0.25 mm, about one
+vertex spacing; values from 0.1 to 0.5 mm give the same accuracy (Appendix E). This excludes
+vertices under an overhang or on the far side of the part (Fig. 2c). Each vertex averages the bilinearly
+interpolated P𝑗over the views that see it, with equal weights,
+𝑝𝑘,𝑖=
+Í
+𝑗𝜈𝑖𝑗𝑃𝑗(𝜌𝑖, 𝜍𝑖)
+Í
+𝑗𝜈𝑖𝑗
+,
+(9)
+and 𝑝𝑘,𝑖= 0 if no view sees it.
+Assembly and re-centering. Part 𝑘is the largest connected piece of {𝑖∈C𝑘: 𝑝𝑘,𝑖> 0.5}. Where the
+pieces of neighboring parts overlap, a vertex goes to the part with the highest 𝑝𝑘,𝑖. Each part then
+keeps its largest connected piece on the scan. Finally, we re-estimate the frame from the segment
+with Eq. (1) and segment the part once more. This closes the loop of Eq. (1): a coarse frame gives a
+segment, and the segment gives the frame it implies.
+7
+
+
+3.3 Training
+Goal. The two networks are trained separately, each with its own loss (Eqs. (4) and (11)). The
+segmentation network must also handle errors in the predicted frames.
+Perturbed frames. We train it on ground-truth frames perturbed like frame-prediction errors:
+˜c = c + 𝜖1x + 𝜖2y,
+˜z = Ra(𝛼) z,
+(10)
+where x, y are the frame’s in-plane axes, 𝜖𝑙∼N (0, 𝜎2
+𝑐) is clipped to ±4 mm, 𝜎𝑐= 1.5 mm, and Ra(𝛼)
+a rotation by 𝛼∼U(0◦, 15◦) about a random axis a ⊥z. We set these ranges well above the errors
+we measure for frame prediction (median 0.4 mm and 4◦; Sec. 4.5), so the network also learns from
+poor frames. The in-plane axis is random too, so the network relies on neither an exact frame nor its
+in-plane orientation. Each training crop is seen from one direction drawn uniformly over the same
+cap as the test views, cos 𝜃∼U(cos 𝜃max, 1) and 𝜙∼U(0, 2𝜋).
+Loss. Let Ω be the pixels without an ignore label, with target 𝑡and predicted probability 𝑃at each.
+The loss is binary cross-entropy plus soft Dice:
+Lseg = −1
+|Ω|
+∑︁
+Ω
+
+𝑡log 𝑃+ (1 −𝑡) log(1 −𝑃)
+
++ 1 −
+2 Í
+Ω 𝑃𝑡+ 1
+Í
+Ω 𝑃+ Í
+Ω 𝑡+ 1.
+(11)
+Since 𝑔always gets a part in its own frame, one 𝑔learns every kind of part at once. With several
+kinds of parts, each training crop comes from each kind with equal probability and is cut at that
+kind’s radius 𝑅; in our experiments, nails and teeth with probability 1
+2 each.
+4
+Experiments
+The method rests on one idea: a small part is segmented best in its own frame, at the scanner’s
+resolution. We test it on two kinds of parts that differ in size and layout. A nail covers a tiny share of
+a hand scan and often faces away from the scanner, while teeth fill much of an intraoral scan and sit
+close together. Both use the same settings; only the part size 𝐷, which we measure from the labels,
+differs from one kind of part to the other.
+4.1 Setup
+Data. We test on two datasets, one per kind of part.
+• Nails. 95 hand scans of 51 people: both hands of 44 people and one hand of the other 7. Each
+scan has about two million vertices, spaced 0.2–0.3 mm apart. Human annotators outlined every
+nail by hand, and the vertices inside an outline take that nail’s label. The annotators also rated
+each nail as usable or not; nails rated unusable are ignored in training and scoring. We split by
+person into 30 training people (57 hands, 213 usable nails), 8 validation people (15 hands, 52
+nails) and 13 test people (23 hands, 83 nails), and we score every usable test nail.
+8
+
+
+• Teeth. Teeth3DS+ [2] intraoral scans (100–150k vertices, teeth labeled by their FDI number)
+with ToothGroupNetwork’s patient folds [3]: 420 training, 90 validation and 90 test patients, two
+jaws each. We also test on the 3DTeethSeg’22 private test set, the challenge test set: 600 scans of
+300 other patients, disjoint from all training scans.
+Both networks are trained with augmentation (Appendix C); validation and test scans are never
+augmented. The segmentation network sees mirror images, smooth surface noise and the perturbed
+frames of Sec. 3.3. The frame network sees rotations, scalings, mirror images, and scans with smooth
+surface noise, holes and small tilts. The corrupted test scans of Tab. 11 are made separately: we
+decimate the test scans, add smooth noise to them, or cut one hole into each nail (Appendix B).
+Metrics. For nails, we report Dice per nail (mean and median over nails), the average symmetric
+surface distance (ASSD), the boundary F-score at 0.25 mm (BF0.25) and the share of nails with
+Dice below 0.7. For teeth, we report the per-tooth IoU, the boundary IoU [6] at 0.25 mm and
+ToothGroupNetwork’s tooth identification rate (TIR). The per-tooth IoU matches each ground-truth
+tooth to the predicted tooth overlapping it most, so a missed tooth scores 0. Our models and the
+trained baselines use 3 seeds, and all tables report the mean over the seeds (Appendix A).
+Baselines. Whole-scan methods on hands: Point Transformer V3 (PTv3) [56], MeshSegNet [29]
+and ToothGroupNetwork [3], all retrained on our hands, and a whole-hand render. It uses our
+segmentation network, channels, 12 views within 60◦of the mat normal and lifting, but on the
+whole hand. Per-part methods in our predicted frames: region growing [8], DGCNN [54] and
+PTv3 on the crop. On teeth: the released TSegNet [7] and ToothGroupNetwork checkpoints;
+ToothInstanceNet [53] and the 2026 methods TeethSplineSeg [55] and 3DTeethSAM [33], retrained
+on the training fold and selected on the validation fold; and a whole-jaw render like the whole-hand
+one. Every baseline trains on the same training scans as FrameSeg3D. Appendix D gives details and
+reproduction checks for every baseline.
+Implementation details. We use PyTorch, segmentation_models_pytorch, and Open3D ray casting.
+One segmentation network serves all kinds of parts, in our experiments nails and teeth. Both networks
+train with AdamW [32] and a one-cycle schedule [48], and we keep the checkpoint that is best on
+the validation set. All kinds of parts share every setting; only 𝐷, which we measure from the labels,
+differs. We use a server with eight NVIDIA H100 GPUs (80 GB each), two Intel Xeon Platinum 8468
+CPUs (128 cores), 2 TB of memory and a 2 TB disk; each training run uses one GPU. Appendix C lists
+the hardware and software, the training schedules and times, the data augmentation and the values
+of the remaining constants.
+4.2 Comparison with existing methods
+Nails. FrameSeg3D is the most accurate method on every metric (Tab. 1): mean Dice 0.970, ASSD
+0.144 mm, BF0.25 0.829, and no failed nail. Every whole-scan method is behind: the whole-hand
+render by 0.004 mean Dice and 0.019 mm ASSD, and PTv3 by 0.017. The two dental methods
+are 0.17 or more behind and fail on a fifth of the nails, because they see too few points on a nail:
+ToothGroupNetwork keeps about 100 of its 24,000 points on a nail, and MeshSegNet 41 of its 10,000
+9
+
+
+Table 1. Nail segmentation on the 83 test nails of 13 people (mean over 3 seeds). Dice: mean over nails;
+ASSD: average symmetric surface distance in mm; BF0.25: boundary F-score at 0.25 mm; Fail: Dice below 0.7;
+render pixel sizes in mm; GT: ground truth. Every baseline trains on the same training scans as FrameSeg3D.
+The whole-hand render uses our network, channels, 12 views within 60◦and lifting, but on the whole hand.
+Bold marks the best value, and underline the second best. The GT-frames row is not ranked.
+Method
+Dice↑
+Dicemed↑
+ASSD↓
+BF0.25↑
+Fail↓
+Whole scan
+MeshSegNet [29]
+0.735
+0.797
+1.010
+0.198
+22%
+ToothGroupNet. [3]
+0.797
+0.874
+0.633
+0.374
+18%
+PTv3 [56]
+0.953
+0.958
+0.201
+0.675
+0.4%
+Whole-hand render, 0.25 mm
+0.966
+0.969
+0.163
+0.784
+0%
+Whole-hand render, 0.08 mm
+0.956
+0.968
+0.168
+0.777
+0.4%
+Per part, in our predicted frames
+Region growing [8]
+0.790
+0.833
+0.788
+0.217
+18%
+DGCNN [54]
+0.966
+0.969
+0.160
+0.801
+0%
+PTv3 [56]
+0.961
+0.970
+0.153
+0.794
+1%
+FrameSeg3D (Ours)
+0.970
+0.973
+0.144
+0.829
+0%
+FrameSeg3D (Ours), GT frames
+0.970
+0.973
+0.143
+0.835
+0%
+Table 2. Tooth segmentation on Teeth3DS+ with ToothGroupNetwork’s patient folds. The challenge test set is
+the 3DTeethSeg’22 private test set (600 scans of 300 other patients). IoU: per-tooth IoU, each ground-truth
+tooth matched to the predicted tooth it overlaps most (a missed tooth scores 0); BIoU: boundary IoU at
+0.25 mm. Both are means over ground-truth teeth. TIR: predicted teeth with the right number, mean over
+scans. ×100; ours over 3 seeds. TeethSplineSeg, 3DTeethSAM and ToothInstanceNet are retrained on the
+same training fold.
+Test fold
+Challenge set
+Method
+IoU↑
+BIoU↑
+TIR↑
+IoU↑
+BIoU↑
+TIR↑
+TSegNet [7]
+88.42
+41.97
+97.87
+84.05
+36.71
+90.83
+ToothGroupNetwork [3]
+95.96
+69.59
+98.67
+92.62
+66.37
+93.14
+TeethSplineSeg [55]
+94.86
+60.26
+98.26
+92.32
+59.60
+90.72
+3DTeethSAM [33]
+94.39
+59.28
+97.97
+88.00
+52.80
+88.77
+ToothInstanceNet [53]
+95.90
+67.37
+98.63
+96.23
+68.96
+95.36
+Whole-jaw render, 0.08 mm
+94.77
+63.87
+96.78
+90.29
+57.83
+91.79
+FrameSeg3D (Ours)
+96.48
+70.46
+98.41
+95.84
+71.55
+94.05
+faces. Even perfect labels at MeshSegNet’s input reach only 0.877. Our frames also help other
+networks: PTv3 gains 0.008 mean Dice in our frames over the whole hand, and DGCNN in our
+frames comes within 0.004 of FrameSeg3D. Rendering in the frame still wins, most clearly on the
+boundary (BF0.25 0.829 vs. 0.801). Predicted frames work as well as ground-truth ones (0.970 for
+both). Figure 3 (top) shows typical baseline failures: missed nail area (blue) and extra nail area
+(red), compared with the ground truth.
+Teeth. With the same settings as on nails and no dental knowledge, FrameSeg3D is the most
+10
+
+
+Ground truth
+Ours
+Whole-hand render
+PTv3
+ToothGroupNet
+left hand
+0.969
+0.964
+0.956
+0.831
+Hand
+Ground truth
+Ours
+Whole-hand render
+PTv3
+ToothGroupNet
+Ground truth
+Ours
+Whole-hand render
+PTv3
+ToothGroupNet
+index
+0.973
+0.974
+0.957
+0.875
+thumb
+0.972
+0.963
+0.965
+0.860
+middle
+0.942
+0.874
+0.967
+0.777
+index
+0.960
+0.910
+0.951
+0.723
+pinky
+0.952
+0.924
+0.579
+0.005
+ring
+0.974
+0.971
+0.627
+0.003
+Nails
+Ground truth
+Ours
+ToothGroupNet
+TeethSplineSeg
+3DTeethSAM
+Ground truth
+Ours
+ToothGroupNet
+TeethSplineSeg
+3DTeethSAM
+upper
+97.0
+96.7
+95.5
+92.5
+lower
+96.7
+96.4
+95.2
+92.8
+upper
+97.7
+72.7
+80.4
+85.1
+upper
+96.9
+72.5
+89.3
+76.2
+upper
+95.2
+82.0
+45.4
+25.8
+lower
+96.9
+82.9
+66.5
+42.4
+Teeth
+Nails:
+nail found
+nail missed
+extra nail
+ignored
+Teeth:
+gum or unlabeled
+tooth on gum only
+other colors: the ground-truth tooth it overlaps most
+Figure 3. A typical test hand (top, mean Dice over its five nails), test nails (middle, Dice per nail) and jaws
+from the challenge test set (bottom, per-tooth IoU of the scan), picked automatically from the scores. On the
+whole hand, nails are small and errors lie at their borders. Rows of nails and jaws: typical examples, where
+every method is near its median; where the whole-hand render (nails) and ToothGroupNetwork (teeth) lose
+most against FrameSeg3D; and where PTv3 (nails), TeethSplineSeg (teeth, left) and 3DTeethSAM (teeth, right)
+lose most. Nails are seen along their normal, tip up. Each predicted tooth takes the color of the ground-truth
+tooth it overlaps most, so two teeth in one color are one predicted tooth. More examples are in Figs. 4 to 6.
+accurate method on the test fold, in per-tooth IoU (96.48) and in boundary IoU (70.46), ahead of
+ToothGroupNetwork (95.96 and 69.59), ToothInstanceNet (95.90 and 67.37) and the two 2026
+methods (Tab. 2). On the challenge test set, it draws the most accurate boundaries (71.55, against
+68.96 for ToothInstanceNet) and leads ToothGroupNetwork, TeethSplineSeg and 3DTeethSAM by
+3.2 to 7.8 per-tooth IoU. From the test fold to this unseen set, it loses only 0.6 per-tooth IoU, against
+2.5 to 6.4 for these three methods. They typically merge neighboring teeth into one predicted tooth
+or leave teeth unlabeled (Fig. 3, bottom). Only ToothInstanceNet has a higher per-tooth IoU on the
+challenge test set (96.23 vs. 95.84). Its lead lies in the back molars, which are rare in our training
+fold (12 third molars in 840 scans, against 152 in the 600 challenge scans), so our frame network
+often places no frame on them. On incisors to first molars, FrameSeg3D is ahead (96.52 vs. 96.34)
+11
+
+
+Table 3. How a nail is seen. The same network, channels and 12 views within 60◦of an axis. Only the views’
+axis, center and pixel size change. Row 3 makes one pass, since re-centering would restore the frame normal.
+The last row is FrameSeg3D. Pixels: median pixels on a nail per view. Test nails, mean over 3 seeds.
+Views around
+Centered on
+mm/px
+Pixels
+Dice↑
+BF0.25↑
+mat normal
+whole hand
+0.25
+1.2k
+0.965
+0.769
+mat normal
+whole hand
+0.08
+11.6k
+0.956
+0.777
+mat normal
+frame center
+0.08
+11.5k
+0.965
+0.801
+frame normal (Ours) frame center
+0.08
+12.4k
+0.970
+0.829
+Table 4. By nail tilt (test nails, mean over 3 seeds; rows as in Tab. 3). Tilt: angle between the nail’s normal and
+the mat normal; the number of nails in each bin in parentheses. Beyond 45◦, views around the mat normal
+lose 0.038 against FrameSeg3D, and the whole-hand render at 0.08 mm/px loses 0.066 (0.899 vs. 0.965).
+Mean Dice↑by nail tilt from the mat
+Views around
+Centered on
+mm/px
+0–15◦
+(43)
+15–30◦
+(24)
+30–45◦
+(7)
+>45◦
+(9)
+mat normal
+whole hand
+0.25
+0.970
+0.963
+0.956
+0.950
+mat normal
+whole hand
+0.08
+0.965
+0.960
+0.956
+0.899
+mat normal
+frame center
+0.08
+0.972
+0.966
+0.964
+0.927
+frame normal (Ours) frame center
+0.08
+0.973
+0.967
+0.967
+0.965
+Table 5. Resolution (test nails; whole-hand renders trained without augmentation). Inside the frame, 0.08
+and 0.16 mm nearly tie, and both beat 0.32 mm, most clearly on the boundary. The whole hand gets worse
+with finer pixels. At 0.08 mm, the three whole-hand runs reach their best validation score after 1.5k, 4.5k and
+5.5k of their 6k training steps; we keep the checkpoint that is best on validation.
+Input
+mm/px
+Dice↑
+Dicemed↑
+ASSD↓
+BF0.25↑
+Frame, 1 view, GT
+0.32
+0.964
+0.967
+0.173
+0.757
+0.16
+0.968
+0.971
+0.150
+0.812
+0.08
+0.969
+0.971
+0.151
+0.811
+Frame, 1 view, predicted
+0.32
+0.964
+0.968
+0.170
+0.766
+0.16
+0.968
+0.970
+0.157
+0.797
+0.08
+0.969
+0.971
+0.152
+0.807
+Whole hand, 12 views
+0.25
+0.965
+0.968
+0.168
+0.769
+0.125
+0.961
+0.969
+0.163
+0.785
+0.08
+0.956
+0.968
+0.168
+0.777
+and its boundary IoU is 2.7 higher (Appendix F).
+4.3 How a part is seen
+We change only how a nail is seen and keep the network, channels, number of views and lifting
+fixed (Tab. 3). Pixel count does not explain the gap: at the same 0.08 mm per pixel, the whole-hand
+12
+
+
+Table 6. One segmentation network for nails and teeth (3 seeds each; Chall.: the challenge test set). A
+dedicated network trains 6k steps on one domain. The shared network draws each crop’s domain with
+probability 1
+2 and trains 24k steps, so each domain sees twice as many crops as with its dedicated network
+(12k steps’ worth instead of 6k).
+Nails
+Teeth, test fold
+Chall.
+Segmentation network
+Dice↑
+ASSD↓
+IoU↑
+BIoU↑
+IoU↑
+Two dedicated networks
+0.970
+0.142
+96.46
+70.34
+95.73
+One network, 24k steps
+0.970
+0.144
+96.48
+70.46
+95.84
+Table 7. Few labels on nails. Every method trains on the same nested subsets of the 30 training people.
+Segmentation network on the subset: frames from the frame network trained on all data. Both stages: the frame
+network is also trained on the subset. Subsets: one seed. All 30 people: mean over 3 seeds, as in Tab. 1. Each
+row keeps one training recipe at every subset size, so its all-data value can differ slightly from Tab. 1.
+Mean Dice↑on test nails
+Training people (of 30)
+1
+3
+8
+30
+Ours, segmentation network on the subset
+0.949
+0.966
+0.968
+0.970
+Ours, both stages on the subset
+0.772
+0.943
+0.967
+0.970
+DGCNN in our frames, segmentation on the subset
+0.935
+0.956
+0.964
+0.966
+DGCNN in our frames, both stages on the subset
+0.747
+0.930
+0.964
+0.966
+Whole-hand render
+0.888
+0.959
+0.961
+0.964
+PTv3, whole hand
+0.568
+0.901
+0.932
+0.951
+render puts almost as many pixels on a nail as FrameSeg3D (11.6k vs. 12.4k per view), yet loses
+0.014 mean Dice. Centering explains most of it: views around the mat normal, but centered on our
+frame, reach 0.965 with slightly fewer pixels on a nail (11.5k). The view direction matters for tilted
+parts (Tab. 4). Within 30◦of the mat, these views tie the views around the frame normal. Beyond
+45◦, they fall to 0.927, against 0.965. Over all nails, they lose 0.028 BF0.25. Resolution helps only
+in the frame (Tab. 5). Inside the frame, finer pixels raise the mean Dice from 0.964 at 0.32 mm to
+0.969 at 0.08 mm (0.968 at 0.16 mm), and BF0.25 from 0.757 to 0.811 with ground-truth frames.
+The whole-hand render instead gets worse, from 0.965 at 0.25 mm to 0.956 at 0.08 mm. Tilted parts
+gain most. The margin over the whole-hand render grows from 0.003 for nails within 15◦of the mat
+to 0.015 beyond 45◦. There, the whole-hand render at 0.08 mm falls to 0.899, while FrameSeg3D
+keeps a mean Dice of 0.965.
+Teeth tilt less (median 14◦from the jaw axis). Here the frame helps mainly by spending the resolution
+on one part. At the same 0.08 mm, the frame adds 1.71 per-tooth IoU and 6.59 boundary IoU over
+the whole-jaw render. Viewing along the tooth normal instead of the jaw axis adds only 0.15. Unlike
+the whole hand, the whole jaw does gain from finer pixels: from 0.25 to 0.08 mm/px it gains 0.88
+per-tooth IoU and 7.73 boundary IoU (Appendix F).
+13
+
+
+Table 8. Few labels on teeth. Every method trains on the same nested subsets of the 420 training patients.
+Segmentation network on the subset and both stages as in Tab. 7. Subsets: one seed. All 420 patients: mean
+over 3 seeds, as in Tab. 2. ToothGroupNetwork is retrained with its official code on the subsets; with all 420
+patients it is the released checkpoint.
+Per-tooth IoU↑on the test fold
+Training patients (of 420)
+5
+42
+420
+Ours, segmentation network on the subset
+96.38
+96.41
+96.48
+Ours, both stages on the subset
+96.16
+96.36
+96.48
+Whole-jaw render, 0.08 mm/px
+92.36
+94.23
+94.77
+ToothGroupNetwork
+87.18
+89.40
+95.96
+4.4 One network, few labels
+One network for nails and teeth. We train one segmentation network on crops of both kinds, drawn
+with equal probability. It matches the two dedicated networks (Tab. 6): mean Dice 0.970 vs. 0.970
+on nails, per-tooth IoU 96.48 vs. 96.46 on the test fold, and 95.84 vs. 95.73 on the challenge test set.
+It trains for 24,000 steps, twice as many per domain as a dedicated network. Initializing one domain
+from the other’s network does not help (Appendix G). The two kinds of parts share a network but do
+not help each other.
+Few labels. In its canonical view, the segmentation network needs few masks (Tabs. 7 and 8). We first
+use frames from the full frame network. Trained on the nails of 3 of the 30 people, the segmentation
+network already beats the whole-hand render trained on all 30 (0.966 vs. 0.964). With one person,
+it leads the render trained on that person by 0.061 (0.949 vs. 0.888). It also needs fewer labels
+than a point network in the same frames: with 1, 3 and 8 people, it leads DGCNN in our frames by
+0.014, 0.010 and 0.004 mean Dice. Without a frame, PTv3 on the whole hand falls to 0.568 with
+one person. On teeth (Tab. 8), cutting the training patients from 420 to 42 or 5 costs it 0.07 or 0.10
+per-tooth IoU, but costs the whole-jaw render 0.54 or 2.41. ToothGroupNetwork, retrained with its
+own code on the same 42 or 5 patients, falls to 89.40 or 87.18, from 95.96 for its released checkpoint
+on all 420. With 5 patients, our segmentation network still beats that checkpoint (96.38 vs. 95.96).
+The frame network is the weaker stage. Trained on the subset too, it loses two nails at 3 people
+(mean Dice 0.943), and at one person it finds only 81% of the nails (0.772). Still, the whole method
+needs only a fraction of the labels. With both stages trained on 8 of the 30 people, FrameSeg3D
+beats the whole-hand render trained on all 30 (0.967 vs. 0.964). With both stages trained on 5 of
+420 patients, FrameSeg3D leads ToothGroupNetwork trained on the same patients by 8.98 per-tooth
+IoU (96.16 vs. 87.18) and still beats it trained on all 420 (96.16 vs. 95.96). With 42 patients, a tenth
+of the training fold, it reaches 96.36, within 0.12 of training on all 420.
+4.5 Ablations
+Table 9 changes one part of FrameSeg3D at a time. Without a frame, both tasks lose clearly (nails
+−0.014 Dice, teeth −1.71 IoU). Views around the scan’s up axis lose mainly at the boundary, and one
+view fails on teeth. Re-centering, ground-truth frames and two dedicated networks change little, so
+14
+
+
+Table 9. Ablations. One part of FrameSeg3D changed at a time (test, mean over 3 seeds, all at 0.08 mm per
+pixel). No frame: the whole-hand and whole-jaw renders. †Centered on the part; nails with predicted centers
+and one pass, teeth with ground-truth centers. ‡Teeth with ground-truth frames; with them, 12 views reach
+96.53 per-tooth IoU.
+Nails
+Teeth, test fold
+Variant
+Dice↑
+BF0.25↑
+IoU↑
+BIoU↑
+FrameSeg3D (Ours)
+0.970
+0.829
+96.48
+70.46
+No frame: views of the whole scan
+0.956
+0.777
+94.77
+63.87
+Views around the scan’s up axis†
+0.965
+0.801
+96.38
+69.67
+One view along the frame normal‡
+0.968
+0.794
+86.63
+39.68
+No re-centering
+0.970
+0.832
+96.45
+70.40
+Ground-truth frames
+0.970
+0.835
+96.53
+70.50
+Two dedicated segmentation networks
+0.970
+0.836
+96.46
+70.34
+Table 10. Frame robustness (median / mean Dice over validation and
+test nails, 3 seeds). The ground-truth frame is tilted or shifted in a
+random direction. One pass, or one re-centering pass that recomputes
+the frame from the first segment by Eq. (1).
+Median / mean Dice↑
+Ground-truth frame perturbed by
+One pass
+Re-centered
+none
+0.973 / 0.969
+0.972 / 0.969
+tilt 20◦
+0.972 / 0.968
+0.973 / 0.969
+tilt 45◦
+0.968 / 0.959
+0.973 / 0.969
+shift 4 mm
+0.972 / 0.969
+0.973 / 0.969
+shift 8 mm
+0.946 / 0.837
+0.972 / 0.913
+predicted frames and one shared network are enough.
+Frames. The frame network names every test finger correctly (median center error 0.38 mm, normal
+error 4.0◦). On teeth, it places a frame with the right number within 3 mm of 99.6% of the test teeth
+(center 0.52 mm, normal 5.4◦). The segmentation network tolerates such errors. Its result does not
+change when the frame is tilted by 20◦or shifted by 4 mm. Re-centering recovers a 45◦tilt (mean
+Dice 0.959 to 0.969; Tab. 10). Only a shift of 8 mm, about 0.7𝐷, hurts (mean Dice 0.837, and 0.913
+after re-centering). With predicted frames, re-centering changes the mean Dice on nails by less than
+0.001, so it matters only for large frame errors.
+Views. One view along the frame normal loses only 0.002 mean Dice on nails but 0.035 BF0.25 (0.794
+vs. 0.829). It fails on teeth (per-tooth IoU 86.6 vs. 96.5 with ground-truth frames). A view from
+above does not see the side walls of a crown, where the gum line runs. The gain comes from the
+views at test time. A cone-trained network tested on one view is no better than one trained on that
+view, so the cone helps only when it is also used at test time.
+15
+
+
+Scan quality and cost. FrameSeg3D keeps the highest mean Dice on test hands that are decimated,
+made noisy or cut by holes (Tab. 11). Its mean Dice stays at 0.964 or above under every corruption
+we test. The whole-scan models fail where their input changes most: PTv3 falls to 0.461 with an
+eighth of the faces, and the whole-hand render to 0.891 under 0.1 mm of smooth noise. FrameSeg3D
+takes 15.5 s per hand on one GPU, half the time of the whole-hand render at the same 0.08 mm per
+pixel. Most of this time goes to the in-frame segmentation, which renders and segments 12 views of
+each part in two passes (Appendix B).
+5
+Conclusion
+Small parts on high-resolution 3D scans are limited by the direction and scale at which they are
+seen, not by how many samples land on them. FrameSeg3D turns this into a simple method. It
+predicts a frame for every part from a coarse view of the whole scan, then segments each part in
+views around its frame normal at the scanner’s resolution. With the same settings, it outperforms
+whole-scan and two-stage methods on nails and on the Teeth3DS+ test fold, and it draws the most
+accurate tooth boundaries. On hands, the gain over the whole-hand render grows with the nail’s
+tilt and is largest on the thumb, which faces sideways. The frames also help other networks: in our
+frames, DGCNN comes within 0.004 mean Dice of FrameSeg3D on nails. The canonical view also lets
+one segmentation network serve both kinds of parts and learn from a fraction of the labels: a quarter
+of the hands or a tenth of the patients. Between nails and teeth, only the part size changes, and we
+measure it from the labels. So we expect a new kind of part to need labeled scans, not a new design.
+Limitations
+The frame network is the weak stage. It needs more labels than the segmentation network: trained
+on the hands of one person, it misses a fifth of the nails. It misses parts that are rare in training:
+on the challenge test set, it places no frame on many third molars, which the training fold almost
+lacks. There, ToothInstanceNet segments and names teeth more accurately. The frame network also
+assumes that each part faces a clear direction. On jaws, where the crops of neighboring teeth overlap,
+FrameSeg3D is slower than rendering the whole jaw and than the dental methods (21.9 s per jaw,
+against 1.3 to 8.8 s). We test only two kinds of parts, and all hand scans come from one 3D scanner.
+We simulate lower scan quality by decimation, noise and holes, but we have not tested scans from
+other scanners. Learning the frame without frame labels, for example from the segmentation loss
+through a differentiable renderer, is a natural next step, since the two stages could then be trained
+together, end to end.
+LLM Usage Statement
+The idea was proposed and the initial experiments were conducted by the human authors. Claude
+Code (Anthropic) and Codex (OpenAI) helped improve the experiments and analyze the data. They
+also helped polish and revise the text. The human authors take full responsibility for all ideas,
+experiments, conclusions, claims and contributions, and for all of the text.
+16
+
+
+References
+[1] Ahmed Abdelreheem, Ivan Skorokhodov, Maks Ovsjanikov, and Peter Wonka. SATR: zero-shot semantic
+segmentation of 3D shapes. In IEEE/CVF International Conference on Computer Vision, ICCV, pages
+15120–15133, Paris, France, 2023.
+[2] Achraf Ben-Hamadou, Oussama Smaoui, Houda Chaabouni-Chouayakh, Ahmed Rekik, Sergi Pu-
+jades, Edmond Boyer, Julien Strippoli, Aurélien Thollot, Hugo Setbon, Cyril Trosset, and Edouard
+Ladroit. Teeth3DS: a benchmark for teeth segmentation and labeling from intra-oral 3D scans. CoRR,
+abs/2210.06094, 2022.
+[3] Achraf Ben-Hamadou, Oussama Smaoui, Ahmed Rekik, Sergi Pujades, Edmond Boyer, Hoyeon Lim,
+Minchang Kim, Minkyung Lee, Minyoung Chung, Yeong-Gil Shin, Mathieu Leclercq, Lucia H. S. Cevidanes,
+Juan Carlos Prieto, Shaojie Zhuang, Guangshun Wei, Zhiming Cui, Yuanfeng Zhou, Tudor Dascalu,
+Bulat Ibragimov, Tae-Hoon Yong, Hong-Gi Ahn, Wan Kim, Jae-Hwan Han, Byungsun Choi, Niels van
+Nistelrooij, Steven Kempers, Shankeeth Vinayahalingam, Julien Strippoli, Aurélien Thollot, Hugo Setbon,
+Cyril Trosset, and Edouard Ladroit. 3DTeethSeg’22: 3D teeth scan segmentation and labeling challenge.
+CoRR, abs/2305.18277, 2023.
+[4] Angel X. Chang, Thomas A. Funkhouser, Leonidas J. Guibas, Pat Hanrahan, Qi-Xing Huang, Zimo Li,
+Silvio Savarese, Manolis Savva, Shuran Song, Hao Su, Jianxiong Xiao, Li Yi, and Fisher Yu. ShapeNet:
+An information-rich 3D model repository. CoRR, abs/1512.03012, 2015.
+[5] Xiaobai Chen, Aleksey Golovinskiy, and Thomas A. Funkhouser. A benchmark for 3D mesh segmentation.
+ACM Trans. Graph., 28(3):73, 2009.
+[6] Bowen Cheng, Ross B. Girshick, Piotr Dollár, Alexander C. Berg, and Alexander Kirillov. Boundary IoU:
+Improving object-centric image segmentation evaluation. In IEEE Conference on Computer Vision and
+Pattern Recognition, CVPR, pages 15334–15342, Virtual, 2021.
+[7] Zhiming Cui, Changjian Li, Nenglun Chen, Guodong Wei, Runnan Chen, Yuanfeng Zhou, Dinggang
+Shen, and Wenping Wang. TSegNet: An efficient and accurate tooth segmentation network on 3D dental
+model. Medical Image Anal., 69:101949, 2021.
+[8] Jingbiao Deng. Method and system for extracting nail contours. U.S. Patent 12,530,862 B2 (Shanghai
+Huizi Cosmetics), 2026.
+[9] Jia Deng, Wei Dong, Richard Socher, Li-Jia Li, Kai Li, and Li Fei-Fei. ImageNet: A large-scale hierarchical
+image database. In 2009 IEEE Computer Society Conference on Computer Vision and Pattern Recognition
+CVPR, pages 248–255, Miami, FL, 2009.
+[10] Terrance Devries and Graham W. Taylor. Improved regularization of convolutional neural networks with
+cutout. CoRR, abs/1708.04552, 2017.
+[11] Mingfei Gao, Ruichi Yu, Ang Li, Vlad I. Morariu, and Larry S. Davis. Dynamic zoom-in network for fast
+object detection in large images. In 2018 IEEE Conference on Computer Vision and Pattern Recognition,
+CVPR, pages 6926–6935, Salt Lake City, UT, 2018.
+[12] Elias Gedamu. System and method for manufacturing custom nails. U.S. Patent 11,515,019 B2 (H3alth
+Technologies), 2022.
+[13] Álvaro González. Measurement of areas on a sphere using Fibonacci and latitude–longitude lattices.
+Mathematical Geosciences, 42(1):49–64, 2010.
+17
+
+
+[14] Abdullah Hamdi, Silvio Giancola, and Bernard Ghanem. MVTN: multi-view transformation network for
+3D shape recognition. In 2021 IEEE/CVF International Conference on Computer Vision, ICCV, pages 1–11,
+Montreal, QC, Canada, 2021.
+[15] Rana Hanocka, Amir Hertz, Noa Fish, Raja Giryes, Shachar Fleishman, and Daniel Cohen-Or. MeshCNN:
+a network with an edge. ACM Trans. Graph., 38(4):90:1–90:12, 2019.
+[16] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. Deep residual learning for image recognition.
+In 2016 IEEE Conference on Computer Vision and Pattern Recognition, CVPR, pages 770–778, Las Vegas,
+NV, 2016.
+[17] Kaiming He, Georgia Gkioxari, Piotr Dollár, and Ross B. Girshick. Mask R-CNN. In IEEE International
+Conference on Computer Vision, ICCV, pages 2980–2988, Venice, Italy, 2017.
+[18] Jingwei Huang, Haotian Zhang, Li Yi, Thomas A. Funkhouser, Matthias Nießner, and Leonidas J. Guibas.
+TextureNet: Consistent local parametrizations for learning from high-resolution signals on meshes. In
+IEEE Conference on Computer Vision and Pattern Recognition, CVPR, pages 4440–4449, Long Beach, CA,
+2019.
+[19] Jingwei Huang, Yichao Zhou, Thomas A. Funkhouser, and Leonidas J. Guibas. FrameNet: Learning local
+canonical frames of 3D surfaces from a single RGB image. In 2019 IEEE/CVF International Conference on
+Computer Vision, ICCV, pages 8637–8646, Seoul, South Korea, 2019.
+[20] Xinrui Huang, Dongming He, Zhenming Li, Xiaofan Zhang, and Xudong Wang. IOSSAM: label efficient
+multi-view prompt-driven tooth segmentation. In Medical Image Computing and Computer Assisted
+Intervention - MICCAI, pages 632–642, Marrakesh, Morocco, 2024.
+[21] Max Jaderberg, Karen Simonyan, Andrew Zisserman, and Koray Kavukcuoglu. Spatial transformer
+networks. In Advances in Neural Information Processing Systems, NIPS, pages 2017–2025, Montreal, QC,
+Canada, 2015.
+[22] Evangelos Kalogerakis, Melinos Averkiou, Subhransu Maji, and Siddhartha Chaudhuri. 3D shape segmen-
+tation with projective convolutional networks. In 2017 IEEE Conference on Computer Vision and Pattern
+Recognition, CVPR, pages 6630–6639, Honolulu, HI, 2017.
+[23] Tibor Kubík and Michal Španěl. LMVSegRNN and Poseidon3D: Addressing challenging teeth segmentation
+cases in 3D dental surface orthodontic scans. Bioengineering, 11(10):1014, 2024.
+[24] Harold W. Kuhn. The Hungarian method for the assignment problem. Naval Research Logistics Quarterly,
+2(1–2):83–97, 1955.
+[25] Abhijit Kundu, Xiaoqi Yin, Alireza Fathi, David A. Ross, Brian Brewington, Thomas A. Funkhouser, and
+Caroline Pantofaru. Virtual multi-view fusion for 3D semantic segmentation. In Computer Vision - ECCV
+2020 - 16th European Conference, Proceedings, Part XXIV, pages 518–535, Glasgow, UK, 2020.
+[26] Balaji Lakshminarayanan, Alexander Pritzel, and Charles Blundell. Simple and scalable predictive
+uncertainty estimation using deep ensembles. In Advances in Neural Information Processing Systems,
+NIPS, pages 6402–6413, Long Beach, CA, 2017.
+[27] Sena Lee, Guenhye Kim, Yongkyu Jin, and Sejung Yang. Render2Seg: Landmark-guided patch-wise
+segmentation for robust 3D dental mesh analysis. In IEEE/CVF International Conference on Computer
+Vision, ICCV Workshops, pages 1063–1072, Honolulu, HI, 2025.
+18
+
+
+[28] Marc Levoy, Kari Pulli, Brian Curless, Szymon Rusinkiewicz, David Koller, Lucas Pereira, Matt Ginzton,
+Sean E. Anderson, James Davis, Jeremy Ginsberg, Jonathan Shade, and Duane Fulk. The digital
+Michelangelo project: 3D scanning of large statues. In Proceedings of the 27th Annual Conference on
+Computer Graphics and Interactive Techniques, SIGGRAPH, pages 131–144, New Orleans, LA, 2000.
+[29] Chunfeng Lian, Li Wang, Tai-Hsien Wu, Fan Wang, Pew-Thian Yap, Ching-Chang Ko, and Dinggang Shen.
+Deep multi-scale mesh feature learning for automated labeling of raw dental surfaces from 3D intraoral
+scanners. IEEE Trans. Medical Imaging, 39(7):2440–2450, 2020.
+[30] Minghua Liu, Yinhao Zhu, Hong Cai, Shizhong Han, Zhan Ling, Fatih Porikli, and Hao Su. PartSLIP:
+Low-shot part segmentation for 3D point clouds via pretrained image-language models. In IEEE/CVF
+Conference on Computer Vision and Pattern Recognition, CVPR, pages 21736–21746, Vancouver, BC,
+Canada, 2023.
+[31] Minghua Liu, Mikaela Angelina Uy, Donglai Xiang, Hao Su, Sanja Fidler, Nicholas Sharp, and Jun Gao.
+PartField: Learning 3D feature fields for part segmentation and beyond. In IEEE/CVF International
+Conference on Computer Vision, ICCV, pages 9704–9715, Honolulu, HI, 2025.
+[32] Ilya Loshchilov and Frank Hutter. Decoupled weight decay regularization. In 7th International Conference
+on Learning Representations, ICLR, New Orleans, LA, 2019.
+[33] Zhiguo Lu, Jianwen Lou, Mingjun Ma, Hairong Jin, Youyi Zheng, and Kun Zhou. 3DTeethSAM: Taming
+SAM2 for 3D teeth segmentation. In Fortieth AAAI Conference on Artificial Intelligence, AAAI, pages
+7609–7617, Singapore, 2026.
+[34] Francesco Mangano, Andrea Gandolfi, Giuseppe Luongo, and Silvia Logozzo. Intraoral scanners in
+dentistry: A review of the current literature. BMC Oral Health, 17:149, 2017.
+[35] Takashi Miyazaki, Yasuhiro Hotta, Jun Kunii, Soichi Kuriyama, and Yukimichi Tamaki. A review of dental
+CAD/CAM: Current status and future perspectives from 20 years of experience. Dental Materials Journal,
+28(1):44–56, 2009.
+[36] Kaichun Mo, Shilin Zhu, Angel X. Chang, Li Yi, Subarna Tripathi, Leonidas J. Guibas, and Hao Su.
+PartNet: A large-scale benchmark for fine-grained and hierarchical part-level 3D object understanding.
+In IEEE Conference on Computer Vision and Pattern Recognition, CVPR, pages 909–918, Long Beach, CA,
+2019.
+[37] Mahyar Najibi, Bharat Singh, and Larry Davis. AutoFocus: Efficient multi-scale inference. In 2019
+IEEE/CVF International Conference on Computer Vision, ICCV, pages 9744–9754, Seoul, South Korea,
+2019.
+[38] Charles Ruizhongtai Qi, Hao Su, Kaichun Mo, and Leonidas J. Guibas. PointNet: Deep learning on point
+sets for 3D classification and segmentation. In 2017 IEEE Conference on Computer Vision and Pattern
+Recognition, CVPR, pages 77–85, Honolulu, HI, 2017.
+[39] Charles Ruizhongtai Qi, Li Yi, Hao Su, and Leonidas J. Guibas. PointNet++: Deep hierarchical feature
+learning on point sets in a metric space. In Advances in Neural Information Processing Systems, NIPS,
+pages 5099–5108, Long Beach, CA, 2017.
+[40] Charles R. Qi, Wei Liu, Chenxia Wu, Hao Su, and Leonidas J. Guibas. Frustum PointNets for 3D object
+detection from RGB-D data. In 2018 IEEE Conference on Computer Vision and Pattern Recognition, CVPR,
+pages 918–927, Salt Lake City, UT, 2018.
+19
+
+
+[41] Liangdong Qiu, Chongjie Ye, Pei Chen, Yunbi Liu, Xiaoguang Han, and Shuguang Cui. DArch: Dental
+arch prior-assisted 3D tooth instance segmentation with weak annotations. In IEEE/CVF Conference on
+Computer Vision and Pattern Recognition, CVPR, pages 20720–20729, New Orleans, LA, 2022.
+[42] Ahmed Rekik, Achraf Ben-Hamadou, Oussama Smaoui, Firas Bouzguenda, Sergi Pujades, and Edmond
+Boyer. TSegLab: Multi-stage 3D dental scan segmentation and labeling. Comput. Biol. Medicine, 185:
+109535, 2025.
+[43] Olaf Ronneberger, Philipp Fischer, and Thomas Brox. U-Net: Convolutional networks for biomedical
+image segmentation. In Medical Image Computing and Computer-Assisted Intervention - MICCAI, pages
+234–241, Munich, Germany, 2015.
+[44] Rahul Sajnani, Adrien Poulenard, Jivitesh Jain, Radhika Dua, Leonidas J. Guibas, and Srinath Sridhar.
+ConDor: Self-supervised canonicalization of 3D pose for partial shapes. In IEEE/CVF Conference on
+Computer Vision and Pattern Recognition, CVPR, pages 16948–16958, New Orleans, LA, 2022.
+[45] Nicholas Sharp, Souhaib Attaiki, Keenan Crane, and Maks Ovsjanikov. DiffusionNet: Discretization
+agnostic learning on surfaces. ACM Trans. Graph., 41(3):27:1–27:16, 2022.
+[46] Bharat Singh and Larry S. Davis. An analysis of scale invariance in object detection - SNIP. In 2018
+IEEE Conference on Computer Vision and Pattern Recognition, CVPR, pages 3578–3587, Salt Lake City, UT,
+2018.
+[47] Bharat Singh, Mahyar Najibi, and Larry S. Davis. SNIPER: efficient multi-scale training. In Advances in
+Neural Information Processing Systems, NeurIPS, pages 9333–9343, Montreal, QC, Canada, 2018.
+[48] Leslie N. Smith and Nicholay Topin. Super-convergence: Very fast training of residual networks using
+large learning rates. CoRR, abs/1708.07120, 2017.
+[49] Hang Su, Subhransu Maji, Evangelos Kalogerakis, and Erik G. Learned-Miller. Multi-view convolutional
+neural networks for 3D shape recognition. In 2015 IEEE International Conference on Computer Vision,
+ICCV, pages 945–953, Santiago, Chile, 2015.
+[50] George Tang, William Zhao, Logan Ford, David Ben-Haim, and Paul Zhang. Segment any mesh: Zero-shot
+mesh part segmentation via lifting Segment Anything 2 to 3D. CoRR, abs/2408.13679, 2024.
+[51] Maxim Tatarchenko, Jaesik Park, Vladlen Koltun, and Qian-Yi Zhou. Tangent convolutions for dense
+prediction in 3D. In 2018 IEEE Conference on Computer Vision and Pattern Recognition, CVPR, pages
+3887–3896, Salt Lake City, UT, 2018.
+[52] Federico Tombari, Samuele Salti, and Luigi Di Stefano. Unique signatures of histograms for local surface
+description. In Computer Vision - ECCV 2010, 11th European Conference on Computer Vision, Proceedings,
+Part III, pages 356–369, Heraklion, Crete, Greece, 2010.
+[53] Niels van Nistelrooij and Shankeeth Vinayahalingam. ToothInstanceNet: Comprehensive information
+from intra-oral scans by integration of large-context and high-resolution predictions. In Supervised and
+Semi-supervised Multi-structure Segmentation and Landmark Detection in Dental Data - MICCAI 2024
+Challenges, pages 229–240, Marrakesh, Morocco, 2024.
+[54] Yue Wang, Yongbin Sun, Ziwei Liu, Sanjay E. Sarma, Michael M. Bronstein, and Justin M. Solomon.
+Dynamic graph CNN for learning on point clouds. ACM Trans. Graph., 38(5):146:1–146:12, 2019.
+20
+
+
+[55] Xianghan Wei, Jianwen Lou, Zhiguo Lu, Hairong Jin, and Haihua Zhu. B-Spline embedded structure
+learning for 3D tooth segmentation. CoRR, abs/2608.17291, 2026.
+[56] Xiaoyang Wu, Li Jiang, Peng-Shuai Wang, Zhijian Liu, Xihui Liu, Yu Qiao, Wanli Ouyang, Tong He, and
+Hengshuang Zhao. Point transformer V3: simpler, faster, stronger. In IEEE/CVF Conference on Computer
+Vision and Pattern Recognition, CVPR, pages 4840–4851, Seattle, WA, 2024.
+[57] Xiaoyang Wu, Daniel DeTone, Duncan P. Frost, Tianwei Shen, Chris Xie, Nan Yang, Jakob J. Engel,
+Richard A. Newcombe, Hengshuang Zhao, and Julian Straub. Sonata: Self-supervised learning of reliable
+point representations. In IEEE/CVF Conference on Computer Vision and Pattern Recognition, CVPR, pages
+22193–22204, Nashville, TN, 2025.
+[58] Shufan Xi, Zexian Liu, Junlin Chang, Hongyu Wu, Xiaogang Wang, and Aimin Hao. 3D dental model
+segmentation with geometrical boundary preserving. In IEEE/CVF Conference on Computer Vision and
+Pattern Recognition, CVPR, pages 10476–10485, Nashville, TN, 2025.
+[59] Fangting Xia, Peng Wang, Liang-Chieh Chen, and Alan L. Yuille. Zoom better to see clearer: Human
+and object parsing with hierarchical auto-zoom net. In Computer Vision - ECCV 2016 - 14th European
+Conference, Proceedings, Part V, pages 648–663, Amsterdam, The Netherlands, 2016.
+[60] Yunhan Yang, Yukun Huang, Yuan-Chen Guo, Liangjun Lu, Xiaoyang Wu, Edmund Y. Lam, Yan-Pei Cao,
+and Xihui Liu. SAMPart3D: Segment any part in 3D objects. CoRR, abs/2411.07184, 2024.
+[61] Li Yi, Vladimir G. Kim, Duygu Ceylan, I-Chao Shen, Mengyan Yan, Hao Su, Cewu Lu, Qixing Huang,
+Alla Sheffer, and Leonidas J. Guibas. A scalable active framework for region annotation in 3D shape
+collections. ACM Trans. Graph., 35(6):210:1–210:12, 2016.
+[62] Yuanwen Yue, Damien Robert, Jianyuan Wang, Sunghwan Hong, Jan Dirk Wegner, Christian Rupprecht,
+and Konrad Schindler. LitePT: Lighter yet stronger point transformer. In IEEE/CVF Conference on Computer
+Vision and Pattern Recognition, CVPR, pages 24173–24184, Denver, CO, 2026.
+[63] Lingming Zhang, Yue Zhao, Deyu Meng, Zhiming Cui, Chenqiang Gao, Xinbo Gao, Chunfeng Lian,
+and Dinggang Shen. TSGCNet: Discriminative geometric feature learning with two-stream graph
+convolutional network for 3D dental model segmentation. In IEEE Conference on Computer Vision and
+Pattern Recognition, CVPR, pages 6699–6708, Virtual, 2021.
+[64] Hengshuang Zhao, Li Jiang, Jiaya Jia, Philip H. S. Torr, and Vladlen Koltun. Point transformer. In 2021
+IEEE/CVF International Conference on Computer Vision, ICCV, pages 16239–16248, Montreal, QC, Canada,
+2021.
+[65] Xingyi Zhou, Dequan Wang, and Philipp Krähenbühl. Objects as points. CoRR, abs/1904.07850, 2019.
+[66] Yuyin Zhou, Lingxi Xie, Wei Shen, Yan Wang, Elliot K. Fishman, and Alan L. Yuille. A fixed-point model
+for pancreas segmentation in abdominal CT scans. In Medical Image Computing and Computer Assisted
+Intervention - MICCAI, pages 693–701, Quebec City, QC, Canada, 2017.
+[67] Shaojie Zhuang, Lu Yin, Guangshun Wei, Yunpeng Li, Xilu Wang, and Yuanfeng Zhou. TSegAgent:
+Zero-shot tooth segmentation via geometry-aware vision-language agents. In Medical Image Computing
+and Computer Assisted Intervention - MICCAI, pages 635–644, Strasbourg, France, 2026.
+21
+
+
+Appendix
+A
+Data and metrics
+Hand scans. Each hand lies flat on a mat and is scanned with one 3D scanner (about two million
+vertices, 0.2–0.3 mm apart). Human annotators outlined each nail by hand and labeled every vertex
+as nail (with the finger’s name), skin, or ignore (doubled scan layers and loose fragments). Ignored
+vertices are excluded from scoring and from all losses. The annotators also rated each nail as usable
+or not. Seven people have one hand in the dataset (three training, one validation and three test
+people), and the others both hands. The 83 test nails (11 thumbs) are those with labels rated usable.
+The split is by person: 30 training, 8 validation and 13 test people, with 57, 15 and 23 hands and
+213, 52 and 83 usable nails.
+Nail metrics. Each ground-truth nail is scored against the predicted nail pieces that touch it, whatever
+their finger label, so finger names do not affect the scores. Dice weights each vertex by its area. ASSD
+is the mean distance between the predicted and ground-truth outlines, in both directions. BF0.25 is
+the F-score of outline vertices within 0.25 mm of the other outline: precision counts the predicted
+outline vertices near the true outline, and recall the reverse.
+Tooth metrics. ToothGroupNetwork’s evaluation code averages IoU and F1 over predicted teeth, so a
+missed tooth does not count. Its TIR is the share of predicted teeth with the right number. So we also
+report our per-tooth IoU. It matches each ground-truth tooth to the predicted tooth that overlaps it
+most, ignoring tooth numbers. A missed tooth scores 0. Boundary IoU [6] is computed on the mesh.
+We score all teeth results with one scorer, from per-vertex predictions on the same meshes. Per-tooth
+IoU and boundary IoU are means over ground-truth teeth. ToothGroupNetwork’s metrics are means
+over scans, as in its evaluation code.
+Seeds. Our models and the trained baselines use 3 seeds; tables give the mean. The segmentation
+networks trained on label subsets (Appendix G) use one seed. A frame network on a subset is still an
+ensemble of 3, as in the full method, with each member trained on the same subset from a different
+random seed, and their outputs are averaged before finding peaks.
+B
+Scan quality and cost
+Scan quality. We corrupt the test scans in three ways: we decimate them, displace them by smooth
+noise along the normal, or cut one hole into each nail and close it with flat triangles (Tab. 11).
+FrameSeg3D is best under every density, noise level and hole size, and its mean Dice never falls
+below 0.964, also with an eighth of the faces, under 0.1 mm of smooth noise and with a 3 mm hole
+on every nail. The whole-scan models fail where their input changes most: PTv3 falls to 0.461 with
+an eighth of the faces, and the whole-hand render to 0.891 under 0.1 mm of noise.
+22
+
+
+Table 11. Robustness to scan quality (test nails, mean Dice, 3 seeds). We decimate the test scans, displace
+them by smooth noise along the normal (correlation length about 0.6 mm), or cut one hole per nail and close
+it with flat triangles. Every model sees surface noise in training, and the whole-scan models and our frame
+network also see holes. The whole-hand render uses 0.25 mm per pixel. FrameSeg3D is best under every
+corruption and at every strength.
+Mean Dice↑
+Faces kept
+Smooth noise (mm)
+Hole radius (mm)
+Method
+Clean
+1/2
+1/4
+1/8
+0.025
+0.05
+0.1
+1
+2
+3
+FrameSeg3D (Ours)
+0.970
+0.969
+0.967
+0.964
+0.969
+0.966
+0.964
+0.970
+0.968
+0.964
+DGCNN in the frame
+0.966
+0.964
+0.960
+0.955
+0.965
+0.962
+0.954
+0.966
+0.964
+0.961
+Whole-hand render
+0.966
+0.961
+0.957
+0.952
+0.964
+0.962
+0.891
+0.965
+0.964
+0.960
+PTv3, whole hand
+0.953
+0.950
+0.918
+0.461
+0.952
+0.948
+0.932
+0.951
+0.950
+0.943
+Table 12. Inference cost with the final networks on one H100 GPU (16 CPU threads), mean over six test scans
+after one warm-up. Time: from the loaded mesh to per-vertex labels, without reading or writing files; for
+FrameSeg3D and the renders, the vertex normals and curvature are loaded with the mesh. GPU memory: peak
+PyTorch allocation / peak use of the process, which adds the CUDA context and the allocator’s cache; for the
+two stages of FrameSeg3D, the peak allocation while that stage runs, with the networks of both stages loaded.
+FrameSeg3D’s parameters are the three frame networks of the ensemble (24.4 M each) and one segmentation
+network (24.4 M).
+Method
+Time (s)↓
+GPU memory
+(GB)↓
+Parameters (M)↓
+Hands, per hand (1.6–3.3 million vertices)
+FrameSeg3D (Ours)
+15.5
+1.3 / 2.6
+97.8
+frame prediction
+2.5
+0.7
+73.3
+in-frame segmentation, two passes
+12.9
+1.3
+24.4
+FrameSeg3D (Ours), one view per frame
+9.3
+0.7 / 1.5
+97.8
+DGCNN in the frame
+6.6
+7.4 / 28.3
+74.3
+Whole-hand render, 0.25 mm/px
+6.7
+0.5 / 1.3
+24.4
+Whole-hand render, 0.08 mm/px
+30.6
+3.9 / 6.4
+24.4
+PTv3, whole hand
+0.9
+1.5 / 3.7
+46.2
+Teeth, per jaw (78–176k vertices)
+FrameSeg3D (Ours)
+21.9
+1.3 / 2.3
+97.8
+frame prediction
+0.2
+0.4
+73.3
+in-frame segmentation, two passes
+21.7
+1.3
+24.4
+Whole-jaw render, 0.25 mm/px
+2.4
+0.2 / 0.8
+24.4
+Whole-jaw render, 0.08 mm/px
+8.8
+0.9 / 2.0
+24.4
+TSegNet
+1.3
+1.7 / 3.7
+2.4
+ToothGroupNetwork
+4.4
+1.3 / 4.4
+15.8
+ToothInstanceNet
+2.0
+4.1 / 13.0
+27.1
+TeethSplineSeg
+6.9
+0.3 / 1.5
+47.4
+3DTeethSAM
+6.1
+5.2 / 9.7
+296.9
+23
+
+
+Cost. Table 12 gives the inference cost of every method with the final networks, measured on one
+GPU in the same way. On hands, FrameSeg3D takes 15.5 s per hand, half the time of the whole-hand
+render at the same 0.08 mm per pixel (30.6 s), with a third of its allocated GPU memory. The
+whole-hand render at 0.25 mm and PTv3 are faster but less accurate (Tab. 1). The GPU memory of
+FrameSeg3D stays small on hands and on jaws, 1.3 GB of allocations, because every view has the
+same 384 × 384 pixels whatever the size of the scan. On teeth, it is the slowest method (21.9 s per
+jaw, about 1.5 s per tooth), because the crops of neighboring teeth overlap and are rendered one at a
+time; batching them would make it faster. Most of its parameters belong to the three frame networks
+of the ensemble.
+C
+Implementation details
+Hardware and software. We use a server with eight NVIDIA H100 GPUs with 80 GB each, two Intel
+Xeon Platinum 8468 CPUs with 128 cores in total, 2 TB of memory, and a 2 TB disk for the data and
+caches. Our code uses Python 3.10, PyTorch 2.5.1 with CUDA 12.4, segmentation_models_pytorch,
+and Open3D for ray casting; the baselines run in their own environments. Each training run uses
+one GPU, and several runs share the server at a time. With other runs on the server, one seed of
+the shared segmentation network (24k steps) trains in about 6.4 h on one GPU, and one seed of
+the frame network (20k steps) in about 2.7 h on hands and 0.6 h on teeth. Appendix B gives the
+inference cost of every method.
+Overview image. The image spans 1.2 times the 90th percentile of the training scans’ extent, so
+that nearly every scan fits with a margin. We find the local floor by a grayscale opening of the height
+image over 12𝐷, much wider than a part, so that the opening removes the parts and keeps what they
+rest on; the overview’s height channel is measured from this floor.
+Frame network. The heatmap Gaussians have a standard deviation of 𝐷/8. Twice that is 𝐷/4, well
+below the distance between the centers of neighboring parts, so their peaks stay apart. The normal
+loss uses the pixels within 𝐷/6 of a part’s center (𝑤(q) = 1 in Eq. (4)), where the surface faces most
+like the part as a whole. Pixels with an ignore label give no loss, and pixels within 𝐷/2 of one give no
+heatmap loss, because an ignored part still looks like a part. A part is a local maximum of ˆ𝐶above 0.3
+that lies at least 𝐷/3 from a stronger one; 𝐷/3 is well below the distance between neighboring parts.
+The Hungarian algorithm scores each name by the mean of ˆS within 𝐷/6 of a peak. The network
+never sees scan tags, such as whether a hand is left or right or a jaw upper or lower; a tag only maps
+a predicted name to the dataset’s label, for instance a tooth position, counted from the front of the
+jaw, to its tooth number in the upper or lower jaw. We set these constants once and use them for
+every kind of part.
+Rendering. We divide the height channel by 5 mm and clip the curvature to [−1, 1] to keep the
+channels in a similar range as the normal components, which lie in [−1, 1].
+Training schedules. The segmentation network trains for 24,000 steps of 16 crops (peak learning
+rate 5×10−4), so that each kind of part gets twice the steps of a network trained on one kind (6,000).
+We keep the checkpoint with the best mean, over the kinds of parts, of the median crop Dice on
+24
+
+
+up to 300 validation parts each. The frame network trains for 20,000 steps of 16 overview images
+(learning rate 5 × 10−4); at 6,000 steps its validation detection score was still rising. We keep its
+checkpoint with the best detection F1 on validation, with the right name within 𝐷/3.
+Data augmentation. We augment training scans only. Each training crop of the segmentation
+network is mirrored with probability 1
+2. With probability 1
+2, we also move it along its normals by a
+smooth field 𝜂, v𝑖←v𝑖+ 𝜂𝑖n𝑖: white noise smoothed over the mesh graph (correlation length about
+0.6 mm) with a robust standard deviation drawn from U(0, 0.12 mm). We then recompute normals
+and curvature, so the network cannot rely on the noise level of one scanner. The frame network sees
+any rotation, scaling by 0.9–1.1 and mirroring. A mirror image renames the parts by a fixed map: a
+tooth position changes sides, while a finger keeps its name. Half of its training images come from
+one of eight augmented copies of each training scan. Each copy has smooth surface noise as above, a
+hole on each part with probability 1
+2, and a tilt of up to 15◦about a random axis perpendicular to u.
+A hole is a ball of radius up to 0.3𝐷around a random point of the part, cut out and closed with flat
+triangles, much like Cutout [10] on a surface. We fixed these settings in advance and did not tune
+them. The whole-scan baselines are trained with the same noise and holes (Appendix D).
+D
+Baselines
+Table 13. All methods on the Teeth3DS+ test fold (180 scans of 90 patients, ×100). Their metrics: Tooth-
+GroupNetwork’s IoU, F1 and TIR, averaged over predicted teeth and then over scans. Per ground-truth tooth:
+our per-tooth IoU and boundary IoU, means over ground-truth teeth. Jaw-axis views: views around the jaw
+axis instead of the tooth normal. Ours and the whole-jaw renders: 3 seeds. Retrained methods: 1 run each.
+With ground-truth frames or centers, TIR is 100 by construction, since the frames carry the tooth numbers.
+These rows are not ranked.
+Their metrics
+Per ground-truth tooth
+Method
+IoU↑
+F1↑
+TIR↑
+IoU↑
+BIoU0.25↑BIoU0.5↑
+PointNet
+78.38
+85.89
+92.63
+81.12
+29.26
+38.32
+DGCNN (released checkpoint)
+83.27
+89.08
+94.02
+86.24
+33.91
+43.16
+PointNet++
+89.54
+93.56
+96.58
+91.26
+44.25
+56.51
+TSegNet [7]
+90.77
+94.83
+97.87
+88.42
+41.97
+54.02
+Point Transformer
+91.09
+94.64
+97.08
+92.31
+48.70
+61.00
+ToothGroupNetwork [3]
+95.99
+97.83
+98.67
+95.96
+69.59
+78.08
+without boundary-aware sampling
+93.00
+96.25
+98.67
+92.97
+50.55
+62.92
+TeethSplineSeg [55], retrained
+94.64
+97.03
+98.26
+94.86
+60.26
+71.24
+3DTeethSAM [33], retrained
+93.58
+96.17
+97.97
+94.39
+59.28
+69.85
+ToothInstanceNet [53], retrained
+95.63
+97.58
+98.63
+95.90
+67.37
+76.71
+Whole-jaw render, 0.25 mm/px
+92.84
+95.66
+97.80
+93.89
+56.14
+67.64
+Whole-jaw render, 0.08 mm/px
+92.99
+95.28
+96.78
+94.77
+63.87
+73.46
+FrameSeg3D (Ours)
+96.11
+97.82
+98.41
+96.48
+70.46
+79.03
+ground-truth frames
+96.53
+98.21
+100.00
+96.53
+70.50
+79.08
+ground-truth centers, jaw-axis views
+96.37
+98.12
+100.00
+96.38
+69.67
+78.25
+one view, ground-truth frames
+86.61
+92.43
+100.00
+86.63
+39.68
+44.44
+25
+
+
+On hands. All hand baselines train on the same 30 people and select checkpoints on the same 8.
+PTv3 [56] segments nail vs. not nail on the hand above the mat, at its 0.5 mm grid (median 671
+points per nail). We drop nail pieces under 20 mm2. MeshSegNet [29] sees the hand decimated
+to about 10,000 faces by vertex clustering, because quadric decimation stalls on most hands. Its
+output is upsampled to every vertex by nearest neighbors. We could not run its graph-cut refinement.
+Its input resolution limits it: even perfect labels at that input reach a mean Dice of only 0.877.
+ToothGroupNetwork [3] samples 24,000 points (median 98 per nail). For hands, we use full rotation
+augmentation, a fixed 70 mm scale, and a label vote per cluster instead of tooth numbers. We
+select its DBSCAN parameter on validation and run it three times with a time-capped schedule. The
+whole-hand render runs our segmentation network, channels and lifting on the whole hand, with 12
+Fibonacci views within 60◦of the mat normal and 0.25, 0.125 or 0.08 mm per pixel. Each image
+covers the hand. DGCNN [54] and PTv3 in the frame segment the same crops as FrameSeg3D, trained
+on the same perturbed frames. Region growing [8] grows the nail from the frame center over the
+surface. All baselines train on the same training scans as FrameSeg3D. DGCNN and PTv3 in the
+frame train with our surface noise, like FrameSeg3D. PTv3 and the whole-hand render at 0.25 mm
+per pixel see surface noise and holes like those of the frame network (Appendix C), drawn from
+16 precomputed augmented versions per hand, because per-step noise was too slow to compute on
+whole hands of two million vertices.
+On teeth. We run the released checkpoints of ToothGroupNetwork and its baselines on its own test
+fold. They match the published table within 0.01 IoU for ToothGroupNetwork (with and without its
+boundary-aware sampling), Point Transformer and PointNet. TSegNet is 1.1 below and DGCNN 5.0
+below. We retrain TeethSplineSeg [55] from scratch on the training fold with its full pipeline and
+post-processing, and select on the validation fold. Its own evaluation on our test fold gives 93.55
+T-mIoU and 70.87 B-IoU, close to its paper’s 92.62 and 71.36. We retrain 3DTeethSAM [33] from
+SAM2.1 Hiera-L with its two-stage schedule (30 + 70 epochs), seven views and graph-cut smoothing.
+Its own evaluation gives 93.44 T-mIoU, against 91.90 in its paper. Its released checkpoint saw 120 of
+our 180 test scans in training, so we do not use it. We retrain ToothInstanceNet [53] from scratch with
+its released code and full inference pipeline (pose alignment, tooth instances, then FDI numbers).
+Its released checkpoints were trained on Teeth3DS scans that may include our test scans, so we do
+not use them. Of the two training configurations in its repository, we keep the one with the higher
+validation F1. The whole-jaw render predicts 17 classes (background and 16 positions) per pixel,
+because neighboring teeth touch. Each tooth keeps its largest piece, as in FrameSeg3D. We found no
+public code for Render2Seg [27], TSegLab [42] or IOSSAM [20], so we do not compare with them.
+All teeth methods. Table 13 lists every method on the test fold, with ToothGroupNetwork’s own
+metrics next to ours. Their IoU and F1 average over predicted teeth and then over scans, so they
+do not count a missed tooth; our per-tooth IoU does. With ground-truth frames, the tooth numbers
+come from the ground truth, so TIR is 100 by construction.
+26
+
+
+Ground truth
+Ours
+Whole-hand render
+PTv3
+ToothGroupNet
+left hand
+0.969
+0.964
+0.956
+0.831
+left hand
+0.971
+0.963
+0.913
+0.628
+right hand
+0.974
+0.966
+0.889
+0.129
+nail found
+nail missed
+extra nail
+ignored
+Figure 4. Whole test hands seen from above, with each method’s mean Dice over the five nails. The hands are
+picked automatically: the typical hand of Fig. 3, the hand where the whole-hand render loses most against
+FrameSeg3D, and the hand where both PTv3 and ToothGroupNetwork lose most. ToothGroupNetwork misses
+most nails of this hand. We show only hands with all five nails scored. Nails with unusable labels are ignored.
+Detached scan fragments and the board under one hand are not drawn, so that each tile shows only the hand.
+Table 14. Per finger (test, mean Dice; 11, 20, 18, 18 and 16 nails). Thumbs face sideways on a flat hand, so
+they gain most over the whole-hand renders, which see the hand from above.
+Mean Dice↑
+Method
+Thumb
+Index
+Middle
+Ring
+Pinky
+FrameSeg3D (Ours)
+0.967
+0.969
+0.975
+0.974
+0.963
+DGCNN in the frame
+0.964
+0.962
+0.974
+0.970
+0.960
+PTv3 in the frame
+0.962
+0.939
+0.975
+0.972
+0.963
+Whole-hand render, 0.25 mm/px
+0.957
+0.964
+0.969
+0.972
+0.957
+Whole-hand render, 0.08 mm/px
+0.911
+0.955
+0.968
+0.971
+0.956
+PTv3, whole hand
+0.950
+0.947
+0.965
+0.951
+0.944
+ToothGroupNetwork
+0.689
+0.796
+0.856
+0.864
+0.731
+E
+More results on nails
+Per finger. Table 14 splits the test nails by finger. FrameSeg3D is best or tied on every finger. Its
+gain is largest on the thumb, which faces sideways on a flat hand: 0.967, against 0.957 for the
+whole-hand render at 0.25 mm/px and 0.911 at 0.08 mm/px.
+27
+
+
+More examples. Figure 4 shows whole test hands and Fig. 5 single nails, picked automatically from
+the scores: typical cases and the cases where each baseline loses most against FrameSeg3D, so no
+example is chosen by hand.
+Ground truth
+Ours
+Whole-hand render
+PTv3
+ToothGroupNet
+Ground truth
+Ours
+Whole-hand render
+PTv3
+ToothGroupNet
+thumb
+0.972
+0.963
+0.965
+0.860
+index
+0.973
+0.974
+0.957
+0.875
+middle
+0.976
+0.973
+0.969
+0.893
+ring
+0.972
+0.961
+0.962
+0.862
+pinky
+0.971
+0.956
+0.961
+0.858
+thumb
+0.981
+0.965
+0.955
+0.002
+middle
+0.942
+0.874
+0.967
+0.777
+index
+0.960
+0.910
+0.951
+0.723
+pinky
+0.952
+0.924
+0.579
+0.005
+ring
+0.974
+0.971
+0.627
+0.003
+pinky
+0.921
+0.939
+0.942
+0.712
+thumb
+0.931
+0.946
+0.919
+0.660
+nail found
+nail missed
+extra nail
+ignored
+Figure 5. More test nails with each method’s Dice, picked automatically from the per-nail scores. In reading
+order: a typical nail of each finger (every method near its median), the nail where ToothGroupNetwork loses
+most against FrameSeg3D, the two where the whole-hand render loses most, the two where PTv3 loses most,
+and our two lowest nails. Each tile is framed to its nail. Green: nail found; blue: nail missed; red: extra nail.
+Further ablations. With ground-truth frames, the visibility tolerance of the lifting matters little up
+to 0.5 mm (mean Dice 0.970 at 0.1, 0.25 and 0.5 mm). At 1 mm, BF0.25 drops from 0.835 to 0.817,
+because some skin next to the nail is lifted onto it. Training the frame network with holes and tilts
+(Appendix C) instead of noise alone leaves the mean Dice on clean test scans unchanged (0.970), but
+lowers the normal error of its frames on test hands (median 4.0◦vs. 5.0◦, 90th percentile 9.3◦vs.
+11.5◦) and finds more teeth with the right number on the challenge test set (97.9% vs. 97.6%).
+F
+More results on teeth
+The frame on teeth. Teeth tilt little from the jaw axis (median 14◦, 95% within 34◦; thumb nails
+sit at 56◦from the mat). So the tooth normal adds little. With ground-truth centers, views around
+the tooth normal instead of the jaw axis add 0.15 per-tooth IoU and 0.83 boundary IoU. Most of the
+frame’s effect on teeth comes from spending resolution on one part. Over the whole-jaw render at
+0.25 mm/px, FrameSeg3D adds 2.59 per-tooth IoU and 14.3 boundary IoU. Of the 14.3, 7.7 come
+28
+
+
+from the finer pixels and 6.6 from the frame at the same resolution. From 0.25 to 0.08 mm/px, the
+whole jaw gains 0.88 IoU and 7.73 boundary IoU. The gain over the whole-jaw render grows above
+30◦of tilt and is largest on molars (Tab. 15), the one tooth type where the finer whole-jaw render is
+worse than the coarse one.
+Table 15. By tooth tilt and type (test fold, per-tooth IoU per ground-truth tooth). Tilt: angle between the
+tooth’s normal and the jaw axis. Δ: gain of FrameSeg3D in per-tooth IoU / boundary IoU at 0.25 mm, over
+ToothGroupNetwork (TGN) and over the whole-jaw render at 0.08 mm/px.
+Per-tooth IoU↑
+Gain↑, IoU / BIoU
+Teeth
+𝑛
+FrameSeg3D
+(Ours)
+TGN
+Δ TGN
+Δ whole jaw
+tilt 0–10◦
+735
+96.77
+96.37
++0.40 / +0.6
++1.72 / +6.4
+tilt 10–20◦991
+96.61
+96.15
++0.46 / +0.7
++1.34 / +6.1
+tilt 20–30◦452
+96.15
+95.41
++0.74 / +1.5
++1.93 / +6.7
+tilt > 30◦
+196
+95.54
+94.80
++0.73 / +1.4
++2.97 / +9.8
+incisors
+719
+96.00
+95.71
++0.28 / +0.6
++1.84 / +7.5
+canines
+350
+96.37
+96.08
++0.29 / +0.9
++1.15 / +5.2
+premolars 705
+96.82
+96.53
++0.28 / +0.5
++1.15 / +6.0
+molars
+600
+96.73
+95.53
++1.21 / +1.6
++2.53 / +7.0
+Frame prediction on teeth. A ground-truth tooth counts as named correctly if the frame with its
+number lies within 3 mm of its centroid. On the test fold, 99.6% of the teeth are named correctly,
+with 20 extra detections in 180 scans. The median center error is 0.52 mm (90th percentile 1.24),
+and the median normal error is 5.4◦(90th percentile 12.1◦). On the challenge test set, 97.9% are
+named correctly, with 109 extra detections in 600 scans. There, 1.6% of the teeth have no frame
+within 3 mm. Where the nearest frame has the wrong number, the number is off by one, that is, it
+names the neighboring tooth, in 404 of 431 cases, as is also the case for ToothGroupNetwork.
+Teeth by position. On the challenge test set, ToothInstanceNet’s lead comes from the back molars
+(Tab. 16). Of its 0.39 points of per-tooth IoU, third molars account for 0.42 and second molars for
+0.13, while FrameSeg3D is 0.15 ahead on teeth 1 to 6. Back molars are rarer in training. Per scan,
+the training fold has 0.01 third molars, the validation and test folds 0.02, and the challenge test set
+0.25. For second molars, the numbers are 1.25, 1.47, 1.32 and 1.79. Of the 87 teeth where our first
+run scores below 0.5 IoU, 84 have no frame, and 41 of these are third molars. The validation fold
+does not show this failure: it holds 3 third molars, and every tooth in it gets a frame.
+Why 3DTeethSAM drops on the challenge test set. From the test fold to the challenge test set,
+3DTeethSAM loses 6.4 per-tooth IoU, against 3.3 for ToothGroupNetwork, 2.5 for TeethSplineSeg
+and 0.6 for FrameSeg3D, while ToothInstanceNet gains 0.3. The drop is broad: 110 of the 600 scans
+fall below 0.8 (ToothGroupNetwork 30, FrameSeg3D 3 to 6 per seed, ToothInstanceNet 0). On 94
+of those 110 scans, neighboring teeth share one predicted tooth (299 of 1,584 ground-truth teeth
+match the same predicted tooth as a neighbor). Parts of teeth are also labeled as gum. Naming fails
+29
+
+
+Table 16. By tooth position on the challenge test set: 1–6 are incisors to first molars, 7 second molars and 8
+third molars. IoU: per-tooth IoU; BIoU: boundary IoU at 0.25 mm; Fail: teeth with IoU below 0.5 (%). Ours:
+mean over 3 seeds. TGN: the released ToothGroupNetwork checkpoint.
+FrameSeg3D (Ours)
+ToothInstanceNet
+TGN
+Teeth
+𝑛
+IoU↑
+BIoU↑
+Fail↓
+IoU↑
+BIoU↑
+Fail↓
+Fail↓
+1–6
+7048
+96.52
+72.94
+0.3
+96.34
+70.27
+0.2
+2.4
+7
+1074
+95.00
+65.98
+2.0
+96.00
+62.81
+0.5
+10.2
+8
+152
+70.00
+46.22
+27.6
+92.67
+51.79
+1.3
+65.8
+All
+8274
+95.84
+71.55
+1.1
+96.23
+68.96
+0.3
+4.6
+on the same scans (TIR 0.66). Figure 6 shows the scans where each of these methods loses most
+against FrameSeg3D, picked automatically from the per-scan scores.
+Ground truth
+Ours
+ToothGroupNet
+TeethSplineSeg
+3DTeethSAM
+Ground truth
+Ours
+ToothGroupNet
+TeethSplineSeg
+3DTeethSAM
+upper
+97.0
+96.7
+95.5
+92.5
+lower
+96.7
+96.4
+95.2
+92.8
+upper
+97.7
+72.7
+80.4
+85.1
+upper
+96.9
+72.5
+89.3
+76.2
+lower
+96.4
+74.9
+87.4
+68.4
+upper
+95.2
+82.0
+45.4
+25.8
+upper
+97.9
+97.4
+51.0
+61.9
+upper
+96.8
+88.8
+52.9
+63.9
+lower
+96.9
+82.9
+66.5
+42.4
+upper
+98.0
+96.1
+57.6
+51.2
+lower
+97.9
+76.8
+73.4
+60.6
+lower
+76.3
+95.7
+87.7
+94.6
+gum or unlabeled
+tooth on gum only
+other colors: the ground-truth tooth it overlaps most
+Figure 6. More jaws from the challenge test set with each method’s per-tooth IoU, picked automatically
+from the per-scan scores. In reading order: a typical upper and lower jaw (every method near its median);
+for ToothGroupNetwork, TeethSplineSeg and 3DTeethSAM, the three scans where each loses most against
+FrameSeg3D (different patients, among scans where FrameSeg3D reaches 95); and our lowest scan, where
+FrameSeg3D misses three teeth (both second premolars and one second molar). Colors as in Fig. 3.
+G
+One network and few labels
+Few labels. The subsets of Tabs. 7 and 8 are nested and the same for every method: 1, 3 and 8
+people hold 1, 5 and 14 of the 57 training hands, and 5 and 42 patients hold 10 and 84 of the 840
+training scans. Every model selects its checkpoint on the full validation set. We retrain both stages of
+ToothGroupNetwork with its official code and settings on the 5 and 42 patients. Each epoch repeats
+30
+
+
+the subset up to the 840 scans of the full fold, so a subset gets the same schedule and number of
+steps as the released checkpoints (60 epochs). We keep the checkpoint with the lowest loss on the
+180 validation scans. With both stages on 3 people, the whole loss comes from two nails on two test
+hands, which get no frame of their own and score close to 0. With one person, the frame network
+names only 83% of the test nails correctly, and its 90th-percentile center error is 98 mm. With both
+stages on 5 patients, the median scan is unchanged, and 4 of 180 scans lose more than 5 points. On
+teeth, the segmentation network on 5 patients still beats ToothGroupNetwork in boundary IoU (70.18
+vs. 69.59) and ties it in their IoU (96.00 vs. 95.99), with 84 times fewer training scans (10 instead of
+840). Retrained on a subset, ToothGroupNetwork learns both of its stages from it, so we compare it
+with FrameSeg3D with both stages trained on the same patients. On 5 patients, ToothGroupNetwork
+reaches 49.80 boundary IoU and 88.34 in its own IoU, and it identifies 86.79% of the teeth (TIR);
+FrameSeg3D reaches 70.08, 95.78 and 96.66%. On 42 patients, ToothGroupNetwork reaches 53.65,
+90.64 and 94.69%, and FrameSeg3D 70.26, 95.88 and 97.84%.
+Cross-domain initialization. Starting the segmentation network from the other domain’s network
+instead of ImageNet weights does not help (one seed each): nails from 3 people 0.967 vs. 0.966,
+from one person 0.939 vs. 0.949, and teeth from 5 patients 96.40 vs. 96.38 per-tooth IoU (the
+other-domain start first in each pair).
+31

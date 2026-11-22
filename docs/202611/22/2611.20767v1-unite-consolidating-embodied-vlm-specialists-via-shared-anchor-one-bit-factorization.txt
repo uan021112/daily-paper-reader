@@ -1,0 +1,3675 @@
+1
+UNITE: Consolidating Embodied VLM Specialists
+via Shared-Anchor One-Bit Factorization
+Tao Tao, Anke Tang, Enneng Yang, Zhi Hou, Xiaogang Wang, and Dacheng Tao
+Abstract—Embodied capabilities such as visual grounding, spa-
+tial reasoning, navigation, and driving understanding are often
+developed in separate vision-language specialists fine-tuned from
+a common pretrained model. Deploying the specialists separately
+multiplies storage, whereas merging them into one dense model
+forces conflicting task updates to share parameters and loses part
+of each specialist’s expertise. We introduce UNITE, a framework
+that consolidates such specialists into a compact shared-backbone
+mixture of experts. UNITE keeps the feed-forward block of each
+specialist as a routable expert and represents the expert bank
+through a shared-anchor one-bit factorization: a shared floating-
+point anchor plus expert-specific, row-scaled binary deviations.
+The anchor is optimized jointly with the scales and signs through
+closed-form alternating updates, using only source weights and
+no calibration data. Router adaptation then adjusts token-
+level expert selection with the backbone and experts frozen,
+updating fewer than 0.6M parameters (< 0.01% of the 8.8B
+active parameters). Built from four Qwen3-VL-8B specialists, the
+complete UNITE model occupies 20.3 GB, 1.16× the storage of
+one dense specialist and 59.6% below the uncompressed MoE.
+Across 22 benchmarks and R2R Val-Unseen, UNITE matches
+six static merging methods in mean retention of best-specialist
+performance, leads all of them on Scan2Cap, ScanQA, and all
+four navigation metrics, and surpasses every source specialist
+on all five 3D scene understanding benchmarks (up to +19.1 on
+Scan2Cap) and on R2R navigation. Relative to the uncompressed
+MoE, factorization is nearly lossless on 21 of 22 benchmarks; the
+exception is VSI-Bench, where frame-count experiments suggest
+impaired use of cross-frame evidence. UNITE thus consolidates
+complementary embodied capabilities near single-model storage.
+Index Terms—Vision-language models, model merging, mix-
+ture of experts, one-bit quantization, embodied intelligence.
+I. INTRODUCTION
+E
+MBODIED intelligence aims to develop agents that can
+perceive and understand physical environments and use
+this understanding to guide their actions [1]. This requires
+complementary capabilities such as visual grounding, spatial
+reasoning, navigation, and driving understanding. Recent ad-
+vances in vision-language and vision-language-action founda-
+tion models have improved scene understanding, robot control,
+and action generation across diverse embodied tasks [2], [3],
+[4], [5], [6]. These advances motivate bringing complementary
+Tao Tao is with Sichuan University, Chengdu, China, and ACE Robotics,
+Shanghai, China. (e-mail: 2022141430130@stu.scu.edu.cn).
+Zhi Hou and Xiaogang Wang are with ACE Robotics, Shanghai, China.
+(e-mail: houzhi91@gmail.com, xg@acerobotics.com).
+Anke Tang and Dacheng Tao are with Nanyang Technological University,
+Singapore. (e-mail: anke.tang@ntu.edu.sg, dacheng.tao@ntu.edu.sg).
+Enneng Yang is with Shenzhen Campus of Sun Yat-sen University, Shen-
+zhen 518107, China. (e-mail: yangenn@mail.sysu.edu.cn).
+Corresponding authors: Anke Tang, Zhi Hou.
+0
+40
+80
+Weight storage (GB)
+Four specialists
+(kept separate)
+UNITE (ours)
+One model
+(static merging)
+70.1 GB
+20.3 GB
+17.5 GB
+Near single-model storage
+0
+20
+40
+60
+R2R Val-Unseen SR (%)
+UNITE (ours)
+Fisher Merging
+Model Soup
+DARE
+Task Arith.
+TIES Merging
+RegMean
+59.6
+55.2
+54.3
+48.8
+48.7
+30.9
+30.2
+UNITE surpasses it
+specialist 57.5%
+Fig. 1. Storage versus capability retention for four Qwen3-VL-8B specialists.
+Keeping them separate (gray) costs 70.1 GB; static merging (violet, Table I)
+cuts this to 17.5 GB, but every merging method then falls below the navigation
+specialist’s 57.5% R2R Val-Unseen success rate, reaching at best 55.2%
+(Table III). UNITE (blue) needs only 20.3 GB, 1.16× the single-specialist
+footprint, and surpasses the specialist at 59.6% success rate.
+embodied capabilities into a single model while retaining the
+expertise learned for individual tasks [7].
+In practice, embodied tasks such as visual grounding [8],
+spatial reasoning [9], navigation [10], and driving understand-
+ing [11] differ in their observations, supervision signals, tem-
+poral horizons, and output formats [12], [13], [14], [15]. The
+common practice is therefore to fine-tune a vision-language
+model (VLM) separately for each task, producing a collection
+of dense specialists that share an architecture and a pretrained
+initialization [16], [17]. Two common deployment choices
+expose a trade-off between storage and capability retention.
+Storing the specialists side by side multiplies weight storage
+by the number of tasks: four Qwen3-VL-8B specialists occupy
+70.1 GB. Statically merging them into one dense model retains
+the storage of a single specialist, but task-specific updates
+interfere [18], [19]. This loss is evident in navigation: the
+navigation specialist reaches 57.5% success rate on R2R Val-
+Unseen, whereas all six static merging methods fall below it,
+with the best reaching 55.2% (Table III). Fig. 1 summarizes
+this trade-off. The challenge is to combine their capabilities
+near single-model storage (Fig. 2).
+Constructing a mixture of experts (MoE) from the special-
+ists’ feed-forward blocks avoids interference in these blocks
+by keeping each specialist’s transformation as a separately
+routable expert [20], but retaining full-precision feed-forward
+weights for every specialist brings total model storage to
+arXiv:2611.20767v1  [cs.LG]  16 Nov 2026
+
+
+2
+Navigation Specialist
+Grounding Specialist
+Embodied Spatial Specialist
+Driving Specialist
+(b) Task-Specific Experts
+① Single View (one image)
+② Multi-View
+③ Video
+A single image of
+the current view.
+Visual Observation (three forms)
+(a) Model Inputs
+Text Instruction
+"Find the target in this scene."
+(c) Unified Generalist Model
+UNITE
+Model
+Object regions &
+target points
+Path / waypoint
+prediction
+Trajectory
+prediction
+"The ottoman is in
+front of the sofa."
+Driving
+Navigation
+Grounding
+Spatial QA
+Fig. 2.
+Consolidating embodied specialists with UNITE. Grounding, spatial reasoning, navigation, and driving understanding specialists from a common
+pretrained model contribute separate feed-forward experts to a shared-backbone MoE. Jointly fitted anchors and one-bit deviations compress the expert bank,
+bringing total model storage to 1.16× that of one dense specialist; supervised router adaptation adjusts token-level expert selection.
+50.2 GB in our setting. Representing each expert as a shared
+component plus a compact expert-specific deviation removes
+this redundancy [21], [22]. Prior work fixes the shared com-
+ponent in advance, typically at the pretrained base or at a
+merged weight, and then compresses the deviation around
+it. The key observation is that the shared anchor determines
+how well the expert-specific residuals can be represented at
+one bit per weight. A row-scaled binary deviation represents
+only one magnitude per row, so the mean expert weight,
+which minimizes unquantized squared residuals, need not
+minimize binary reconstruction error. Fitting the anchor jointly
+with the deviations accounts for this constraint and reduces
+reconstruction error by 20–22% relative to a fixed mean anchor
+on the Qwen3-VL-8B expert bank, at identical storage.
+We introduce UNITE, a framework that integrates this
+jointly optimized representation into a shared-backbone MoE
+for embodied VLM specialists. Following the dense-to-MoE
+construction of Branch-Train-MiX [20], each decoder layer
+retains a complete feed-forward network (FFN) block from
+each specialist as a separately routable expert, while the
+remaining modules are merged into a shared backbone. The
+factorization jointly fits a shared floating-point anchor, expert-
+specific row scales, and binary signs through closed-form
+alternating updates, each of which minimizes its conditional
+subproblem. Fitting requires only source weights, with no
+calibration data or gradients, and each additional expert costs
+approximately one bit per weight. Supervised router adaptation
+then adjusts token-level expert selection with the backbone
+and experts frozen, updating fewer than 0.6M parameters
+(< 0.01% of the 8.8B active parameters).
+We evaluate UNITE built from four Qwen3-VL-8B spe-
+cialists [23] for grounding, spatial reasoning, navigation, and
+driving understanding, against the source specialists and six
+static merging methods on 22 understanding benchmarks and
+R2R Val-Unseen. The complete four-expert UNITE model
+occupies 20.3 GB, 1.16× the footprint of one dense specialist
+and 59.6% below the uncompressed MoE (Table I). At this
+footprint, UNITE matches static merging methods in mean
+retention of the best specialist’s score across the 22 bench-
+marks, and it leads all static merging methods on Scan2Cap
+(102.1 versus 86.4), ScanQA (105.6 versus 101.8), and all
+four navigation metrics. UNITE also surpasses every source
+specialist on all five 3D scene understanding benchmarks
+and all four navigation metrics, improving Scan2Cap by 19.1
+points over the best specialist and reaching 59.6% R2R
+success rate. Stage-wise evaluation shows that factorization
+is nearly lossless relative to the uncompressed MoE on 21
+of 22 benchmarks; on the exception, VSI-Bench, frame-count
+experiments suggest impaired use of cross-frame evidence.
+Our main contributions are threefold: (1) a shared-anchor
+one-bit factorization with closed-form updates that jointly
+optimize the anchor and expert-specific binary deviations
+using only source weights; (2) UNITE, a shared-backbone
+MoE framework with compressed specialist FFNs and su-
+pervised router adaptation, achieving 1.16× the storage of a
+single dense model; and (3) a stage-wise evaluation across
+22 embodied understanding benchmarks and R2R navigation,
+which identifies the gains and losses from expert construction,
+factorization, and router adaptation.
+II. RELATED WORK
+Embodied foundation models and capability reuse.
+Vision-language-action (VLA) and world action models pursue
+broader embodied capabilities through multimodal learning
+and predictive modeling, as exemplified by π0.5, WorldVLA,
+and DreamZero [2], [5], [24]. These models acquire breadth
+through large-scale joint training across tasks. Parameter reuse
+provides a complementary route that composes already-trained
+skills. RETAIN interpolates a pretrained VLA policy with its
+fine-tuned counterpart to retain general capabilities during task
+adaptation [25], and MergeVLA combines masked parameter
+merging, cross-attention action experts, and task routing to
+merge multiple task-specialized VLA models for skill compo-
+sition [26]. Both produce a single merged model and do not
+
+
+3
+address the storage cost of holding many specialists. UNITE
+targets the many-specialist setting: it consolidates existing
+dense VLM specialists derived from a common pretrained
+model, with an emphasis on compact expert storage and
+learned token-level selection.
+Static and dynamic parameter merging. Parameter merg-
+ing methods differ in whether they produce a fixed model or
+compose expertise according to the input. Model Soups aver-
+ages fine-tuned model weights, while Task Arithmetic com-
+bines task vectors relative to a shared pretrained model [18],
+[27]. Fisher Merging and RegMean use parameter impor-
+tance and activation statistics, respectively [28], [29]. TIES-
+Merging resolves conflicts among update signs, and DARE
+sparsifies and rescales task updates [19], [30]. All of these
+methods produce a single dense weight set, so capabilities
+whose updates conflict must share the same parameters; the
+resulting interference is evident in Section IV-C, where every
+static method falls below the navigation specialist on R2R.
+Dynamic variants reduce interference by conditioning on the
+input. WEMoE constructs input-conditioned FFN weights
+from pretrained weights and task vectors, while Twin-Merging
+dynamically combines a shared merged model with low-rank
+task residuals [31], [32]. These methods synthesize a new
+weight matrix per input, which requires the task vectors or
+residuals to be stored and combined at inference. UNITE
+instead composes the outputs of complete feed-forward experts
+through token-level routing, so each expert is stored once in
+a compressed form and evaluated only when selected.
+Expert construction and routing. Constructing mixtures
+of experts (MoEs) from dense checkpoints reuses learned
+parameters to form separately routable expert branches. Sparse
+Upcycling initializes experts by replicating feed-forward net-
+work (FFN) blocks from a single dense model [33]. Branch-
+Train-MiX assembles FFN blocks from independently special-
+ized models and averages the remaining parameters into a
+shared backbone [20]. MergeME addresses both homogeneous
+and heterogeneous expert models, using projection layers
+and sequence-level routing to connect heterogeneous model
+branches [34]. These constructions retain every expert at full
+precision, so the expert bank grows linearly with the number of
+specialists; in our setting, the resulting 50.2-GB uncompressed
+MoE is 2.9× the size of one specialist. UNITE adopts this
+construction and reduces its storage through jointly fitted
+anchors and row-scaled binary deviations.
+Routing determines how the constructed expert branches
+are selected and used. PHATGOOSE learns gates post hoc on
+each specialist’s source data with the backbone and parameter-
+efficient modules frozen, then combines these gates for token-
+and module-level routing [35]. SMILE selects experts using
+projection norms onto SVD-derived task-update subspaces
+without additional router training [36]. MADE-IT uses feature-
+subspace alignment for training-free routing within an adap-
+tive continual model-merging framework [37]. Training-free
+routers are fitted to the uncompressed specialist weights and
+do not see the reconstruction error introduced when the experts
+are compressed. UNITE therefore uses singular directions of
+the centered source weights only to initialize the routers, then
+fine-tunes them on the compressed bank with supervision.
+Compact specialist and expert representations. Com-
+pact parameter representations reduce storage by separating
+shared weights from specialist-specific deviations. BitDelta
+compresses fine-tuning updates around a fixed pretrained base
+using binary signs and matrix-level scales, while T-Switch
+represents task vectors through binary masks, signs, and
+scalar magnitudes [21], [38]. At the expert-bank level, DeRS
+represents upcycled experts using their common pretrained
+initialization and sparse or quantized deviations [22]. Low-
+rank approaches offer another compact representation: D2-
+MoE constructs a shared base through Fisher-weighted expert
+merging and factorizes expert-specific residuals [39]. In all
+of these methods the shared component is fixed before the
+deviations are fitted, either at the pretrained base or at a
+merged weight. When deviations are constrained to one bit per
+weight, this fixed choice determines the residuals the binary
+code must approximate, and the shared component cannot
+compensate for the representation’s limited expressiveness.
+UNITE removes this restriction by treating the anchor as an
+optimization variable: it jointly fits a floating-point anchor,
+expert-specific row scales, and binary deviation signs through
+alternating closed-form updates, allowing the shared anchor
+to adapt to the one-bit deviation budget while preserving a
+separate reconstruction for each expert.
+III. METHOD
+We consider E dense vision-language specialists for com-
+plementary embodied capabilities, including grounding, spatial
+reasoning, navigation, and driving understanding. They share
+an architecture and are fine-tuned from a common pretrained
+model. UNITE consolidates them into a shared-backbone
+mixture of experts (MoE), reducing weight duplication while
+retaining conditional access to specialist transformations.
+The three stages serve distinct roles (Fig. 3). First, expert
+construction retains complete specialist feed-forward blocks
+and merges the remaining parameters into the shared back-
+bone. Second, shared-anchor one-bit factorization compresses
+the expert weights using source weights alone. Finally, super-
+vised router adaptation learns token-level expert selection with
+the backbone and compressed experts frozen.
+A. Shared-Backbone Expert Construction
+Each decoder layer retains one complete feed-forward net-
+work (FFN) block from each specialist. An expert contains
+the gate, up, and down projections of its source specialist;
+the router selects these projections together. Matching input
+and output dimensions allow the experts to process token
+representations within a shared decoder.
+We form the shared backbone by merging corresponding
+non-FFN parameters. We use norm-rescaled averaging for
+self-attention projection weights, whose Frobenius norms can
+shrink when source matrices differ in direction. For corre-
+sponding source projections {Pe}E
+e=1, let µ = E−1 P
+e Pe
+and n = E−1 P
+e ∥Pe∥F . We rescale the mean to the average
+source norm, except near zero:
+Pshared =
+(
+µ n/∥µ∥F ,
+∥µ∥F ≥10−10,
+µ,
+otherwise.
+
+
+4
+M1
+non-FFN
+FFN1
+M2
+non-FFN
+FFN2
+ME
+non-FFN
+FFNE
+⋮
+(a) Dense specialists
+Ŵe = C + diag(αe) Se
+C
+shared anchor
+Update
+αe, Se
+α1
+S1
++1
+−1
+−1
++1
+−1
++1
++1
++1
++1
+−1
++1
+−1
+α2
+S2
+−1
++1
+−1
++1
++1
+−1
++1
+−1
+−1
++1
++1
+−1
+αE
+SE
++1
+−1
++1
++1
+−1
+−1
++1
+−1
++1
++1
+−1
++1
+⋮
+(b) Shared-anchor one-bit factorization
+Update C
+Shared non-FFN
+Router
+α1, S1
+α2, S2
+αE, SE
+⋯
+C (shared by all experts)
+Experts
+(c) UNITE MoE layer
+merge non-FFN parameters into the shared backbone
+Trainable
+Frozen
+Fig. 3. Overview of UNITE. (a) The non-FFN parameters of the dense specialists are merged into a shared backbone, while each specialist FFN is kept as
+an expert. (b) Alternating updates jointly fit the shared anchor C, row scales αe, and binary signs Se for each layer and weight group. (c) In the resulting
+MoE layer, every expert is represented by its one-bit factors (αe, Se) on top of the shared anchor C. The trainable/frozen markers refer to router adaptation,
+which trains only the routers while the backbone and the compressed experts stay frozen.
+The remaining shared parameters (visual encoder, normaliza-
+tion layers, embeddings, and output head) are averaged.
+Each MoE layer routes tokens independently to a sub-
+set of experts. At layer ℓ, expert e maps an input token
+representation x ∈Rd to Fℓ,e(x), where d is the hidden
+dimension. A linear router with weights Rℓ∈RE×d assigns
+probabilities pℓ(x) = softmax(Rℓx). The indices of the k
+highest-probability experts form Tℓ(x). We renormalize their
+probabilities and combine the selected expert outputs:
+MoEℓ(x) =
+X
+e∈Tℓ(x)
+pℓ,e(x)
+P
+j∈Tℓ(x) pℓ,j(x)Fℓ,e(x).
+(1)
+Only the selected expert blocks are evaluated for each token.
+B. Joint Shared-Anchor One-Bit Factorization
+We represent every expert matrix as a shared anchor plus
+an expert-specific binary deviation. The anchor determines the
+residuals that the binary deviations must approximate, and with
+one nonnegative scale per output row, a binary deviation can
+represent only a single magnitude within that row. An anchor
+fixed in advance therefore leaves reconstruction error that the
+deviations cannot absorb. We instead treat the anchor as an
+optimization variable and formulate reconstruction as a joint
+optimization over the anchor, row scales, and binary signs.
+We concatenate each expert’s gate and up projections by
+rows into one weight group and treat its down projection as
+a second group. For a fixed layer and weight group, expert e
+has a weight matrix We ∈RO×I with O output rows and I
+input columns. We approximate each expert matrix as
+c
+We = C + diag(αe)Se,
+(2)
+where C ∈RO×I is the anchor shared across experts within
+this layer and weight group. The matrix Se ∈{−1, +1}O×I
+contains expert-specific binary signs. The nonnegative vector
+αe ∈RO
+≥0 provides one scale per output row. Anchors and
+row scales remain floating point; only the signs use one bit.
+The joint objective minimizes the total squared reconstruc-
+tion error across experts:
+min
+C,{αe,Se}E
+e=1
+E
+X
+e=1
+∥We −C −diag(αe)Se∥2
+F ,
+s.t.
+αe ≥0,
+Se ∈{−1, +1}O×I.
+(3)
+We optimize every layer and weight group on its own.
+We optimize Eq. (3) by alternating between the expert-
+specific factors and the shared anchor for T iterations. We
+initialize the anchor with the mean expert weight, C(0) =
+1
+E
+PE
+e=1 We. At iteration t ∈{0, . . . , T −1}, fixing the anchor
+gives residuals ∆(t)
+e
+= We −C(t). The conditionally optimal
+binary signs and row scales are
+S(t)
+e
+= sign
+
+∆(t)
+e
+
+,
+α(t)
+e,o = 1
+I
+I
+X
+i=1
+∆(t)
+e,o,i
+ ,
+(4)
+where o and i index rows and columns, and sign(·) is applied
+entrywise with sign(x) = 1 for x ≥0 and −1 for x < 0.
+The signs follow the residual entries; each row scale is the
+row’s mean absolute residual. With these factors fixed, we
+subtract the reconstructed deviations from each source matrix
+and average the remaining weights to update the anchor:
+C(t+1) = 1
+E
+E
+X
+e=1
+h
+We −diag
+
+α(t)
+e
+
+S(t)
+e
+i
+.
+(5)
+Each closed-form update minimizes its conditional subprob-
+lem, so the objective cannot increase in exact arithmetic. The
+objective values therefore form a non-increasing sequence
+bounded below by zero and hence converge. Each iteration
+costs O(EOI) elementwise operations and requires no data.
+Iteration t = 0 corresponds to a fixed anchor: a single
+sign-and-scale fit of the residuals around the mean expert
+weight. The mean minimizes the total squared deviation
+P
+e ∥We −C∥2
+F and is therefore a natural fixed choice, but
+it is not optimal once the deviations are restricted to row-
+scaled signs. Fig. 4 reports the reduction on the Qwen3-VL-8B
+
+
+5
+0
+2
+4
+6
+8
+10
+Alternating iteration T
+0.7
+0.8
+0.9
+1.0
+Reconstruction error
+(relative to T=0)
+−20%
+−22%
+mean-anchor initialization (T=0)
+gate + up projections
+down projection
+Fig. 4. Joint anchor fitting versus a fixed anchor. Summed reconstruction error
+P
+e ∥We−c
+We∥2
+F as a function of the alternating iteration T, normalized per
+layer to its value at T = 0 (fixed mean anchor with a single sign-and-scale
+fit). Lines are medians across the 36 decoder layers of the Qwen3-VL-8B
+expert bank; bands span the 10th to 90th percentile. The last point (T = 10)
+is measured after rounding the anchor and row scales to BF16 and refitting
+the signs and scales, i.e., the archive used at inference; the rounding costs
+less than one percentage point.
+Algorithm 1 Alternating optimization for shared-anchor one-
+bit factorization
+Input: Expert matrices {We}E
+e=1, We ∈RO×I; iteration count T.
+Output: Stored anchor Cstore, signs {Se}E
+e=1, and row scales
+{αe,store}E
+e=1.
+Use FP32 for alternating updates and sign(0) = +1.
+1: C(0) ←1
+E
+PE
+e=1 We
+2: for t = 0, . . . , T −1 do
+3:
+for e = 1, . . . , E do
+4:
+∆(t)
+e
+←We −C(t)
+5:
+S(t)
+e
+←sign(∆(t)
+e )
+6:
+α(t)
+e,o ←1
+I
+PI
+i=1 |∆(t)
+e,o,i|, o = 1, . . . , O
+7:
+end for
+8:
+C(t+1) ←1
+E
+PE
+e=1
+
+We −diag(α(t)
+e )S(t)
+e
+
+9: end for
+10: Cstore ←BF16(C(T ))
+11: for e = 1, . . . , E do
+12:
+∆e ←We −Cstore
+13:
+Se ←sign(∆e)
+14:
+αe,o ←1
+I
+PI
+i=1 |∆e,o,i|, o = 1, . . . , O
+15:
+αe,store ←BF16(αe)
+16: end for
+17: return Cstore, {Se, αe,store}E
+e=1
+expert bank: after ten iterations and the final BF16 rounding,
+the reconstruction error is 20% (gate-up) and 22% (down
+projection) lower than with the fixed mean anchor (median
+over the 36 decoder layers; the 10th–90th percentile range
+spans 19–23%), and over 90% of the reduction is obtained
+within the first three iterations.
+After T alternating updates in 32-bit floating point (FP32),
+we round the final anchor C(T ) to bfloat16 (BF16). We
+recompute signs and row scales relative to this stored an-
+chor so that the deviations are fitted to the anchor used
+during inference. The recomputed row scales are then stored
+in BF16. Algorithm 1 summarizes the procedure for one
+layer and weight group. Storing E expert matrices requires
+16OI+EOI+16EO bits before packing alignment. The three
+terms account for the shared anchor, expert-specific binary
+signs, and row scales, respectively. Dividing by the EOI
+logical expert weights gives 1+16/E +16/I bits per weight,
+including the shared anchor and scales. The 16/E term reflects
+the anchor cost amortized across experts. For E = 4, this
+is approximately five bits per expert weight, compared with
+16 bits for an uncompressed BF16 expert bank; the shared
+backbone and routers are counted separately. Because the
+anchor is shared, the marginal cost of adding one more expert
+is only 1+16/I bits per weight, so the representation becomes
+more economical as more specialists are consolidated.
+C. Router Initialization and Adaptation
+Routing determines how tokens use the constructed and
+compressed expert bank. We initialize each router from differ-
+ences among the original specialist weights, without calibra-
+tion data. At layer ℓ, let Wgate
+ℓ,e
+and Wup
+ℓ,e denote expert e’s
+original gate and up matrices. Let W
+gate
+ℓ
+and W
+up
+ℓ
+be their
+respective means across specialists. We subtract these means
+and stack the centered matrices by rows:
+Xℓ,e =
+"
+Wgate
+ℓ,e
+−W
+gate
+ℓ
+Wup
+ℓ,e −W
+up
+ℓ
+#
+.
+We approximate the leading right singular vector vℓ,e,1 using
+randomized singular value decomposition (SVD). This vector
+initializes the corresponding router row:
+Rℓ[e, :] = vT
+ℓ,e,1.
+(6)
+It captures a dominant input direction along which the special-
+ist’s gate and up projections differ from their cross-specialist
+means. We compute the SVD in FP32 and retain the sign
+returned by the numerical routine. The router row is initialized
+to zero if maxo,i |Xℓ,e,o,i| < 10−8.
+Supervised router adaptation adjusts expert selection to the
+compressed model. The shared backbone, anchors, row scales,
+and binary signs remain frozen. Training combines causal
+language-modeling loss on target answer tokens with an aux-
+iliary load-balancing loss, without explicit expert-assignment
+labels. During router adaptation, we select multiple experts per
+token so gradients from the language-modeling loss can pass
+through the selected mixture weights.
+IV. EXPERIMENTS
+Our experiments answer four questions. (i) How much
+storage does UNITE save relative to the alternatives of keeping
+separate specialists or an uncompressed MoE (Section IV-B)?
+(ii) At that storage, does UNITE retain the capabilities that
+static merging loses, and does consolidation add capability
+beyond the source specialists (Section IV-C)? (iii) At which
+stage do gains and losses arise, and how does router adaptation
+interact with one-bit compression (Sections IV-D and IV-E)?
+(iv) Does the factorization transfer to a second model family
+without router training (Section IV-F)?
+
+
+6
+A. Experimental Setup
+Source models. We fine-tune four Qwen3-VL-8B special-
+ists for grounding, embodied spatial reasoning, navigation,
+and driving understanding [23]. UNITE and the static merg-
+ing baselines use these same four source checkpoints. The
+language-model extension uses Llama-3.1-8B specialists from
+MergeBench [40] without router adaptation (Section IV-F).
+Tasks and metrics. The embodied evaluation covers 22 under-
+standing benchmarks and navigation on R2R Val-Unseen [10].
+(1) The grounding benchmarks are RoboSpatial [41], RefSpa-
+tial [42], PointArena [43], RoboAfford [44], and the ShareR-
+obot trajectory task [45]. (2) The embodied spatial benchmarks
+are VSI-Bench (VSI) [46], MMSI-Bench (MMSI) [47], Mind-
+Cube [48], EmbSpatial-Bench [49], ERQA [1], and SAT [50],
+together with five 3D scene understanding benchmarks:
+ScanQA [9], SQA3D [51], Scan2Cap [52], ScanRefer [53],
+and Multi3DRefer (Multi3DRef) [54]. (3) The real-world and
+driving benchmarks are MME-RealWorld [55], MAPLM [56],
+DriveAction [57], NuScenes-QA (NuScenesQA) [58], Nu-
+PlanQA [59], and LingoQA [60].
+We use each benchmark’s reported metric, including overall
+accuracy for MMSI and DriveAction; MindCube uses the
+tiny configuration. For 3D scene understanding, we report
+CIDEr for ScanQA, EM-1 for SQA3D, and CIDEr@0.25 for
+Scan2Cap. ScanRefer and Multi3DRef use Acc@0.25 and
+F1@0.25, respectively. For R2R, we report navigation error
+(NE), oracle success (OS), success rate (SR), and success
+weighted by path length (SPL). NE is in meters; OS, SR,
+and SPL are percentages. ShareRobot reports mean normalized
+discrete Fréchet distance (nDFD) for trajectory prediction.
+Lower is better for NE and nDFD; higher is better otherwise.
+The supplement details benchmark variants and protocols.
+Baselines. We compare with Model Soup [27], Task Arith-
+metic [18], TIES Merging [19], DARE [30], Fisher Merg-
+ing [28], and RegMean [29]. All six methods merge the
+same source checkpoints into one dense model of 17.5 GB.
+For context, we also evaluate general-purpose and embodied
+reference models on the same benchmark data with the same
+metrics. They differ from UNITE in architecture, scale, and
+training data. Tables II and III compare their task-level scores
+with UNITE, while Tables IV and V compare methods built
+from the same source checkpoints. The supplement details
+baseline implementations and calibration settings.
+Training and evaluation. We apply ten alternating factoriza-
+tion updates and store anchors and row scales in BF16. Router
+adaptation updates 589,824 parameters with the backbone and
+expert bank frozen. We use top-2 routing during adaptation and
+top-1 routing for the main evaluations. Top-2 training allows
+gradients through the selected mixture weights, whereas the
+normalized top-1 coefficient in Eq. (1) is constant. Uncom-
+pressed and compressed router-tuned models share the same
+training budget and supervision mixture; full optimization
+settings are provided in the supplement.
+Router supervision. We use 55,757 samples from 18 sources
+covering navigation, grounding, spatial reasoning, and related
+vision-language tasks. The mixture includes training data asso-
+ciated with several evaluated tasks (R2R, RefSpatial, ShareR-
+TABLE I
+WEIGHT STORAGE AND PEAK ALLOCATED GPU MEMORY. STORAGE
+COUNTS SAFETENSORS WEIGHT PAYLOADS ONLY. “UNCOMPRESSED
+MOE” DENOTES THE SHARED-BACKBONE MODEL BEFORE
+FACTORIZATION.
+Model
+Weight storage
+(GB)↓
+Peak allocated
+memory (GB)↓
+One dense specialist
+17.5 (1.0×)
+17.9 (1.0×)
+Four standalone specialists
+70.1 (4.0×)
+65.6 (3.7×)
+Uncompressed MoE
+50.2 (2.9×)
+50.6 (2.8×)
+UNITE (one-bit + router)
+20.3 (1.16×)
+21.0 (1.17×)
+obot affordance and trajectory, VSI-590K, MMSI, MindCube,
+and SAT). Router adaptation updates only the routing pa-
+rameters, and its largest gain occurs on NuScenesQA, which
+is absent from the mixture (Section IV-D). The supplement
+details the full mixture.
+B. Weight Storage and GPU Memory
+Table I places UNITE between the two deployment options
+discussed in Section I. Four standalone specialists require 70.1
+GB. Sharing the non-FFN backbone alone reduces this to 50.2
+GB for the uncompressed MoE, still 2.9× one dense specialist,
+because the expert bank remains at full precision. Shared-
+anchor one-bit factorization reduces expert-bank storage from
+43.5 to 13.6 GB; adding 6.7 GB for shared modules and
+routers gives 20.3 GB of total weight storage. This is a 59.6%
+reduction relative to the uncompressed MoE and a 71.0%
+reduction relative to the standalone collection. It is only 1.16×
+the 17.5-GB footprint of a single dense specialist or any static
+merging baseline, while retaining four routable experts.
+Peak allocated GPU memory during evaluation decreases
+from 50.6 GB for the uncompressed MoE to 21.0 GB for
+UNITE, confirming that the storage reduction carries over to
+deployment memory. We next examine the embodied capabil-
+ities retained within this footprint.
+C. Consolidation Performance
+Tables II and III compare UNITE with reference models
+on understanding and navigation. Tables IV and V compare
+static merging with UNITE and its source experts on the
+same tasks. In mean retention of best-specialist performance
+(defined under Remaining deficits below), UNITE matches
+static merging methods; it leads on all four navigation metrics
+and trails the strongest static method by over one point only
+on VSI, MME-RealWorld, RoboSpatial, and RefSpatial.
+UNITE leads static merging most on 3D scene under-
+standing. On Scan2Cap, UNITE reaches 102.1 against the
+best static score of 86.4, and on ScanQA 105.6 against 101.8.
+Driving question answering depends on router adaptation.
+The driving specialist reaches 58.8 on NuScenesQA (Ta-
+ble IV); after static merging, Model Soup retains 40.1, Fisher
+Merging 19.2, and the best static method, Task Arithmetic,
+48.6. Keeping the driving FFN as a routable expert is not
+sufficient on its own: before router adaptation, UNITE scores
+27.7; adapting the router raises this to 48.7, matching the best
+static method. TIES Merging and RegMean degrade broadly
+
+
+7
+TABLE II
+TASK-LEVEL COMPARISON OF REFERENCE MODELS AND UNITE ACROSS 22 BENCHMARKS. REFERENCE MODELS ARE EVALUATED BY US ON THE SAME
+BENCHMARK DATA WITH THE SAME METRICS; THEIR ARCHITECTURES AND TRAINING DATA DIFFER. BOLD AND UNDERLINED SCORES DENOTE THE
+BEST AND SECOND-BEST DISTINCT VALUES ACROSS ALL ROWS, INCLUDING TIES. UNITE USES TOP-1 ROUTING AFTER ROUTER ADAPTATION. HIGHER
+IS BETTER EXCEPT SHAREROBOT (TRAJ.). COLUMN TINTS MARK THE BENCHMARK GROUPS.
+Grounding
+Embodied Spatial
+Driving
+Model
+RoboSpatial
+RefSpatial
+PointArena
+RoboAfford
+ShareRobot (↓)
+VSI
+MMSI
+MindCube
+EmbSpatial
+ERQA
+ScanQA
+SQA3D
+Scan2Cap
+ScanRefer
+Multi3DRef
+SAT
+MME-RealWorld
+MAPLM
+DriveAction
+NuScenesQA
+NuPlanQA
+LingoQA
+Closed-source reference models
+GPT-5.4 [61]
+53.5 15.7 37.9 29.4 0.32
+52.6 31.3 45.3 73.2 50.5 78.3 45.8 14.0 61.7 45.1 73.3
+32.4 57.9 82.5 37.1 87.5 76.8
+Gemini 2.5 Pro [62]
+53.7 36.5 62.8 15.0 0.34
+43.4 38.0 57.6 78.7 55.7 67.0 37.3 16.8 65.9 54.4 78.7
+67.0 26.1 73.5 16.1 64.2 64.1
+Claude Sonnet 4.6 [63]
+37.3 4.0 14.9 15.2 0.39
+17.6 30.9 43.7 87.9 41.0 31.5 14.0
+8.3
+51.5 40.2 64.7
+24.4 56.7 80.0 22.9 78.2 60.0
+Embodied reference models
+ACE-Brain-0.5-8B [4]
+60.1 55.6 68.5 75.1 0.32
+62.2 35.5 86.3 75.9 46.3 99.2 62.6 83.3 70.2 72.4 82.7
+66.6 71.3 78.2 44.7 86.7 55.6
+Cosmos3 Nano [64]
+61.0 53.1 69.4 84.0 0.30
+54.9 36.2 34.8 82.9 46.0 60.9 44.2
+9.2
+5.4
+8.1 80.7
+57.0 26.7 79.9 16.6 82.5 71.4
+Embodied-R1.5 [65]
+69.7 54.2 71.4 80.0 0.31
+56.1 29.5 29.4 78.1 46.0 67.1 48.2
+0.3
+5.1
+7.7 62.7
+61.7 63.1 77.1 33.5 82.0 61.0
+RynnBrain-8B [66]
+73.1 59.2 65.8 50.3 0.35
+71.0 39.6 56.6 80.0 46.8 60.2 43.3
+2.8
+5.4
+8.1 78.0
+68.7 68.2 76.3 29.5 81.8 57.8
+Vlaser-8B [67]
+61.7 59.2 60.3 18.3 0.35
+60.3 27.2 34.6 75.1 41.0 55.5 44.6
+0.2
+3.1
+8.2 66.7
+41.6 29.1 78.1 33.1 78.3 59.6
+MiMo-Embodied-7B [68]
+61.8 48.0 3.9 69.8 0.15
+48.5 31.7 32.3 76.2 46.8 83.7 54.2 61.8 64.7 35.9 78.7
+60.3 74.5 81.0 56.7 73.7 69.9
+Pelican-VL-7B [69]
+57.5 22.3 24.6 26.0 0.46
+52.8 26.0 31.0 73.2 39.8 65.6 42.5
+0.5
+5.4
+7.9 67.3
+57.9 24.4 77.2 14.8 83.4 56.0
+VeBrain-7B [70]
+44.9 9.8 12.1 18.9 0.38
+39.9 27.3 30.1 30.6 33.3 101.5 61.6 89.7 66.4 67.8 73.3
+60.1 22.9 78.3 29.3 82.9 55.0
+RoboBrain 2.5-8B [71]
+73.0 60.5 59.3 74.9 0.24
+41.0 29.3 28.1 75.6 22.3 63.1 28.1
+4.8
+2.3
+8.1 63.3
+60.0 22.5 80.5 33.2 79.3 48.0
+UNITE (ours)
+58.3 57.2 71.3 80.3 0.25
+46.7 36.3 87.9 78.9 47.3 105.6 62.8 102.1 71.0 73.2 90.7
+65.7 93.8 79.8 48.7 91.2 63.0
+on this specialist collection under their standard settings,
+which is consistent with four task updates that conflict too
+strongly for sign resolution or activation-matched averaging
+to reconcile within a single weight set.
+Consolidation is additive rather than merely lossless. On
+several tasks, UNITE exceeds every source specialist. The
+best specialist scores on ScanQA, SQA3D, and Scan2Cap are
+97.7, 61.7, and 83.0; UNITE reaches 105.6, 62.8, and 102.1.
+PointArena rises from 68.3 for the grounding specialist to
+71.3, RoboAfford from 77.7 to 80.3, and MAPLM from 88.4
+to 93.8. These margins are substantially larger than those of
+the best static method (+19.1 versus +3.4 on Scan2Cap and
++7.9 versus +4.1 on ScanQA), consistent with the additional
+contribution of token-level routing, which allows tokens within
+a single forward pass to draw on different experts.
+Navigation benefits from both expert retention and router
+adaptation. On R2R Val-Unseen (Table V, Fig. 5), UNITE
+leads all static baselines on every metric, with 59.6% SR and
+53.4% SPL against the best static scores of 55.2% and 50.5%,
+and a navigation error of 4.5 m against 5.0 m. UNITE also
+surpasses the navigation specialist on all four metrics (4.7
+m NE, 63.7% OS, 57.5% SR, 51.2% SPL), whereas every
+static method remains below it. The router mixture contains
+R2R training data, and before adaptation the one-bit MoE
+(57.0% SR) is just below the specialist, so the margin over the
+specialist comes from router adaptation. UNITE also exceeds
+all navigation reference models in SR and SPL (Table III).
+Remaining deficits. The largest gap is on the video benchmark
+VSI, where UNITE scores 46.7 against 63.6 for Model Soup.
+TABLE III
+R2R VAL-UNSEEN. NAVIGATION REFERENCES ARE EVALUATED BY US ON
+THE SAME EPISODES. NE IS IN METERS; OTHER METRICS ARE
+PERCENTAGES. BOLD AND UNDERLINED SCORES MARK THE BEST AND
+SECOND-BEST DISTINCT VALUES ACROSS ALL ROWS.
+Model
+NE↓OS↑SR↑SPL↑
+Navigation references
+NaVid [72]
+5.7 49.2 41.9
+36.5
+Uni-NaVid [73]
+5.6 53.3 47.0
+42.7
+NaVILA [74]
+5.2 62.5 54.0
+49.0
+StreamVLN [75]
+5.0 64.2 56.9
+51.9
+NavFoM [76]
+5.0 64.9 56.2
+51.2
+RynnBrain-Nav [66]
+4.9 71.6 58.6
+49.6
+Qwen-VLA-Instruct [77]
+5.1 69.0 57.5
+51.2
+ACE-Brain-0.5 [4]
+4.8 63.7 57.4
+51.7
+UNITE (ours)
+4.5 65.7 59.6
+53.4
+On the remaining nine benchmarks on which UNITE does
+not lead, the strongest static method is higher by between 0.3
+and 4.9 points; the gap exceeds one point only on MME-
+RealWorld (4.9), RoboSpatial (4.3), and RefSpatial (3.3),
+and is below one point on MMSI, DriveAction, MindCube,
+Multi3DRef, LingoQA, and ScanRefer. The RoboSpatial and
+MME-RealWorld deficits are already present in the uncom-
+pressed MoE (Section IV-D) and therefore do not originate in
+compression. In mean retention (the score divided by the best
+specialist’s score, with the ratio inverted for nDFD, averaged
+over the 22 benchmarks), UNITE (98.8%) and the strongest
+
+
+8
+… putting the exit … on your left. Walk to the end of the entrance way and turn left. Travel across the kitchen area with the counter and chairs on your 
+right … reach the dining room … stop and wait one meter from the closest end of the long dining table.
+… Go around the bed … past the double doors … towards the short hallway … Do not enter the room with the round hanging objects … Turn left and 
+enter the bathroom. Stop as soon as you are through the door and into the bathroom.
+With the large window to your right, head forward and to your left … Continue past the stairs … towards … stairs leading downwards. Pass to the 
+right of those second stairs … down a narrow hallway with the banister on your left … Enter the next room on your right …
+Walk past the large dining table with the chandelier overhead … table should be on your right … Follow the red carpet … exit … by the first doorway 
+… after passing the table … Walk down the hall and stop in the first doorway on your right.
+Forward
+Right
+Left
+Stop
+Forward
+Right
+Left
+Stop
+Forward
+Right
+Left
+Stop
+Forward
+Right
+Left
+Stop
+Forward
+Right
+Left
+Stop
+Forward
+Right
+Left
+Stop
+Forward
+Right
+Left
+Stop
+Forward
+Right
+Left
+Stop
+Forward
+Right
+Left
+Stop
+Forward
+Right
+Left
+Stop
+Forward
+Right
+Left
+Stop
+Forward
+Right
+Left
+Stop
+Forward
+Right
+Left
+Stop
+Forward
+Right
+Left
+Stop
+Forward
+Right
+Left
+Stop
+Forward
+Right
+Left
+Stop
+Fig. 5. Navigation in R2R Val-Unseen environments. Each row shows an instruction excerpt and four snapshots pairing egocentric observations with trajectory
+maps and action annotations. Green and blue indicate the ground-truth and UNITE trajectories, respectively. Tables III and V report navigation results.
+static methods (98.6–98.9%) are close. The difference lies
+in which capabilities are retained: UNITE’s main loss is
+concentrated in one video benchmark, whereas its advantages
+are concentrated in 3D captioning and question answering and
+in navigation. The VSI decline arises during factorization and
+persists after router adaptation.
+D. Stage-wise Analysis
+We trace when capability gains and losses arise through
+the three consolidation stages: the uncompressed MoE, the
+shared-anchor one-bit MoE, and the router-adapted one-bit
+MoE. Tables IV and V compare these stages with source
+experts and static merging on understanding and navigation.
+Figure 6 shows the change contributed by each stage across
+benchmarks. All three stages use top-1 routing, so the number
+of activated expert branches is fixed.
+Source specialists are complementary. The navigation and
+embodied spatial specialists record 57.5% and 56.8% R2R
+SR, whereas the grounding specialist reaches 28.2% and the
+driving specialist 0.1%. Conversely, the driving specialist leads
+on NuScenesQA (58.8), LingoQA (65.8), and SAT (92.0),
+where the other specialists are far behind. A consolidated
+model must preserve capabilities held by a single source.
+Expert construction already composes capabilities. Before
+any compression or router training, the uncompressed MoE
+scores 104.3 on ScanQA and 97.1 on Scan2Cap, exceeding
+every source specialist. Its R2R SR (55.9%), NuScenesQA
+(27.7), RoboSpatial (58.0), and MME-RealWorld (65.6) scores
+are below the corresponding best specialists (57.5%, 58.8,
+68.0, and 71.2). Router adaptation later recovers R2R and
+most of NuScenesQA, whereas the RoboSpatial and MME-
+RealWorld gaps persist; they therefore arise at expert con-
+struction rather than from compression.
+One-bit factorization is nearly lossless on 21 of 22 bench-
+marks. Factorizing the expert bank reduces total model weight
+storage from 50.2 to 20.3 GB, lowers no score other than VSI
+by more than 1.2 points, and improves 16 of the 22: ScanQA
+increases from 104.3 to 106.6, Scan2Cap from 97.1 to 100.6,
+RefSpatial from 56.1 to 59.4, and ShareRobot (Traj.) from
+0.34 to 0.26. R2R SR also improves, from 55.9% to 57.0%.
+At matched storage, the one-bit bank also outperforms data-
+free INT4 quantization of the same expert weights on 17 of 22
+
+
+9
+TABLE IV
+CONTROLLED COMPARISON OF SOURCE SPECIALISTS, STATIC MERGING METHODS, AND SUCCESSIVE UNITE STAGES ACROSS ALL 22 BENCHMARKS.
+ALL MERGING METHODS AND UNITE USE THE SAME SOURCE SPECIALISTS; UNITE USES TOP-1 ROUTING AT EVERY STAGE. BOLD AND UNDERLINED
+SCORES DENOTE THE BEST AND SECOND-BEST DISTINCT VALUES, INCLUDING TIES: SOURCE SPECIALISTS ARE RANKED SEPARATELY, WHILE STATIC
+MERGING METHODS AND UNITE STAGES ARE RANKED JOINTLY. THE BASE MODEL IS EXCLUDED FROM HIGHLIGHTING. HIGHER IS BETTER EXCEPT
+SHAREROBOT (TRAJ.); MMSI AND DRIVEACTION REPORT OVERALL ACCURACY.
+Grounding
+Embodied Spatial
+Driving
+Model
+RoboSpatial
+RefSpatial
+PointArena
+RoboAfford
+ShareRobot (↓)
+VSI
+MMSI
+MindCube
+EmbSpatial
+ERQA
+ScanQA
+SQA3D
+Scan2Cap
+ScanRefer
+Multi3DRef
+SAT
+MME-RealWorld
+MAPLM
+DriveAction
+NuScenesQA
+NuPlanQA
+LingoQA
+Base model and source specialists
+Base (Qwen3-VL-8B-Instruct)
+62.4 53.1 62.3 75.4 0.37 59.4 31.0 29.4 78.5 45.8 72.9 49.5 2.6
+0.1 0.1 66.0 63.3 31.5 79.0 22.8 82.2 57.0
+Grounding expert
+68.0 57.8 68.3 77.7 0.25 56.3 34.1 87.6 79.4 47.3 92.8 55.2 75.7 65.6 66.4 86.7 68.9 88.4 79.1 28.9 86.7 55.6
+Navigation expert
+60.6 54.2 67.7 75.1 0.26 62.9 33.3 85.3 74.5 44.8 93.5 61.4 78.8 70.1 72.1 84.7 67.4 83.6 78.7 6.6 86.3 53.6
+Embodied Spatial expert
+60.7 53.4 68.0 77.2 0.25 63.8 36.5 85.8 76.1 44.8 97.7 61.7 83.0 70.2 72.4 87.3 66.3 81.3 78.6 7.8 86.9 56.2
+Driving expert
+55.6 26.0 44.7 56.5 0.46 63.1 32.2 82.1 77.8 41.5 97.3 54.5 75.2 61.4 55.9 92.0 71.2 77.8 81.3 58.8 91.7 65.8
+Static merging methods
+Model Soup [27]
+62.6 60.5 69.3 79.8 0.25 63.6 37.1 88.3 77.9 44.8 101.8 61.6 85.6 71.3 73.2 90.7 70.5 93.1 80.4 40.1 90.2 62.2
+Task Arithmetic [18]
+61.3 59.7 68.3 78.4 0.25 63.5 37.0 88.0 78.0 45.0 101.8 61.6 85.6 71.3 73.5 90.7 70.5 93.1 80.2 48.6 90.2 62.0
+TIES Merging [19]
+47.7 11.6 17.4 27.2 0.37 41.0 27.8 57.8 46.5 32.3 5.9 19.3 10.1 19.7 23.0 72.0 39.8 88.2 45.7 9.7 73.1 33.8
+DARE [30]
+61.7 58.1 69.8 80.2 0.25 63.2 36.2 87.1 77.9 45.0 98.2 60.7 86.4 71.1 73.6 90.7 70.6 93.7 80.4 47.3 90.5 63.4
+Fisher Merging [28]
+62.1 58.5 69.5 77.6 0.27 63.3 35.1 88.2 77.3 45.8 98.5 62.8 84.4 70.8 73.3 89.3 68.7 90.1 79.2 19.2 87.7 59.0
+RegMean [29]
+50.5 41.5 55.6 56.4 0.36 55.4 32.1 41.5 68.6 38.5 74.4 45.2 42.5 56.6 52.5 72.0 49.6 82.4 63.6 34.5 73.3 52.8
+UNITE stages
+Uncompressed MoE
+58.0 56.1 70.6 79.6 0.34 62.4 36.4 87.8 78.3 44.8 104.3 62.4 97.1 71.3 73.6 85.3 65.6 91.7 79.5 27.7 89.3 60.4
+Shared-anchor one-bit MoE
+58.9 59.4 71.7 79.6 0.26 47.4 37.5 88.1 80.1 47.0 106.6 63.1 100.6 71.3 73.6 87.3 65.9 92.0 79.5 29.7 89.8 59.2
+One-bit MoE + router adaptation 58.3 57.2 71.3 80.3 0.25 46.7 36.3 87.9 78.9 47.3 105.6 62.8 102.1 71.0 73.2 90.7 65.7 93.8 79.8 48.7 91.2 63.0
+understanding benchmarks and all navigation metrics (Detailed
+Results supplement). Both representations occupy 20.3 GB;
+INT4 uses round-to-nearest quantization with group size 16.
+The sole exception is VSI, which falls from 62.4 to 47.4. We
+next examine how this deficit scales with frame count.
+The one-bit MoE gains little from additional frames on
+VSI. To characterize this deficit, we evaluate both expert banks
+on VSI while varying the number of sampled frames from 4
+to 64 (Fig. 7). At four frames the uncompressed and the one-
+bit MoE score 48.1 and 46.9, a gap of 1.2 points in line with
+the image benchmarks. With more frames the uncompressed
+model improves monotonically to 55.2, 59.2, 62.4, and 65.0,
+while the one-bit model stays between 46.8 and 48.8 with no
+trend; the gap therefore widens to 17.2 points at 64 frames.
+The sub-task breakdown is consistent with this reading. On
+object counting and object-size estimation, scores change by
+at most 5 points across frame counts for either model, and
+the two models differ by at most about six points at any
+frame count. By contrast, the uncompressed model improves
+from 49.4 to 80.3 on relative direction, from 51.0 to 77.8
+on appearance order, from 28.3 to 49.1 on absolute distance,
+and from 45.6 to 62.2 on room size, whereas the one-bit
+model varies by less than six points on each of them. These
+results suggest that one-bit factorization limits the model’s
+use of additional cross-frame evidence. At the same total
+model weight storage, the INT4 bank retains VSI at 61.9
+while trailing on most other benchmarks, showing that the two
+representations have different error profiles. Router adaptation
+does not recover the VSI deficit (Table VI); testing larger bit
+budgets in selected experts or layers is left to future work.
+Router adaptation refines selection. With the backbone and
+compressed experts frozen, router adaptation raises SAT from
+87.3 to 90.7, LingoQA from 59.2 to 63.0, MAPLM from 92.0
+to 93.8, NuScenesQA from 29.7 to 48.7, and R2R SR from
+57.0% to 59.6%. It lowers 12 of the 22 benchmarks, all but
+RefSpatial (59.4 to 57.2) by at most 1.2 points.
+Compression and router adaptation interact. To separate
+the effect of compression from that of adaptation, we also
+train the routers of the uncompressed MoE under the same
+supervision mixture and training budget (Table VI).
+After adaptation, the 20.3-GB compressed MoE outper-
+forms the 50.2-GB uncompressed one on Scan2Cap (102.1
+versus 94.1), NuScenesQA (48.7 versus 24.4), and R2R SR
+and SPL, while the uncompressed model leads on ScanQA
+(111.1 versus 105.6), SQA3D, and VSI, and marginally on
+ScanRefer and Multi3DRef. Two observations follow. First,
+one-bit compression does not systematically limit what router
+adaptation can achieve: on four of the nine reported metrics,
+the compressed model is the better one after adaptation.
+Second, pre-adaptation differences do not reliably predict
+post-adaptation ones: the compressed bank leads on ScanQA
+and SQA3D before adaptation and trails after it, while its
+
+
+10
+TABLE V
+R2R VAL-UNSEEN: SOURCE EXPERTS, STATIC MERGING METHODS, AND
+UNITE STAGES WITH TOP-1 ROUTING. NE IS IN METERS; OTHER
+METRICS ARE PERCENTAGES. BOLD AND UNDERLINED SCORES MARK
+THE BEST AND SECOND-BEST DISTINCT VALUES. EXPERTS ARE RANKED
+SEPARATELY; STATIC MERGING AND UNITE STAGES ARE RANKED
+JOINTLY. THE BASE MODEL IS EXCLUDED FROM HIGHLIGHTING.
+Model
+R2R Val-Unseen
+NE↓OS↑SR↑SPL↑
+Base model and source specialists
+Base Qwen3-VL-8B-Instruct
+9.1
+1.1
+0.1
+0.1
+Grounding expert
+7.5
+31.0 28.2 26.3
+Navigation expert
+4.7
+63.7 57.5 51.2
+Embodied Spatial expert
+4.9
+62.9 56.8 50.3
+Driving expert
+8.9
+0.5
+0.1
+0.0
+Static merging methods
+Model Soup [27]
+5.0
+59.1 54.3 50.5
+Task Arithmetic [18]
+5.7
+60.2 48.7 43.0
+TIES Merging [19]
+7.7
+50.6 30.9 23.1
+DARE [30]
+5.8
+60.3 48.8 43.1
+Fisher Merging [28]
+5.2
+63.5 55.2 48.0
+RegMean [29]
+8.0
+40.5 30.2 26.3
+UNITE stages
+Uncompressed MoE
+5.0
+61.6 55.9 50.6
+Shared-anchor one-bit MoE
+4.9
+62.1 57.0 51.9
+One-bit MoE + router adaptation
+4.5
+65.7 59.6 53.4
+TABLE VI
+FACTORIZATION AND ROUTER ADAPTATION UNDER THE SAME TRAINING
+BUDGET AND SUPERVISION MIXTURE. ALL MODELS USE TOP-1; R2R
+USES VAL-UNSEEN.
+Before adaptation After adaptation
+Benchmark
+Uncomp.
+Comp.
+Uncomp.
+Comp.
+ScanQA (CIDEr)
+104.3
+106.6
+111.1
+105.6
+SQA3D (EM-1)
+62.4
+63.1
+63.5
+62.8
+Scan2Cap (CIDEr@0.25)
+97.1
+100.6
+94.1
+102.1
+ScanRefer (Acc@0.25)
+71.3
+71.3
+71.3
+71.0
+Multi3DRef (F1@0.25)
+73.6
+73.6
+73.7
+73.2
+VSI
+62.4
+47.4
+63.7
+46.7
+NuScenesQA
+27.7
+29.7
+24.4
+48.7
+R2R SR (%)
+55.9
+57.0
+59.2
+59.6
+R2R SPL (%)
+50.6
+51.9
+53.2
+53.4
+NuScenesQA lead grows from 2.0 to 24.3 points.
+E. Routing Top-k
+We evaluate whether activating additional experts, k ∈
+{1, 2, 3}, improves the consolidated model before and after
+router adaptation (Fig. 8; absolute scores in the Detailed
+Results supplement). Activating k experts raises the active
+parameter count from 8.8B to 14.2B and 19.6B.
+Before router adaptation, the effect of larger k is task-
+dependent. Navigation, grounding, and driving question an-
+swering benefit: R2R SR rises from 57.0% to 58.2%, RefS-
+patial from 59.4 to 61.2, and NuScenesQA from 29.7 to 33.2
+at k = 3. With weight-derived routers, no single expert yet
+serves all tasks well; more experts partially compensate.
+After router adaptation, this sensitivity is largely eliminated.
+Router adaptation alone raises top-1 NuScenesQA from 29.7
+to 48.7, far more than activating three experts before adapta-
+−4
+−2
+0
+2
+4
+RoboSpatial
+RefSpatial
+PointArena
+RoboAfford
+VSI
+MMSI
+MindCube
+EmbSpatial
+ERQA
+ScanQA
+SQA3D
+Scan2Cap
+ScanRefer
+Multi3DRef
+SAT
+MME-RealWorld
+MAPLM
+DriveAction
+NuScenesQA
+NuPlanQA
+LingoQA
+R2R SR
+One-bit factorization
+50.2 GB → 20.3 GB
+-15.0
+−4
+−2
+0
+2
+4
+Router adaptation
+20.3 GB (unchanged)
++19.0
+Score change (points)
+Grounding
+Embodied spatial
+Driving
+Navigation
+Fig. 6. Score change contributed by each consolidation stage (top-1 routing
+throughout). Left: one-bit factorization of the expert bank, reducing total
+model weight storage from 50.2 to 20.3 GB. Right: router adaptation at
+constant storage. Bars beyond ±5 points are truncated and labeled with their
+value. ShareRobot (Traj., on a different scale) improves from 0.34 to 0.26
+and 0.25. Full numbers are in Tables IV and V.
+4
+8
+16
+32
+64
+Maximum number of video frames
+45
+50
+55
+60
+65
+VSI-Bench score
+−1.2
+−6.5
+−12.4
+−14.9
+−17.2
+Uncompressed MoE (50.2 GB)
+One-bit MoE (20.3 GB)
+Fig. 7. VSI-Bench score as a function of the maximum number of sampled
+video frames for the uncompressed and the one-bit expert bank (same
+backbone, top-1 routing, no router adaptation; all 5,130 questions). The two
+models are within 1.2 points at four frames. The uncompressed MoE gains
+17.0 points from 4 to 64 frames, whereas the one-bit MoE stays within
+a two-point band, indicating limited benefit from additional frames after
+factorization. The main tables use 32 frames.
+tion, and NuScenesQA then stays within 0.3 points across k
+(48.7, 48.5, 48.4); all other benchmarks change by at most
+approximately two points. R2R SR moves from 59.6% to
+60.1% at k = 3. The adapted top-1 configuration, which
+activates the same 8.8B parameters as a dense specialist,
+therefore captures nearly all of the benefit, and additional
+
+
+11
+−4
+−2
+0
++2
++4
+VSI
+MMSI
+MindCube
+EmbSpatial
+ERQA
+ScanQA
+SQA3D
+Scan2Cap
+ScanRefer
+Multi3DRef
+SAT
+RoboSpatial
+RefSpatial
+PointArena
+RoboAfford
+ShareRobot (Traj.)
+MME-RW
+MAPLM
+DriveAction
+NuScenesQA
+NuPlanQA
+LingoQA
+R2R NE
+R2R OS
+R2R SR
+R2R SPL
+−4
+−2
+0
++2
++4
+VSI
+MMSI
+MindCube
+EmbSpatial
+ERQA
+ScanQA
+SQA3D
+Scan2Cap
+ScanRefer
+Multi3DRef
+SAT
+RoboSpatial
+RefSpatial
+PointArena
+RoboAfford
+ShareRobot (Traj.)
+MME-RW
+MAPLM
+DriveAction
+NuScenesQA
+NuPlanQA
+LingoQA
+R2R NE
+R2R OS
+R2R SR
+R2R SPL
+(a) Before router adaptation
+(b) After router adaptation
+top-1 (0 %)
+top-2
+top-3
+Embodied spatial
+Grounding
+Driving
+Navigation
+Fig. 8. Top-k routing before and after router adaptation. The radius is the direction-adjusted percentage change of top-k relative to top-1 at the same stage,
+so the bold circle marks top-1 and points outside it indicate improvement for every metric, including ShareRobot (Traj.) and R2R NE. The radial axis spans
+−6% to +5%; NuScenesQA before router adaptation (+6.1% and +11.8%) exceeds this range and is clipped at the outer edge.
+expert activation is not required for the reported results.
+F. Extension to Language Models
+We also evaluate the factorization on five Llama-3.1-8B spe-
+cialists from MergeBench [40], covering instruction following,
+mathematics, multilingual understanding, coding, and safety
+(Table VII). Both UNITE stages use weight-derived SVD ini-
+tialization and top-1 routing without router adaptation. Math,
+Multilingual, Coding, and Safety report within-group averages;
+Instruction reports IFEval prompt-level loose accuracy.
+TABLE VII
+LLAMA-3.1-8B EXTENSION ON MERGEBENCH. SOURCE NAMES DENOTE
+SPECIALIZATION. BOTH UNITE STAGES USE TOP-1 WITHOUT ROUTER
+ADAPTATION; HIGHLIGHTS RANK MERGING METHODS AND UNITE.
+HIGHER IS BETTER IN ALL COLUMNS.
+Model
+Math Multilingual Instruction Coding Safety
+Base model and source specialists
+Pretrained base
+28.9
+53.9
+10.5
+36.4
+36.1
+Instruction expert
+34.9
+55.3
+54.2
+47.4
+43.8
+Math expert
+62.9
+48.1
+14.6
+31.4
+36.6
+Multilingual expert
+32.4
+55.9
+4.1
+29.2
+41.4
+Coding expert
+30.5
+53.1
+27.4
+56.2
+42.6
+Safety expert
+27.6
+48.7
+7.8
+42.6
+77.6
+Static merging methods
+Model Soup
+47.8
+54.4
+16.8
+53.4
+56.4
+Task Arithmetic
+55.0
+52.1
+35.5
+50.3
+57.6
+TIES Merging
+55.9
+54.1
+19.0
+50.0
+63.2
+DARE
+54.1
+51.5
+33.6
+49.4
+58.4
+Fisher Merging
+45.5
+54.4
+17.4
+51.1
+55.5
+RegMean
+49.0
+55.1
+25.1
+49.7
+61.7
+UNITE stages
+Uncompressed MoE
+49.4
+55.1
+21.6
+46.9
+53.1
+Shared-anchor one-bit MoE 49.9
+55.1
+22.3
+48.2
+53.3
+This experiment tests the factorization alone on a second
+model family with five experts, where the amortized anchor
+cost is lower (1 + 16/5 bits per weight before scales). Keep-
+ing the routers unchanged isolates the effect of factorization
+relative to the uncompressed MoE. Factorization matches
+or improves the uncompressed MoE in every group: Math,
+Instruction, and Coding increase by 0.5 to 1.3 points, Multi-
+lingual is unchanged, and Safety increases by 0.2. The one-
+bit representation thus preserves the uncompressed model’s
+quality on Llama as well.
+V. CONCLUSION
+We presented UNITE, a framework that consolidates dense
+embodied VLM specialists into a shared-backbone mixture of
+experts whose expert bank is stored through a shared-anchor
+one-bit factorization. Under a one-bit deviation budget, the
+shared anchor is optimized jointly with the expert-specific
+row scales and binary signs through closed-form alternating
+updates that require only the source weights. Combined with
+router adaptation of fewer than 0.6M parameters (< 0.01% of
+the 8.8B active parameters), UNITE consolidates four Qwen3-
+VL-8B specialists into a model whose total weight storage is
+1.16× that of a single specialist. Across 22 embodied under-
+standing benchmarks and R2R navigation, UNITE surpasses
+every source specialist on all five 3D scene understanding
+benchmarks and all four navigation metrics; the factorization
+itself is nearly lossless relative to the uncompressed MoE on
+21 of the 22 understanding benchmarks.
+For the remaining exception, the video benchmark VSI-
+Bench, frame-count experiments show that the compressed
+model gains little from additional frames, suggesting impaired
+use of cross-frame evidence. These findings motivate inves-
+tigating whether a larger bit budget for selected experts or
+
+
+12
+layers can recover this capability. Extending the framework to
+vision-language-action policies with action heads and to more
+divergent specialists is a natural direction for future work.
+REFERENCES
+[1] Gemini Robotics Team, S. Abeyruwan, J. Ainslie, J.-B. Alayrac,
+M. G. Arenas, T. Armstrong, A. Balakrishna, R. Baruch, M. Bauzá,
+M. Blokzijl, S. Bohez, K. Bousmalis, A. Brohan, T. Buschmann,
+A. Byravan, S. Cabi, K. Caluwaerts, F. Casarini, O. Chang, J. E.
+Chen, X. Chen, H.-T. L. Chiang, K. Choromanski, D. B. D’Ambrosio,
+S. Dasari, T. Davchev, C. Devin, N. D. Palo, T. Ding, A. Dostmohamed,
+D. Driess, Y. Du, D. Dwibedi, M. Elabd, C. Fantacci, C. Fong, E. Frey,
+C. K. Fu, M. Giustina, K. Gopalakrishnan, L. Graesser, L. Hasenclever,
+N. Heess, B. Hernaez, A. Herzog, R. A. Hofer, J. Humplik, A. Iscen,
+M. G. Jacob, D. Jain, R. C. Julian, D. Kalashnikov, M. E. Karagozler,
+S. Karp, C. Kew, J. Kirkland, S. Kirmani, Y. Kuang, T. Lampe,
+A. Laurens, I. Leal, A. X. Lee, T.-W. E. Lee, J. Liang, Y. Lin,
+S. Maddineni, A. Majumdar, A. H. Michaely, R. Moreno, M. Neunert,
+F. Nori, C. Parada, E. Parisotto, P. Pastor, A. Pooley, K. Rao,
+K. Reymann, D. Sadigh, S. Saliceti, P. R. Sanketi, P. Sermanet,
+D. Shah, M. Sharma, K. Shea, C. Shu, V. Sindhwani, S. Singh,
+R. Soricut, J. T. Springenberg, R. Sterneck, R. Surdulescu, J. Tan,
+J. Tompson, V. Vanhoucke, J. Varley, G. Vesom, G. Vezzani, O. Vinyals,
+A. Wahid, S. Welker, P. Wohlhart, F. Xia, T. Xiao, A. Xie, J. Xie,
+P. Xu, S. Xu, Y. Xu, Z. Xu, Y. Yang, R. Yao, S. Yaroshenko, W.-H. Yu,
+W. Yuan, J. Zhang, T. Zhang, A. Zhou, and Y. Zhou, “Gemini Robotics:
+Bringing AI into the Physical World,” arXiv preprint arXiv:2503.20020,
+2025. [Online]. Available: https://arxiv.org/abs/2503.20020
+[2] Physical Intelligence, K. Black, N. Brown, J. Darpinian, K. Dhabalia,
+D. Driess, A. Esmail, M. Equi, C. Finn, N. Fusai, M. Y. Galliker,
+D. Ghosh, L. Groom, K. Hausman, B. Ichter, S. Jakubczak, T. Jones,
+L. Ke, D. LeBlanc, S. Levine, A. Li-Bell, M. Mothukuri, S. Nair,
+K. Pertsch, A. Z. Ren, L. X. Shi, L. Smith, J. T. Springenberg,
+K. Stachowicz, J. Tanner, Q. Vuong, H. R. Walke, A. Walling, H.-H.
+Wang, L. Yu, and U. Zhilinsky, “π0.5: a Vision-Language-Action
+Model with Open-World Generalization,” ArXiv, vol. abs/2504.16054,
+2025.
+[Online].
+Available:
+https://api.semanticscholar.org/CorpusID:
+277993634
+[3] Z. Gong, Z. Luo, A. Tang, Z. Liu, S. Fu, Z. Hou, G. Yang, W. Wang,
+X. Wang, J. Liu et al., “ACE-Brain-0: Spatial intelligence as a shared
+scaffold for universal embodiments,” arXiv preprint arXiv:2603.03198,
+2026.
+[4] ACE-Brain Team, Z. Gong, H. Gu, Z. Luo, T. Zhang, T. Tao, Y. Chi,
+Z. Liu, L. Zhu, J. Liu, A. Tang, S. Li, Y. Kong, N. Liu, T. Zhu,
+Y. Qing, S. Luo, X. Liu, S. Fu, D. Nie, S. Liu, Z. Wen, F. Pan,
+X. Wang, Z. Hou, C. Liu, X. Yang, J. Yan, H. Zhao, D. Tao, and
+X. Wang, “ACE-Brain-0.5: A Unified Embodied Foundational Model
+for Physical Agentic AI,” arXiv preprint arXiv:2607.04426, 2026.
+[Online]. Available: https://arxiv.org/abs/2607.04426
+[5] J. Cen, C. Yu, H. Yuan, Y. Jiang, S. Huang, J. Guo, X. Li, Y. Song,
+H. Luo, F. Wang et al., “WorldVLA: Towards autoregressive action
+world model,” arXiv preprint arXiv:2506.21539, 2025.
+[6] J. Cen, S. Huang, Y. Yuan, K. Li, H. Yuan, C. Yu, Y. Jiang, J. Guo,
+X. Li, H. Luo et al., “RynnVLA-002: A unified vision-language-action
+and world model,” arXiv preprint arXiv:2511.17502, 2025.
+[7] StarVLA Community, “StarVLA: A Lego-like Codebase for Vision-
+Language-Action Model Developing,” arXiv preprint arXiv:2604.05014,
+2026.
+[8] L.
+Yu,
+P.
+Poirson,
+S.
+Yang,
+A.
+C.
+Berg,
+and
+T.
+L.
+Berg,
+“Modeling Context in Referring Expressions,” in Computer Vision –
+ECCV 2016, ser. Lecture Notes in Computer Science, vol. 9906.
+Springer International Publishing, 2016, pp. 69–85. [Online]. Available:
+https://link.springer.com/chapter/10.1007/978-3-319-46475-6_5
+[9] D. Azuma, T. Miyanishi, S. Kurita, and M. Kawanabe, “ScanQA:
+3D Question Answering for Spatial Scene Understanding,” in 2022
+IEEE/CVF Conference on Computer Vision and Pattern Recognition
+(CVPR).
+IEEE, 2022, pp. 19 107–19 117.
+[10] P. Anderson, Q. Wu, D. Teney, J. Bruce, M. Johnson, N. Sünderhauf,
+I. Reid, S. Gould, and A. van den Hengel, “Vision-and-Language
+Navigation: Interpreting Visually-Grounded Navigation Instructions in
+Real Environments,” in 2018 IEEE/CVF Conference on Computer Vision
+and Pattern Recognition.
+IEEE, 2018, pp. 3674–3683.
+[11] C.
+Sima,
+K.
+Renz,
+K.
+Chitta,
+L.
+Chen,
+H.
+Zhang,
+C.
+Xie,
+J. Beißwenger, P. Luo, A. Geiger, and H. Li, “DriveLM: Driving
+with Graph Visual Question Answering,” in Computer Vision –
+ECCV 2024, ser. Lecture Notes in Computer Science, vol. 15110.
+Springer Nature Switzerland, 2024, pp. 256–274. [Online]. Available:
+https://link.springer.com/chapter/10.1007/978-3-031-72943-0_15
+[12] A.
+Brohan,
+N.
+Brown,
+J.
+Carbajal,
+Y.
+Chebotar,
+X.
+Chen,
+K. Choromanski, T. Ding, D. Driess, A. Dubey, C. Finn, P. Florence,
+C. Fu, M. G. Arenas, K. Gopalakrishnan, K. Han, K. Hausman,
+A.
+Herzog,
+J.
+Hsu,
+B.
+Ichter,
+A.
+Irpan,
+N.
+Joshi,
+R.
+Julian,
+D. Kalashnikov, Y. Kuang, I. Leal, L. Lee, T.-W. E. Lee, S. Levine,
+Y. Lu, H. Michalewski, I. Mordatch, K. Pertsch, K. Rao, K. Reymann,
+M. Ryoo, G. Salazar, P. Sanketi, P. Sermanet, J. Singh, A. Singh,
+R. Soricut, H. Tran, V. Vanhoucke, Q. Vuong, A. Wahid, S. Welker,
+P. Wohlhart, J. Wu, F. Xia, T. Xiao, P. Xu, S. Xu, T. Yu, and B. Zitkovich,
+“RT-2: Vision-language-action models transfer web knowledge to
+robotic control,” ArXiv, vol. abs/2307.15818, 2023. [Online]. Available:
+https://api.semanticscholar.org/CorpusID:260293142
+[13] Octo Model Team, D. Ghosh, H. R. Walke, K. Pertsch, K. Black,
+O. Mees, S. Dasari, J. Hejna, T. Kreiman, C. Xu, J. Luo, Y. L. Tan,
+L. Y. Chen, Q. Vuong, T. Xiao, P. R. Sanketi, D. Sadigh, C. Finn,
+and S. Levine, “Octo: An Open-Source Generalist Robot Policy,” in
+Robotics: Science and Systems (RSS), 2024.
+[14] M. J. Kim, K. Pertsch, S. Karamcheti, T. Xiao, A. Balakrishna, S. Nair,
+R. Rafailov, E. P. Foster, P. R. Sanketi, Q. Vuong, T. Kollar, B. Burchfiel,
+R. Tedrake, D. Sadigh, S. Levine, P. Liang, and C. Finn, “OpenVLA:
+An Open-Source Vision-Language-Action Model,” in Proceedings of
+the 8th Conference on Robot Learning, ser. Proceedings of Machine
+Learning Research, vol. 270.
+PMLR, 2025, pp. 2679–2713. [Online].
+Available: https://proceedings.mlr.press/v270/kim25c.html
+[15] K. Black, N. Brown, D. Driess, A. Esmail, M. R. Equi, C. Finn,
+N. Fusai, L. Groom, K. Hausman, B. Ichter, S. Jakubczak, T. Jones,
+L. Ke, S. Levine, A. Li-Bell, M. Mothukuri, S. Nair, K. Pertsch,
+L. X. Shi, J. Tanner, Q. Vuong, A. Walling, H.-H. Wang, and
+U. Zhilinsky, “π0: A vision-language-action flow model for general
+robot control,” ArXiv, vol. abs/2410.24164, 2024. [Online]. Available:
+https://api.semanticscholar.org/CorpusID:273811174
+[16] E. Yang, L. Shen, G. Guo, X. Wang, X. Cao, J. Zhang, and D. Tao,
+“Model Merging in LLMs, MLLMs, and Beyond: Methods, Theo-
+ries, Applications and Opportunities,” arXiv preprint arXiv:2408.07666,
+2024.
+[17] P. Yadav, C. Raffel, M. Muqeeth, L. Caccia, H. Liu, T. Chen, M. Bansal,
+L. Choshen, and A. Sordoni, “A Survey on Model MoErging: Recycling
+and Routing Among Specialized Experts for Collaborative Learning,”
+arXiv preprint arXiv:2408.07057, 2024.
+[18] G. Ilharco, M. T. Ribeiro, M. Wortsman, S. Gururangan, L. Schmidt,
+H. Hajishirzi, and A. Farhadi, “Editing Models with Task Arithmetic,”
+in The Eleventh International Conference on Learning Representations,
+2023. [Online]. Available: https://openreview.net/forum?id=6t0Kwf8-jrj
+[19] P.
+Yadav,
+D.
+Tam,
+L.
+Choshen,
+C.
+Raffel,
+and
+M.
+Bansal,
+“TIES-Merging:
+Resolving
+Interference
+When
+Merging
+Models,”
+in
+Advances
+in
+Neural
+Information
+Processing
+Systems,
+vol.
+36,
+2023,
+pp.
+7093–7115.
+[Online].
+Available:
+https://proceedings.neurips.cc/paper_files/paper/2023/hash/
+1644c9af28ab7916874f6fd6228a9bcf-Abstract-Conference.html
+[20] S. Sukhbaatar, O. Golovneva, V. Sharma, H. Xu, X. V. Lin, B. Rozière,
+J. Kahn, S.-W. Li, W. tau Yih, J. E. Weston, and X. Li, “Branch-Train-
+MiX: Mixing Expert LLMs into a Mixture-of-Experts LLM,” in First
+Conference on Language Modeling (COLM), 2024. [Online]. Available:
+https://openreview.net/forum?id=nqLAuMOF6n
+[21] J. Liu, G. Xiao, K. Li, J. D. Lee, S. Han, T. Dao, and T. Cai, “BitDelta:
+Your Fine-Tune May Only Be Worth One Bit,” in Advances in Neural
+Information Processing Systems, vol. 37, 2024, pp. 13 579–13 600. [On-
+line]. Available: https://proceedings.neurips.cc/paper_files/paper/2024/
+hash/187d94b3c93343f0e925b5cf729eadd5-Abstract-Conference.html
+[22] Y. Huang, P. Ye, C. Huang, J. Cao, L. Zhang, B. Li, G. Yu,
+and
+T.
+Chen,
+“DeRS:
+Towards
+Extremely
+Efficient
+Upcycled
+Mixture-of-Experts
+Models,”
+in
+Proceedings
+of
+the
+IEEE/CVF
+Conference on Computer Vision and Pattern Recognition, 2025,
+pp. 10 056–10 066. [Online]. Available: https://openaccess.thecvf.com/
+content/CVPR2025/html/Huang_DeRS_Towards_Extremely_Efficient_
+Upcycled_Mixture-of-Experts_Models_CVPR_2025_paper.html
+[23] S. Bai, Y. Cai, R. Chen, K. Chen, X. Chen, Z. Cheng, L. Deng,
+W. Ding, C. Gao, C. Ge, W. Ge, Z. Guo, Q. Huang, J. Huang,
+F. Huang, B. Hui, S. Jiang, Z. Li, M. Li, M. Li, K. Li, Z. Lin,
+J. Lin, X. Liu, J. Liu, C. Liu, Y. Liu, D. Liu, S. Liu, D. Lu,
+R. Luo, C. Lv, R. Men, L. Meng, X. Ren, X. Ren, S. Song,
+
+
+13
+Y. Sun, J. Tang, J. Tu, J. Wan, P. Wang, P. Wang, Q. Wang,
+Y. Wang, T. Xie, Y. Xu, H. Xu, J. Xu, Z. Yang, M. Yang, J. Yang,
+A. Yang, B. Yu, F. Zhang, H. Zhang, X. Zhang, B. Zheng, H. Zhong,
+J. Zhou, F. Zhou, J. Zhou, Y. Zhu, and K. Zhu, “Qwen3-VL Technical
+Report,” arXiv preprint arXiv:2511.21631, 2025. [Online]. Available:
+https://arxiv.org/abs/2511.21631
+[24] S. Ye, Y. Ge, K. Zheng, S. Gao, S. Yu, G. Kurian, S. Indupuru, Y. L.
+Tan, C. Zhu, J. Xiang, A. Malik, K. Lee, W. Liang, N. Ranawaka, J. Gu,
+Y. Xu, G. Wang, F. Hu, A. Narayan, J. Bjorck, J. Wang, G. Kim, D. Niu,
+R. Zheng, Y. Xie, J. Wu, Q. Wang, R. Julian, D. Xu, Y. Du, Y. Chebotar,
+S. Reed, J. Kautz, Y. Zhu, L. J. Fan, and J. Jang, “World Action
+Models are Zero-shot Policies,” arXiv preprint arXiv:2602.15922, 2026.
+[Online]. Available: https://arxiv.org/abs/2602.15922
+[25] Y. Yadav, Z. Zhou, A. Wagenmaker, K. Pertsch, and S. Levine, “Robust
+Fine-Tuning of Vision-Language-Action Robot Policies via Parameter
+Merging,” in International Conference on Learning Representations
+(ICLR), 2026. [Online]. Available: https://openreview.net/forum?id=
+uWJwQ5SZoM
+[26] Y. Fu, Z. Zhang, Y. Zhang, Z. Wang, Z. Huang, and Y. Luo,
+“MergeVLA: Cross-Skill Model Merging Toward a Generalist Vision-
+Language-Action Agent,” in Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition (CVPR), 2026. [Online].
+Available: https://arxiv.org/abs/2511.18810
+[27] M. Wortsman, G. Ilharco, S. Y. Gadre, R. Roelofs, R. Gontijo-Lopes,
+A. S. Morcos, H. Namkoong, A. Farhadi, Y. Carmon, S. Kornblith,
+and
+L.
+Schmidt,
+“Model
+soups:
+averaging
+weights
+of
+multiple
+fine-tuned models improves accuracy without increasing inference
+time,”
+in
+Proceedings
+of
+the
+39th
+International
+Conference
+on
+Machine Learning, ser. Proceedings of Machine Learning Research,
+vol. 162.
+PMLR, 2022, pp. 23 965–23 998. [Online]. Available:
+https://proceedings.mlr.press/v162/wortsman22a.html
+[28] M. S. Matena and C. A. Raffel, “Merging Models with Fisher-Weighted
+Averaging,” in Advances in Neural Information Processing Systems,
+vol. 35, 2022, pp. 17 703–17 716.
+[29] X. Jin, X. Ren, D. Preotiuc-Pietro, and P. Cheng, “Dataless knowledge
+fusion by merging weights of language models,” in The Eleventh
+International Conference on Learning Representations, 2023. [Online].
+Available: https://openreview.net/forum?id=FCnohuR6AnM
+[30] L. Yu, B. Yu, H. Yu, F. Huang, and Y. Li, “Language models are super
+mario: Absorbing abilities from homologous models as a free lunch,” in
+Forty-first International Conference on Machine Learning, 2024.
+[31] A.
+Tang,
+L.
+Shen,
+Y.
+Luo,
+N.
+Yin,
+L.
+Zhang,
+and
+D.
+Tao,
+“Merging Multi-Task Models via Weight-Ensembling Mixture of
+Experts,”
+in
+Proceedings
+of
+the
+41st
+International
+Conference
+on
+Machine
+Learning,
+ser.
+Proceedings
+of
+Machine
+Learning
+Research, vol. 235, 2024, pp. 47 778–47 799. [Online]. Available:
+https://proceedings.mlr.press/v235/tang24e.html
+[32] Z.
+Lu,
+C.
+Fan,
+W.
+Wei,
+X.
+Qu,
+D.
+Chen,
+and
+Y.
+Cheng,
+“Twin-Merging:
+Dynamic
+Integration
+of
+Modular
+Expertise
+in
+Model
+Merging,”
+in
+Advances
+in
+Neural
+Information
+Processing Systems, vol. 37, 2024, pp. 78 905–78 935. [Online].
+Available:
+https://proceedings.neurips.cc/paper_files/paper/2024/hash/
+8fcd17eb91bae20d9826786d7d6be799-Abstract-Conference.html
+[33] A. Komatsuzaki, J. Puigcerver, J. Lee-Thorp, C. Riquelme Ruiz,
+B. Mustafa, J. Ainslie, Y. Tay, M. Dehghani, and N. Houlsby, “Sparse
+upcycling: Training mixture-of-experts from dense checkpoints,” in The
+Eleventh International Conference on Learning Representations, 2023.
+[Online]. Available: https://openreview.net/forum?id=T5nUQDrM4u
+[34] Y. Zhou, G. Karamanolakis, V. Soto, A. Rumshisky, M. Kulkarni,
+F. Huang, W. Ai, and J. Lu, “MergeME: Model Merging Techniques
+for Homogeneous and Heterogeneous MoEs,” in Proceedings of
+the 2025 Conference of the Nations of the Americas Chapter of
+the Association for Computational Linguistics: Human Language
+Technologies (Volume 1: Long Papers), 2025, pp. 2315–2328. [Online].
+Available: https://aclanthology.org/2025.naacl-long.117/
+[35] M. Muqeeth, H. Liu, Y. Liu, and C. Raffel, “Learning to Route Among
+Specialized Experts for Zero-Shot Generalization,” in Proceedings of the
+41st International Conference on Machine Learning, ser. Proceedings
+of Machine Learning Research, vol. 235, 2024, pp. 36 829–36 846.
+[Online]. Available: https://proceedings.mlr.press/v235/muqeeth24a.html
+[36] A. Tang, L. Shen, Y. Luo, S. Xie, H. Hu, L. Zhang, B. Du, and
+D. Tao, “Zero-Shot Sparse Mixture of Low-Rank Experts Construction
+From Pre-Trained Foundation Models,” IEEE Transactions on Pattern
+Analysis and Machine Intelligence, vol. 48, no. 2, pp. 1145–1157, 2026.
+[Online]. Available: https://ieeexplore.ieee.org/document/11175033
+[37] H. Qiu, X. Wu, and K. C. Tan, “Towards Adaptive Continual
+Model Merging via Manifold-Aware Expert Evolution,” ArXiv, vol.
+abs/2604.22464, 2026. [Online]. Available: https://api.semanticscholar.
+org/CorpusID:287773992
+[38] B. Qi, F. Li, Z. Wang, J. Gao, D. Li, P. Ye, and B. Zhou, “Less
+is More: Efficient Model Merging with Binary Task Switch,” 2024.
+[Online]. Available: https://arxiv.org/abs/2412.00054
+[39] H. Gu, W. Li, L. Li, Q. Zhu, M. G. Lee, S. Sun, W. Xue, and
+Y. Guo, “Delta Decompression for MoE-based LLMs Compression,”
+in Proceedings of the 42nd International Conference on Machine
+Learning, ser. Proceedings of Machine Learning Research, vol. 267,
+2025, pp. 20 497–20 514. [Online]. Available: https://proceedings.mlr.
+press/v267/gu25c.html
+[40] Y. He, S. Zeng, Y. Hu, R. Yang, T. Zhang, and H. Zhao, “MergeBench:
+A
+Benchmark
+for
+Merging
+Domain-Specialized
+LLMs,”
+in
+The
+Thirty-ninth Annual Conference on Neural Information Processing
+Systems Datasets and Benchmarks Track, 2025. [Online]. Available:
+https://openreview.net/forum?id=rw50iUoyLu
+[41] C.
+H.
+Song,
+V.
+Blukis,
+J.
+Tremblay,
+S.
+Tyree,
+Y.
+Su,
+and
+S.
+Birchfield,
+“RoboSpatial:
+Teaching
+Spatial
+Understanding
+to
+2D
+and
+3D
+Vision-Language
+Models
+for
+Robotics,”
+in
+Proceedings
+of
+the
+IEEE/CVF
+Conference
+on
+Computer
+Vision
+and
+Pattern
+Recognition,
+2025,
+pp.
+15 768–15 780.
+[Online].
+Available:
+https://openaccess.thecvf.com/content/CVPR2025/html/
+Song_RoboSpatial_Teaching_Spatial_Understanding_to_2D_and_3D_
+Vision-Language_Models_CVPR_2025_paper.html
+[42] E. Zhou, J. An, C. Chi, Y. Han, S. Rong, C. Zhang, P. Wang, Z. Wang,
+T. Huang, L. Sheng, and S. Zhang, “RoboRefer: Towards Spatial
+Referring with Reasoning in Vision-Language Models for Robotics,” in
+Advances in Neural Information Processing Systems, vol. 38, 2025. [On-
+line]. Available: https://proceedings.neurips.cc/paper_files/paper/2025/
+hash/29416b66c2149872b9d1415a3fd2c5e0-Abstract-Conference.html
+[43] L. Cheng, J. Duan, Y. R. Wang, H. Fang, B. Li, Y. Huang, E. Wang,
+A. Eftekhar, J. Lee, W. Yuan, R. Hendrix, N. A. Smith, F. Xia, D. Fox,
+and R. Krishna, “PointArena: Probing Multimodal Grounding Through
+Language-Guided Pointing,” arXiv preprint arXiv:2505.09990, 2025.
+[Online]. Available: https://arxiv.org/abs/2505.09990
+[44] Y. Tang, L. Zhang, S. Zhang, Y. Zhao, and X. Hao, “RoboAfford: A
+Dataset and Benchmark for Enhancing Object and Spatial Affordance
+Learning in Robot Manipulation,” in Proceedings of the 33rd ACM
+International Conference on Multimedia, 2025, pp. 12 706–12 713.
+[Online]. Available: https://roboafford-dataset.github.io/
+[45] Y. Ji, H. Tan, J. Shi, X. Hao, Y. Zhang, H. Zhang, P. Wang, M. Zhao,
+Y. Mu, P. An, X. Xue, Q. Su, H. Lyu, X. Zheng, J. Liu, Z. Wang,
+and S. Zhang, “RoboBrain: A Unified Brain Model for Robotic
+Manipulation from Abstract to Concrete,” in Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern Recognition,
+2025, pp. 1724–1734. [Online]. Available: https://openaccess.thecvf.
+com/content/CVPR2025/html/Ji_RoboBrain_A_Unified_Brain_Model_
+for_Robotic_Manipulation_from_Abstract_CVPR_2025_paper.html
+[46] J. Yang, S. Yang, A. W. Gupta, R. Han, L. Fei-Fei, and S. Xie,
+“Thinking in Space: How Multimodal Large Language Models See,
+Remember, and Recall Spaces,” in Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition, 2025.
+[Online]. Available: https://arxiv.org/abs/2412.14171
+[47] S. Yang, R. Xu, Y. Xie, S. Yang, M. Li, J. Lin, C. Zhu, X. Chen,
+H. Duan, X. Yue, D. Lin, T. Wang, and J. Pang, “MMSI-Bench:
+A Benchmark for Multi-Image Spatial Intelligence,” in International
+Conference on Learning Representations (ICLR), 2026. [Online].
+Available: https://openreview.net/forum?id=gHRoX4vXm3
+[48] Q. Wang, B. Yin, P. Zhang, J. Zhang, K. Wang, Z. Wang, J. Zhang,
+K. Chandrasegaran, H. Liu, R. Krishna, S. Xie, J. Wu, L. Fei-Fei,
+and M. Li, “MindCube: Spatial Mental Modeling from Limited
+Views,” arXiv preprint arXiv:2506.21458, 2025. [Online]. Available:
+https://arxiv.org/abs/2506.21458
+[49] M. Du, B. Wu, Z. Li, X. Huang, and Z. Wei, “EmbSpatial-Bench:
+Benchmarking Spatial Understanding for Embodied Tasks with Large
+Vision-Language Models,” in Proceedings of the 62nd Annual Meeting
+of the Association for Computational Linguistics (Volume 2: Short
+Papers), 2024, pp. 346–355.
+[50] A. Ray, J. Duan, E. Brown, R. Tan, D. Bashkirova, R. Hendrix,
+K. Ehsani, A. Kembhavi, B. A. Plummer, R. Krishna, K.-H. Zeng, and
+K. Saenko, “SAT: Dynamic Spatial Aptitude Training for Multimodal
+Language Models,” in Conference on Language Modeling, 2025.
+[Online]. Available: https://openreview.net/forum?id=DW8U8ZWa1U
+[51] X. Ma, S. Yong, Z. Zheng, Q. Li, Y. Liang, S.-C. Zhu, and S. Huang,
+“SQA3D: Situated Question Answering in 3D Scenes,” in International
+Conference on Learning Representations, 2023. [Online]. Available:
+https://arxiv.org/abs/2210.07474
+
+
+14
+[52] Z. Chen, A. Gholami, M. Niessner, and A. X. Chang, “Scan2Cap:
+Context-Aware Dense Captioning in RGB-D Scans,” in Proceedings
+of
+the
+IEEE/CVF
+Conference
+on
+Computer
+Vision and Pattern
+Recognition,
+2021.
+[Online].
+Available:
+https://openaccess.thecvf.
+com/content/CVPR2021/html/Chen_Scan2Cap_Context-Aware_Dense_
+Captioning_in_RGB-D_Scans_CVPR_2021_paper.html
+[53] D. Z. Chen, A. X. Chang, and M. Niessner, “ScanRefer: 3D
+Object Localization in RGB-D Scans using Natural Language,” in
+Computer Vision – ECCV 2020, ser. Lecture Notes in Computer
+Science,
+vol.
+12365,
+2020,
+pp.
+202–221.
+[Online].
+Available:
+https://link.springer.com/chapter/10.1007/978-3-030-58565-5_13
+[54] Y. Zhang, Z. Gong, and A. X. Chang, “Multi3DRefer: Grounding
+Text Description to Multiple 3D Objects,” in Proceedings of the
+IEEE/CVF
+International
+Conference
+on
+Computer
+Vision,
+2023.
+[Online]. Available: https://openaccess.thecvf.com/content/ICCV2023/
+html/Zhang_Multi3DRefer_Grounding_Text_Description_to_Multiple_
+3D_Objects_ICCV_2023_paper.html
+[55] Y.-F. Zhang, H. Zhang, H. Tian, C. Fu, S. Zhang, J. Wu, F. Li,
+K. Wang, Q. Wen, Z. Zhang, L. Wang, R. Jin, and T. Tan, “MME-
+RealWorld: Could Your Multimodal LLM Challenge High-Resolution
+Real-World Scenarios that are Difficult for Humans?” in International
+Conference on Learning Representations, 2025. [Online]. Available:
+https://openreview.net/forum?id=k5VHHgsRbi
+[56] X. Cao, T. Zhou, Y. Ma, W. Ye, C. Cui, K. Tang, Z. Cao, K. Liang,
+Z. Wang, J. M. Rehg, and C. Zheng, “MAPLM: A Real-World
+Large-Scale Vision-Language Benchmark for Map and Traffic Scene
+Understanding,” in Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition, 2024, pp. 21 819–21 830.
+[Online]. Available: https://openaccess.thecvf.com/content/CVPR2024/
+html/Cao_MAPLM_A_Real-World_Large-Scale_Vision-Language_
+Benchmark_for_Map_and_Traffic_CVPR_2024_paper.html
+[57] Y. Hao, Z. Li, L. Sun, W. Wang, N. Yi, S. Song, C. Qin,
+M. Zhou, Y. Zhan, and X. Lang, “DriveAction: A Benchmark
+for
+Exploring
+Human-like
+Driving
+Decisions
+in
+VLA
+Models,”
+arXiv preprint arXiv:2506.05667, 2025. [Online]. Available: https:
+//arxiv.org/abs/2506.05667
+[58] T. Qian, J. Chen, L. Zhuo, Y. Jiao, and Y.-G. Jiang, “NuScenes-QA: A
+Multi-modal Visual Question Answering Benchmark for Autonomous
+Driving Scenario,” in Proceedings of the AAAI Conference on Artificial
+Intelligence, 2024. [Online]. Available: https://arxiv.org/abs/2305.14836
+[59] S.-Y. Park, C. Cui, Y. Ma, A. Moradipari, R. Gupta, K. Han,
+and Z. Wang, “NuPlanQA: A Large-Scale Dataset and Benchmark
+for Multi-View Driving Scene Understanding in Multi-Modal Large
+Language Models,” in Proceedings of the IEEE/CVF International
+Conference on Computer Vision, 2025, pp. 8066–8076. [Online].
+Available: https://openaccess.thecvf.com/content/ICCV2025/html/Park_
+NuPlanQA_A_Large-Scale_Dataset_and_Benchmark_for_Multi-View_
+Driving_Scene_ICCV_2025_paper.html
+[60] A.-M. Marcu, L. Chen, J. Hünermann, A. Karnsund, B. Hanotte,
+P. Chidananda, S. Nair, V. Badrinarayanan, A. Kendall, J. Shotton,
+E. Arani, and O. Sinavski, “LingoQA: Visual Question Answering for
+Autonomous Driving,” in European Conference on Computer Vision,
+2024. [Online]. Available: https://arxiv.org/abs/2312.14115
+[61] OpenAI, “GPT-5.4 Thinking System Card,” https://deploymentsafety.
+openai.com/gpt-5-4-thinking, 2026, accessed Nov. 2026.
+[62] G. Comanici, E. Bieber, M. Schaekermann, I. Pasupat, N. Sachdeva,
+I. Dhillon et al., “Gemini 2.5: Pushing the Frontier with Advanced
+Reasoning,
+Multimodality,
+Long
+Context,
+and
+Next
+Generation
+Agentic Capabilities,” arXiv preprint arXiv:2507.06261, 2025. [Online].
+Available: https://arxiv.org/abs/2507.06261
+[63] Anthropic, “Claude Sonnet 4.6 System Card,” https://www.anthropic.
+com/claude-sonnet-4-6-system-card, 2026, accessed Nov. 2026.
+[64] NVIDIA,
+“Cosmos
+3:
+Omnimodal
+World
+Models
+for
+Physical
+AI,” arXiv preprint arXiv:2606.02800, 2026. [Online]. Available:
+https://arxiv.org/abs/2606.02800
+[65] Y. Yuan, Y. Huang, X. Yao, Y. Li, S. Zhang, L. Han et al., “Embodied-
+R1.5:
+Evolving
+Physical
+Intelligence
+via
+Embodied
+Foundation
+Models,” arXiv preprint arXiv:2606.11324, 2026. [Online]. Available:
+https://arxiv.org/abs/2606.11324
+[66] R. Dang, J. Guo, B. Hou, S. Leng, K. Li, X. Li et al., “RynnBrain:
+Open Embodied Foundation Models,” arXiv preprint arXiv:2602.14979,
+2026. [Online]. Available: https://arxiv.org/abs/2602.14979
+[67] G. Yang, T. Zhang, H. Hao, W. Wang, Y. Liu, D. Wang et al.,
+“Vlaser: Vision-Language-Action Model with Synergistic Embodied
+Reasoning,” in International Conference on Learning Representations
+(ICLR), 2026. [Online]. Available: https://arxiv.org/abs/2510.11027
+[68] X.
+Hao,
+L.
+Zhou,
+Z.
+Huang,
+Z.
+Hou,
+Y.
+Tang,
+L.
+Zhang
+et al., “MiMo-Embodied: X-Embodied Foundation Model Technical
+Report,” arXiv preprint arXiv:2511.16518, 2025. [Online]. Available:
+https://arxiv.org/abs/2511.16518
+[69] Y. Zhang, C. Liu, X. Ren, H. Ni, S. Zhang, Z. Ding et al., “Pelican-
+VL 1.0: A Foundation Brain Model for Embodied Intelligence,”
+arXiv preprint arXiv:2511.00108, 2025. [Online]. Available: https:
+//arxiv.org/abs/2511.00108
+[70] G. Luo, G. Yang, Z. Gong, G. Chen, H. Duan, E. Cui et al.,
+“Visual Embodied Brain: Let Multimodal Large Language Models See,
+Think, and Control in Spaces,” arXiv preprint arXiv:2506.00123, 2025.
+[Online]. Available: https://arxiv.org/abs/2506.00123
+[71] H. Tan, E. Zhou, Z. Li, Y. Xu, Y. Ji, X. Chen et al., “RoboBrain
+2.5: Depth in Sight, Time in Mind,” arXiv preprint arXiv:2601.14352,
+2026. [Online]. Available: https://arxiv.org/abs/2601.14352
+[72] J. Zhang, K. Wang, R. Xu, G. Zhou, Y. Hong, X. Fang, Q. Wu,
+Z. Zhang, and H. Wang, “NaVid: Video-based VLM Plans the Next
+Step for Vision-and-Language Navigation,” in Robotics: Science and
+Systems, 2024. [Online]. Available: https://arxiv.org/abs/2402.15852
+[73] J. Zhang, K. Wang, S. Wang, M. Li, H. Liu, S. Wei, Z. Wang, Z. Zhang,
+and H. Wang, “Uni-NaVid: A Video-based Vision-Language-Action
+Model for Unifying Embodied Navigation Tasks,” in Robotics: Science
+and Systems (RSS), 2025.
+[74] A.-C. Cheng, Y. Ji, Z. Yang, X. Zou, J. Kautz, E. Biyik, H. Yin, S. Liu,
+and X. Wang, “NaVILA: Legged Robot Vision-Language-Action Model
+for Navigation,” in Robotics: Science and Systems, 2025. [Online].
+Available: https://navila-bot.github.io/
+[75] M. Wei, C. Wan, X. Yu, T. Wang, Y. Yang, X. Mao, C. Zhu, W. Cai,
+H. Wang, Y. Chen, X. Liu, and J. Pang, “StreamVLN: Streaming
+Vision-and-Language Navigation via SlowFast Context Modeling,” in
+IEEE International Conference on Robotics and Automation, 2026.
+[Online]. Available: https://arxiv.org/abs/2507.05240
+[76] J. Zhang, A. Li, Y. Qi, M. Li, J. Liu, S. Wang, H. Liu, G. Zhou,
+Y. Wu, X. Li, Y. Fan, W. Li, Z. Chen, F. Gao, Q. Wu, Z. Zhang, and
+H. Wang, “Embodied Navigation Foundation Model,” in International
+Conference on Learning Representations, 2026. [Online]. Available:
+https://arxiv.org/abs/2509.12129
+[77] Q.
+Wang,
+M.
+Li,
+J.
+Guan,
+J.
+Ye,
+S.
+Xie,
+Y.
+Liu
+et
+al.,
+“Qwen-VLA:
+Unifying
+Vision-Language-Action
+Modeling
+across
+Tasks,
+Environments,
+and
+Robot
+Embodiments,”
+arXiv
+preprint
+arXiv:2605.30280, 2026. [Online]. Available: https://arxiv.org/abs/2605.
+30280
+
+
+UNITE: SUPPLEMENTARY MATERIAL
+15
+Supplementary Material
+This supplement contains Methods and Implementation (M), Detailed Results (D), and Qualitative Examples (Q). The letter
+prefixes distinguish supplementary sections, tables, figures, and equations; unprefixed references point to the main manuscript.
+M1 Method Details
+15
+M2 Implementation and Training Details
+16
+M3 Benchmark and Evaluation Protocols
+17
+D1
+Routing Top-k
+19
+D2
+VSI Frame-Count Sweep by Sub-Task
+19
+Q1
+Qualitative Results
+20
+Q1.1
+Grounding . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+20
+Q1.2
+Embodied Spatial . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+22
+Q1.3
+Driving . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+30
+M1. METHOD DETAILS
+Expert parameterization.: Each specialist contributes a complete SwiGLU block at every decoder layer. Let d and m
+denote the hidden and intermediate dimensions, respectively. For specialist e at layer ℓ, the gate and up matrices satisfy
+Wgate
+ℓ,e , Wup
+ℓ,e ∈Rm×d, and the down matrix satisfies Wdown
+ℓ,e
+∈Rd×m. For input x ∈Rd, the expert computes
+Fℓ,e(x) = Wdown
+ℓ,e
+h
+SiLU
+
+Wgate
+ℓ,e x
+
+⊙
+
+Wup
+ℓ,ex
+i
+,
+(M1)
+where ⊙denotes elementwise multiplication. We store the gate and up matrices in Eq. (M1) as the row-concatenated matrix
+Wgate-up
+ℓ,e
+= [(Wgate
+ℓ,e )T, (Wup
+ℓ,e)T]T ∈R2m×d. The two factorization groups at each layer are therefore the gate-up stack of
+shape E × 2m × d and the down stack of shape E × d × m. Gate and up retain separate row scales despite being packed into
+one group, and the router selects both projections together with the corresponding down projection.
+Shared-backbone fusion.: We apply norm-rescaled averaging to decoder self-attention projections. For corresponding
+query, key, value, or output matrices {Pe}E
+e=1, define µ = E−1 P
+e Pe and n = E−1 P
+e ∥Pe∥F . The shared projection is
+Pshared =
+(
+µ n/∥µ∥F ,
+∥µ∥F ≥10−10,
+µ,
+otherwise.
+We compute means and norms in FP32 and cast fused tensors to the source storage dtype. The visual encoder, normalization
+parameters, token embeddings, output head, and any decoder attention biases use the elementwise mean across specialists.
+Weight-derived router initialization.: The router initializer extracts expert differences in the input space of the feed-forward
+block. Writing W
+gate
+ℓ
+and W
+up
+ℓ
+for the respective means across specialists, we form
+Xℓ,e =
+"
+Wgate
+ℓ,e
+−W
+gate
+ℓ
+Wup
+ℓ,e −W
+up
+ℓ
+#
+∈R2m×d.
+We compute an approximate leading right singular vector using randomized SVD in FP32, with a subspace size q =
+min(6, 2m, d) and four subspace iterations, and use it in Eq. (6). If maxo,i |Xℓ,e,o,i| < 10−8, we instead initialize that
+router row to zero. We retain the singular-vector sign returned by the numerical routine without sign canonicalization, then
+cast the router weights to the source storage dtype. An exact leading right singular vector maximizes the centered projections’
+combined output norm over unit-norm input directions. This construction provides a weight-derived starting point for expert
+selection; router adaptation (Section III-C) then refines it.
+Conditional least-squares updates.: Each alternating step solves a conditional subproblem of Eq. (3). For a fixed anchor,
+consider one residual row δ ∈RI, its nonnegative scale a, and its binary sign vector s ∈{−1, +1}I. Its squared error is
+∥δ −as∥2
+2 = ∥δ∥2
+2 + Ia2 −2aδTs.
+For any a ≥0, choosing si = sign(δi) maximizes the last inner product, with either sign optimal when δi = 0. Using the
+positive sign at zero, minimization over a gives a = I−1 P
+i |δi|, yielding Eq. (4). For fixed signs and scales, differentiating the
+objective with respect to the anchor and setting the derivative to zero gives the average in Eq. (5). Consequently, the objective
+is non-increasing over the alternating updates in exact arithmetic.
+The numerical settings used in the experiments (ten FP32 iterations followed by BF16 storage) are given in Section M2,
+and the measured reconstruction error per iteration in Table M1.
+
+
+UNITE: SUPPLEMENTARY MATERIAL
+16
+Direct evaluation of factorized experts.: The factorized implementation applies each factorized projection as c
+Wex =
+Cx + αe ⊙(Sex), without constructing a full dense expert parameter. Within a layer forward pass, tokens are grouped by
+selected expert, and the default PyTorch path temporarily expands the signs for each expert selected by at least one token.
+Thus, top-1 routing selects one expert per token, while different tokens in a batch may collectively select every expert.
+M2. IMPLEMENTATION AND TRAINING DETAILS
+Model construction and compression.: The embodied model uses four Qwen3-VL-8B specialists, each with 36 decoder
+layers, hidden dimension d = 4096, and intermediate dimension m = 12288. Each layer contains two independently factorized
+weight groups, gate-up and down, each spanning all four experts, giving 72 groups in total. For each group, we initialize the
+anchor with the expert mean, perform T = 10 alternating updates in FP32 (Algorithm 1), and round the final anchor to BF16.
+We then recompute the binary signs and row scales relative to the stored anchor and store the recomputed row scales in BF16.
+For storage, we encode each sign Se,o,i ∈{−1, +1} as a bit be,o,i = (Se,o,i + 1)/2 ∈{0, 1}, mapping negative residuals to
+0 and nonnegative residuals to 1. We pack the bits into 32-bit words along each matrix’s input dimension and decode them
+at inference time as Se,o,i = 2be,o,i −1. For a group of E expert matrices with shape O × I, the anchor, signs, and row
+scales require 16OI + EOI + 16EO bits before packing alignment. This is 1 + 16/E + 16/I bits per logical expert weight,
+or approximately five bits for the four-expert bank, including the amortized anchor and scales.
+Reconstruction error per iteration.: Table M1 lists the values underlying Fig. 4. With the fixed mean anchor (t = 0), the
+summed one-bit reconstruction error is a median 36.7% (gate-up) and 34.5% (down) of the experts’ total squared deviation
+from their mean, P
+e ∥We −W∥2
+F . After joint fitting and BF16 storage, it is 29.2% and 26.9%, respectively.
+TABLE M1
+SUMMED RECONSTRUCTION ERROR P
+e ∥We −c
+We∥2
+F RELATIVE TO THE FIXED MEAN ANCHOR (t = 0, = 100), MEDIAN OVER THE 36 DECODER
+LAYERS. COLUMN t USES THE ANCHOR C(t) WITH ITS CONDITIONALLY OPTIMAL SIGNS AND SCALES; “STORED” IS THE BF16 ARCHIVE USED AT
+INFERENCE, WITH 10TH–90TH PERCENTILE RANGES OF 78.5–80.6 (GATE-UP) AND 77.2–78.9 (DOWN).
+Group
+t = 1
+t = 2
+t = 3
+t = 5
+t = 9
+Stored
+Gate-up
+84.7
+81.3
+80.3
+79.8
+78.8
+79.6
+Down
+82.5
+78.9
+77.8
+77.3
+77.1
+77.9
+Storage accounting.: Weight storage counts the safetensors payloads of all parameters, including the vision encoder,
+embeddings, shared backbone, routers, and expert bank; peak GPU memory is the peak allocated memory during evaluation
+(Table I). With d = 4096 and m = 12288, each layer holds 1.5×108 expert weights per specialist across its gate-up and down
+groups. The four-expert bank therefore occupies 43.5 GB in BF16 and 13.6 GB after factorization, and the shared backbone,
+vision encoder, embeddings, and routers add 6.7 GB to both, giving the 50.2 GB and 20.3 GB totals. Table M2 lists storage
+together with logical parameter counts.
+TABLE M2
+WEIGHT STORAGE AND LOGICAL PARAMETER COUNTS. ACTIVE COUNTS INCLUDE THE SHARED PARAMETERS AND k COMPLETE EXPERT BRANCHES.
+Weight storage (GB)↓
+One dense specialist
+17.5
+Four standalone specialists
+70.1
+Uncompressed shared-backbone MoE
+50.2
+Shared-anchor one-bit MoE
+20.3
+Logical parameters (B)
+Dense specialist, total
+8.8
+MoE, total logical
+25.1
+MoE, active top-1
+8.8
+MoE, active top-2
+14.2
+MoE, active top-3
+19.6
+Router adaptation.: We train only the 36 router matrices (589,824 parameters) with target-token language-modeling loss
+and a load-balancing loss weighted by 10−3. Training runs for one epoch on eight A800 GPUs with learning rate 10−3,
+cosine decay, warmup ratio 0.03, and seed 42. The per-device batch size is one, with four gradient accumulation steps, giving
+an effective global batch size of 32. Training selects two experts per token, while the exported model uses top-1 unless the
+evaluation explicitly varies k. Under Eq. (1) of the main manuscript, top-2 routing permits gradients through the selected
+mixture weights, whereas the normalized mixture coefficient is identically one for top-1.
+Router supervision mixture.: Router adaptation uses 55,757 supervised samples from eighteen sources spanning navigation,
+3D referring, grounding, affordance, trajectory, video spatial reasoning, spatial question answering, egocentric planning, and
+general visual question answering. The uncompressed MoE (Table VI) uses the same mixture and training budget.
+
+
+UNITE: SUPPLEMENTARY MATERIAL
+17
+Static merging configurations.: The six merging baselines use the same four source checkpoints as UNITE. Model Soup
+averages the source weights without including the pretrained base as an additional model. Task Arithmetic uses a task-vector
+scale of 0.2. DARE uses a drop probability of 0.5, a task-vector scale of 0.25, and seed 42. TIES retains 20% of task-vector
+entries, uses sum aggregation after sign resolution, and applies scale 1.0.
+Calibration data.: Fisher Merging and RegMean use the same 256-example multimodal calibration set, drawn from the
+training splits of 20 sources with fixed quotas and seed 1234 (Table M3). The quotas allocate 64 examples to each of the four
+specialist domains, so that every specialist’s capability is represented equally in the Fisher and Gram statistics. NuScenes-QA
+examples are drawn from training scenes with available camera images. All four specialists receive the same preprocessed
+inputs, one example per batch, and compute their own Fisher or Gram statistics. An example may contain multiple images; 9
+of the 256 examples are VSI-590K videos, and all other visual inputs are images.
+TABLE M3
+CALIBRATION-SET COMPOSITION FOR FISHER MERGING AND REGMEAN.
+Source
+Examples
+Grounding
+Point XY
+4
+ShareRobot Affordance
+14
+ShareRobot Trajectory
+14
+PixMo-Points (at most 10 points)
+8
+PACO-LVIS v1 train
+8
+RefSpatial 3D
+8
+RefSpatial Simulator
+8
+Navigation
+R2R (action-word annotations)
+40
+RxR (action-word annotations)
+24
+Embodied spatial
+VSI-590K
+12
+MMSI
+12
+MindCube train
+12
+SAT train
+12
+GPT4Scene train
+16
+Driving
+NuScenes-QA train
+16
+NuPlanQA train
+12
+MAPLM train
+12
+LingoQA Action train
+8
+LingoQA Scenery train
+8
+CODA-LM train
+8
+Total
+256
+Fisher Merging.: For each specialist and calibration example, we select the highest-probability next token at the final
+sequence position as a hard self-label and compute its negative log-likelihood. The diagonal Fisher estimate is the mean of the
+per-example squared parameter gradients over the 256 examples, without global L2 normalization. Each parameter coordinate
+is merged by averaging the four specialist values with weights proportional to their Fisher estimates plus δ = 10−10.
+RegMean.: For each specialist’s linear layer, we collect the uncentered input Gram matrix Gi = XT
+i Xi/Ni, where Ni is
+the total number of input activation rows observed for that layer. Before merging, we multiply the off-diagonal entries by 0.5
+while leaving the diagonal unchanged, yielding G′
+i. For output-by-input weight matrices, the merged weight satisfies
+WT
+merge =
+ 4
+X
+i=1
+G′
+i
+!−1 4
+X
+i=1
+G′
+iWT
+i
+!
+.
+We use a pseudoinverse if the summed Gram matrix has condition number greater than 108 or any zero diagonal entry;
+otherwise, we use the ordinary inverse. This rule applies to two-dimensional linear weights with Gram statistics; all remaining
+parameters are averaged across the four specialists.
+M3. BENCHMARK AND EVALUATION PROTOCOLS
+Tables II and III report the 22 understanding benchmarks and R2R Val-Unseen. Table M4 lists the evaluation split and size
+of each benchmark; all models in the main tables are evaluated on these data.
+
+
+UNITE: SUPPLEMENTARY MATERIAL
+18
+Benchmark and reference-model sources.:
+The grounding evaluations include RoboSpatial [41], RefSpatial [42],
+PointArena [43], and RoboAfford [44]. The ShareRobot trajectory task uses the dataset introduced with RoboBrain [45].
+The spatial evaluations include VSI-Bench [46], MMSI-Bench [47], MindCube [48], EmbSpatial-Bench [49], SAT (Spatial
+Aptitude Training) [50], and the ERQA benchmark introduced with Gemini Robotics [1]. VSI-Bench and MMSI-Bench are
+abbreviated as VSI and MMSI in the tables. The 3D scene-understanding tasks use ScanQA [9], SQA3D [51], Scan2Cap [52],
+ScanRefer [53], and Multi3DRefer, abbreviated as Multi3DRef in the tables [54]. The real-world and driving evaluations
+include MME-RealWorld [55], MAPLM [56], DriveAction [57], NuScenes-QA, denoted NuScenesQA in the tables [58],
+NuPlanQA [59], and LingoQA [60]. Navigation is evaluated on R2R [10]. The closed-source reference models in Table II are
+GPT-5.4 [61], Gemini 2.5 Pro [62], and Claude Sonnet 4.6 [63]. The embodied reference models are ACE-Brain-0.5-8B [4],
+Cosmos3 Nano [64], Embodied-R1.5 [65], RynnBrain-8B [66], Vlaser-8B [67], MiMo-Embodied-7B [68], Pelican-VL-7B [69],
+VeBrain-7B [70], and RoboBrain 2.5-8B [71]. The navigation reference models in Table III are NaVid [72], Uni-NaVid [73],
+NaVILA [74], StreamVLN [75], NavFoM [76], RynnBrain-Nav [66], Qwen-VLA-Instruct [77], and ACE-Brain-0.5 [4]. We
+evaluate all reference models ourselves on the same benchmark data with the same metrics as UNITE; they differ from UNITE
+in architecture, scale, and training data and are therefore excluded from the rankings.
+Metric definitions.: RoboSpatial, RefSpatial, PointArena, and RoboAfford use their task-level aggregate scores, and
+ShareRobot reports mean normalized discrete Fréchet distance (nDFD). For 3D scene understanding, ScanQA reports CIDEr,
+SQA3D reports EM-1, Scan2Cap reports CIDEr@0.25, ScanRefer reports Acc@0.25, and Multi3DRef reports F1@0.25. VSI
+uses its overall benchmark score; MMSI and DriveAction report overall accuracy across questions, and NuScenesQA reports
+strict exact-match accuracy. We also evaluate MindCube, EmbSpatial, ERQA, SAT, MME-RealWorld, MAPLM, NuPlanQA,
+and LingoQA, each with its official evaluation metric. R2R reports navigation error in meters and OS, SR, and SPL in percent.
+Lower values are better for navigation error and ShareRobot (Traj.), and higher values are better for the other reported scores.
+ShareRobot trajectory metric.:
+We report mean normalized discrete Fréchet distance (nDFD; lower is better)
+between image-plane trajectories. For image width W
+and height H, ground-truth pixels (u, v) are mapped to
+(int(1000u/W), int(1000v/H)) by integer truncation. Predictions use the same coordinate system and are rounded to integers;
+both sequences are then divided by 1000 without further normalization or clipping.
+Let P = (p1, . . . , pm) and Q = (q1, . . . , qn) denote the normalized prediction and reference. We linearly resample P along
+its point-index axis to the reference length n, obtaining eP while keeping Q unchanged. A single prediction point is repeated;
+a one-point reference uses the first prediction point. The dimensionless per-example error is
+dDF( eP, Q) = min
+π∈Πn
+max
+(i,j)∈π ∥epi −qj∥2,
+where Πn contains monotone paths from (1, 1) to (n, n) with steps (1, 0), (0, 1), or (1, 1). We report their mean over examples.
+TABLE M4
+EVALUATION SETTINGS AND SIZES FOR THE 22 UNDERSTANDING BENCHMARKS AND R2R.
+Benchmark
+Evaluation setting
+Evaluation size
+RoboSpatial
+Grounding evaluation
+350
+RefSpatial
+Grounding evaluation
+277
+PointArena
+Grounding evaluation
+982
+RoboAfford
+Grounding evaluation
+338
+ShareRobot
+Trajectory evaluation
+200
+ScanQA
+Val
+4,675
+SQA3D
+Val
+3,261
+Scan2Cap
+Val, Mask3D proposals
+2,007 inference inputs; 2,068 scoring reference objects
+ScanRefer
+Val, Mask3D proposals
+9,508
+Multi3DRef
+Val, Mask3D proposals
+11,120
+VSI
+Overall benchmark score
+5,130
+MMSI
+Overall benchmark accuracy
+1,000
+MindCube
+Tiny
+1,200
+EmbSpatial
+Test evaluation
+3,640
+ERQA
+Test evaluation
+400
+SAT
+Val
+150
+MME-RealWorld
+Overall benchmark score
+23,609
+MAPLM
+Multiple-choice evaluation
+1,500
+DriveAction
+True/false and multiple-choice
+16,185
+NuScenesQA
+Full evaluation task
+83,337
+NuPlanQA
+Test
+1,801
+LingoQA
+Official evaluation/test
+500 questions; 100 video clips
+R2R
+Val-Unseen
+1,839 episodes; 11 scenes
+Input processing.: UNITE evaluations on VSI, MMSI, and MindCube use a minimum image area of 200,704 pixels,
+a maximum of 802,816 pixels, and at most 32 video frames. EmbSpatial and ERQA set both the minimum and maximum
+image-area budgets to 1,048,576 pixels and use the same frame cap. Their preprocessing preserves aspect ratio and aligns
+
+
+UNITE: SUPPLEMENTARY MATERIAL
+19
+image dimensions to the model’s image grid, so the actual area may differ slightly from the target budget due to rounding.
+These evaluations use batch size one and the FlashAttention-2 attention implementation. Grounding inputs use a maximum
+image area of 16,777,216 pixels. The minimum is 16,384 pixels for RoboSpatial and 1,048,576 pixels for the other four
+grounding tasks. Model evaluation and router training use Transformers 5.13.0.
+Generation settings.: VSI and MME-RealWorld use deterministic decoding with a maximum of 16 generated tokens.
+MMSI and MindCube use deterministic decoding with a maximum of 4,096 tokens. NuScenesQA and NuPlanQA use a
+maximum of 512 tokens. The EmbSpatial and ERQA task configurations specify at most 1,024 tokens. The five grounding
+evaluations use temperature 0.2, top-p = 0.95, top-k = 50, and at most 4,096 generated tokens. This sampling top-k controls
+the vocabulary distribution and is distinct from the number of activated MoE experts.
+Reporting conventions.: Boldface and underlining mark the best and second-best distinct displayed scores within each
+caption’s comparison group. Ties receive the same formatting, and scores are rounded once to the displayed precision.
+Parameter accounting.: Active parameters (Table M2) are logical counts: the shared non-FFN parameters plus k complete
+FFN expert branches per token, independently of their compressed storage representation. The equivalent dense MoE architecture
+contains approximately 25.1 billion logical parameters in total.
+Detailed Results
+D1. ROUTING TOP-k
+Tables D1 and D2 give the scores underlying Fig. 8: top-k ∈{1, 2, 3} before and after router adaptation, on all 22 benchmarks
+and R2R Val-Unseen. Source specialists and consolidation stages are compared in Tables IV and V of the main manuscript.
+TABLE D1
+TOP-k COMPARISON AT TWO STAGES OF UNITE. ACTIVE PARAMETERS ARE LOGICAL COUNTS. HIGHER IS BETTER EXCEPT SHAREROBOT (TRAJ.).
+MMSI AND DRIVEACTION REPORT OVERALL ACCURACY. ROUTING SETTINGS ARE RANKED SEPARATELY WITHIN EACH STAGE.
+Grounding
+Embodied Spatial
+Driving
+Model
+Active (B)
+RoboSpatial
+RefSpatial
+PointArena
+RoboAfford
+ShareRobot (↓)
+VSI
+MMSI
+MindCube
+EmbSpatial
+ERQA
+ScanQA
+SQA3D
+Scan2Cap
+ScanRefer
+Multi3DRef
+SAT
+MME-RealWorld
+MAPLM
+DriveAction
+NuScenesQA
+NuPlanQA
+LingoQA
+Shared-anchor one-bit MoE
+UNITE (top-k = 1) 8.8
+58.9 59.4 71.7 79.6 0.26 47.4 37.5 88.1 80.1 47.0 106.6 63.1 100.6 71.3 73.6 87.3 65.9 92.0 79.5 29.7 89.8 59.2
+UNITE (top-k = 2) 14.2 60.5 59.4 71.6 79.4 0.26 47.5 37.3 88.0 79.8 47.0 106.3 63.3 97.6 71.5 73.6 87.3 65.7 92.9 79.7 31.5 90.0 60.4
+UNITE (top-k = 3) 19.6 59.7 61.2 71.9 80.9 0.26 47.3 37.5 88.3 79.5 47.5 106.2 63.1 98.3 71.7 73.7 88.0 65.8 93.2 80.0 33.2 90.3 60.8
+One-bit MoE + router adaptation
+UNITE (top-k = 1) 8.8
+58.3 57.2 71.3 80.3 0.25 46.7 36.3 87.9 78.9 47.3 105.6 62.8 102.1 71.0 73.2 90.7 65.7 93.8 79.8 48.7 91.2 63.0
+UNITE (top-k = 2) 14.2 57.3 58.8 71.0 80.2 0.26 47.1 36.4 87.8 79.0 46.5 105.6 63.2 102.8 71.0 73.4 89.3 65.6 93.7 79.8 48.5 91.1 62.4
+UNITE (top-k = 3) 19.6 58.4 58.5 70.9 80.9 0.25 47.1 36.8 87.8 79.1 46.8 106.0 63.2 102.6 71.1 73.3 89.3 65.8 93.7 79.9 48.4 91.1 62.4
+Before router adaptation, NuScenesQA rises from 29.7 (k = 1) to 33.2 (k = 3) and R2R SR from 57.0% to 58.2%. After
+adaptation, top-1 reaches 48.7 on NuScenesQA and 59.6% R2R SR, and larger k changes NuScenesQA by at most 0.3 points.
+TABLE D2
+R2R VAL-UNSEEN, SAME EPISODES ACROSS SETTINGS. BEST AND SECOND-BEST SCORES ARE MARKED WITHIN EACH STAGE. NE: METERS; OS, SR,
+SPL: PERCENTAGES.
+Routing
+NE↓
+OS↑
+SR↑
+SPL↑
+Shared-anchor one-bit MoE
+Top-1
+4.9
+62.1
+57.0
+51.9
+Top-2
+4.8
+63.7
+58.2
+53.0
+Top-3
+4.7
+63.6
+58.2
+52.9
+One-bit MoE + router adaptation
+Top-1
+4.5
+65.7
+59.6
+53.4
+Top-2
+4.5
+65.8
+59.4
+53.2
+Top-3
+4.6
+66.5
+60.1
+53.7
+D2. VSI FRAME-COUNT SWEEP BY SUB-TASK
+Table D3 lists the overall VSI scores plotted in Fig. 7 together with the eight sub-task scores. Both expert banks share
+the backbone and use top-1 routing without router adaptation on all 5,130 questions; only the maximum number of sampled
+
+
+UNITE: SUPPLEMENTARY MATERIAL
+20
+frames varies. On object counting and object size, scores change by at most 5 points across frame counts for both models. The
+uncompressed MoE gains most on sub-tasks that relate observations across frames, such as relative direction (49.4 →80.3)
+and appearance order (51.0 →77.8), whereas the one-bit MoE varies by less than six points on each of them.
+TABLE D3
+VSI-BENCH OVERALL AND SUB-TASK SCORES VERSUS THE MAXIMUM NUMBER OF SAMPLED FRAMES (ALL 5,130 QUESTIONS; TOP-1 ROUTING, NO
+ROUTER ADAPTATION). THE MAIN TABLES USE 32 FRAMES. ABS. DIST.: ABSOLUTE DISTANCE; REL. DIST./DIR.: RELATIVE DISTANCE/DIRECTION;
+APPEAR. ORDER: APPEARANCE ORDER.
+Expert bank
+Frames
+Overall
+Obj.
+count
+Abs.
+dist.
+Obj.
+size
+Room
+size
+Rel.
+dist.
+Rel.
+dir.
+Route
+plan
+Appear.
+order
+Uncompressed MoE
+4
+48.1
+64.9
+28.3
+68.9
+45.6
+42.5
+49.4
+34.0
+51.0
+8
+55.2
+67.4
+35.7
+71.9
+59.4
+47.5
+58.0
+38.1
+63.8
+16
+59.2
+68.8
+43.1
+71.8
+60.6
+54.6
+59.3
+43.3
+72.2
+32
+62.4
+66.6
+46.4
+73.9
+61.1
+61.5
+69.8
+46.4
+73.3
+64
+65.0
+66.1
+49.1
+73.8
+62.2
+63.0
+80.3
+47.9
+77.8
+One-bit MoE
+4
+46.9
+63.9
+26.8
+68.1
+37.0
+42.4
+48.1
+38.1
+50.5
+8
+48.8
+64.0
+27.7
+69.1
+36.7
+48.7
+47.9
+40.2
+55.8
+16
+46.8
+63.9
+26.9
+68.3
+36.7
+42.4
+47.9
+38.1
+50.3
+32
+47.4
+63.0
+26.7
+67.8
+36.8
+45.2
+48.0
+39.2
+52.9
+64
+47.8
+64.5
+29.8
+68.9
+40.1
+44.8
+45.3
+33.5
+55.5
+Q1. QUALITATIVE RESULTS
+All outputs are produced by the final UNITE model (One-bit MoE + router adaptation) with top-1 routing and are shown
+alongside the reference answers or task-level scores.
+A. Grounding
+We show examples on RoboSpatial (Fig. Q1), RefSpatial (Fig. Q2), PointArena (Fig. Q3), RoboAfford (Fig. Q4), and
+ShareRobot trajectory prediction (Fig. Q5).
+RoboSpatial
+Question: In the image, there is a desk. 
+Pinpoint several points within the vacant 
+space situated to the below the desk. 
+Your answer should be formatted as a list 
+of tuples, i.e. [(x1, y1), ...], where each 
+tuple contains the x and y coordinates of 
+a point satisfying the conditions above. 
+The coordinates should be between 0 and 
+1000, indicating the normalized pixel 
+locations of the points.
+UNITE Output: [(797, 435), (887, 455), 
+(838, 532), (730, 500), (793, 512), (837, 
+446), (868, 493), (805, 482), (779, 458)]
+Score: 100
+Question: In the image, there is a game 
+controller. Pinpoint several points within 
+the vacant space situated to the in front 
+of the game controller. Your answer 
+should be formatted as a list of tuples, i.e. 
+[(x1, y1), ...], where each tuple contains 
+the x and y coordinates of a point 
+satisfying the conditions above. The 
+coordinates should be between 0 and 
+1000, indicating the normalized pixel 
+locations of the points.
+UNITE Output:  [(274, 576), (300, 570), 
+(320, 561]
+Score: 100
+Question: Can the mouse fit left of the 
+keyboard? Answer yes or no.
+UNITE Output:  Yes
+Score: 100
+Question: Is the stove right of the sink? 
+Answer yes or no.
+UNITE Output:  Yes
+Score: 100
+Fig. Q1. Qualitative examples on RoboSpatial. The bracket mismatch in the displayed output is retained from the original model response.
+
+
+UNITE: SUPPLEMENTARY MATERIAL
+21
+REFSPATIAL
+Question: Please point out the free space 
+in the direction of the handle of the 
+second closest cup to the viewer.
+UNITE Output: [[346, 474]]
+Score: 100
+Question: Please point out the free space 
+between the black water bottle, the pot 
+lid, and the scissors.
+UNITE Output: [[349, 622]]
+Score: 100
+Question: Please point out the second 
+closest cup to the viewer.
+UNITE Output: [[149, 154]]
+Score: 100
+Question: Please point out the free spot, 
+equidistant from both the blue bowl and 
+the red bowl, and between them, where a 
+new, similar-sized bowl can be placed.
+UNITE Output: [[504, 654]]
+Score: 100
+Fig. Q2. Qualitative examples on RefSpatial.
+PointArena
+Question: Point to the object that 
+indicates the speed limit.
+UNITE Output:  [[699, 376], [756, 376], 
+[814, 376], [869, 376]]
+Score: 100
+Question: Point to counting all the 
+monkeys in the image.
+UNITE Output:  [[104, 299], [182, 403], 
+[484, 303], [524, 319], [694, 326], [764, 
+326]]
+Score: 100
+Question: Point to the first three Coca-
+Cola bottles.
+UNITE Output:  [[725, 491], [575, 454], 
+[485, 432]]
+Score: 100
+Question: Point to the person positioned 
+to the left of the firefighter on the right 
+and to the right of the firefighter on the 
+left.
+UNITE Output:  [[314, 624]]
+Score: 100
+Fig. Q3. Qualitative examples on PointArena.
+RoboAfford
+Question: What part of a pan should be 
+gripped to lift it safely? Your answer 
+should be formatted as a list of tuples, i.e. 
+[(x1, y1), (x2, y2), ...], where each tuple 
+contains the x and y coordinates of a 
+point satisfying the conditions above. The 
+coordinates should be rounded to two 
+decimal places, indicating the absolute 
+pixel locations of the points in the image.
+UNITE Output: [(773.0, 593.0)]
+Score: 100
+Question: Find some points in the vacant 
+area inside the cabinet. Your answer 
+should be formatted as a list of tuples, i.e. 
+[(x1, y1), (x2, y2), ...], where each tuple 
+contains the x and y coordinates of a 
+point satisfying the conditions above. The 
+coordinates should be rounded to two 
+decimal places, indicating the absolute 
+pixel locations of the points in the image.
+UNITE Output:  [(401.0, 654.0), (434.0, 
+660.0), (417.0, 671.0), (450.0, 662.0), 
+(400.0, 675.0), (431.0, 681)]
+Score: 100
+Question: Identify several points on the 
+rightmost bowl in the image. Your answer 
+should be formatted as a list of tuples, i.e. 
+[(x1, y1), (x2, y2), ...], where each tuple 
+contains the x and y coordinates of a 
+point satisfying the conditions above. The 
+coordinates should be rounded to two 
+decimal places, indicating the absolute 
+pixel locations of the points in the image.
+UNITE Output: [(551.0, 854.0), (578.0, 
+896.0), (598.0, 856.0), (542.0, 933.0), 
+(564.0, 823.0)]
+Score: 100
+Question: What part of the cabinet 
+should be pulled to open it? Your answer 
+should be formatted as a list of tuples, i.e. 
+[(x1, y1), (x2, y2), ...], where each tuple 
+contains the x and y coordinates of a 
+point satisfying the conditions above. The 
+coordinates should be rounded to two 
+decimal places, indicating the absolute 
+pixel locations of the points in the image.
+UNITE Output:  [(692.0, 395.0)]
+Score: 100
+Fig. Q4. Qualitative examples on RoboAfford.
+
+
+UNITE: SUPPLEMENTARY MATERIAL
+22
+ShareRobot Traj.
+Question: You are a robot using the joint 
+control. The task is \"reach for the 
+ketchup bottle in the strainer\". Please 
+predict up to 10 key trajectory points to 
+complete the task. Your answer should be 
+formatted as a list of tuples, i.e. [[x1, y1], 
+[x2, y2], ...], where each tuple contains 
+the x and y coordinates of a point.
+UNITE Output: [[307, 468], [333, 542], 
+[374, 601], [417, 638]]
+GT Answer: [[308, 450], [327, 525], [360, 
+600], [400, 645]]
+Score: 0.018
+Question: You are a robot using the joint 
+control. The task is \"reach for the cloth\". 
+Please predict up to 10 key trajectory 
+points to complete the task. Your answer 
+should be formatted as a list of tuples, i.e. 
+[[x1, y1], [x2, y2], ...], where each tuple 
+contains the x and y coordinates of a 
+point.
+UNITE Output: [[127, 376], [254, 439], 
+[373, 531], [501, 642]]
+GT Answer: [[132, 393], [254, 439], [375, 
+502], [526, 643]]
+Score: 0.029
+Question: You are a robot using the joint 
+control. The task is \"reach for the 
+mushroom in the pot\". Please predict up 
+to 10 key trajectory points to complete 
+the task. Your answer should be 
+formatted as a list of tuples, i.e. [[x1, y1], 
+[x2, y2], ...], where each tuple contains 
+the x and y coordinates of a point.
+UNITE Output: [[313, 205], [388, 239], 
+[438, 282], [510, 324]]
+GT Answer: [[304, 206], [376, 218], [451, 
+245], [532, 341]]
+Score: 0.039
+Question: You are a robot using the joint 
+control. The task is \"reach for the yellow 
+brush\". Please predict up to 10 key 
+trajectory points to complete the task. 
+Your answer should be formatted as a list 
+of tuples, i.e. [[x1, y1], [x2, y2], ...], where 
+each tuple contains the x and y 
+coordinates of a point.
+UNITE Output: [[397, 301], [436, 398], 
+[466, 496], [466, 586]]
+GT Answer: [[387, 295], [426, 383], [471, 
+491], [457, 595]]
+Score: 0.018
+Fig. Q5. Qualitative examples on ShareRobot (Traj.).
+B. Embodied Spatial
+Examples: VSI (Fig. Q6), MMSI (Fig. Q7), MindCube (Fig. Q8), EmbSpatial (Fig. Q9), ERQA (Fig. Q10), ScanQA
+(Fig. Q11), SQA3D (Fig. Q12), Scan2Cap (Fig. Q13), ScanRefer (Fig. Q14), Multi3DRef (Fig. Q15), and SAT (Fig. Q16).
+
+
+UNITE: SUPPLEMENTARY MATERIAL
+23
+VSI-Bench 1
+Question: You are a robot beginning at the refrigerator, with your back to the fridge. You want to navigate to the trophies on the open shelving. You will perform the following 
+actions (Note: for each [please fill in], choose either 'turn back,' 'turn left,' or 'turn right.'): 1. Go forward until the kitchen island. 2. [please fill in] 3. Go forward until the chairs. 4. 
+[please fill in] 5. Go forward until past the column. 6. [please fill in] 7. Go forward until the open shelving. You have reached the final destination.
+Options: A. Turn Back, Turn Right, Turn Right, B. Turn Left, Turn Left, Turn Right, C. Turn Left, Turn Right, Turn Left, D. Turn Right, Turn Left, Turn Right
+UNITE Output: D
+GT Answer: D
+VSI-Bench 2
+Question: You are a robot beginning at the printer and facing the window. You want to navigate to the lamp. You will perform the following actions (Note: for each [please fill 
+in], choose either 'turn back,' 'turn left,' or 'turn right.'): 1. Go forward until the desk chair. 2. [Please fill in] 3. Go forward until the sofa. 4. [please fill in] 5. Go forward until the 
+other sofa by the window. 6. [please fill in] 7. Go forward until the lamp. You have reached the final destination.
+Options: A. Turn Right, Turn Left, Turn Right, B. Turn Left, Turn Left, Turn Right, C. Turn Back, Turn Right, Turn Left, D. Turn Back, Turn Right, Turn Right
+UNITE Output: A
+GT Answer: A
+Fig. Q6. Qualitative examples on VSI.
+
+
+UNITE: SUPPLEMENTARY MATERIAL
+24
+MMSI Bench  1
+Question: The room with black chairs and a brown table is the meeting room, and the table with blue and yellow bottles is the dining table. The lawn is to the north of the 
+outdoor sofa. Which of the following statements is correct?
+Options:  A: The refrigerator is to the west of the lawn, B: When a person is sitting on the sofa facing the TV and watching TV, the dining table is on the person's left, C: The 
+indoor sofa is to the southeast of the outdoor sofa, D: The meeting room is to the north of the TV
+UNITE Output: C
+GT Answer: C
+MMSI Bench 2 
+Question: These photos show different areas inside the same house. Suppose a person enters the room through the white door in Photo 1 and stands at the doorway, facing 
+perpendicular to the white door frame and looking into the room. Which of the following statements is correct regarding how this person can see the bookshelf in Photo 4?
+Options:  A. Looking straight ahead, they can see the wooden cabinet. B: Looking directly to the right, they can see the wooden cabinet. C: Looking to the front left, they can 
+see the wooden cabinet. D: Looking to the front right, they can see the wooden cabinet.
+UNITE Output: D
+GT Answer: D
+Fig. Q7. Qualitative examples on MMSI.
+MindCube 1
+Question: Based on these four images (image 1, 2, 3, and 4) showing the black shoe from different viewpoints (front, left, back, and right), with each camera aligned 
+with room walls and partially capturing the surroundings: If I was positioned where the black shoe is and facing the same direction, would I be able to see the wooden 
+dining table? 
+Options: A. No B. Yes
+UNITE Output: A
+GT Answer: A
+MindCube 2
+Question: Based on these four images (image 1, 2, 3, and 4) showing the blue ball from different viewpoints (front, left, back, and right), with each camera aligned with room 
+walls and partially capturing the surroundings: From the viewpoint presented in image 1, what is to the left of the blue ball? 
+Options: A. Window B. Cardboard-covered sliding door C. Wall D. Smoking machine
+UNITE Output: C
+GT Answer: C
+Fig. Q8. Qualitative examples on MindCube.
+
+
+UNITE: SUPPLEMENTARY MATERIAL
+25
+EmbSpatial
+Question: From your perspective, which 
+object in the image is at the shortest 
+distance?
+Options: A. garage door, B. cabinet, C. 
+table, D. cart
+UNITE Output: B
+GT Answer: B
+Question: Which object, in relation to your 
+current position, holds the nearest 
+placement in the image?
+Options: A. fireplace, B. pool table, C. 
+railing, D. pillow
+UNITE Output: C
+GT Answer: C
+Question: What is the spatial 
+configuration between fireplace and 
+television in relation to each other within 
+the image?
+Options: A. The fireplace is on the right 
+side of the television, B. The fireplace is 
+inside the television, C. The fireplace is 
+touching the television, D. The fireplace is 
+at the left side of the television
+UNITE Output: C
+GT Answer: C
+Question: What is the spatial 
+configuration between dresser and night 
+stand in relation to each other within the 
+image?
+Options: A. The dresser is inside the night 
+stand, B. The dresser is on the right side 
+of the night stand, C. The dresser is 
+above the night stand, D. The dresser is 
+touching the night stand.
+UNITE Output: A
+GT Answer: A
+Fig. Q9. Qualitative examples on EmbSpatial.
+ERQA
+Question: The image contains colored 
+drawings indicating potential action 
+trajectories. What is a list of trajectories 
+that make sense for the task of cooking 
+the tomato? Please answer directly with 
+only the letter of the correct option and 
+nothing else.
+Options: A. 1. Cut the tomato (yellow) 2. 
+Turn on the stove (orange) 3. Open the lid 
+(red) 4. Pour oil (green). B. 1. Cut the 
+tomato (yellow) 2. Turn on the stove 
+(orange) 3. Open the lid (red) 4. Pour oil 
+(blue) 5. Put in tomato (cyan). C. 1. Cut 
+the tomato (yellow) 2. Turn on the stove 
+(orange) 3. Pour oil (green) 4. Open the lid 
+(red) 5. Put in tomato (cyan). D. 1. Cut the 
+tomato (yellow) 2. Turn on the stove 
+(orange) 3. Open the lid (red) 4. Pour oil 
+(green) 5. Put in tomato (cyan).
+UNITE Output: D
+GT Answer: D
+Question: You are watching a robotic 
+gripper completing a task from the 
+viewpoint of its wrist camera. Several 
+colored trajectories are overlaid on the 
+screen. Which of these trajectories will 
+result in the robot correctly picking the 
+lotion container in front of the robot and 
+placing it next to the other lotion on the 
+far right? Please answer directly with only 
+the letter of the correct option and 
+nothing else.
+Options:  A. The purple trajectory. B. The 
+orange trajectory. C. The red trajectory. D. 
+The pink trajectory. Please answer 
+directly with only the letter of the correct 
+option and nothing else.
+UNITE Output: A
+GT Answer: A
+Question: The image is labeled with 
+action points in numbers. Give a list of 
+actions that need to be completed in 
+order to cook the meat. Please answer 
+directly with only the letter of the correct 
+option and nothing else.
+Options: A. [7 (open meat package), 6 
+(open pot lid)]. B. [3 (turn on stove), 7 
+(open meat package), 8 (open fish 
+package)]. C. [3 (turn on stove), 9 (open 
+pot lid), 7 (open meat package)]. D. [3 
+(turn on stove), 6 (open pot lid), 7 (open 
+meat package)]. 
+UNITE Output: D
+GT Answer: D
+Question: The annotated arrows 
+represent potential point-wise movements 
+of the screwdriver (where a point on the 
+screwdriver travels from the base of the 
+arrow to the tip of the arrow). Following 
+which two arrows would the screwdriver 
+be moved into a pose that is most 
+suitable for operating on the screw on the 
+chair that is closest to the human hand? 
+Please answer directly with only the letter 
+of the correct option and nothing else.
+Options: A. Red and blue. B. Green and 
+purple. C. Blue and green. D. Yellow and 
+orange. 
+UNITE Output: A
+GT Answer: A
+Fig. Q10. Qualitative examples on ERQA.
+
+
+UNITE: SUPPLEMENTARY MATERIAL
+26
+ScanQA
+Question 1: How many black chairs are located between 
+six brown chairs and a black couch? Answer the 
+question using a single word or phrase.
+UNITE Output: 2.
+GT answer: 2
+Question 2: How many brown arm chairs are stacked 
+against the white wall? Answer the question using a 
+single word or phrase.
+UNITE Output: 8.
+GT answer: 8 of 
+them
+Question 3: How many black chairs are next to the 
+chairs? Answer the question using a single word or 
+phrase.
+UNITE Output: 2.
+GT answer: 2
+Fig. Q11. Qualitative examples on ScanQA.
+SQA3D
+Question 1: I am standing by an office chair on my left 
+facing round table and the curved furniture is behind me. 
+If I walked around to the other side of the table, how 
+many keyboards would I have a choice of? Answer the 
+question using a single word or phrase.
+UNITE Output: Two. 
+GT answer: two
+Question 2: I am standing by a keyboard on my right 
+facing an office chair with another keyboard in my one 
+o'clock direction and the furniture in my five o'clock 
+direction. How many office chairs are around the table 
+next to me? Answer the question using a single word or 
+phrase.
+UNITE Output: Three.
+GT answer: three
+Question 3: I got out of the office chair and grabbed my 
+phone from the table in front of it. Is the lamp located 
+close to the middle of the table? Answer the question 
+using a single word or phrase.
+UNITE Output: Yes.
+GT answer: yes
+Fig. Q12. Qualitative examples on SQA3D.
+
+
+UNITE: SUPPLEMENTARY MATERIAL
+27
+Scan2Cap 1
+Question: Start by articulating the outward features of the <OBJ009>, then transition into its spatial alignment within the broader scene.
+UNITE Output: This is a gray chair. It is in the second row from the back and is the second chair from the right.
+Reference Answer:  - A chair is in the second row if you start counting from the back row. It is the second chair from the right.
+  - This is a gray chair. It is second from the right.
+  - The chair is the second from the right in the third row. It is a grey color and has tan arm rests.
+Scan2Cap 2
+Question: Paint a picture of the visual attributes of <OBJ013>, then explore how it relates spatially to other elements in the scene.
+UNITE Output: This is a black chair. It is the third chair from the left.
+Reference Answer:   - This is a brown chair in an office. It is the third chair from the right up against a wall. 
+  - The chair is against the side wall. It is the third from the left.
+  - This is the third chair from the right. It is facing inward.
+  - This is a black meeting room chair. It is near the wall, two down from the red backpack.
+Fig. Q13. Qualitative examples on Scan2Cap.
+
+
+UNITE: SUPPLEMENTARY MATERIAL
+28
+ScanRefer 1
+Question: What is the ID of the object that matches the description \"in front of the back row of chairs, this chair is second from the left. to its left is a chair, behind it is the back 
+row, and to its right is a gap before another two chairs\"?
+UNITE Output: <OBJ004>.
+GT answer: [<OBJ004>]
+ScanRefer 2
+Question: Share the ID of the object that best corresponds to the description \"a rectangular black computer monitor on the frontmost desk in the class.  it is on the front desk, 
+all the way to the right, and is the left monitor in the dual-monitor setup\".
+UNITE Output: <OBJ009>.
+GT answer: [<OBJ009>]
+Fig. Q14. Qualitative examples on ScanRefer.
+
+
+UNITE: SUPPLEMENTARY MATERIAL
+29
+Multi3DRef 1
+Question: Are there any objects fitting the description of \"a long red table is placed in the middle of the room\"? If so, kindly provide the IDs for those objects.
+UNITE Output: Yes. <OBJ010>.
+GT answer: [<OBJ010>]
+Multi3DRef 2
+Question: Are there objects with the attributes of \"a rectangular pillow sits atop the bed, against the wall\"? If there are, please list their IDs.
+UNITE Output: Yes. <OBJ006>, <OBJ011>, <OBJ012>, <OBJ016>, <OBJ020>, and <OBJ026>.
+GT answer: [<OBJ006>, <OBJ011>, <OBJ012>, <OBJ016>, <OBJ020>, 
+<OBJ026>]
+Fig. Q15. Qualitative examples on Multi3DRef.
+SAT
+Question: I need to go to the houseplant. 
+which direction should i rotate to face it?
+Answer with the option's letter from the 
+given choices directly.
+Options:  A. left, B. right
+UNITE Output:  A
+GT Answer: A
+Question: I need to go to the counter. if i 
+turn left, will i be facing away from it?
+Answer with the option's letter from the 
+given choices directly.
+Options:  A. yes, B. no
+UNITE Output:  A
+GT Answer: A
+Question: Were any of the objects in the 
+initial frame that you can still see in the 
+second frame moved from their original 
+positions?Answer with the option's letter 
+from the given choices directly.
+Options:  A. chair was moved left and 
+away from the camera, B. chair was 
+moved right and away from the camera
+UNITE Output:  A
+GT Answer: A
+Question: How did the camera likely 
+rotate when shooting the video?Answer 
+with the option's letter from the given 
+choices directly.
+Options:  A. rotated left, B. rotated right
+UNITE Output:  A
+GT Answer: A
+Fig. Q16. Qualitative examples on SAT.
+
+
+UNITE: SUPPLEMENTARY MATERIAL
+30
+C. Driving
+We show examples on MME-RealWorld (Fig. Q17), MAPLM (Fig. Q18), DriveAction (Fig. Q19), NuScenesQA (Fig. Q20),
+NuPlanQA (Fig. Q21), and LingoQA (Fig. Q22).
+MME-RealWorld
+Question: What is the total number of cars and trucks in the image? Select the best 
+answer to the above multiple-choice question based on the image. Respond with 
+only the letter (A, B, C, D, or E) of the correct option.The best answer is: 
+Options: (A) 22 (B) 9 (C) 30 (D) 31 (E) The image does not feature the objects
+UNITE Output: A
+GT Answer: A
+Question: This image shows the front view of the ego car. Based on the 
+observations of the pedestrian in white clothes in the middle, what are possible 
+actions to be taken by the pedestrians preparing to cross the road in the middle? 
+What is the reason? Select the best answer to the above multiple-choice question 
+based on the image. Respond with only the letter (A, B, C, D, or E) of the correct 
+option.The best answer is: 
+Options: (A) The action is to gently brake to a stop, the reason is to follow the traffic 
+rules.(B) The action is to keep going at the same speed, the reason is that there is 
+no safety issue.(C) The action is to keep going at the same speed, and the reason is 
+to maintain a safe distance.(D) The action is to accelerate and go ahead, the reason 
+is to follow the traffic rules.(E) The image does not feature the object.
+UNITE Output: B
+GT Answer: B
+Fig. Q17. Qualitative examples on MME-RealWorld.
+
+
+UNITE: SUPPLEMENTARY MATERIAL
+31
+MAPLM 1
+Question: What is the point cloud data quality in current road area of this image?
+Options: A. Very clear, B. Not clear, road mark is worn, C. Not clear, road mark is occluded by some vehicle, D. Not clear, road mark is worn and occluded by vehicle
+UNITE Output: A
+GT Answer:  A
+MAPLM 2
+Question: What kind of road scene is it in the images?
+Options: A. Normal city road, B. Construction road, C. Undeveloped road, D. Road mark repainting, E. Roundabout, F. None of the above
+UNITE Output: A
+GT Answer:  A
+Fig. Q18. Qualitative examples on MAPLM.
+DriveAction 1
+Question: 79 meters ahead, the navigation indicates to drive towards the front right. There are 6 lanes ahead, with the lane attributes from left to right being: straight, straight, 
+straight, left U-turn, straight, straight. Please use the middle lane. Which lane, counting from the left to the right, is your vehicle currently in?
+Options: A. Lane 2, B. Lane 3, C. Lane 4, D. Lane 5
+UNITE Output: B
+GT Answer: B
+DriveAction 2
+Question: 147 meters ahead, the navigation indicates a left turn. There are 5 lanes ahead, with lane attributes from left to right as follows: left turn, variable lane, straight, 
+straight, straight + right turn. Please use the leftmost lane (lane 1). Which of the following statements correctly reflects the relationship between the current lane of the vehicle 
+and the navigation lane?
+Options: A. The current lane of the vehicle is not the navigation lane and a lane change is required, B. The current lane of the vehicle is exactly the navigation lane and no lane 
+change is needed, C. The current lane of the vehicle allows both left turn and going straight, D. The current lane of the vehicle only allows right turn
+UNITE Output: A
+GT Answer: A
+Fig. Q19. Qualitative examples on DriveAction.
+
+
+UNITE: SUPPLEMENTARY MATERIAL
+32
+NuScenesQA 1 
+Question: There is a moving thing that is to the back right of the parked construction vehicle and the back right of the without rider bicycle; what is it?
+UNITE Output: car
+GT Answer:  car
+NuScenesQA 2 
+Question: What number of other cars in the same status as the truck that is to the back right of the stopped truck?
+UNITE Output: 5
+GT Answer:  5
+Fig. Q20. Qualitative examples on NuScenesQA.
+NuPlanQA 1
+Question: You are driving on the road. Based on given images of the surroundings of your vehicle and information from your vehicle extracted past 1.5 seconds, choose right 
+answer among (a) to (d) for the given question.
+- Velocity(m/s): [4.62, 4.258, 3.918, 3.572, 3.233]
+- Steering angles: [-1.401, -1.256, -1.303, -1.366, -1.375]
+Question:  What is the overall situation assessment? Please choose the correct answer from the given options
+Options: A. The ego-vehicle is approaching a stop sign and needs to pause before proceeding. B. The ego-vehicle is approaching a yield sign and must slow down to merge 
+with traffic. C. The ego-vehicle is at a four-way intersection with a flashing yellow light indicating caution. D. The ego-vehicle is passing through a green light at the intersection 
+without stopping.
+UNITE Output: A
+GT Answer:  A
+NuPlanQA 2
+Question: You are driving on the road. Based on given images of the surroundings of your vehicle and information from your vehicle extracted past 1.5 seconds, choose right 
+answer among (a) to (d) for the given question.
+- Velocity(m/s): [0.008, 0.008, 0.009, 0.008, 0.008]
+- Steering angles: [-61.915, -82.628, 37.346, -57.111, 22.72]
+Question:  What is the current scenario the vehicle is navigating? Please choose the correct answer from the given options.
+Options: A. The ego-vehicle is at an intersection, waiting at a yellow light, with pedestrians crossing. B. The ego-vehicle is at an intersection, waiting at a green light, with no 
+vehicles crossing. C. The ego-vehicle is at a roundabout, yielding to traffic from the left. D. The ego-vehicle is at an intersection, waiting at a red light, with vehicles crossing 
+the intersection ahead.
+UNITE Output: D
+GT Answer:  D
+Fig. Q21. Qualitative examples on NuPlanQA.
+
+
+UNITE: SUPPLEMENTARY MATERIAL
+33
+LingoQA 1
+Question: Why are you moving to the right lane
+UNITE Output: I am moving to the right lane to turn right at the upcoming intersection.
+Reference Answer:  - Preparing to turn right when the lights change to green.
+ - Preparing to turn right when the lights change to green.
+ - To turn right.
+LingoQA 2
+Question: Is the traffic in front accelerating or decelerating?
+UNITE Output: The traffic in front is accelerating.
+Reference Answer:  - Accelerating.
+Fig. Q22. Qualitative examples on LingoQA.
