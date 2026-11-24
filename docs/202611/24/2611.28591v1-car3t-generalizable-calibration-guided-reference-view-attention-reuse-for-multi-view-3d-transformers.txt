@@ -1,0 +1,1481 @@
+CAR3T: GENERALIZABLE CALIBRATION-GUIDED
+REFERENCE-VIEW ATTENTION REUSE FOR MULTI-VIEW 3D
+TRANSFORMERS
+Lan Wei1, Haosong Peng2, Sicheng Tian1, Tianyu Qi3, Wenchao Xu2, Lei Xue3, Yufeng Zhan1, Yuanqing Xia1
+1 Beijing Institute of Technology
+2 The Hong Kong University of Science and Technology
+3 SUN YAT-SEN UNIVERSITY
+ABSTRACT
+Feed-forward multi-view 3D reconstruction relies on global attention for cross-view aggregation,
+but the attention cost grows quadratically with the number of views, making inference increasingly
+expensive for larger inputs. Existing acceleration methods compress tokens or sparsify attention,
+potentially losing geometric detail or restricting cross-view aggregation while leaving redundancy
+among attention outputs underexploited. We observe similar cross-view attention distributions in
+certain layers, revealing an opportunity to reduce repeated global aggregation through output reuse.
+However, the layers suitable for reuse vary with the input, and reusing one layer alters the features
+received by later layers. Similarity at individual layers therefore cannot characterize the combined
+effect of multiple reuse decisions on output drift. To address these challenges, we propose CAR3T, a
+training-free framework combining reference-view attention output reuse with offline risk calibration
+and online dynamic layer selection. Calibration models cumulative reuse risk, while online selection
+adapts reuse to each input under a calibrated budget. CAR3T retains all input tokens and attends
+to the keys and values of all views, reducing the core attention computation in selected layers from
+quadratic to linear. Experiments on VGGT, DA3, and π3 show forward speedups up to 1.41× with
+at most 100 views and 1.75× on longer sequences, with accuracy trade-offs across backbones and
+datasets.
+1
+Introduction
+Multi-view 3D reconstruction recovers scene geometry and camera parameters from images, supporting robotic
+perception [1, 2] and autonomous driving [3, 4]. Current feed-forward models such as VGGT [5], Depth Anything 3
+(DA3) [6], and π3 [7] learn cross-view feature interactions and predict geometry and camera parameters in a single
+forward pass. They aggregate information across views through global attention, whose efficiency is central to scaling
+reconstruction to larger inputs.
+However, global attention remains a bottleneck when scaling these models to many views. Each view contributes
+queries that attend to the keys and values of all views, so the core attention computation grows quadratically with the
+number of input views. Efficient kernels such as FlashAttention reduce memory access costs [8], but retain the quadratic
+computation of exact dense attention. With dozens or hundreds of input views, repeating global aggregation for every
+query becomes expensive.
+Existing acceleration methods reduce this cost through token compression [9, 10, 11], sparse attention [12, 13], or
+compact global representations [14]. Such compression or sparsification can lose geometric detail or limit information
+exchange, yet redundancy among attention outputs remains underexploited. To examine this possibility, we analyze
+cross-view attention in VGGT, DA3, and π3 and observe similar attention distributions in certain layers. Since queries
+across views share the same global keys and values, similar distributions can produce similar aggregation responses.
+This observation motivates reusing a reference view’s attention response across views to reduce repeated computation
+while preserving all input tokens and access to all keys and values.
+arXiv:2611.28591v1  [cs.CV]  21 Nov 2026
+
+
+A PREPRINT - NOVEMBER 24, 2026
+However, applying this reuse poses challenges in both layer selection and the control of output drift. Cross-view
+attention similarity varies across layers and inputs, so the suitability of reuse changes with the current features. Moreover,
+reusing one layer alters the features passed to later layers, making the final output drift depend on the combination of
+reused layers. Similarity at one layer therefore provides an incomplete basis for multiple reuse decisions. Effective
+reuse requires adapting layer selection to the input while accounting for cumulative output drift and interactions among
+the selected layers.
+To address these challenges, we propose CAR3T, a training-free framework that combines reference-view attention
+output reuse with offline risk calibration and online dynamic layer selection. In each selected layer, CAR3T computes
+the reference view’s attention response over the keys and values of all views and reuses it across views. With one
+reference view, this reduces the core attention computation from quadratic to linear in the number of views. The query,
+key, value, and subsequent output projections remain unchanged. Other layers retain the original global attention to
+preserve view-specific aggregation. Offline calibration relates Query Drift to Output Drift and models single-layer
+sensitivity, pairwise interactions, and higher-order combination risks. A Pareto analysis of latency and output drift
+on validation inputs determines the reuse budget. During inference, the online module combines query features,
+cumulative risk, and a lookahead estimate of future reuse value to guide layer selection under calibrated risk constraints.
+CAR3T operates with unchanged pre-trained weights and requires no fine-tuning. Experiments on VGGT, DA3, and
+π3 across eight benchmark settings show overall forward speedups of 1.13× to 1.31× with up to 100 input views.
+Longer sequences yield speedups up to 1.75×. Pose and reconstruction evaluations characterize the resulting accuracy
+trade-offs across backbones and input scales. Our main contributions are:
+• We introduce reference-view attention output reuse that reduces the core attention computation while retaining all
+input tokens and attending to all keys and values.
+• We combine offline risk calibration with online dynamic layer selection to adapt reuse to each input under a
+calibrated budget, accounting for cumulative risk and interactions among reused layers.
+• We evaluate CAR3T on three feedforward reconstruction models, showing inference speedups across input scales
+and quantifying the geometric accuracy trade-offs.
+2
+Related Work
+Feedforward Visual Geometry Models. In recent years, feedforward visual geometry models have gradually emerged
+as a new paradigm distinct from traditional multi-stage optimization pipelines. DUSt3R [15] regresses pixel-aligned 3D
+point maps from uncalibrated image pairs, while MASt3R [16] extends it with local features for robust dense matching.
+MV-DUSt3R+ [17], Fast3R [18], MUSt3R [19], MVSplat [20], and DepthSplat [21] have advanced multi-view 3D
+reconstruction using point maps and 3D Gaussians. With further advancements, VGGT [5] unifies multi-view visual
+geometry modeling using a feedforward Transformer architecture, simultaneously predicting camera parameters, depth
+maps, point maps, and 3D point trajectories through alternating frame-wise and global attention mechanisms. π3 [7]
+and DA3 [6] further reduce reliance on fixed reference frames and specialized architectures, collectively advancing
+feedforward 3D reconstruction toward unified and generalizable multi-view geometry models. However, these models
+fundamentally depend on dense cross-view global feature interactions, leading to a rapid increase in computational cost
+with growing number of views, which becomes a significant efficiency bottleneck when scaling to long sequences and
+large-scale scenes.
+Efficient Inference for Feedforward 3D Reconstruction Models. Efficient feedforward reconstruction methods
+reduce computation through 1) token compression, 2) compact scene representations, or 3) attention sparsification.
+FastVGGT [9] prunes tokens based on aggregation patterns, while LiteVGGT [10], HTTM [22], and Co-Me [11]
+use geometry-aware caching-based, head-wise temporal, and confidence-guided merging, respectively. Spark3R [23]
+combines asymmetric query merging, key-value pruning, and layer-adaptive scheduling. Such compression reduces
+attention cost, but merged or removed tokens no longer contribute independently, and aggressive compression may lose
+view-specific correspondences and geometric detail. For compact scene representations, FlashVGGT [14] aggregates
+information through cross-attention between frame descriptors and image tokens, while VGG-T3 [24] uses test-
+time training to distill variable-length scenes into a fixed-size state. These approaches trade representation capacity
+against geometric fidelity. For attention sparsification, Block-Sparse Global Attention [25] replaces dense cross-view
+interactions with block-sparse connections, AVGGT [12] uses frame-wise attention and sampled key-value tokens, and
+SAF3R [13] adaptively selects head-specific computation modes. Reducing these connections can limit cross-view
+aggregation and does not explicitly model redundancy among attention outputs across views.
+2
+
+
+A PREPRINT - NOVEMBER 24, 2026
+input views
+...
+global-attention layers
+sl
+Query 
+drift
+reuse
+full attn
+Select
+adaptive reuse pattern S*
+...
+...
+Online Dynamic Selection
+R(S’)
+(cumulative)
+Decision
+(gate)
+OOD
+��
+���
+��
+�����
+��≤�������
+�(�′) ≤����
+...
+...
+...
+single:
+pair:
+multi:
+reuse configurations S
+calibration data
+output drift
+Y0  
+YS
+D(S)
+Sl
+...
+...
+query drift
+empirical risk calibration
+Offline Calibration
+��
+���
+��
+�����
+1 −cos (∙, ∙)
+Single -
+layer ρl
+Pairwise
+Interaction Iij 
+Higher-
+Order H(S)
+knee
+D(S)
+speed
+Pareto
+Beff
+Calibrated Risk Core
+�(�) = 
+�∈�
+��+
+ 
+�<�,�,�∈�
+���+ �(�)
+Figure 1: Overview of CAR3T. Offline calibration establishes a risk model accounting for single-layer, pairwise, and
+higher-order interactions, with the effective risk budget determined by the speed–drift Pareto frontier. During inference,
+online query drift and cumulative risk constraints guide input-dependent reuse-layer selection.
+3
+Methodology
+This section introduces CAR3T, a framework for accelerating inference in multi-view 3D Transformers. We first outline
+the overall workflow of CAR3T in Sec. 3.1. We then motivate global attention reuse through an analysis of cross-view
+attention similarity and define the reference query reuse operator in Sec. 3.2. Sec. 3.3 describes the offline calibration of
+reuse risk and budgets. Finally, Sec. 3.4 presents calibration-guided online layer selection.
+3.1
+Overview of CAR3T
+As shown in Fig. 1, CAR3T adopts a framework combining offline risk calibration with online dynamic layer selection
+to selectively reuse multi-view global attention, thereby reducing computational overhead and controlling model output
+drift caused by reuse.
+Let L denote the set of indices for candidate global attention layers. In the offline stage, we evaluate reuse configurations
+S ⊆L in terms of output drift D(S) and inference latency T(S), and calibrate an empirical risk model bR. In the online
+stage, given multi-view input I = {Ii}M
+i=1 with M views and the calibrated risk budget Beff, we use the risk model bR
+to dynamically select the reuse layers S∗(I) ⊆L.
+For each layer ℓ∈S∗(I), CAR3T reuses attention outputs from a certrain reference view r ∈{1, . . . , M} across
+views; for all other layers, original global attention computations are preserved. Without fine-tuning the pre-trained
+model or training additional selection networks, CAR3T dynamically adjusts its reuse strategy according to input,
+achieving a controllable trade-off between inference efficiency and model output consistency.
+3.2
+Motivation of Global Attention Reuse
+Layer-wise Differences in Cross-view Attention. To study how global attention varies across views and layers, we
+visualize the attention maps of VGGT, DA3, and π3. As shown in Fig. 2, we feed the same four images to each model.
+Across all three models, attention block rows corresponding to different query views show similar patterns in some
+layers, but are less similar in others. To quantify this similarity, we compute the Jensen–Shannon divergence (JSD) [26]
+between the global attention distributions of corresponding query tokens in the reference view and the other views. A
+lower JSD indicates more similar distributions. We average the scores across tokens and non-reference views for each
+attention head. Appx B.1 provides the calculation details. As shown in Fig. 3, the solid lines show the mean JSD across
+attention heads, and the shaded regions show the interquartile range. The JSD varies across layers in all three models,
+with lower values in some layers. Together, these qualitative and quantitative results suggest that cross-view attention
+3
+
+
+A PREPRINT - NOVEMBER 24, 2026
+Input 
+images
+L14：Lower Similarity
+L03：Lower Similarity
+L14：Lower Similarity
+L20：Higher Similarity
+L13：Higher Similarity
+L01：Higher Similarity
+VGGT
+DA3
+��
+Figure 2: Cross-view attention in VGGT, DA3, and π3. Left: input image. Right: representative attention maps at
+different layers for each model. The top and bottom rows show layers with higher and lower cross-view similarity,
+respectively, with red boxes and crosses highlighting regions with large discrepancies in attention distribution.
+can be redundant, but that the degree of redundancy varies across layers. This observation motivates selectively reusing
+the attention response of a reference view across views in suitable layers.
+Definition of Reference Query Reuse Operator. To exploit this redundancy, we define a reference query reuse
+operator. Let P denote the number of tokens per view and d the feature dimension of a single attention head. At layer ℓ,
+the operator computes the attention response using the queries Q(ℓ)
+r
+of a reference view r and the concatenated keys
+K(ℓ) and values V(ℓ) of all views:
+O(ℓ)
+r
+= Softmax
+ 
+Q(ℓ)
+r K(ℓ)⊤
+√
+d
+!
+V(ℓ).
+(1)
+The response is then reused for all views at the same level:
+eO(ℓ)
+i
+= O(ℓ)
+r ,
+i = 1, . . . , M.
+(2)
+This reduces the number of queries in the attention computation from MP to P, while retaining all MP keys and
+values. Ignoring batch size and the number of attention heads, the complexity of the attention core is therefore reduced
+from O(M 2P 2d) to O(MP 2d) (see Appx. A). The Q/K/V projections and subsequent output projections for all views
+are still performed as usual.
+3.3
+Offline Calibration of Reuse Risk and Budgets
+CAR3T uses offline calibration to guide online layer selection. The offline stage has two objectives: first, to establish
+an empirical mapping between Output Drift and Query Drift, analyze the impact of different layer reuse configurations
+on model outputs, and thereby build a unified reuse risk model; second, to evaluate the inference efficiency and output
+quality of different static reuse configurations on the validation set, select a trade-off configuration through Pareto
+analysis, and use it to determine the risk budget required for online inference.
+Definition of Output Drift. To quantify the effect of reuse on model outputs, we consider three output components: 1)
+per-view geometry (depth or local points), 2) global points, and 3) camera poses. For a set of reused layers S, let Y S
+k
+4
+
+
+A PREPRINT - NOVEMBER 24, 2026
+��
+Figure 3: Differences in cross-view attention distributions across global attention layers among VGGT, π3, and
+Depth Anything 3.
+A lower JSD indicates smaller differences and higher similarity between the two attention
+distributions.
+and Y 0
+k denote the k-th (k ∈{1, 2, 3}) component produced with reuse and by the full model, respectively. We define
+the relative drift of each component and their equally weighted mean as:
+Dk(S) =
+Y S
+k −Y 0
+k
+
+2
+∥Y 0
+k ∥2 + ϵ ,
+D(S) = 1
+3
+3
+X
+k=1
+Dk(S).
+(6)
+Query Drift Estimation.
+We use per-layer query drift as an input-dependent proxy, calibrating its relationship with
+output drift through offline ablation studies. Specifically, let r denote the reference view and v denote another view
+(v̸ = r). At layer ℓ, let Q(ℓ)
+r,h,n and Q(ℓ)
+v,h,n denote the query vectors of views r and v, respectively, at the same token
+position n and attention head h. Here, ℓ, h, and n represent the indices of the network layer, attention head, and token
+position, respectively.
+We measure the difference between the two query vectors using cosine distance:
+δ(ℓ)
+v,h,n = 1 −cos
+
+Q(ℓ)
+r,h,n, Q(ℓ)
+v,h,n
+
+.
+(8)
+We summarize query differences at each layer with the query drift score:
+sℓ= mℓ+ 0.5pℓ+ 0.25xℓ.
+(9)
+Here, mℓ, pℓ, and xℓare the mean, 90th percentile, and maximum of the distances across all sampled queries,
+respectively.
+Single-layer Risk Calibration. We profile each layer offline to calibrate the relationship between query drift and output
+drift. During inference, we estimate the risk of reusing layer ℓas:
+ρℓ= uℓ
+sℓ
+¯sℓ
+.
+(10)
+Here, ¯sℓis the average query drift measured offline, and uℓis a conservative sensitivity coefficient derived from a high
+quantile of the offline risk ratio.
+Two-layer and Higher-order Risk Modeling. Beyond single-layer risks, we account for two-layer interactions and
+higher-order effects when reusing multiple layers. Define the offline interaction residual for layer pair (i, j) as:
+Iij = D({i, j}) −D({i}) −D({j}).
+(11)
+For the two-layer test results, CAR3T adopts a relatively high interaction risk value based on the offline experimental
+results to avoid underestimating the error. For combinations with more reused layers, it further leverages offline
+combination ablation to build a higher-order risk model H(S) to capture risks that cannot be explained by single layers
+and pairwise interactions. Thus, the overall risk of a set of reused layers is expressed as:
+R(S) =
+X
+ℓ∈S
+ρℓ+
+X
+i<j
+i,j∈S
+Iij + H(S).
+(12)
+5
+
+
+A PREPRINT - NOVEMBER 24, 2026
+The model maps the current input query features to the empirical risk of a set of reusable layers, providing a unified risk
+metric for subsequent dynamic decision-making.
+Pareto-based Optimal Configuration Selection. We evaluate the relative speedup gains of different static reuse
+configurations on the validation set:
+G(S) = max
+
+0, t0 −tS
+t0
+
+,
+(13)
+where t0 and tS denote the inference latency of the full model and the reused configuration, respectively. By incorporat-
+ing the output drift D(S), we construct the quality–efficiency Pareto frontier and select knee-point candidates based on
+the normalized speedup and output drift:
+K(S) = eG(S) −λD eD(S).
+(14)
+Among them, λD controls the trade-off between output consistency and computational efficiency.
+Risk Budget Determination. After selecting the elbow-point configuration, we re-evaluate the set of reusable layers
+using the recorded query features and the same risk model used during online inference. The resulting total risk serves
+as the reference budget Beff for the effective cumulative risk, ensuring that budget calibration and online selection use
+the same risk metric. The individual single-layer limit Bsingle prevents any single layer from consuming too much
+budget. We calibrate separately for different ranges of the number of views and select the corresponding calibration
+result based on the number of input views.
+3.4
+Calibration-Guided Online Layer Selection
+Online Dynamic Layer Selection. During inference, CAR3T decides, in network layer order, whether to reuse each
+global attention layer. At layer ℓ, let Sℓ−1 denote the set of layers selected so far, and let S′ = Sℓ−1 ∪{ℓ}. CAR3T
+first checks whether the number of input views and the query drift are within the calibrated range. It then performs the
+standard checks for the single-layer risk constraint and the cumulative risk constraint:
+ρℓ≤Bsingle,
+R(S′) ≤Beff.
+(15)
+To reserve budget for subsequent layers, CAR3T compares two options: reusing the current layer and consuming part
+of the remaining budget, or skipping the current layer and retaining the budget. For each option, approximate dynamic
+programming uses offline risk estimates to predict how many subsequent layers can be reused within the remaining
+budget. CAR3T prefers the option that is expected to yield a larger total number of reusable layers, counting the current
+layer toward the total if it is reused. When it reaches a subsequent layer, CAR3T re-evaluates and makes a decision
+using the layer’s actual query features.
+4
+Experiments
+4.1
+Experimental Setup
+Implementation Details. We use the images from ScanNet++ to perform offline calibration for each backbone network
+separately. We adopt four calibration tiers, each containing 50 scenes, with 38 scenes used for risk model fitting and 12
+for budget calibration. Each scene contains up to 50, 150, 250, and 500 views, respectively. The number of views and
+tier configuration are set according to the requirements of the test inputs, and during online inference, the calibration
+tier is selected based on the number of input views.
+Models and Datasets. We evaluate CAR3T on three models: DA3 [6], π3 [7], and VGGT [5]. Each pair of baselines
+shares the same pretrained weights, with only the feature reuse setting toggled. Reference view selection for each
+model is described in Appx. B.2. The main experiments cover 86 scene settings across ETH3D [27], 7Scenes [28],
+ScanNet++ [29], DTU [30], DTU-64 [30], Waymo [31], and vKITTI [32]. Inference efficiency is reported for all the
+above settings; camera pose results exclude vKITTI [32]; 3D reconstruction evaluation uses ETH3D [27], 7Scenes [28],
+ScanNet++ [29], and Waymo [31]. Long-sequence experiments are conducted on 7Scenes [28], NRGBD [33], and
+ScanNet++ [29], while ablation experiments use a fixed VGGT [5] backbone.
+Inputs and Evaluation Metrics. In the main experiments and ablation studies, at most 100 frames are input for each
+scene: when fewer than 100 frames are available, all frames are retained, ensuring that the baselines and CAR3T use the
+same inputs. For long-sequence experiments, the input is fixed at 50, 150, 250, and 500 frames, with ScanNet++ results
+6
+
+
+A PREPRINT - NOVEMBER 24, 2026
+VGGT
+DA3
+�3
+FastVGGT
+3119.5(ms)
+9456.2(ms)
+7890.2(ms)
+9615.9(ms)
+VGGT+CAR3T
+1.04×
+DA3+CAR3T
+1.16×
+�3+CAR3T
+1.35×
+FastVGGT+CAR3T
+1.09×
+2998.2(ms)
+8677.7(ms)
+6804.8(ms)
+7132.9(ms)
+4096.8(ms)
+3933.1(ms)
+  CoMe+CAR3T
+1.04×
+CoMe
+Figure 4: Qualitative comparison of the 3D reconstruction results generated by CAR3T with those of various
+feedforward models. By introducing layer reuse, CAR3T achieves visually comparable reconstruction quality.
+Table 1: Inference efficiency with up to 100 input frames per scene. We report the forward pass time (sec/scene) and
+the speedup relative to the baseline (×). “Avg. frames” is the actual average input length and gray rows indicate the
+speedup.
+Method
+ETH3D [27]
+7Scenes [28]
+ScanNet++ [29]
+DTU [30]
+DTU-64 [30]
+Waymo [31]
+vKITTI [32]
+Avg. frames
+34.3
+100.0
+100.0
+49.0
+55.9
+100.0
+100.0
+DA3 [6]
+0.941
+4.692
+4.697
+1.685
+2.024
+3.936
+1.308
+DA3+CAR3T
+0.882
+4.021
+4.031
+1.539
+1.828
+3.390
+1.196
+Speedup (×)↑
+1.067
+1.167
+1.165
+1.095
+1.107
+1.161
+1.094
+π3 [7]
+1.124
+5.355
+5.363
+1.739
+2.148
+5.425
+5.254
+π3+CAR3T
+0.938
+4.429
+4.518
+1.397
+1.695
+4.349
+4.206
+Speedup (×)↑
+1.199
+1.209
+1.187
+1.245
+1.267
+1.247
+1.249
+VGGT [5]
+1.037
+5.484
+5.504
+1.896
+2.302
+4.604
+1.391
+VGGT+CAR3T
+0.902
+3.884
+4.045
+1.528
+1.798
+3.355
+1.191
+Speedup (×)↑
+1.150
+1.412
+1.361
+1.241
+1.281
+1.372
+1.167
+reported only up to 250 frames. We evaluate camera pose using AUC@5◦and AUC@30◦, and 3D reconstruction
+using Acc., Comp., Overall, and F-score; metric details are provided in Sec. C.1. All experiments are conducted on an
+NVIDIA RTX PRO 6000 Blackwell GPU.
+4.2
+Main Results
+We apply CAR3T to VGGT, DA3, and π3 and evaluate them pairwise against their respective original models.
+Inference Efficiency. Table 1 reports both the actual average number of input frames and the forward inference time.
+Across all scenes, CAR3T achieves speedups on all three models, demonstrating its ability to reduce inference overhead
+across architectures. The speedup gains are more pronounced on datasets with up to 100 input frames, such as 7Scenes,
+ScanNet++, and Waymo. These gains stem from computing global attention only for the reference view in the selected
+layers and reusing the resulting output across views. This reduces the core attention computation cost in these layers
+while preserving the full key-value context.
+Camera Pose Accuracy. Table 2 reports pose accuracy under the strict AUC@5◦metric. With π3, CAR3T remains
+within 0.020 AUC of the baseline on five datasets and improves performance on ScanNet++. CAR3T also improves DA3
+on 7Scenes, while results for DA3 and VGGT vary across datasets. These results illustrate the efficiency–accuracy trade-
+off of applying CAR3T to different backbones. Results under AUC@30◦are provided in Table 9 in the supplementary
+material.
+7
+
+
+A PREPRINT - NOVEMBER 24, 2026
+Table 2: Camera pose estimation accuracy with up to 100 input frames per scene. We report AUC@5◦(↑) for each
+method.
+AUC@5◦↑
+Dataset
+DA3 [6]
+π3 [7]
+VGGT [5]
+Base
+CAR3T
+Base
+CAR3T
+Base
+CAR3T
+ETH3D [27]
+0.6686
+0.4758
+0.4715
+0.4650
+0.4347
+0.3652
+7Scenes [28]
+0.4290
+0.4433
+0.4237
+0.4068
+0.3750
+0.3461
+ScanNet++ [29]
+0.8877
+0.6763
+0.6952
+0.7199
+0.7208
+0.6217
+DTU [30]
+0.9423
+0.7833
+0.8321
+0.8125
+0.9924
+0.8876
+DTU-64 [30]
+0.9410
+0.8295
+0.7362
+0.7214
+0.8087
+0.7292
+Waymo [31]
+0.9041
+0.7258
+0.5043
+0.4865
+0.7652
+0.7465
+3D Reconstruction Accuracy. Table 3 shows that CAR3T reduces the Overall reconstruction error and improves the
+F-score of π3 on ETH3D and 7Scenes. It also reduces VGGT’s Overall error on 7Scenes. Results on ScanNet++ and
+Waymo are reported in Table 8 in the Appx. C.2.
+Table 3: Pose-free 3D reconstruction quality on ETH3D and 7Scenes with up to 100 frames.
+Model
+Metric
+ETH3D [27]
+7Scenes [28]
+Base
+CAR3T
+Base
+CAR3T
+DA3 [6]
+Acc.↓
+0.2139
+0.2560
+0.1142
+0.1086
+Comp.↓
+0.6192
+0.7316
+0.1331
+0.1448
+Overall↓
+0.4166
+0.4938
+0.1237
+0.1267
+F-score↑
+0.8202
+0.6813
+0.5141
+0.5074
+π3 [7]
+Acc.↓
+0.2743
+0.2572
+0.1350
+0.1271
+Comp.↓
+0.7680
+0.7089
+0.1105
+0.1070
+Overall↓
+0.5212
+0.4831
+0.1228
+0.1171
+F-score↑
+0.6943
+0.7129
+0.4152
+0.4347
+VGGT [5]
+Acc.↓
+0.3074
+0.3111
+0.1487
+0.1484
+Comp.↓
+0.8191
+0.8648
+0.1348
+0.1301
+Overall↓
+0.5632
+0.5880
+0.1418
+0.1393
+F-score↑
+0.6280
+0.5963
+0.4791
+0.4817
+Efficiency and Accuracy on Long Sequences. As shown in Table 4, CAR3T achieves inference acceleration across all
+tested configurations, and the acceleration gain generally increases as the input sequence length grows, indicating that
+feature reuse can further reduce inference overhead in long-sequence scenarios. This trend stems from differences in
+computational complexity: the overhead of global attention grows quadratically with the number of views, whereas
+reusing attention outputs from reference-view attention can reduce the attention computation in selected layers to linear
+complexity. As a result, longer sequences can achieve greater computational savings from cross-view reuse of attention
+outputs.
+For pose estimation, π3 and VGGT generally maintain accuracy across sequence lengths, while DA3 remains close to
+the baseline in most settings. Reconstruction results are also largely stable, with improvements in several cases, although
+DA3 at 250 frames exhibits larger accuracy changes. Overall, CAR3T demonstrates stable inference acceleration across
+different backbones and sequence lengths, while accuracy changes are jointly influenced by the backbone architecture
+and input sequence length.
+4.3
+Compatibility with Existing Acceleration Methods
+Table 5 evaluates CAR3T applied to VGGT and the acceleration methods FastVGGT [9] and CoMe [11]. CAR3T
+provides additional acceleration for both methods across all three datasets, demonstrating its compatibility with existing
+acceleration approaches. This is because token merging shortens the sequence length but does not explicitly eliminate
+the similarity between attention distributions across different views. CAR3T leverages this residual redundancy by
+reusing the attention outputs of the reference view in the selected layer, thereby further reducing computational cost
+on top of token merging. Fig. 4 visualizes reconstructions from 50–200 input frames. CAR3T preserves the major
+geometric structures and scene layout of the original models while reducing inference overhead.
+8
+
+
+A PREPRINT - NOVEMBER 24, 2026
+Table 4: Long-sequence performance. Changes in pose and reconstruction accuracy relative to baseline models, and
+forward acceleration ratio of CAR3T across different sequence lengths. Reported metrics include ∆AUC@30° (↑),
+∆Acc. (↓), ∆Comp. (↓), ∆F-score (↑), and acceleration ratio (×, ↑) (∆= CAR3T - baseline). ScanNet++ is evaluated
+on up to 250 frames.
+Model
+Frames
+7Scenes [28]
+NRGBD [33]
+ScanNet++ [29]
+∆AUC@30◦∆Acc. ∆Comp. ∆F-score Spd.(×)↑∆AUC@30◦∆Acc. ∆Comp. ∆F-score Spd.(×)↑∆AUC@30◦∆Acc. ∆Comp. ∆F-score Spd.(×)↑
+DA3 [6]
+50
++0.0062 -0.0154 +0.0068
+-0.0331
+1.097
+-0.0077 -0.0152 +0.0046
+-0.0617
+1.096
+-0.1000 +0.0188 +0.0199
+-0.1340
+1.098
+150
++0.0033 -0.0097 +0.0193
+-0.0307
+1.202
+-0.0138 +0.0033 +0.0048
+-0.0797
+1.201
+-0.0406 +0.0135 +0.0132
+-0.1468
+1.206
+250
+-0.1931 +0.2242 +0.1255
+-0.3159
+1.319
+-0.1701 +0.1103 +0.0860
+-0.5946
+1.331
+-0.3275 +0.1164 +0.0968
+-0.5092
+1.266
+500
+-0.0019 -0.0197 +0.0193
+-0.0596
+1.312
+-0.0156 -0.0271 +0.0061
+-0.0822
+1.312
+–
+–
+–
+–
+–
+π3 [7]
+50
+-0.0028 -0.0011
+-0.0003
++0.0098
+1.256
+-0.0012 -0.0037 +0.0009
+-0.0153
+1.256
++0.0037 -0.0008
+-0.0001
++0.0120
+1.238
+150
+-0.0045 -0.0053
+-0.0002
++0.0042
+1.248
+-0.0001 -0.0192
+-0.0002
++0.0119
+1.250
+-0.0031 +0.0055 +0.0053
+-0.0674
+1.212
+250
+-0.0082 -0.0141 +0.0035
++0.0134
+1.684
+-0.0038 +0.0168 +0.0015
+-0.0287
+1.669
++0.0033 +0.0014 +0.0018
+-0.0264
+1.576
+500
+-0.0026 -0.0176
+-0.0040
++0.0387
+1.553
+-0.0014 -0.0011 +0.0002
+-0.0154
+1.537
+–
+–
+–
+–
+–
+VGGT [5]
+50
+-0.0117 +0.0015
+-0.0004
++0.0008
+1.271
+-0.0098 +0.0071 +0.0077
+-0.0684
+1.262
+-0.0269 +0.0056 +0.0041
+-0.0458
+1.225
+150
+-0.0104 -0.0185
+-0.0250
++0.0067
+1.552
+-0.0180 +0.0088 +0.0067
+-0.0634
+1.547
+-0.0224 +0.0055 +0.0050
+-0.0609
+1.463
+250
+-0.0142 +0.0141
+-0.0016
+-0.0012
+1.726
+-0.0256 +0.0236 +0.0139
+-0.1091
+1.703
+-0.0272 +0.0049 +0.0066
+-0.0642
+1.555
+500
+-0.0079 +0.0432
+-0.0021
+-0.0201
+1.733
+-0.0881 +0.2380 +0.1010
+-0.0947
+1.748
+–
+–
+–
+–
+–
+Table 5: Accuracy and inference efficiency of VGGT [5], FastVGGT [9], and CoMe [11] with and without CAR3T
+on three datasets. Speedup is measured relative to VGGT. The merging threshold for CoMe is 0.5 and the merge ratio
+of FastVGGT is 0.9.
+Method
+7Scenes [28]
+ScanNet++ [29]
+Waymo [31]
+AUC@30◦↑ACC. ↓
+Comp. ↓
+F-Score ↑
+Spd.(×) ↑
+AUC@30◦↑
+ACC. ↓
+Comp. ↓
+F-Score ↑
+Spd.(×) ↑
+AUC@30◦↑
+ACC. ↓
+Comp. ↓
+F-Score ↑
+Spd.(×) ↑
+VGGT [5]
+84.083
+0.1847
+0.1239
+47.020
+1.000
+93.606
+0.0486
+0.0829
+68.201
+1.000
+93.540
+0.5587
+0.5126
+43.194
+1.000
+VGGT +CAR3T
+82.557
+0.2031
+0.1218
+46.497
+1.776
+91.417
+0.0541
+0.0896
+62.867
+1.577
+93.185
+0.6813
+0.6497
+41.247
+1.604
+FastVGGT [9]
+83.058
+0.1535
+0.1360
+47.620
+2.488
+90.565
+0.0528
+0.0901
+59.656
+2.373
+93.297
+0.6892
+0.6360
+36.894
+2.037
+FastVGGT +CAR3T
+67.535
+0.2287
+0.1422
+38.813
+3.046
+82.864
+0.0712
+0.1052
+46.669
+2.801
+93.079
+0.7506
+0.7307
+29.489
+2.149
+CoMe [11]
+79.905
+0.1947
+0.1921
+35.147
+2.058
+69.543
+0.0991
+0.1315
+42.892
+2.010
+85.712
+1.5746
+2.2182
+24.428
+1.506
+CoMe +CAR3T
+79.912
+0.1931
+0.1904
+36.332
+2.151
+69.636
+0.1001
+0.1322
+42.263
+2.119
+85.539
+1.7505
+2.6966
+23.431
+1.887
+4.4
+Ablation Studies
+To analyze the roles of the reuse strategy and budget selection in CAR3T, we conduct ablation studies with the VGGT
+backbone on several datasets.
+Reuse Strategy. Table 6 compares full-layer reuse, fixed 12-layer and 14-layer configurations constructed from the
+low-JSD layers in Fig. 3, and CAR3T. Although full-layer reuse achieves the highest speedup, it causes a substantial
+drop in pose and reconstruction accuracy. The two fixed low-JSD configurations also achieve speedup, but their
+accuracy is significantly lower than that of CAR3T. In particular, compared with the fixed 12-layer configuration,
+CAR3T achieves nearly the same average number of reused layers while attaining higher AUC@30◦and F-score and
+lower Overall distance. This indicates that low JSD can be used to filter candidate layers, but relying solely on a
+pre-determined fixed set of layers is still insufficient to guarantee prediction quality across different inputs; CAR3T’s
+input-adaptive decision improves accuracy preservation under a similar reuse scale.
+Table 6: Speed and accuracy comparison of different global attention reuse strategies on VGGT.
+Variant
+Layers
+Spd.(×)↑
+AUC@30◦↑
+F-score↑
+Overall↓
+Baseline
+0.00
+1.000
+0.8725
+0.5825
+0.2230
+All layers
+24.00
+2.064
+0.0199
+0.0249
+2.6524
+Static (12)
+12.00
+1.363
+0.7988
+0.4676
+0.2512
+Static (14)
+14.00
+1.438
+0.7940
+0.4626
+0.2564
+CAR3T
+12.19
+1.317
+0.8540
+0.5577
+0.2263
+Budget Sensitivity. Table 7 further examines the impact of the quality budget. When the median of the candidate Pareto
+front risk is used instead of the inflection-point budget, both the number of reused layers and the speedup decrease,
+although accuracy improves slightly. This suggests that the default inflection-point selection can obtain more substantial
+efficiency gains at a limited accuracy cost. As the budget increases from 0.5× to 1.25×, the speedup generally increases,
+while AUC@30◦and F-score gradually decrease; further increasing it to 1.5× does not yield additional speedup. The
+default budget therefore lies in a relatively reasonable trade-off region between efficiency and accuracy: further relaxing
+the budget yields only limited speed gains while increasing accuracy loss. These two sets of experiments show that the
+benefits of CAR3T come from the combination of adaptive reuse-layer selection and budget constraints: the former
+9
+
+
+A PREPRINT - NOVEMBER 24, 2026
+demonstrates the necessity of dynamic layer selection, while the latter controls the trade-off between speedup gains and
+output quality.
+Table 7: Impact of reuse budget settings on VGGT inference speed and accuracy. No knee uses the median risk of
+the candidate Pareto front instead of the knee-point budget. Budget multipliers scale the default calibrated budget used
+by CAR3T.
+Variant
+Layers
+Spd.(×)↑
+AUC@30◦↑
+F-score↑
+Overall↓
+No knee
+8.88
+1.200
+0.8621
+0.5718
+0.2234
+Budget 0.5×
+7.75
+1.181
+0.8650
+0.5700
+0.2259
+Budget 0.75×
+10.26
+1.263
+0.8611
+0.5754
+0.2225
+Budget 1.25×
+13.25
+1.328
+0.8527
+0.5551
+0.2292
+Budget 1.5×
+12.65
+1.210
+0.8469
+0.5417
+0.2247
+CAR3T
+12.19
+1.317
+0.8540
+0.5577
+0.2263
+5
+Conclusion
+We propose CAR3T, a training-free framework that accelerates multi-view 3D reconstruction by reusing reference-view
+attention outputs. It combines offline risk calibration with online query drift estimation and layer selection to adapt to
+layer- and input-dependent attention redundancy while controlling reuse error. Despite the additional overhead of these
+online decisions, experiments show that CAR3T reduces inference time while largely preserving reconstruction quality.
+10
+
+
+A PREPRINT - NOVEMBER 24, 2026
+References
+[1] Haosong Peng, Hao Li, Yalun Dai, Yushi Lan, Yihang Luo, Tianyu Qi, Zhengshen Zhang, Yufeng Zhan, Junfei
+Zhang, Wenchao Xu, and Ziwei Liu. Omnivggt: Omni-modality driven visual geometry grounded transformer. In
+IEEE/CVF Conference on Computer Vision and Pattern Recognition, CVPR 2026, Denver, CO, USA, June 3-7,
+2026, pages 36485–36497. Computer Vision Foundation, 2026.
+[2] Haosong Peng, Hao Li, Jiaqi Chen, Yuhao Pan, Runmao Yao, Yalun Dai, Fushuo Huo, Fangzhou Hong, Zhaoxi
+Chen, Haozhao Wang, Dingwen Zhang, Ziwei Liu, and Wenchao Xu. Spatialbench: Is your spatial foundation
+model an all-round player?, 2026.
+[3] Sicheng Zuo, Zixun Xie, Wenzhao Zheng, Shaoqing Xu, Fang Li, Shengyin Jiang, Long Chen, Zhi-Xin Yang, and
+Jiwen Lu. DVGT: driving visual geometry transformer. In IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, CVPR 2026, Denver, CO, USA, June 3-7, 2026, pages 14658–14668. Computer Vision Foundation,
+2026.
+[4] Shuai Yuan, Runxi Tang, Yuzhou Ji, Fudong Ge, Hanshi Wang, Yifei Wang, Xianming Zeng, Jianyun Xu,
+Xingliang Liu, Yanfeng Wang, et al. Surroundnexo: Ego-centric metric bridging for spatially consistent geometry
+in autonomous driving. arXiv preprint arXiv:2606.16960, 2026.
+[5] Jianyuan Wang, Minghao Chen, Nikita Karaev, Andrea Vedaldi, Christian Rupprecht, and David Novotny.
+Vggt: Visual geometry grounded transformer. In 2025 IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), pages 5294–5306. IEEE, 2025.
+[6] Haotong Lin, Sili Chen, Junhao Liew, Donny Y Chen, Zhenyu Li, Guang Shi, Jiashi Feng, and Bingyi Kang.
+Depth anything 3: Recovering the visual space from any views. arXiv preprint arXiv:2511.10647, 2025.
+[7] Yifan Wang, Jianjun Zhou, Haoyi Zhu, Wenzheng Chang, Yang Zhou, Zizun Li, Junyi Chen, Jiangmiao Pang,
+Chunhua Shen, and Tong He. π3: Permutation-equivariant visual geometry learning. In C. Vondrick, B. Hariharan,
+C. Raffel, L. Pinto, D. Yang, and A. Faust, editors, International Conference on Learning Representations, volume
+2026, pages 10481–10497, 2026.
+[8] Tri Dao, Dan Fu, Stefano Ermon, Atri Rudra, and Christopher Ré. Flashattention: Fast and memory-efficient
+exact attention with io-awareness. Advances in neural information processing systems, 35:16344–16359, 2022.
+[9] You Shen, Zhipeng Zhang, Yansong Qu, Xiawu Zheng, Jiayi Ji, Shengchuan Zhang, and Liujuan Cao. Fastvggt:
+Fast visual geometry transformer. In C. Vondrick, B. Hariharan, C. Raffel, L. Pinto, D. Yang, and A. Faust, editors,
+International Conference on Learning Representations, volume 2026, pages 98040–98062, 2026.
+[10] Zhijian Shu, Cheng Lin, Tao Xie, Wei Yin, Ben Li, Zhiyuan Pu, Weize Li, Yao Yao, Xun Cao, Xiaoyang Guo,
+et al. Litevggt: Boosting vanilla vggt via geometry-aware cached token merging. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition, pages 36422–36432, 2026.
+[11] Yutian Chen, Yuheng Qiu, Ruogu Li, Jay Patrikar, and Sebastian Scherer. Co-me: Confidence guided token
+merging for visual geometric transformers. In Proceedings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition, pages 14590–14599, 2026.
+[12] Xianbing Sun, Zhikai Zhu, Zhengyu Lou, Bo Yang, Jinyang Tang, Liqing Zhang, He Wang, and Jianfu Zhang.
+Avggt: Rethinking global attention for accelerating vggt. In Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition, pages 251–260, 2026.
+[13] Jianing Deng, Yuanzhe Li, Jialu Wang, Song Wang, Tianlong Chen, Huanrui Yang, and Jingtong Hu. Saf3r:
+Dynamic sparse attention for feed-forward 3d reconstruction transformers. In European Conference on Computer
+Vision, pages 42–59. Springer, 2026.
+[14] Zipeng Wang and Dan Xu. Flashvggt: Efficient and scalable visual geometry transformers with compressed
+descriptor attention. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition,
+pages 21826–21835, 2026.
+[15] Shuzhe Wang, Vincent Leroy, Yohann Cabon, Boris Chidlovskii, and Jerome Revaud. Dust3r: Geometric 3d
+vision made easy. In 2024 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), pages
+20697–20709, 2024.
+[16] Vincent Leroy, Yohann Cabon, and Jérôme Revaud. Grounding image matching in 3d with mast3r. In European
+conference on computer vision, pages 71–91. Springer, 2024.
+[17] Zhenggang Tang, Yuchen Fan, Dilin Wang, Hongyu Xu, Rakesh Ranjan, Alexander Schwing, and Zhicheng Yan.
+Mv-dust3r+: Single-stage scene reconstruction from sparse views in 2 seconds. In 2025 IEEE/CVF Conference
+on Computer Vision and Pattern Recognition (CVPR), pages 5283–5293, 2025.
+11
+
+
+A PREPRINT - NOVEMBER 24, 2026
+[18] Jianing Yang, Alexander Sax, Kevin J Liang, Mikael Henaff, Hao Tang, Ang Cao, Joyce Chai, Franziska Meier,
+and Matt Feiszli. Fast3r: Towards 3d reconstruction of 1000+ images in one forward pass. In 2025 IEEE/CVF
+Conference on Computer Vision and Pattern Recognition (CVPR), pages 21924–21935. IEEE, 2025.
+[19] Yohann Cabon, Lucas Stoffl, Leonid Antsfeld, Gabriela Csurka, Boris Chidlovskii, Jerome Revaud, and Vincent
+Leroy. Must3r: Multi-view network for stereo 3d reconstruction. In 2025 IEEE/CVF Conference on Computer
+Vision and Pattern Recognition (CVPR), pages 1050–1060, 2025.
+[20] Yuedong Chen, Haofei Xu, Chuanxia Zheng, Bohan Zhuang, Marc Pollefeys, Andreas Geiger, Tat-Jen Cham, and
+Jianfei Cai. Mvsplat: Efficient 3d gaussian splatting from sparse multi-view images. In Aleš Leonardis, Elisa
+Ricci, Stefan Roth, Olga Russakovsky, Torsten Sattler, and Gül Varol, editors, Computer Vision – ECCV 2024,
+pages 370–386, Cham, 2025. Springer Nature Switzerland.
+[21] Haofei Xu, Songyou Peng, Fangjinhua Wang, Hermann Blum, Daniel Barath, Andreas Geiger, and Marc Pollefeys.
+Depthsplat: Connecting gaussian splatting and depth. In 2025 IEEE/CVF Conference on Computer Vision and
+Pattern Recognition (CVPR), pages 16453–16463, 2025.
+[22] Weitian Wang, Lukas Meiner, Rai Shubham, Cecilia De La Parra, and Akash Kumar. Httm: Head-wise temporal
+token merging for faster vggt. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 26379–26388, 2026.
+[23] Zecheng Tang, Jiaye Fu, Qiankun Gao, Haijie Li, Yanmin Wu, Jiaqi Zhang, Siwei Ma, and Jian Zhang. Spark3r:
+Asymmetric token reduction makes fast feed-forward 3d reconstruction, 2026.
+[24] Sven Elflein, Ruilong Li, Sérgio Agostinho, Zan Gojcic, Laura Leal-Taixé, Qunjie Zhou, and Aljosa Osep.
+VGG-T3: Offline feed-forward 3d reconstruction at scale. arXiv preprint arXiv:2602.23361, 2026.
+[25] Chung-Shien Brian Wang, Christian Schmidt, Jens Piekenbrinck, and Bastian Leibe. Block-sparse global attention
+for efficient multi-view geometry transformers. In Proceedings of the IEEE/CVF Conference on Computer Vision
+and Pattern Recognition, pages 14546–14555, 2026.
+[26] Jianhua Lin. Divergence measures based on the shannon entropy. IEEE Transactions on Information theory,
+37(1):145–151, 1991.
+[27] Thomas Schops, Johannes L Schonberger, Silvano Galliani, Torsten Sattler, Konrad Schindler, Marc Pollefeys,
+and Andreas Geiger. A multi-view stereo benchmark with high-resolution images and multi-camera videos. In
+Proceedings of the IEEE conference on computer vision and pattern recognition, pages 3260–3269, 2017.
+[28] Jamie Shotton, Ben Glocker, Christopher Zach, Shahram Izadi, Antonio Criminisi, and Andrew Fitzgibbon. Scene
+coordinate regression forests for camera relocalization in rgb-d images. In Proceedings of the IEEE conference on
+computer vision and pattern recognition, pages 2930–2937, 2013.
+[29] Chandan Yeshwanth, Yueh-Cheng Liu, Matthias Nießner, and Angela Dai. Scannet++: A high-fidelity dataset of
+3d indoor scenes. In 2023 IEEE/CVF International Conference on Computer Vision (ICCV), pages 12–22. IEEE,
+2023.
+[30] Henrik Aanæs, Rasmus Ramsbøl Jensen, George Vogiatzis, Engin Tola, and Anders Bjorholm Dahl. Large-scale
+data for multiple-view stereopsis. International Journal of Computer Vision, 120(2):153–168, 2016.
+[31] Pei Sun, Henrik Kretzschmar, Xerxes Dotiwalla, Aurelien Chouard, Vijaysai Patnaik, Paul Tsui, James Guo, Yin
+Zhou, Yuning Chai, Benjamin Caine, et al. Scalability in perception for autonomous driving: Waymo open dataset.
+In 2020 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), pages 2443–2451. IEEE,
+2020.
+[32] Adrien Gaidon, Qiao Wang, Yohann Cabon, and Eleonora Vig. Virtual worlds as proxy for multi-object tracking
+analysis. In Proceedings of the IEEE conference on computer vision and pattern recognition, pages 4340–4349,
+2016.
+[33] Dejan Azinovi´c, Ricardo Martin-Brualla, Dan B Goldman, Matthias Nießner, and Justus Thies. Neural rgb-d
+surface reconstruction. In 2022 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR),
+pages 6280–6291. IEEE, 2022.
+[34] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N Gomez, Łukasz Kaiser, and
+Illia Polosukhin. Attention is all you need. Advances in neural information processing systems, 30, 2017.
+12
+
+
+A PREPRINT - NOVEMBER 24, 2026
+Appendix
+Contents
+A. Preliminary . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 13
+B. Implementation Details . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 13
+C. Additional Experiments . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 14
+D. Additional Visualizations . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 14
+A
+Preliminary
+VGGT, π3, and DA3 are representative feed-forward geometric models that achieve cross-view information aggregation
+through global attention [5, 7, 6]. Although their specific architectures differ, the core computation of global attention
+in all three can be expressed as scaled dot-product attention between view-specific Queries and a global Key-Value
+(KV) set.
+Given an input set I = {Ii}M
+i=1 composed of M views, the model encodes each view into P tokens, including image
+patch tokens and special tokens. Denote the features belonging to view i at layer ℓas
+Xℓ
+i ∈RB×P ×C,
+(3)
+where B and C denote the batch size and feature dimension, respectively. Let Qℓ
+i represent the Query of view i, and
+concatenate all views’ Keys and Values into
+Kℓ= [Kℓ
+1; . . . ; Kℓ
+M],
+Vℓ= [Vℓ
+1; . . . ; Vℓ
+M].
+(4)
+The global attention output corresponding to view i is
+Oℓ
+i = Softmax
+Qℓ
+i(Kℓ)⊤
+√
+d
+
+Vℓ,
+(5)
+Here, d denotes the feature dimension of a single attention head [34]. Oℓ
+i represents the slice in the global attention
+output sequence corresponding to view i, and the complete output can be expressed as {Oℓ
+i}M
+i=1.
+Full global attention requires computing interactions between all MP queries and MP keys. Ignoring batch dimensions
+and the number of attention heads, its core computational complexity is O(M 2P 2d), which grows quadratically with
+the number of input views [34, 8].
+B
+Implementation Details
+B.1
+Cross-View Attention JSD
+For layer ℓand attention head h, let A(ℓ)
+r,h,n and A(ℓ)
+v,h,n denote the global attention distributions of query tokens at
+the same intra-view position n in the reference view r and a non-reference view v, respectively. Each distribution is
+defined over all MP key tokens, where M is the number of views and P is the number of key tokens per view. Their
+Jensen–Shannon divergence is
+JSD(ℓ)
+v,h,n = 1
+2DKL
+
+A(ℓ)
+r,h,n ∥¯A(ℓ)
+v,h,n
+
++ 1
+2DKL
+
+A(ℓ)
+v,h,n ∥¯A(ℓ)
+v,h,n
+
+,
+(6)
+where ¯A(ℓ)
+v,h,n = 1
+2(A(ℓ)
+r,h,n + A(ℓ)
+v,h,n). Averaging over all non-reference views and the Pq query positions per view gives
+the score for head h at layer ℓ:
+J(ℓ)
+h
+=
+1
+(M −1)Pq
+M
+X
+v=1
+v̸=r
+Pq
+X
+n=1
+JSD(ℓ)
+v,h,n .
+(7)
+The plotted mean and interquartile range are computed across attention heads.
+13
+
+
+A PREPRINT - NOVEMBER 24, 2026
+B.2
+Reference View Selection
+VGGT uses the first frame of the input sequence as the reference view. DA3 retains its original reference view selection
+strategy (default: saddle_balanced) and moves the selected frame to the first position. Before the first global attention
+block, π3 constructs a normalized descriptor ei for each view from its register-token queries and selects the view with
+the smallest mean cosine distance to the other views:
+r = arg min
+i∈{1,...,M}
+1
+M −1
+M
+X
+j=1
+j̸=i
+ 1 −e⊤
+i ej
+
+.
+(8)
+C
+Additional Experiments
+C.1
+Evaluation Metrics
+Camera pose is evaluated using AUC@5◦and AUC@30◦. For 3D reconstruction, Acc. and Comp. measure the average
+nearest-neighbor distances from predicted points to ground-truth points and from ground-truth points to predicted
+points, respectively; Overall = (Acc. + Comp.)/2. The F-score is the harmonic mean of precision and recall, with
+the distance threshold set to 0.05 m or 0.25 m depending on the dataset. In the long-sequence table, all ∆metrics are
+defined as the CAR3T result minus the corresponding baseline result.
+C.2
+Additional Reconstruction Results
+Table 8 complements Table 3 with results on ScanNet++ and Waymo.
+Table 8: Pose-free 3D reconstruction quality on ScanNet++ and Waymo with up to 100 frames. We report Acc.,
+Comp., and Overall error (in meters, ↓), and F-score (↑).
+Model
+Metric
+ScanNet++ [29]
+Waymo [31]
+Base
+CAR3T
+Base
+CAR3T
+DA3 [6]
+Acc.↓
+0.0321
+0.0450
+1.3344
+1.1104
+Comp.↓
+0.1011
+0.1134
+0.9976
+0.8536
+Overall↓
+0.0666
+0.0792
+1.1660
+0.9820
+F-score↑
+0.7876
+0.6531
+0.4367
+0.2103
+π3 [7]
+Acc.↓
+0.0466
+0.0464
+3.6148
+3.4673
+Comp.↓
+0.1142
+0.1140
+2.4804
+2.5011
+Overall↓
+0.0804
+0.0802
+3.0476
+2.9842
+F-score↑
+0.6316
+0.6373
+0.1639
+0.1444
+VGGT [5]
+Acc.↓
+0.0442
+0.0478
+0.7861
+0.8322
+Comp.↓
+0.1140
+0.1171
+0.8053
+0.9119
+Overall↓
+0.0791
+0.0825
+0.7957
+0.8721
+F-score↑
+0.6757
+0.6402
+0.3595
+0.3960
+C.3
+Additional Camera Pose Results
+Table 9 reports AUC@30◦for the experiments in Table 2. CAR3T maintains performance close to the original models
+across the datasets, with improvements for π3 on ETH3D and ScanNet++ and for DA3 on 7Scenes.
+D
+Additional Visualizations
+14
+
+
+A PREPRINT - NOVEMBER 24, 2026
+Table 9: Camera pose estimation accuracy with up to 100 input frames per scene. We report AUC@30◦(↑).
+AUC@30◦↑
+Dataset
+DA3 [6]
+π3 [7]
+VGGT [5]
+Base
+CAR3T
+Base
+CAR3T
+Base
+CAR3T
+ETH3D [27]
+0.9229
+0.8786
+0.8556
+0.8565
+0.8181
+0.7851
+7Scenes [28]
+0.8651
+0.8729
+0.8614
+0.8568
+0.8474
+0.8373
+ScanNet++ [29]
+0.9797
+0.9404
+0.9376
+0.9469
+0.9438
+0.9247
+DTU [30]
+0.9904
+0.9609
+0.9717
+0.9682
+0.9987
+0.9813
+DTU-64 [30]
+0.9901
+0.9702
+0.9486
+0.9473
+0.8526
+0.8378
+Waymo [31]
+0.9682
+0.9324
+0.8765
+0.8748
+0.9397
+0.9362
+VGGT
+VGGT+CAR3T
+1.78×
+53422.1(ms)
+30063.1(ms)
+FastVGGT
+FastVGGT+CAR3T
+1.14×
+10824.5(ms)
+9461.6(ms)
+DA3
+DA3+CAR3T
+1.01×
+3040.2(ms)
+3013.6(ms)
+�3
+�3+CAR3T
+1.12×
+3102.8(ms)
+2780.9(ms)
+4025.4(ms)
+3914.4(ms)
+CoMe+CAR3T
+1.03×
+CoMe
+Figure 5: Qualitative comparison of the 3D reconstruction results generated by CAR3T with those of various
+feedforward models. By introducing layer reuse, CAR3T achieves visually comparable reconstruction quality.
+15

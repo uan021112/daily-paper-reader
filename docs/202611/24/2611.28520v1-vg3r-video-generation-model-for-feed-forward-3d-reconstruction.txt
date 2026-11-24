@@ -1,0 +1,2623 @@
+VG3R: Video Generation Model for Feed-Forward 3D Reconstruction
+Jingong Chen1,3†∗
+Qingwen Zhang2†∗
+Linlian Jiang4,5
+Xinxin Zuo4
+Yang Wang4,5
+Chulwoo Pack1
+Kyle Gao3
+Patric Jensfelt2‡
+Kwanghee Won1‡∗
+1South Dakota State University
+2KTH Royal Institute of Technology
+3Aalto University
+4Concordia University
+5Mila – Quebec AI Institute
+†Equal contribution
+‡Equal advising
+∗Corresponding author
+(a)
+a set of images
+a video
+(c)
+VGGT (image backbone)
+VG3R (video generation model)
+Ground truth
+(b)
+video generation → 3D reconstruction
+video generation model (Wan2.1) + LoRA
+VAE decoder
++ ClipShift
+LayerTap
+camera head
+depth
+cameras
+Figure 1. VG3R turns a pretrained video generation model into a feed-forward model that reconstructs a scene and the camera of every
+frame from a video. (a) Geometry foundation models treat a video as a set of images, VG3R as a video. (b) Overview of VG3R. (c) On a
+7-Scenes video, VGGT, which uses an image backbone, distorts the red partition, which VG3R reconstructs as in the ground truth.
+Abstract
+Video generation models are widely used as 3D priors for
+novel view synthesis and 3D scene generation. Fine-tuned
+for perception, generation models also excel at dense pre-
+diction such as depth estimation. However, methods that
+apply video generation models to 3D reconstruction either
+predict depth without cameras or generate geometry and
+estimate cameras through many iterative denoising steps,
+which makes them slower. In this paper, we present VG3R,
+which turns a pretrained video generation model into a
+feed-forward 3D reconstruction model. Our key observa-
+tion is that such a model already captures the depth and
+camera motion of a video, but not in the form required for
+reconstruction. We introduce two components: clip-level
+shift prediction, which corrects depth distortion caused by
+the unknown shift in decoded inverse depth, and a multi-
+layer camera head, which predicts per-frame cameras pa-
+rameters by combining features across transformer blocks.
+Using Wan2.1 as its video backbone, VG3R reconstructs a
+scene and estimate the camera of every frame without it-
+erative denoising. It achieves the lowest ATE and recon-
+struction errors among methods built on video generation
+models, runs about 4 and 14 times faster than Aether and
+Geo4D. VG3R also demonstrates competitive depth estima-
+tion and 3D reconstruction performance compared with ge-
+ometry foundation models.
+Project page:
+https://github.com/KTH-RPL/VG3R
+1. Introduction
+Diffusion models generate realistic images [47, 49] and
+videos [5, 58, 81], learning rich visual representations in
+the process. Beyond generation, image diffusion models
+have been adapted for depth and normal estimation, show-
+ing strong generalization to unseen scenes [13, 26]. Re-
+cent methods also achieve this through deterministic feed-
+forward prediction [17, 43, 75].
+Gabeur et al. [14] turn
+an image generator into a generalist perception model by
+casting vision tasks as RGB image generation, matching
+1
+arXiv:2611.28520v1  [cs.CV]  21 Nov 2026
+
+
+video
+video model
+decoded ̂x
+(i) what the video model holds
+(ii) read as it is
+(iii) read by VG3R
+depth 1/̂x: the room bends
+depth 1/(̂x+̂ c): one shift per clip
+no cameras
+cameras from the last block + intermediate blocks
+Figure 2. Motivation. (i) A video generation model used for feed-forward depth prediction outputs clip-normalized inverse depth ˆx (shown
+on a ScanNet clip). (ii) Normalization sets the farthest surfaces to zero inverse depth, so directly taking 1/ˆx places them at infinity and
+distorts the room, even with ground-truth cameras and scale alignment (gray: ground truth). (iii) VG3R predicts a clip-level shift ˆc to
+restore the inverse-depth offset and reconstructs the room using its own predicted cameras. Its camera head also reads the highlighted
+intermediate transformer blocks in (i).
+or outperforming specialist models in segmentation, met-
+ric depth, and normal estimation. They suggest that image
+generation pretraining could play a role similar to language-
+model pretraining in enabling general-purpose perception.
+Video generation models go further: they generate videos
+that remain coherent as camera and objects move, which
+suggests that they implicitly learn the 3D structure of
+scenes. They have likewise been adapted to video depth
+estimation [19, 52, 78, 85], and GenCeption [63] turns
+Wan2.1 [58] into a single-step model that matches or ex-
+ceeds Depth Anything 3 [34], SAM 3 [8] and VGGT-Ω[62]
+on their own tasks with less training data. Many works also
+use the 3D prior of video generation models, from objects to
+scenes: they generate multi-view videos of objects [60, 74],
+synthesize novel views of scenes [37, 84] and create world-
+consistent videos and explorable 3D scenes [3, 22, 48].
+However, directly recovering both scene geometry and
+camera poses from a video remains challenging for video
+generation models. The 3D generation methods above syn-
+thesize views along given camera trajectories, whereas 3D
+reconstruction must recover both geometry and cameras
+from the input video. Video depth estimators [19, 52, 78,
+85] predict depth or inverse depth up to scale and shift, but
+require separate camera pose estimation and alignment for
+3D reconstruction. GenCeption [63] predicts one output per
+prompt, such as depth or a ray map, not depth and cameras
+jointly. Methods that jointly generate geometry and esti-
+mate cameras with video generation models [20, 24, 41, 90]
+need many iterative denoising steps, which makes them
+slower. Consequently, feed-forward reconstruction is domi-
+nated by geometry foundation models [31, 64, 67, 86] such
+as VGGT [61], π3 [70], MapAnything [29], VGGT-Ω[62]
+and Depth Anything 3 [34].
+These models encode each
+frame with an image backbone such as DINOv2 [45] and
+treat a video as a set of images (Fig. 1(a), left).
+In this paper, we show that a video generation model can
+be turned directly into a feed-forward reconstruction model.
+Our key observation is that, used as a feed-forward network,
+a video generation model already captures the depth and
+camera motion of a video, but not in the form required for
+reconstruction (Fig. 2). For depth, the deterministic depth
+pipeline of DVD [85] decodes the inverse depth ˆx of every
+frame from the video diffusion transformer without sam-
+pling (Fig. 2(i)). However, ˆx is normalized over the clip
+to [0, 1], from 0 at the farthest surfaces to 1 at the nearest,
+so taking 1/ˆx as depth places the farthest surfaces at infin-
+ity and exaggerates the depth of far surfaces relative to near
+ones. Even with the ground-truth cameras and scale, the
+room reconstructed this way bends away from the ground
+truth (Fig. 2(ii)). Recovering depth requires estimating, for
+each clip, the shift c removed by this normalization, such
+that the inverse depth is proportional to ˆx + c [65, 66, 83].
+This shift is the inverse depth of the farthest surfaces di-
+vided by the range of inverse depth in the clip, so it depends
+on the relative depths of the nearest and farthest surfaces,
+while the remaining unknown scale only changes the over-
+all size of the reconstruction. Beyond depth, reconstructing
+the scene also requires camera poses. The transformer fea-
+tures contain information about camera motion, but existing
+depth pipeline does not estimate cameras (Fig. 2(ii)).
+Based on this observation, we present VG3R, which fine-
+tunes Wan2.1 [58] with LoRA [18] into a feed-forward
+model that reconstructs a scene and estimates the cameras
+of all frames from a video (Fig. 1(a), right), without it-
+erative denoising or a separate pose estimator (Fig. 1(b)
+and Fig. 2(iii)).
+Building on DVD’s deterministic depth
+pipeline, VG3R introduces two components to recover
+depth and cameras jointly. For depth, clip-level shift predic-
+tion (ClipShift) pools transformer features across the video
+to predict a single shift, correcting the decoded inverse
+2
+
+
+depth while preserving one global scale ambiguity.
+For
+cameras, the multi-layer camera head (LayerTap) combines
+features from intermediate and final transformer blocks to
+predict the camera parameters of every frame. The point
+map of every frame then follows from its depth and cam-
+era. On standard video benchmarks, VG3R achieves the
+lowest ATE on every dataset and the lowest reconstruction
+errors among the methods built on video generation mod-
+els, and runs about 4 and 14 times faster than Aether [90]
+and Geo4D [24]. Compared with VGGT, it reduces video
+depth error by 14% to 33% and reconstruction errors on 7-
+Scenes (Fig. 1(c)), demonstrating competitive performance
+with geometry foundation models.
+In summary, our contributions are as follows:
+• We present VG3R, a feed-forward 3D reconstruction
+model fine-tuned from a video generation model, which
+predicts a scene and the camera of every frame from a
+video without iterative denoising and thus establishes a
+direct path from video generation to 3D reconstruction.
+• We find that a video generation model already captures
+the depth and camera motion of a video, and propose
+ClipShift and LayerTap to make them available for re-
+construction.
+• We show that VG3R outperforms the methods built on
+video generation models in ATE and reconstruction er-
+rors, approaches geometry foundation models and runs
+about 4 and 14 times faster than Aether and Geo4D.
+2. Related Work
+2.1. Generative Priors for 3D and Perception
+Video generation models are widely used as 3D priors.
+They synthesize novel views from one or a few images [37,
+84], generate multi-view videos of static and dynamic ob-
+jects [60, 74], enable camera-controlled generation [16, 48]
+and create explorable 3D scenes [3, 22, 54]. Image diffu-
+sion models have also been adapted for depth and normal
+estimation [13, 26, 28], including deterministic single-step
+variants [17, 43, 75]. Vision Banana [14] instruction-tunes
+an image generator into a generalist vision model by cast-
+ing the outputs of vision tasks as RGB images.
+Unlike
+these works, VG3R uses a video generation model as a feed-
+forward 3D reconstruction model rather than for generation
+or depth estimation alone.
+2.2. Video Generation Models for Geometry
+Video generation models have been adapted to predict ge-
+ometry in several ways, ranging from direct regression to
+iterative generation. GenCeption [63] adapts Wan2.1 [58]
+for single-step perception, using text prompts to select tasks
+such as depth or ray map estimation. Built on Stable Video
+Diffusion [5], DepthCrafter [19], ChronoDepth [52] and
+Depth Any Video [78] predict affine-invariant depth or dis-
+parity, while GeometryCrafter [77] and MotionCrafter [91]
+predict point maps. DVD [85], whose depth pipeline we
+adopt, adapts Wan2.1-T2V-1.3B into a deterministic regres-
+sor from the RGB latent at a fixed timestep. Geo4D [24],
+Aether [90], Sora3R [41] and Gen3R [20] generate geome-
+try and cameras through iterative denoising. Other works
+obtain geometry through next-frame prediction [79], the
+prediction heads of a reconstruction model [87], or joint
+modeling with other modalities [21, 33, 72].
+Beyond explicit geometry prediction, probing studies
+examine the 3D information encoded in frozen features
+of image, video and vision-language models [12, 42, 53].
+VidFM3D [23] finds that frozen Wan2.1 features outper-
+form DINO features for reconstruction, while Geometry
+Forcing [71] aligns video diffusion features with a 3D foun-
+dation model. Unlike methods that predict only depth or
+rely on iterative generation, VG3R jointly predicts depth
+and cameras with a deterministic feed-forward network.
+Concurrent with our work, Gen4P [73] also fine-tunes
+Wan2.1 with a rank-512 LoRA into a feed-forward model,
+predicting video depth and camera poses alongside 3D point
+tracking.
+Gen4P uses a separate cross-attention decoder
+to answer queries, recovers cameras from queried points
+through Kabsch fits and pose-graph optimization, and can
+incorporate DVD’s LoRA as a frozen prior. In contrast,
+VG3R decodes depth with the video generation model’s
+VAE and directly regresses cameras from its transformer
+features.
+Without a video generation prior,
+CVD [40] and
+MegaSaM [32] optimize consistent depth for each video
+at test time, RollingDepth [27] aligns image diffusion pre-
+dictions across short video snippets, and Video Depth
+Anything [10] adds a temporal head to Depth Anything
+V2 [80]. Inspired by CVD’s geometric consistency con-
+straints, VG3R instead enforces cross-frame depth consis-
+tency during training through clip-level depth alignment
+and multi-view supervision using ground-truth correspon-
+dences.
+2.3. 3D Geometry Foundation Models
+Geometry foundation models learn feed-forward 3D recon-
+struction from multiple views. DUSt3R [67] trained one
+network to regress the point maps of an image pair in
+a common coordinate frame, and MASt3R [31] added a
+matching head to the same backbone. MonST3R [86] and
+CUT3R [64] extend this to dynamic scenes and to streams
+of frames. VGGT [61] predicts the cameras, depth and point
+maps of many views with one transformer, π3 [70] removes
+its reference view so that the prediction is equivariant to
+the order of the views, and MapAnything [29] accepts op-
+tional inputs such as intrinsics and predicts metric scale.
+All of them build on image backbones [45] and train on
+many multi-view datasets with 3D supervision. VG3R re-
+tains their feed-forward design and replaces the image back-
+bone with a video generation model pretrained on frames in
+3
+
+
+Wan2.1 DiT
+⋮
+̂
+z
+̂
+x
++
+depth
+dec, mv
+ClipShift̂
+c
+c
+LayerTap camera head
+cam
+pts
++
+Figure 3. Overview. VG3R encodes the input video with the frozen VAE of Wan2.1 and processes its latents with a LoRA-adapted
+transformer at a fixed timestep, with blocks ordered from bottom to top. The final-block features are decoded into inverse depth ˆx through
+the output layer and VAE decoder D. ClipShift uses these features to predict a single shift ˆc for a video clip, recovering depth up to a
+global scale. LayerTap combines features from multiple transformer blocks and pairs each latent frame with the first to predict per-frame
+cameras. Depth and cameras yield the reconstructed point maps. Gray losses are used only during training.
+temporal order.
+3. Method
+Given a video clip I = {Ii}L−1
+i=0
+of L frames, VG3R
+predicts the depth and the camera of every frame, re-
+covering the scene as point maps up to a global scale.
+Building on the deterministic depth pipeline of DVD [85]
+(Sec. 3.1), VG3R adds ClipShift to recover depth up to scale
+(Sec. 3.2) and LayerTap to predict per-frame camera param-
+eters (Sec. 3.3). Section 3.4 describes the training objectives
+and processing of long videos.
+3.1. Preliminaries
+The frozen Wan VAE [30, 58], with encoder E and decoder
+D, encodes the first frame alone and every following group
+of four frames into one latent frame at 1/8 of the spatial res-
+olution, so that the latent zI = E(I) has N = 1+(L−1)/4
+latent frames. Wan2.1-T2V-1.3B [58] generates videos with
+a diffusion transformer (DiT) [47] of 30 blocks trained by
+flow matching [36, 38]. DVD turns this model into a de-
+terministic depth regressor that maps the noise-free video
+latent to a depth latent ˆz at a fixed timestep τ0,
+ˆz = Fθ
+ zI; τ0, ∅
+
+,
+ˆx = 1
+2
+  ¯D(ˆz) + 1
+
+,
+(1)
+where Fθ is the DiT with frozen pretrained weights and
+trainable LoRA [18] weights θ, ∅is the empty text prompt,
+and ¯D averages the three output channels of the VAE de-
+coder D. The target of ˆx is the inverse depth δ = 1/d under
+the percentile normalization of Marigold [26], which DVD
+applies over the whole input video clip,
+xi(p) = δi(p) −δlo
+δhi −δlo
+,
+(2)
+clipped to [0, 1], where p is a pixel and δlo and δhi are the
+2nd and 98th percentiles of δ over the valid pixels of the
+video clip. DVD supervises ˆz with the squared error Llat
+to the encoded target and the error Lgrad of its differences
+along latent frames, rows and columns. The DVD pipeline
+thus has two limitations for 3D reconstruction (Fig. 2(ii)):
+the decoded inverse depth ˆx requires a shift to recover the
+scene geometry up to scale, and the model does not estimate
+camera intrinsics and extrinsics.
+3.2. ClipShift: Clip-Level Shift Prediction
+The decoded inverse depth ˆx cannot be used directly for
+3D reconstruction, as the missing shift distorts the scene
+geometry (Fig. 2(ii)). Recovering depth requires adding a
+clip-level shift c to ˆx, giving depth proportional to 1/(ˆx +
+c). From Eq. (2), the corresponding ground-truth shift is
+c∗= δlo/(δhi −δlo), giving δi = (δhi −δlo)(xi + c∗). The
+remaining scale factor δhi−δlo only changes the overall size
+of the reconstruction, while the shift determines its shape.
+Importantly, the shift is invariant to scene scale and
+shared across all frames of the input video clip. This allows
+us to recover the scene geometry up to scale by predicting a
+single shift from the video clip. We therefore introduce clip-
+level shift prediction (ClipShift), which pools the tokens of
+the last DiT block across all latent frames using attention
+and predicts a positive shift ˆc with an MLP. The depth of
+every frame and the shift loss are
+ˆDi(p) =
+1
+max
+ ˆxi(p) + ˆc, τ
+,
+Lc =
+ln ˆc + ϵ
+c∗+ ϵ
+,
+(3)
+where τ and ϵ are small constants to prevents division by
+zero and stabilizes the logarithmic loss, respectively.
+3.3. LayerTap: Multi-Layer Camera Head
+Beyond depth, reconstructing a scene also requires camera
+intrinsics and extrinsics estimation. Unlike depth, which is
+4
+
+
+Table 1. Comparison on video benchmarks. Video depth is aligned once per video, with scale and shift fitted in inverse depth (†) or
+depth (‡), and scale-only alignment otherwise. A dash indicates methods without camera predictions. Bold and underline mark the best
+and second-best results among VG3R and video-generation-based methods; dark and light shading mark those among VG3R and geometry
+foundation models. VG3R achieves the lowest ATE among video-generation-based methods across all three trajectory benchmarks, and
+outperforms all geometry foundation models in depth error on Bonn and reconstruction completeness error on 7-Scenes.
+Video depth
+Camera trajectories
+Reconstruction
+Sintel
+Bonn
+KITTI
+ScanNet
+Sintel
+TUM-dynamics
+ScanNet
+7-Scenes
+NRGBD
+Method
+AbsRel↓δ1.25↑AbsRel↓δ1.25↑AbsRel↓δ1.25↑TAE↓ATE↓RPE-t↓RPE-r↓ATE↓RPE-t↓RPE-r↓ATE↓RPE-t↓RPE-r↓Acc↓Comp↓NC↑Acc↓Comp↓NC↑
+Built on video generation models
+DepthCrafter† [19]
+0.305
+0.615
+0.072
+0.973
+0.104
+0.896
+1.606
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+Depth Any Video† [78]
+0.304
+0.641
+0.072
+0.968
+0.072
+0.958
+1.998
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+DKT† [76]
+0.479
+0.457
+0.154
+0.779
+0.206
+0.678
+1.420
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+DVD† [85]
+0.268
+0.672
+0.058
+0.972
+0.064
+0.970
+1.143
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+ChronoDepth‡ [52]
+0.677
+0.413
+0.099
+0.917
+0.168
+0.754
+1.599
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+GeometryCrafter [77]
+0.302
+0.668
+0.055
+0.974
+0.055
+0.984
+1.238
+0.230 0.077
+0.926 0.072 0.019
+0.415 0.078 0.020
+0.530 0.047 0.025 0.609 0.065 0.019 0.660
+GenCeption [63]
+0.231
+0.662
+0.061
+0.972
+0.059
+0.979
+1.611
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+Aether [90]
+0.270
+0.600
+0.249
+0.669
+0.117
+0.896
+1.136
+0.174 0.054
+0.684 0.091 0.012
+1.121 0.177 0.028
+1.222 0.100 0.077 0.557 0.127 0.040 0.604
+Geo4D [24]
+0.335
+0.574
+0.088
+0.916
+0.091
+0.937
+1.052
+0.179 0.062
+0.503 0.071 0.019
+0.637 0.123 0.022
+0.700 0.049 0.033 0.597 0.071 0.026 0.632
+VG3R (Ours)
+0.254
+0.699
+0.037
+0.979
+0.058
+0.979
+0.734
+0.142 0.034
+0.360 0.031 0.012
+0.457 0.035 0.015
+0.536 0.018 0.017 0.609 0.032 0.015 0.666
+Geometry foundation models
+VGGT [61]
+0.296
+0.647
+0.055
+0.971
+0.072
+0.965
+0.848
+0.171 0.061
+0.471 0.012 0.010
+0.309 0.035 0.015
+0.376 0.021 0.024 0.630 0.010 0.011 0.803
+π3 [70]
+0.232
+0.665
+0.050
+0.975
+0.039
+0.986
+0.626
+0.073 0.039
+0.281 0.014 0.009
+0.311 0.030 0.013
+0.347 0.012 0.019 0.651 0.010 0.011 0.819
+MapAnything [29]
+0.337
+0.580
+0.063
+0.972
+0.074
+0.972
+1.095
+0.230 0.082
+0.644 0.028 0.019
+0.385 0.060 0.022
+0.617 0.030 0.029 0.603 0.048 0.027 0.666
+DA3 [34]
+0.313
+0.668
+0.049
+0.973
+0.057
+0.978
+1.058
+0.127 0.050
+0.351 0.013 0.009
+0.312 0.033 0.013
+0.386 0.015 0.020 0.628 0.008 0.010 0.848
+VGGT-Ω[62]
+0.256
+0.660
+0.114
+0.933
+0.040
+0.987
+0.748
+0.087 0.033
+0.226 0.011 0.010
+0.316 0.032 0.012
+0.352 0.021 0.028 0.643 0.013 0.011 0.793
+decoded from the final transformer block, camera estima-
+tion can benefit from features at multiple layers that capture
+camera motion. LayerTap therefore combines the tokens of
+intermediate blocks 10 and 20 with those of the final block
+through linear projections and summation (Fig. 3).
+To estimate camera poses relative to the first frame, we
+preserve the spatial tokens of each latent frame and pair
+them with those of the first latent frame.
+However, the
+Wan VAE compresses four RGB frames into each subse-
+quent latent frame, while we need a separate camera esti-
+mation for every RGB frame. We use one learned query per
+RGB frame to extract its features from the corresponding
+pair of latent frames, yielding L frame-level tokens. Fol-
+lowing VGGT [61], a camera head processes these tokens
+with self-attention and iteratively refines the rotation ˆRi,
+translation ˆti, and fields of view ˆfi of each frame relative
+to camera 0. The ground-truth cameras are expressed in the
+same reference frame, with translations normalized by the
+median depth of frame 0, as for the predicted depth. The
+camera loss sums over K refinement iterations,
+Lcam =
+K
+X
+k=1
+γK−k mean
+i
+
+wt∥ˆtk
+i −ti∥1 + ∥ˆRk
+i −Ri∥F
++ wf∥ˆf k
+i −fi∥1
+
+,
+(4)
+where γ < 1 gives later iterations larger weights, and wt
+and wf balance the three terms.
+3.4. Training Loss and Inference
+With depth from ClipShift and cameras from LayerTap,
+VG3R reconstructs the scene by back-projecting each frame
+into the camera coordinate system of frame 0,
+ˆPi(p) = ˆR⊤
+i
+  ˆDi(p) ˆ
+K−1 ˜p −ˆti
+
+,
+(5)
+where ˆ
+K is the camera intrinsic matrix shared across all
+frames, constructed from the predicted fields of view ˆf0 of
+frame 0 with the principal point at the image center, and ˜p
+denotes the homogeneous coordinates of pixel p. We super-
+vise the resulting point maps with an L1 loss Lpts against
+ground truth, jointly training the depth, shift, and camera
+parameter estimation.
+To encourage consistent depth across frames, we intro-
+duce two additional losses. The clip-level decoded loss Ldec
+fits a single affine transformation in inverse depth across all
+frames and penalizes the remaining log-depth error. Unlike
+per-frame alignment, this shared fit exposes inconsistencies
+between frames. The multi-view loss Lmv enforces depth
+consistency across frame pairs using correspondences de-
+rived from ground-truth depth and cameras. We use pairs at
+multiple temporal distances to capture both local inconsis-
+tencies and longer-range drift. The total training loss is
+L = Llat + 0.5 Lgrad + Ldec + 4 Lmv
++ Lcam + Lc + 0.5 Lpts.
+(6)
+For inference on videos longer than the training clips,
+VG3R processes the whole video and overlapping windows
+of the training length.
+The whole-video prediction pro-
+vides a common depth reference, while the windows pro-
+vide depth and camera estimates at the training length. Each
+window’s depth is scaled to the whole-video prediction by
+the median log-depth ratio over their shared frames, and
+overlapping predictions are blended linearly in log depth.
+For cameras, each window is aligned to the preceding re-
+construction using a rigid transform averaged over the over-
+lapping camera poses.
+5
+
+
+VGGT
+π3
+MapAnything
+DA3
+VGGT-Ω
+VG3R (Ours)
+Ground truth
+Figure 4. Reconstructions from video. One sequence per row. Every method fuses the point maps of all frames with its own predicted
+cameras, without confidence filtering or other post-processing, and is aligned to the ground truth by a similarity transform.
+Table 2. Inference time in ms per frame on one GH200, reported
+as the median across sequences, excluding model loading. Each
+method uses its official resolution.
+Video depth
+Cameras
+Method
+Steps
+Sintel
+Bonn
+KITTI
+ScanNet
+DepthCrafter [19]
+5
+146
+100
+158
+–
+Depth Any Video [78]
+3
+184
+133
+128
+–
+DKT [76]
+5
+170
+138
+117
+–
+DVD [85]
+1
+72
+64
+160
+–
+ChronoDepth [52]
+5
+225
+166
+168
+–
+GeometryCrafter [77]
+5
+310
+230
+310
+–
+GenCeption [63]
+1
+216
+264
+288
+–
+Aether [90]
+4
+1319
+1979
+2958
+383
+Geo4D [24]
+5
+1116
+1499
+881
+1351
+VG3R
+1
+74
+79
+78
+84
+4. Experiments
+4.1. Setup
+Training. We train VG3R on 11 public datasets: Scan-
+Net++ [82], TartanAir V2 [68, 69], Matterport3D [9],
+ScanNet [11], PointOdyssey [88], Dynamic Replica [25],
+Spring [44], Virtual KITTI 2 [7], DL3DV [35], Waymo [1,
+57] and RealEstate10K [89]. We initialize the LoRA from
+the released DVD weights [85] and train it together with
+the prediction heads using AdamW [39]. The LoRA has
+rank 512, and training takes about 40 hours on 128 NVIDIA
+GH200 GPUs. We will release the trained model weights
+and code to support further research.
+Evaluation. At test time, input frames are resized to ap-
+proximately 288 × 512 pixels, preserving their aspect ra-
+tio.
+All methods receive videos of consecutive frames,
+with no evaluation sequences included in our training data.
+We evaluate video depth on Sintel [6], Bonn [46] and
+KITTI [15, 59] using absolute relative error (AbsRel) and
+the fraction of pixels with a depth ratio below 1.25 (δ <
+1.25), after one alignment per video in each method’s out-
+put space. Temporal consistency is measured by tempo-
+ral alignment error (TAE) [78] on ScanNet. Camera tra-
+jectories are evaluated by absolute trajectory error (ATE)
+and relative pose error (RPE) on Sintel, the dynamic se-
+quences of TUM RGB-D [56] (TUM-dynamics), and Scan-
+Net. We evaluate 3D reconstruction on 7-Scenes [55] and
+NRGBD [2] using accuracy, completeness, and normal con-
+sistency, after similarity alignment and ICP.
+Baselines.
+We compare with methods built on video
+generation
+models:
+DepthCrafter
+[19],
+Depth
+Any
+Video [78], DKT [76], DVD [85], ChronoDepth [52], Ge-
+ometryCrafter [77], GenCeption [63], Aether [90], and
+Geo4D [24], each run with its official inference set-
+tings. We also compare with geometry foundation models:
+VGGT [61], π3 [70], MapAnything [29], Depth Anything 3
+(DA3) [34], and VGGT-Ω[62].
+The supplementary material provides implementation
+and evaluation details, additional ablations, more analyses
+of ClipShift and LayerTap, comparisons with training from
+random initialization and with one-frame input, and more
+qualitative results, including interactive point clouds and
+videos.
+4.2. Comparison with the State of the Art
+Methods built on video generation models. Table 1 com-
+pares VG3R with nine methods built on video generation
+models on the same videos. Among them, VG3R achieves
+the lowest ATE on all three datasets, the lowest reconstruc-
+tion accuracy and completeness errors on both datasets,
+and the most consistent video depth.
+On ScanNet and
+TUM-dynamics, VG3R reduces ATE by 55.1% and 56.3%,
+respectively, compared with the best of GeometryCrafter,
+Aether and Geo4D. Its reconstruction accuracy error on 7-
+Scenes falls from 0.047 for GeometryCrafter to 0.018, a
+61.7% reduction. VG3R also improves temporal depth con-
+sistency, reducing TAE by 30.2% compared with Geo4D.
+Together, these results demonstrate that a video generation
+backbone can support accurate joint depth and camera pre-
+6
+
+
+Input
+Ground truth
+DepthCrafter
+Depth Any Video
+DKT
+DVD
+ChronoDepth
+GeometryCrafter
+GenCeption
+Aether
+Geo4D
+VG3R (Ours)
+Figure 5. Video depth from video generation models. One frame per benchmark, shown as inverse depth after alignment in Tab. 1, using
+a shared color range with the ground truth for each sequence.
+diction without iterative denoising or separate pose estima-
+tion. In Fig. 6, VG3R follows the ground-truth camera tra-
+jectories more closely, while GeometryCrafter, Aether and
+Geo4D exhibit substantial drift. The depth comparisons in
+Fig. 5 further show that several baselines underestimate the
+depth of the person in Bonn and nearby surfaces in Sintel,
+whereas VG3R better preserves their relative positions.
+Geometry
+foundation
+models.
+Compared
+with
+VGGT [61],
+a representative image-backbone model,
+VG3R reduces video depth AbsRel by 14.2% to 32.7%
+across Sintel, Bonn and KITTI, and TAE by 13.4%.
+It
+also improves camera trajectory estimation on Sintel and
+reduces reconstruction accuracy and completeness errors
+on 7-Scenes by 14.3% and 29.2%, respectively. Across all
+geometry foundation models, VG3R achieves the lowest
+depth AbsRel on Bonn and the lowest reconstruction
+completeness error on 7-Scenes. While camera estimation
+remains less accurate than some geometry foundation
+models, these results demonstrate that a video generation
+backbone can already achieve competitive depth and
+reconstruction accuracy.
+The reconstructions in Fig. 4
+illustrate this advantage in scene consistency:
+VGGT
+produces a fragmented wall on 7-Scenes, while VGGT
+and DA3 duplicate wall surfaces on ScanNet. In contrast,
+VG3R reconstructs these structures more coherently.
+Inference time. As shown in Tab. 2, VG3R takes 74 to
+84 ms per frame while predicting both depth and cameras.
+Table 3.
+Ablation of ClipShift and LayerTap on eval20 and
+ARKit43: camera RPE-r (degrees) and reconstruction F@5 (F-
+score at 5 cm). Component ablation: otherwise identical runs of
+10,000 steps on 16 GPUs; ✗and const. use the decoded inverse
+depth without a shift or with one constant shift across clips, re-
+spectively, while keeping the predicted cameras unchanged. Final
+model: trained for 30,000 steps on 128 GPUs, with reconstruc-
+tions using either predicted or ground-truth (GT) cameras; ‘GT
+fit’ recovers depth by fitting a scale and shift between the decoded
+and ground-truth inverse depth over the clip.
+ClipShift
+LayerTap
+eval20
+ARKit43
+shift
+camera head
+RPE-r↓
+F@5↑
+RPE-r↓
+F@5↑
+Component ablation (10k steps)
+✗
+✗
+7.80
+19.0
+7.78
+22.6
+✗
+✓
+3.79
+19.6
+3.41
+21.8
+const.
+✓
+3.79
+44.3
+3.41
+55.2
+✓
+✗
+7.80
+61.6
+7.78
+60.4
+✓
+✓
+3.79
+65.0
+3.41
+64.4
+Final model (full training)
+✓
+✓
+1.14
+76.8
+1.29
+79.3
+✓
+GT
+–
+85.6
+–
+92.4
+GT fit
+GT
+–
+84.5
+–
+93.2
+Among video depth estimators, only DVD is faster on Sin-
+tel and Bonn, while the others take 1.3 to 4.2 times as
+long. On ScanNet, VG3R is about 4 and 14 times faster
+than Aether [90] and Geo4D [24], respectively. Both base-
+lines rely on iterative denoising, whereas our VG3R pre-
+dicts depth and cameras without denoising.
+7
+
+
+Sintel
+TUM-dynamics
+ScanNet
+ATE 0.585, 0.205, 0.283
+VG3R  ATE 0.055
+ATE 0.212, 0.213, 0.166
+VG3R  ATE 0.022
+ATE 0.238, 0.192, 0.179
+VG3R  ATE 0.040
+Figure 6. Camera trajectories over the ground-truth point cloud, with ground-truth trajectories in black. One sequence per benchmark
+among the five where VG3R leads most in ATE. Left: GeometryCrafter (blue), Aether (purple) and Geo4D (yellow), with ATE reported in
+this order. Right: VG3R.
+Table 4.
+Windows and training data on the benchmarks of
+Tab. 1. Models are trained on three datasets, while the final model
+is trained longer on all eleven datasets.
+AbsRel↓
+ScanNet
+NRGBD
+Windows Datasets Sintel Bonn TAE↓ATE↓RPE-r↓
+Acc↓
+✗
+3
+0.340 0.092 1.050 0.167
+8.87
+0.109
+✓
+3
+0.339 0.092 0.751 0.045
+0.73
+0.071
+✓
+11
+0.254 0.037 0.734 0.035
+0.54
+0.032
+4.3. Ablation
+Table 3 evaluates ClipShift and LayerTap in otherwise iden-
+tical runs of 10,000 steps, Tab. 4 examines inference win-
+dows and training data, and Tab. 5 studies the effects of tem-
+poral input and video pretraining in a separate experiment.
+ClipShift. ClipShift predicts a shared shift for each video
+clip to correct the geometric distortion caused by the de-
+coded inverse depth. Without this shift, the reconstruction
+F-score at 5 cm (F@5) [50] falls from 65.0 to 19.6 on eval20
+and from 64.4 to 21.8 on ARKit43 (Tab. 3). A single con-
+stant shift across all clips only partially recovers this drop,
+reaching 44.3 and 55.2, respectively. These results show
+that the shift must adapt to each clip to correct the distor-
+tion in reconstructed geometry.
+After full training, the final model improves both the re-
+construction and the cameras (last three rows of Tab. 3):
+with its predicted cameras, F@5 rises from 65.0 to 76.8 on
+eval20 and from 64.4 to 79.3 on ARKit43, and RPE-r drops
+from 3.79◦to 1.14◦and from 3.41◦to 1.29◦. To assess
+the accuracy of the predicted shift independently of camera
+poses errors, we also evaluate the final model with ground-
+truth (GT) cameras. ClipShift then achieves an F@5 of 85.6
+on eval20 and 92.4 on ARKit43, within 1.1 points of a per-
+clip scale-and-shift fit of the same decoded inverse depth to
+the ground truth (GT fit). This shows that ClipShift, with-
+out access to the ground truth, recovers nearly all the recon-
+struction accuracy of the GT fit.
+LayerTap. LayerTap combines features from intermediate
+and final transformer blocks to predict the camera of every
+frame. Using only the final-block tokens increases RPE-
+r from 3.79 to 7.80 on eval20 and from 3.41 to 7.78 on
+ARKit43. Reconstruction F@5 also decreases from 65.0
+to 61.6 and from 64.4 to 60.4, respectively. These results
+show that intermediate-block features improve camera esti-
+mation, which also benefits reconstruction.
+Table 5. Video input and pretraining on held-out clips of TUM
+RGB-D, ETH3D and ARKitScenes: medians over clips of F@5,
+with the ground-truth cameras and one scale and shift per clip, and
+of the drift G5.
+Video
+Pretrained
+Model
+input
+DiT
+F@5↑
+G5 ↓
+Wan-Scratch
+✓
+✗
+45.9
+5.9
+Wan-LoRA, one-frame videos
+✗
+✓
+49.2
+18.0
+Wan-LoRA
+✓
+✓
+75.3
+5.4
+Windows and training data. We examine how overlap-
+ping inference windows and additional training data affect
+reconstruction on long videos in Tab. 4.
+For the model
+trained on three datasets, processing a 90-frame ScanNet
+video as a single input gives an RPE-r of 8.87◦and a TAE
+of 1.050. Using overlapping windows reduces these errors
+to 0.73◦and 0.751, respectively. This shows the benefit
+of keeping inference inputs closer to the training lengths.
+Training on all eleven datasets further reduces AbsRel from
+0.339 to 0.254 on Sintel (25.1%) and from 0.092 to 0.037
+on Bonn (59.8%), and reconstruction accuracy error from
+0.071 to 0.032 on NRGBD (54.9%). These gains across
+both depth estimation and 3D reconstruction show the ben-
+efit of scaling up the training data and duration.
+Video input and pretraining. To understand the roles of
+video input and generative pretraining in VG3R, we com-
+pare a Wan2.1-based depth model with frame-wise input
+and randomly initialized DiT variants in Tab. 5. All mod-
+els are evaluated on held-out clips from TUM RGB-D [56],
+ETH3D SLAM [50, 51], and ARKitScenes [4]. We mea-
+sure cross-frame drift by G5, the F@5 gained by fitting one
+scale per frame instead of one per clip; lower values indi-
+cate more consistent depth. Wan-LoRA achieves an F@5 of
+75.3 and a G5 of 5.4. With one-frame input, its F@5 falls to
+49.2 and G5 rises to 18.0, demonstrating the importance of
+temporal context for both accuracy and consistency. Train-
+ing the same DiT from random initialization (Wan-Scratch)
+with the same data, supervision, and steps yields an F@5 of
+45.9. These results show that temporal input is important
+for consistent depth prediction, while DiT pretraining pro-
+vides a substantial accuracy advantage under the evaluated
+training budget.
+8
+
+
+5. Conclusion
+We presented VG3R, which turns a pretrained video gener-
+ation model into a feed-forward 3D reconstruction model.
+ClipShift corrects the shift ambiguity in decoded inverse
+depth, while LayerTap predicts per-frame cameras from
+transformer features. Across video depth, camera trajec-
+tory, and 3D reconstruction benchmarks, VG3R achieves
+the lowest ATE and reconstruction accuracy and complete-
+ness errors among methods built on video generation mod-
+els. By avoiding iterative denoising, it runs about 4 and
+14 times faster than Aether and Geo4D, respectively, while
+achieving competitive depth and reconstruction accuracy
+against geometry foundation models.
+Future work. Our approach could extend to other 3D and
+4D perception tasks, such as surface normal estimation,
+scene flow, and 3D point tracking. More broadly, adapting
+video generators through LoRA and prediction heads raises
+the possibility of a unified model that both generates videos
+and reconstructs their underlying 3D scenes.
+Acknowledgments
+This work was supported by the U.S. National Science
+Foundation under Grant No. 2316400.
+This work was
+also supported by the Wallenberg AI, Autonomous Sys-
+tems and Software Program (WASP) funded by the Knut
+and Alice Wallenberg Foundation. The computations and
+data handling were enabled by the Arrhenius HPC resource
+provided by National Academic Infrastructure for Super-
+computing in Sweden. The authors also acknowledge the
+South Dakota State University High Performance Comput-
+ing (SDSU HPC) team for providing access to and sup-
+port for the university’s high-performance computing re-
+sources.
+References
+[1] Waymo Open Dataset:
+An autonomous driving dataset.
+https://www.waymo.com/open, 2019-2025. 6, 20
+[2] Dejan Azinovi´c, Ricardo Martin-Brualla, Dan B. Goldman,
+Matthias Nießner, and Justus Thies. Neural RGB-D Surface
+Reconstruction. In CVPR, 2022. 6, 14
+[3] Sherwin Bahmani, Tianchang Shen, Jiawei Ren, Jiahui
+Huang, Yifeng Jiang, Haithem Turki, Andrea Tagliasacchi,
+David B. Lindell, Zan Gojcic, Sanja Fidler, Huan Ling, Jun
+Gao, and Xuanchi Ren.
+Lyra: Generative 3D Scene Re-
+construction via Video Diffusion Model Self-Distillation. In
+ICLR, 2026. 2, 3
+[4] Gilad Baruch, Zhuoyuan Chen, Afshin Dehghan, Tal Dimry,
+Yuri Feigin, Peter Fu, Thomas Gebauer, Brandon Joffe,
+Daniel Kurz, Arik Schwartz, and Elad Shulman.
+ARK-
+itScenes:
+A Diverse Real-World Dataset For 3D Indoor
+Scene Understanding Using Mobile RGB-D Data.
+In
+NeurIPS Datasets and Benchmarks, 2021. 8, 19, 20
+[5] Andreas Blattmann, Tim Dockhorn, Sumith Kulal, Daniel
+Mendelevitch, Maciej Kilian, Dominik Lorenz, Yam Levi,
+Zion English, Vikram Voleti, Adam Letts, Varun Jampani,
+and Robin Rombach. Stable Video Diffusion: Scaling Latent
+Video Diffusion Models to Large Datasets. arXiv preprint
+arXiv:2311.15127, 2023. 1, 3
+[6] Daniel J. Butler, Jonas Wulff, Garrett B. Stanley, and
+Michael J. Black.
+A Naturalistic Open Source Movie for
+Optical Flow Evaluation. In ECCV, 2012. 6, 14
+[7] Yohann Cabon, Naila Murray, and Martin Humenberger. Vir-
+tual KITTI 2. arXiv preprint arXiv:2001.10773, 2020. 6, 16,
+20
+[8] Nicolas Carion, Laura Gustafson, Yuan-Ting Hu, Shoub-
+hik Debnath, Ronghang Hu, Didac Suris, Chaitanya Ryali,
+Kalyan Vasudev Alwala, Haitham Khedr, Andrew Huang,
+Jie Lei, Tengyu Ma, Baishan Guo, Arpit Kalla, Markus
+Marks, Joseph Greer, Meng Wang, Peize Sun, Roman
+R¨adle, Triantafyllos Afouras, Effrosyni Mavroudi, Kather-
+ine Xu, Tsung-Han Wu, Yu Zhou, Liliane Momeni, Rishi
+Hazra, Shuangrui Ding, Sagar Vaze, Francois Porcher, Feng
+Li, Siyuan Li, Aishwarya Kamath, Ho Kei Cheng, Piotr
+Doll´ar, Nikhila Ravi, Kate Saenko, Pengchuan Zhang, and
+Christoph Feichtenhofer. SAM 3: Segment Anything with
+Concepts. In ICLR, 2026. 2
+[9] Angel Chang, Angela Dai, Thomas Funkhouser, Maciej Hal-
+ber, Matthias Nießner, Manolis Savva, Shuran Song, Andy
+Zeng, and Yinda Zhang. Matterport3D: Learning from RGB-
+D Data in Indoor Environments. In 3DV, 2017. 6, 18, 20
+[10] Sili Chen, Hengkai Guo, Shengnan Zhu, Feihu Zhang, Zi-
+long Huang, Jiashi Feng, and Bingyi Kang. Video Depth
+Anything:
+Consistent Depth Estimation for Super-Long
+Videos. In CVPR, 2025. 3, 14
+[11] Angela Dai, Angel X. Chang, Manolis Savva, Maciej Hal-
+ber, Thomas Funkhouser, and Matthias Nießner. ScanNet:
+Richly-Annotated 3D Reconstructions of Indoor Scenes. In
+CVPR, 2017. 6, 13, 14, 16, 20
+[12] Mohamed El Banani, Amit Raj, Kevis-Kokitsi Maninis, Ab-
+hishek Kar, Yuanzhen Li, Michael Rubinstein, Deqing Sun,
+Leonidas Guibas, Justin Johnson, and Varun Jampani. Prob-
+ing the 3D Awareness of Visual Foundation Models.
+In
+CVPR, 2024. 3
+[13] Xiao Fu, Wei Yin, Mu Hu, Kaixuan Wang, Yuexin Ma, Ping
+Tan, Shaojie Shen, Dahua Lin, and Xiaoxiao Long. GeoWiz-
+ard: Unleashing the Diffusion Priors for 3D Geometry Esti-
+mation from a Single Image. In ECCV, 2024. 1, 3
+[14] Valentin Gabeur, Shangbang Long, Songyou Peng, Paul
+Voigtlaender, Shuyang Sun, Yanan Bao, Karen Truong,
+Zhicheng Wang, Wenlei Zhou, Jonathan T. Barron, Kyle
+Genova, Nithish Kannen, Sherry Ben, Yandong Li, Mandy
+Guo, Suhas Yogin, Yiming Gu, Huizhong Chen, Oliver
+Wang, Saining Xie, Howard Zhou, Kaiming He, Thomas
+Funkhouser, Jean-Baptiste Alayrac, and Radu Soricut. Im-
+age Generators are Generalist Vision Learners.
+arXiv
+preprint arXiv:2604.20329, 2026. 1, 3
+[15] Andreas Geiger, Philip Lenz, and Raquel Urtasun. Are we
+ready for Autonomous Driving? The KITTI Vision Bench-
+mark Suite. In CVPR, 2012. 6, 14
+9
+
+
+[16] Hao He, Yinghao Xu, Yuwei Guo, Gordon Wetzstein, Bo
+Dai, Hongsheng Li, and Ceyuan Yang.
+CameraCtrl: En-
+abling Camera Control for Video Diffusion Models. In ICLR,
+2025. 3
+[17] Jing He, Haodong Li, Wei Yin, Yixun Liang, Leheng Li,
+Kaiqiang Zhou, Hongbo Zhang, Bingbing Liu, and Ying-
+Cong Chen.
+Lotus:
+Diffusion-based Visual Foundation
+Model for High-quality Dense Prediction. In ICLR, 2025.
+1, 3
+[18] Edward J. Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-
+Zhu, Yuanzhi Li, Shean Wang, Lu Wang, and Weizhu Chen.
+LoRA: Low-Rank Adaptation of Large Language Models. In
+ICLR, 2022. 2, 4
+[19] Wenbo Hu, Xiangjun Gao, Xiaoyu Li, Sijie Zhao, Xi-
+aodong Cun, Yong Zhang, Long Quan, and Ying Shan.
+DepthCrafter: Generating Consistent Long Depth Sequences
+for Open-world Videos. In CVPR, 2025. 2, 3, 5, 6, 16
+[20] Jiaxin Huang, Yuanbo Yang, Bangbang Yang, Lin Ma,
+Yuewen Ma, and Yiyi Liao. Gen3R: 3D Scene Generation
+Meets Feed-Forward Reconstruction. In CVPR, 2026. 2, 3
+[21] Jiehui Huang, Yuechen Zhang, Xu He, Yuan Gao, Zhi Cen,
+Bin Xia, Yan Zhou, Xin Tao, Pengfei Wan, and Jiaya Jia.
+UnityVideo: Unified Multi-Modal Multi-Task Learning for
+Enhancing World-Aware Video Generation. In CVPR, 2026.
+3
+[22] Tianyu Huang, Wangguandong Zheng, Tengfei Wang, Yuhao
+Liu, Zhenwei Wang, Junta Wu, Jie Jiang, Hui Li, Rynson
+W. H. Lau, Wangmeng Zuo, and Chunchao Guo. Voyager:
+Long-Range and World-Consistent Video Diffusion for Ex-
+plorable 3D Scene Generation. ACM TOG, 2025. 2, 3
+[23] Zixuan Huang, Xiang Li, Zhaoyang Lv, and James M. Rehg.
+How Much 3D Do Video Foundation Models Encode?
+In
+CVPR, 2026. 3
+[24] Zeren Jiang, Chuanxia Zheng, Iro Laina, Diane Larlus, and
+Andrea Vedaldi. Geo4D: Leveraging Video Generators for
+Geometric 4D Scene Reconstruction. In ICCV, 2025. 2, 3,
+5, 6, 7, 15, 16
+[25] Nikita Karaev, Ignacio Rocco, Benjamin Graham, Na-
+talia Neverova, Andrea Vedaldi, and Christian Rupprecht.
+DynamicStereo:
+Consistent Dynamic Depth from Stereo
+Videos. In CVPR, 2023. 6, 16, 20
+[26] Bingxin Ke, Anton Obukhov, Shengyu Huang, Nando Met-
+zger, Rodrigo Caye Daudt, and Konrad Schindler. Repurpos-
+ing Diffusion-Based Image Generators for Monocular Depth
+Estimation. In CVPR, 2024. 1, 3, 4
+[27] Bingxin Ke, Dominik Narnhofer, Shengyu Huang, Lei Ke,
+Torben Peters, Katerina Fragkiadaki, Anton Obukhov, and
+Konrad Schindler. Video Depth without Video Models. In
+CVPR, 2025. 3
+[28] Bingxin Ke, Kevin Qu, Tianfu Wang, Nando Metzger,
+Shengyu Huang, Bo Li, Anton Obukhov, and Konrad
+Schindler. Marigold: Affordable Adaptation of Diffusion-
+Based Image Generators for Image Analysis. TPAMI, 2025.
+3
+[29] Nikhil Keetha, Norman M¨uller, Johannes Sch¨onberger,
+Lorenzo Porzi,
+Yuchen Zhang,
+Tobias Fischer,
+Arno
+Knapitsch,
+Duncan Zauss,
+Ethan Weber,
+Nelson An-
+tunes, Jonathon Luiten, Manuel Lopez-Antequera, Samuel
+Rota Bul`o, Christian Richardt, Deva Ramanan, Sebastian
+Scherer, and Peter Kontschieder.
+MapAnything: Univer-
+sal Feed-Forward Metric 3D Reconstruction. In 3DV, 2026.
+arXiv:2509.13414. 2, 3, 5, 6, 16
+[30] Diederik P. Kingma and Max Welling. Auto-Encoding Vari-
+ational Bayes. In ICLR, 2014. 4
+[31] Vincent Leroy, Yohann Cabon, and J´erˆome Revaud. Ground-
+ing Image Matching in 3D with MASt3R. In ECCV, 2024.
+2, 3
+[32] Zhengqi Li, Richard Tucker, Forrester Cole, Qianqian Wang,
+Linyi Jin, Vickie Ye, Angjoo Kanazawa, Aleksander Holyn-
+ski, and Noah Snavely. MegaSaM: Accurate, Fast and Ro-
+bust Structure and Motion from Casual Dynamic Videos. In
+CVPR, 2025. 3
+[33] Ruofan Liang, Zan Gojcic, Huan Ling, Jacob Munkberg, Jon
+Hasselgren, Zhi-Hao Lin, Jun Gao, Alexander Keller, Nan-
+dita Vijaykumar, Sanja Fidler, and Zian Wang. Diffusion-
+Renderer: Neural Inverse and Forward Rendering with Video
+Diffusion Models. In CVPR, 2025. 3
+[34] Haotong Lin, Sili Chen, Jun Hao Liew, Donny Y. Chen,
+Zhenyu Li, Yang Zhao, Sida Peng, Hengkai Guo, Xiaowei
+Zhou, Guang Shi, Jiashi Feng, and Bingyi Kang. Depth Any-
+thing 3: Recovering the Visual Space from Any Views. In
+ICLR, 2026. 2, 5, 6, 16
+[35] Lu Ling, Yichen Sheng, Zhi Tu, Wentian Zhao, Cheng
+Xin, Kun Wan, Lantao Yu, Qianyu Guo, Zixun Yu, Yawen
+Lu, Xuanmao Li, Xingpeng Sun, Rohan Ashok, Aniruddha
+Mukherjee, Hao Kang, Xiangrui Kong, Gang Hua, Tianyi
+Zhang, Bedrich Benes, and Aniket Bera. DL3DV-10K: A
+Large-Scale Scene Dataset for Deep Learning-based 3D Vi-
+sion. In CVPR, 2024. 6, 16, 20
+[36] Yaron Lipman, Ricky T. Q. Chen, Heli Ben-Hamu, Maxi-
+milian Nickel, and Matt Le. Flow Matching for Generative
+Modeling. In ICLR, 2023. 4
+[37] Fangfu Liu, Wenqiang Sun, Hanyang Wang, Yikai Wang,
+Haowen Sun, Junliang Ye, Jun Zhang, and Yueqi Duan.
+ReconX: Reconstruct Any Scene From Sparse Views With
+Video Diffusion Model. TIP, 35:2305–2319, 2026. 2, 3
+[38] Xingchao Liu, Chengyue Gong, and Qiang Liu.
+Flow
+Straight and Fast: Learning to Generate and Transfer Data
+with Rectified Flow. In ICLR, 2023. 4
+[39] Ilya Loshchilov and Frank Hutter. Decoupled Weight Decay
+Regularization. In ICLR, 2019. 6, 18
+[40] Xuan Luo, Jia-Bin Huang, Richard Szeliski, Kevin Matzen,
+and Johannes Kopf.
+Consistent Video Depth Estimation.
+ACM TOG, 2020. 3, 14
+[41] Jinjie Mai, Wenxuan Zhu, Haozhe Liu, Bing Li, Cheng
+Zheng, J¨urgen Schmidhuber, and Bernard Ghanem.
+Can
+Video Diffusion Model Reconstruct 4D Geometry?
+arXiv
+preprint arXiv:2503.21082, 2025. 2, 3
+[42] Yunze Man, Shuhong Zheng, Zhipeng Bao, Martial Hebert,
+Liang-Yan Gui, and Yu-Xiong Wang. Lexicon3D: Probing
+Visual Foundation Models for Complex 3D Scene Under-
+standing. In NeurIPS, 2024. 3
+[43] Gonzalo Martin Garcia, Karim Knaebel, Christian Schmidt,
+Daan de Geus, Alexander Hermans, and Bastian Leibe. Fine-
+Tuning Image-Conditional Diffusion Models is Easier than
+You Think. In WACV, 2025. 1, 3, 13
+10
+
+
+[44] Lukas Mehl, Jenny Schmalfuss, Azin Jahedi, Yaroslava Nali-
+vayko, and Andr´es Bruhn. Spring: A High-Resolution High-
+Detail Dataset and Benchmark for Scene Flow, Optical Flow
+and Stereo. In CVPR, 2023. 6, 16, 20
+[45] Maxime Oquab, Timoth´ee Darcet, Th´eo Moutakanni, Huy
+Vo, Marc Szafraniec, Vasil Khalidov, Pierre Fernandez,
+Daniel Haziza, Francisco Massa, Alaaeldin El-Nouby, Mah-
+moud Assran, Nicolas Ballas, Wojciech Galuba, Russell
+Howes, Po-Yao Huang, Shang-Wen Li, Ishan Misra, Michael
+Rabbat, Vasu Sharma, Gabriel Synnaeve, Hu Xu, Herv´e
+J´egou, Julien Mairal, Patrick Labatut, Armand Joulin, and
+Piotr Bojanowski. DINOv2: Learning Robust Visual Fea-
+tures without Supervision. TMLR, 2024. 2, 3
+[46] Emanuele Palazzolo, Jens Behley, Philipp Lottes, Philippe
+Gigu`ere, and Cyrill Stachniss. ReFusion: 3D Reconstruction
+in Dynamic Environments for RGB-D Cameras Exploiting
+Residuals. In IROS, 2019. 6, 14
+[47] William Peebles and Saining Xie. Scalable Diffusion Models
+with Transformers. In ICCV, 2023. 1, 4
+[48] Xuanchi Ren, Tianchang Shen, Jiahui Huang, Huan Ling,
+Yifan Lu, Merlin Nimier-David, Thomas M¨uller, Alexander
+Keller, Sanja Fidler, and Jun Gao. GEN3C: 3D-Informed
+World-Consistent Video Generation with Precise Camera
+Control. In CVPR, 2025. 2, 3
+[49] Robin Rombach, Andreas Blattmann, Dominik Lorenz,
+Patrick Esser, and Bj¨orn Ommer.
+High-Resolution Image
+Synthesis with Latent Diffusion Models. In CVPR, 2022. 1
+[50] Thomas Sch¨ops, Johannes L. Sch¨onberger, Silvano Galliani,
+Torsten Sattler, Konrad Schindler, Marc Pollefeys, and An-
+dreas Geiger. A Multi-View Stereo Benchmark with High-
+Resolution Images and Multi-Camera Videos.
+In CVPR,
+2017. 8, 19
+[51] Thomas Sch¨ops, Torsten Sattler, and Marc Pollefeys. BAD
+SLAM: Bundle Adjusted Direct RGB-D SLAM. In CVPR,
+2019. 8, 19, 20
+[52] Jiahao Shao, Yuanbo Yang, Hongyu Zhou, Youmin Zhang,
+Yujun Shen, Vitor Guizilini, Yue Wang, Matteo Poggi, and
+Yiyi Liao.
+Learning Temporally Consistent Video Depth
+from Video Diffusion Priors. In CVPR, 2025. 2, 3, 5, 6,
+16
+[53] Haozhan Shen, Tiancheng Zhao, Kangjia Zhao, and Jianwei
+Yin. Which Pretraining Paradigm Better Serves Spatial Intel-
+ligence? An Empirical Comparison of Vision-Language and
+Video Generation Models. arXiv preprint arXiv:2605.28132,
+2026. 3
+[54] Tianchang
+Shen,
+Sherwin
+Bahmani,
+Kai
+He,
+Sangeetha Grama Srinivasan, Tianshi Cao, Jiawei Ren,
+Ruilong Li, Zian Wang, Nicholas Sharp, Zan Gojcic, Sanja
+Fidler, Jiahui Huang, Huan Ling, Jun Gao, and Xuanchi
+Ren. Lyra 2.0: Explorable Generative 3D Worlds. arXiv
+preprint arXiv:2604.13036, 2026. 3
+[55] Jamie Shotton, Ben Glocker, Christopher Zach, Shahram
+Izadi, Antonio Criminisi, and Andrew Fitzgibbon.
+Scene
+Coordinate Regression Forests for Camera Relocalization in
+RGB-D Images. In CVPR, 2013. 6, 14
+[56] J¨urgen Sturm, Nikolas Engelhard, Felix Endres, Wolfram
+Burgard, and Daniel Cremers. A Benchmark for the Eval-
+uation of RGB-D SLAM Systems. In IROS, 2012. 6, 8, 14,
+19, 20
+[57] Pei Sun, Henrik Kretzschmar, Xerxes Dotiwalla, Aurelien
+Chouard, Vijaysai Patnaik, Paul Tsui, James Guo, Yin Zhou,
+Yuning Chai, Benjamin Caine, Vijay Vasudevan, Wei Han,
+Jiquan Ngiam, Hang Zhao, Aleksei Timofeev, Scott Et-
+tinger, Maxim Krivokon, Amy Gao, Aditya Joshi, Yu Zhang,
+Jonathon Shlens, Zhifeng Chen, and Dragomir Anguelov.
+Scalability in Perception for Autonomous Driving: Waymo
+Open Dataset. In CVPR, 2020. 6, 17, 20
+[58] Team Wan, Ang Wang, Baole Ai, Bin Wen, Chaojie Mao,
+Chen-Wei Xie, Di Chen, Feiwu Yu, Haiming Zhao, Jianx-
+iao Yang, Jianyuan Zeng, Jiayu Wang, Jingfeng Zhang, Jin-
+gren Zhou, Jinkai Wang, Jixuan Chen, Kai Zhu, Kang Zhao,
+Keyu Yan, Lianghua Huang, Mengyang Feng, Ningyi Zhang,
+Pandeng Li, Pingyu Wu, Ruihang Chu, Ruili Feng, Shiwei
+Zhang, Siyang Sun, Tao Fang, Tianxing Wang, Tianyi Gui,
+Tingyu Weng, Tong Shen, Wei Lin, Wei Wang, Wei Wang,
+Wenmeng Zhou, Wente Wang, Wenting Shen, Wenyuan Yu,
+Xianzhong Shi, Xiaoming Huang, Xin Xu, Yan Kou, Yangyu
+Lv, Yifei Li, Yijing Liu, Yiming Wang, Yingya Zhang, Yi-
+tong Huang, Yong Li, You Wu, Yu Liu, Yulin Pan, Yun
+Zheng, Yuntao Hong, Yupeng Shi, Yutong Feng, Zeyinzi
+Jiang, Zhen Han, Zhi-Fan Wu, and Ziyu Liu. Wan: Open
+and Advanced Large-Scale Video Generative Models. arXiv
+preprint arXiv:2503.20314, 2025. 1, 2, 3, 4, 18
+[59] Jonas Uhrig, Nick Schneider, Lukas Schneider, Uwe Franke,
+Thomas Brox, and Andreas Geiger. Sparsity Invariant CNNs.
+In 3DV, 2017. 6, 14
+[60] Vikram Voleti, Chun-Han Yao, Mark Boss, Adam Letts,
+David Pankratz, Dmitrii Tochilkin, Christian Laforte, Robin
+Rombach, and Varun Jampani.
+SV3D: Novel Multi-view
+Synthesis and 3D Generation from a Single Image using La-
+tent Video Diffusion. In ECCV, 2024. 2, 3
+[61] Jianyuan Wang, Minghao Chen, Nikita Karaev, Andrea
+Vedaldi, Christian Rupprecht, and David Novotny. VGGT:
+Visual Geometry Grounded Transformer. In CVPR, 2025. 2,
+3, 5, 6, 7, 13, 16
+[62] Jianyuan Wang, Minghao Chen, Shangzhan Zhang, Nikita
+Karaev, Johannes Sch¨onberger, Patrick Labatut, Piotr Bo-
+janowski, David Novotny, Andrea Vedaldi, and Christian
+Rupprecht. VGGT-Ω. In CVPR, 2026. arXiv:2605.15195.
+2, 5, 6, 16
+[63] Letian Wang, Chuhan Zhang, Rishabh Kabra, Jasper Ui-
+jlings, Steven Waslander, Andrew Zisserman, Joao Carreira,
+Kaiming He, Misha Andriluka, Eduard Gabriel Bazavan,
+Andrei Zanfir, and Cristian Sminchisescu. Video Generation
+Models Are General-Purpose Vision Learners.
+In ECCV,
+2026. 2, 3, 5, 6, 16
+[64] Qianqian
+Wang,
+Yifei
+Zhang,
+Aleksander
+Holynski,
+Alexei A. Efros, and Angjoo Kanazawa. Continuous 3D Per-
+ception Model with Persistent State. In CVPR, 2025. 2, 3
+[65] Ruicheng Wang, Sicheng Xu, Cassie Dai, Jianfeng Xiang,
+Yu Deng, Xin Tong, and Jiaolong Yang. MoGe: Unlock-
+ing Accurate Monocular Geometry Estimation for Open-
+Domain Images with Optimal Training Supervision.
+In
+CVPR, 2025. 2
+11
+
+
+[66] Ruicheng Wang, Sicheng Xu, Yue Dong, Yu Deng, Jianfeng
+Xiang, Zelong Lv, Guangzhong Sun, Xin Tong, and Jiaolong
+Yang. MoGe-2: Accurate Monocular Geometry with Metric
+Scale and Sharp Details. In NeurIPS, 2025. 2
+[67] Shuzhe Wang,
+Vincent Leroy,
+Yohann Cabon,
+Boris
+Chidlovskii, and Jerome Revaud. DUSt3R: Geometric 3D
+Vision Made Easy. In CVPR, 2024. 2, 3
+[68] Wenshan Wang, Delong Zhu, Xiangwei Wang, Yaoyu Hu,
+Yuheng Qiu, Chen Wang, Yafei Hu, Ashish Kapoor, and Se-
+bastian Scherer. TartanAir: A Dataset to Push the Limits of
+Visual SLAM. In IROS, 2020. 6, 18
+[69] Wenshan Wang, Yaoyu Hu, Yuheng Qiu, Shihao Shen, and
+Yorai Shaoul. TartanAir Dataset Documentation. https:
+//tartanair.org/, 2023.
+TartanAir V2. Accessed
+2026-10-25. 6, 18, 20
+[70] Yifan Wang, Jianjun Zhou, Haoyi Zhu, Wenzheng Chang,
+Yang Zhou, Zizun Li, Junyi Chen, Jiangmiao Pang, Chun-
+hua Shen, and Tong He. π3: Permutation-Equivariant Visual
+Geometry Learning. In ICLR, 2026. 2, 3, 5, 6, 15, 16
+[71] Haoyu Wu, Diankun Wu, Tianyu He, Junliang Guo, Yang Ye,
+Yueqi Duan, and Jiang Bian. Geometry Forcing: Marrying
+Video Diffusion and 3D Representation for Consistent World
+Modeling. In ICLR, 2026. 3
+[72] Dianbing Xi, Jiepeng Wang, Yuanzhi Liang, Xi Qiu, Yuchi
+Huo, Rui Wang, Chi Zhang, and Xuelong Li. OmniVDiff:
+Omni Controllable Video Diffusion for Generation and Un-
+derstanding. In AAAI, 2026. 3
+[73] Yitong Xia, Zeren Jiang, and Chuanxia Zheng.
+Gen4P:
+Video Generators are 4D Perceivers.
+arXiv preprint
+arXiv:2610.22371, 2026. 3
+[74] Yiming Xie, Chun-Han Yao, Vikram Voleti, Huaizu Jiang,
+and Varun Jampani. SV4D: Dynamic 3D Content Generation
+with Multi-Frame and Multi-View Consistency.
+In ICLR,
+2025. 2, 3
+[75] Guangkai Xu, Yongtao Ge, Mingyu Liu, Chengxiang Fan,
+Kangyang Xie, Zhiyue Zhao, Hao Chen, and Chunhua Shen.
+What Matters When Repurposing Diffusion Models for Gen-
+eral Dense Perception Tasks? In ICLR, 2025. 1, 3
+[76] Shaocong Xu, Songlin Wei, Qizhe Wei, Zheng Geng, Hong
+Li, Licheng Shen, Qianpu Sun, Shu Han, Bin Ma, Bohan
+Li, Chongjie Ye, Yuhang Zheng, Nan Wang, Saining Zhang,
+and Hao Zhao. Diffusion Knows Transparency: Repurposing
+Video Diffusion for Transparent Object Depth and Normal
+Estimation. In ICRA, 2026. 5, 6, 16
+[77] Tian-Xing Xu, Xiangjun Gao, Wenbo Hu, Xiaoyu Li, Song-
+Hai Zhang, and Ying Shan. GeometryCrafter: Consistent
+Geometry Estimation for Open-world Videos with Diffusion
+Priors. In ICCV, 2025. 3, 5, 6, 15, 16
+[78] Honghui Yang, Di Huang, Wei Yin, Chunhua Shen, Haifeng
+Liu, Xiaofei He, Binbin Lin, Wanli Ouyang, and Tong He.
+Depth Any Video with Scalable Synthetic Data. In ICLR,
+2025. 2, 3, 5, 6, 14, 16
+[79] Haosen Yang, Jifei Song, Zhensong Zhang, Xiatian Zhu,
+and Jiankang Deng. Video Generative Models as Geometry
+Learner. In ECCV, 2026. 3
+[80] Lihe Yang, Bingyi Kang, Zilong Huang, Zhen Zhao, Xiao-
+gang Xu, Jiashi Feng, and Hengshuang Zhao. Depth Any-
+thing V2. In NeurIPS, 2024. 3
+[81] Zhuoyi Yang, Jiayan Teng, Wendi Zheng, Ming Ding, Shiyu
+Huang, Jiazheng Xu, Yuanming Yang, Wenyi Hong, Xiao-
+han Zhang, Guanyu Feng, Da Yin, Yuxuan Zhang, Weihan
+Wang, Yean Cheng, Bin Xu, Xiaotao Gu, Yuxiao Dong, and
+Jie Tang. CogVideoX: Text-to-Video Diffusion Models with
+An Expert Transformer. In ICLR, 2025. 1
+[82] Chandan Yeshwanth, Yueh-Cheng Liu, Matthias Nießner,
+and Angela Dai. ScanNet++: A High-Fidelity Dataset of
+3D Indoor Scenes. In ICCV, 2023. 6, 18, 20
+[83] Wei Yin, Jianming Zhang, Oliver Wang, Simon Niklaus,
+Long Mai, Simon Chen, and Chunhua Shen. Learning to
+Recover 3D Scene Shape from a Single Image. In CVPR,
+2021. 2
+[84] Wangbo Yu, Jinbo Xing, Li Yuan, Wenbo Hu, Xiaoyu Li,
+Zhipeng Huang, Xiangjun Gao, Tien-Tsin Wong, Ying Shan,
+and Yonghong Tian. ViewCrafter: Taming Video Diffusion
+Models for High-fidelity Novel View Synthesis.
+TPAMI,
+2025. 2, 3
+[85] Hongfei Zhang, Harold Haodong Chen, Chenfei Liao, Jing
+He, Zixin Zhang, Haodong Li, Yihao Liang, Kanghao Chen,
+Bin Ren, Xu Zheng, Shuai Yang, Kun Zhou, Yinchuan Li,
+Nicu Sebe, and Ying-Cong Chen. DVD: Deterministic Video
+Depth Estimation with Generative Priors.
+arXiv preprint
+arXiv:2603.12250, 2026. 2, 3, 4, 5, 6, 15, 16, 18, 20
+[86] Junyi Zhang, Charles Herrmann, Junhwa Hur, Varun Jam-
+pani, Trevor Darrell, Forrester Cole, Deqing Sun, and Ming-
+Hsuan Yang. MonST3R: A Simple Approach for Estimating
+Geometry in the Presence of Motion. In ICLR, 2025. 2, 3,
+14
+[87] Shuai Zhang, Zhanpeng Ouyang, Zhengqing Chen, Ruohong
+Mei, Shaoyu Chen, Weiqiang Ren, Hui Sun, Qian Zhang,
+Wenyu Liu, and Xinggang Wang.
+Latent Bridge: From
+Video Latents to 3D Geometry via Feature Alignment. arXiv
+preprint arXiv:2610.28521, 2026. 3
+[88] Yang Zheng, Adam W. Harley, Bokui Shen, Gordon Wet-
+zstein, and Leonidas J. Guibas.
+PointOdyssey: A Large-
+Scale Synthetic Dataset for Long-Term Point Tracking. In
+ICCV, 2023. 6, 16, 20
+[89] Tinghui Zhou, Richard Tucker, John Flynn, Graham Fyffe,
+and Noah Snavely.
+Stereo Magnification: Learning View
+Synthesis using Multiplane Images. ACM TOG, 2018. 6, 17,
+20
+[90] Haoyi Zhu, Yifan Wang, Jianjun Zhou, Wenzheng Chang,
+Yang Zhou, Zizun Li, Junyi Chen, Chunhua Shen, Jiang-
+miao Pang, and Tong He. Aether: Geometric-Aware Unified
+World Modeling. In ICCV, 2025. 2, 3, 5, 6, 7, 15, 16
+[91] Ruijie Zhu, Jiahao Lu, Wenbo Hu, Xiaoguang Han, Jianfei
+Cai, Ying Shan, and Chuanxia Zheng. MotionCrafter: Dense
+Geometry and Motion Reconstruction with a 4D VAE. In
+CVPR, 2026. 3
+12
+
+
+VG3R: Video Generation Model for Feed-Forward 3D Reconstruction
+Supplementary Material
+This supplement first completes the description of
+VG3R: the details of ClipShift, LayerTap and the inference
+on long videos (Sec. A) and its two depth losses (Sec. B).
+It then details the evaluation of the main paper (Sec. C),
+shows that the video depth results of VG3R on Sintel and
+Bonn hold under the evaluation code of π3 (Sec. D), and
+shows more reconstructions, video depth and camera trajec-
+tories (Sec. E). The analyses that follow show that the shift
+predicted by ClipShift is nearly as accurate as a fit to the
+ground truth and that the intermediate blocks read by Lay-
+erTap halve the rotation error of the cameras in shorter runs
+(Sec. F), and that video pretraining and temporal input con-
+tribute substantially to the accuracy of the depth (Sec. G).
+Section H lists the data and their licenses.
+A. Implementation Details
+This section gives the architecture of ClipShift and Layer-
+Tap and the inference of VG3R on videos longer than the
+training clips. Frames are scaled to [−1, 1] before the VAE
+encoder.
+ClipShift.
+ClipShift reads the 1536-dimensional tokens
+that the last DiT block passes to the output layer, N ×
+(H/16)×(W/16) of them for a clip of N frames of H ×W
+pixels. After a layer normalization and without a position
+embedding, one learned query attends to all of them in one
+multi-head attention layer with 12 heads. The pooled vector
+passes a layer normalization, a linear layer to 256 channels,
+a GELU and a linear layer to one value, and a softplus with
+an offset of 10−4 gives the positive shift ˆc of the clip. The
+head has 9.8M parameters, and τ = ϵ = 10−3 in Eq. (3).
+One shift for the whole clip keeps all its frames on one affine
+map, as the read-out of Sec. B.1 assumes, whereas a shift
+per frame could absorb the drift between frames.
+LayerTap.
+Each of the three token sets passes a layer
+normalization and a linear map before they are summed.
+The head keeps all 576 tokens of every latent frame at
+288 × 512 pixels, with a 2D sinusoidal position embed-
+ding, and two learned embeddings mark latent frame 0 and
+the latent frame paired with it. Learned queries, one for
+latent frame 0 and four for every later latent frame, carry
+an embedding of their frame index and attend jointly over
+each pair in four transformer blocks. The camera head of
+VGGT [61] then attends across the L frame tokens and re-
+fines the camera of every frame in K = 4 iterations, as a
+translation, a unit quaternion and the horizontal and vertical
+fields of view. In Eq. (4), γ = 0.6, wt = 3 and wf = 0.5,
+and Lpts uses the valid pixels of a grid of stride 4. Keeping
+all tokens instead of pooling them by 2 × 2 gives the low-
+est RPE-r on eval20 in the shorter runs, 2.75◦against 3.79◦
+(Tab. 10), so the final model keeps them.
+Inference.
+All frames share the intrinsic matrix formed
+from ˆf0, and a longer video takes the median of ˆf0 over
+its windows. We chose the window length and stride be-
+fore any benchmark run, with an earlier model trained on
+three datasets, on 30 validation clips of ScanNet [11] with
+97 frames each (Tab. 6). Windows of 37 frames give the
+lowest AbsRel, and among them a stride of 24 gives a lower
+ATE than a stride of 18 with fewer passes, and a lower Ab-
+sRel and ATE than a stride of 30, so we use a window of
+37 frames with a stride of 24. Processing the 97 frames in
+one pass instead raises ATE from 0.090 to 0.350 and RPE-r
+from 1.02◦to 13.96◦, so the windows are needed for videos
+longer than the training clips.
+B. Depth Losses
+This section defines Ldec and Lmv of Eq. (6), which train
+the depth under the alignment and the cameras of the recon-
+struction. Here ˆx is the decoded inverse depth of Eq. (1)
+and xi its target of Eq. (2).
+B.1. Clip-Level Decoded Loss
+To reconstruct a scene from ˆx, we convert all frames of a
+clip to depth with one affine map in inverse depth and fuse
+the back-projected points under one scale. Ldec fits this map
+to the decoded output and penalizes the remaining depth
+error, which contains the drift of scale and shift between
+frames. It extends the decoded affine-invariant loss of E2E-
+FT [43] from one image to one clip, since a fit per frame
+would absorb the drift.
+Let Ωhold the pixels of all frames with valid depth and a
+target 10−6 < xi(p) < 1 −10−6, Ωi those of frame i, and
+let ˆx, d and δ be the prediction, the depth and the inverse
+depth at one pixel. A least-squares fit of aˆx + b to δ over
+Ωwithout gradient keeps in Ω′ the pixels whose absolute
+residual is at most its 90th percentile, and a second fit over
+Ω′ keeps the gradient,
+a =
+mSxδ −SxSδ
+mSxx −S2x + κm2 ,
+b = Sδ −aSx
+m
+,
+(7)
+where m = |Ω′|, Sx, Sδ, Sxx and Sxδ sum ˆx, δ, ˆx2 and ˆxδ
+over Ω′, and κ = 10−8. With ˆs = aˆx + b and the floor
+smin = 1/ max
+ dmax, 1.5 Q0.99(d)
+
+, where dmax = 20 m
+13
+
+
+Table 6. Window length and stride on 30 ScanNet validation clips of 97 frames, for an earlier model trained on three datasets. Passes:
+inputs per clip. Bold: best among the windows.
+Window
+Stride
+Passes
+AbsRel↓
+ATE↓
+RPE-t↓
+RPE-r↓
+TAE↓
+whole clip
+1
+0.0502
+0.3498
+0.2175
+13.96
+1.873
+21
+16
+7
+0.0482
+0.0886
+0.0296
+0.94
+1.431
+29
+24
+5
+0.0477
+0.0856
+0.0299
+0.95
+1.433
+37
+18
+6
+0.0454
+0.0941
+0.0347
+1.07
+1.341
+37
+24
+5
+0.0460
+0.0898
+0.0323
+1.02
+1.419
+37
+30
+4
+0.0466
+0.0906
+0.0308
+1.01
+1.436
+and Q0.99(d) is the 99th percentile of the depth over Ω,
+r = −ln max(ˆs, smin) −ln d,
+µ = median
+Ω
+r,
+Ldec =
+1
+5 ln 2
+
+mean
+Ω
+|r −µ| + mean
+Ω
+[1 −ˆs/smin]+
+
+,
+(8)
+with [·]+ = max(·, 0) and a stop-gradient on µ. Here e−µ
+is the scale of the read-out, so r −µ is the log-depth error
+after the read-out, and the hinge penalizes depths beyond
+1/smin. Because a and b keep their gradient, Ldec is invari-
+ant to ˆx 7→αˆx + β for α̸ = 0 up to the ridge term, so
+its gradient acts only on the differences between frames and
+on the shape within frames, and Llat sets the global nor-
+malization. A sample with fewer than 1000 pixels in Ωor
+a variance of ˆx below 10−4 over Ω′ has no Ldec, and the
+gradient passes through the frozen decoder for every latent
+frame.
+B.2. Multi-View Loss
+Lmv compares frames at correspondences given by the
+ground-truth depth and cameras, whereas consistent video
+depth [40] uses optical flow at test time.
+The clip has
+intrinsics K and world-to-camera poses Ti
+∈SE(3),
+and TjT −1
+i
+has rotation Rji and translation tji. The fit
+and the scale of Eqs. (7) and (8) give the metric depth
+˜Di(p) = e−µ/ max
+ aˆxi(p) + b, smin
+
+of every frame.
+Pixel p of frame i gives the ground-truth point Y ∗=
+Rji di(p)K−1 ˜p + tji, which projects to p∗= π(Y ∗)
+in frame j, where π(Y ) is formed by the first two co-
+ordinates of KY /[Y ]z and [·]z is the third coordinate.
+Of the pixels Si of Ωi on a grid of stride 2, the visible
+set Vij keeps those with [Y ∗]z > dmin = 0.05 m and
+p∗inside the image with its four neighbors in Ωj, ex-
+cept at depth edges, where these neighbors differ in depth
+by more than a factor of 1.05, and at occlusions, where
+|[Y ∗]z −dj(p∗)| > 0.03 dj(p∗). These correspondences
+come from ground truth only and carry no gradient. The
+predicted point ˆY = Rji ˜Di(p)K−1 ˜p + tji is compared
+with the depth that frame j predicts at p∗, interpolated bi-
+linearly,
+ρij(p) = ln max
+ [ ˆY ]z, dmin
+
+−ln ˜Dj(p∗).
+(9)
+The pairs Π have |i −j| ∈{1, 2, 4, 8} in both orders, and
+Π′ ⊆Π keeps those with |Vij| ≥max(500, 0.05|Si|),
+Lmv =
+1
+5 ln 2
+P
+(i,j)∈Π′
+P
+p∈Vij|ρij(p)|
+P
+(i,j)∈Π′|Vij|
+,
+(10)
+and Lmv = 0 when Π′ is empty. Since all frames share one
+map and one scale, scale drift appears directly in ρij, and
+the gaps of 2, 4 and 8 frames expose drift that is small be-
+tween neighboring frames. We apply Lmv to the ScanNet++
+DSLR and TartanAir clips and not to the ScanNet++ iPhone
+clips, whose alignment of depth and image we could not
+verify. The two losses thus supervise what a per-frame loss
+cannot: Ldec the drift of scale and shift across the frames of
+a clip, and Lmv the agreement of the frames at the same 3D
+points.
+C. Evaluation Details
+This section describes how the comparisons of Tab. 1 and
+the inference times of Tab. 2 are obtained. Every method
+receives only the frames of a video, without cameras or
+ground truth, and runs once on GH200 GPUs with the set-
+tings of Tab. 7. Table 7 lists the input size, the window
+and the output of every method, and the fit of its video
+depth: a scale and shift for an output defined up to both
+(s, t) and a scale otherwise (s). For video depth, we use
+the 14 sequences of Sintel [6], 5 of Bonn [46] and 13
+of KITTI [15, 59] with up to 110 frames, as prepared by
+MonST3R [86], and align each method to the ground truth
+by one fit per sequence in its own output space. The tem-
+poral alignment error (TAE) [78] compares the depth of
+consecutive frames after reprojection with the ground-truth
+cameras, computed with the code of Video Depth Any-
+thing [10]. Camera trajectories are evaluated by ATE and
+RPE after a similarity alignment on Sintel, the 8 dynamic
+sequences of TUM RGB-D [56] (TUM-dynamics) and the
+100 test scenes of ScanNet [11], 90 frames at stride 3 each,
+of which 94 have valid poses. For reconstruction, we take
+the first 90 frames at stride 3 of the 18 test sequences of 7-
+Scenes [55] and the 9 scenes of NRGBD [2], back-project
+the predicted depth with the predicted intrinsics and cam-
+eras, align the point maps to the ground truth by a similarity
+transform and ICP, and report accuracy, completeness and
+normal consistency.
+14
+
+
+We use the official inference settings, except that Depth
+Any Video runs without its ensemble of 20 predictions and
+resizes the frames instead of cropping them, DVD uses the
+settings of its README and the v1.1 weights instead of
+the evaluation settings of its paper, GenCeption processes
+videos longer than 81 frames in windows instead of sub-
+sampling them, and DepthCrafter and GeometryCrafter re-
+ceive the full frames without the crops of their own eval-
+uations. Aether predicts its cameras from center crops, so
+its trajectories and reconstruction come from these crops,
+and its reconstruction is scored on the ground truth inside
+them, with camera translations at the scale of its own point
+clouds. GeometryCrafter predicts point maps without cam-
+eras, so its cameras come from the structure-from-motion
+code of its release, run without the hand-drawn masks of
+moving objects that no other method receives. Apart from
+these exceptions, every method receives the same frames
+and the same alignment, so the comparisons of Tab. 1 reflect
+the predictions rather than the evaluation. With its official
+settings, Aether reaches an AbsRel of 0.117 on KITTI in
+our runs, against 0.056 in its paper [90], while our values
+on Sintel and Bonn, 0.270 and 0.249, are lower than the re-
+ported 0.324 and 0.273. Two of these three values are better
+in our runs than in its paper, so our setup does not systemat-
+ically disadvantage Aether. Inference times exclude model
+loading and start from the decoded frames in memory, ex-
+cept for Aether and Geo4D, whose official pipelines read
+the frames and include post-processing and, for Geo4D, a
+global alignment that takes about half of its time; reading
+the frames adds 15 to 23 ms per frame to VG3R. The recon-
+structions shown in the main paper omit the black border of
+the ScanNet frames for every method.
+D. Video Depth with the Evaluation Code of π3
+To check that the video depth results do not depend on
+our alignment, Tab. 8 evaluates VG3R and the geometry
+foundation models with the video depth evaluation code of
+π3 [70], run unchanged. The code aligns every output as
+depth, by a scale and shift that minimize the L1 error or
+by a scale alone, and its scale-only rows are the values of
+the main paper. The main paper aligns each method in its
+own output space instead, because the inverse of an affine-
+invariant inverse depth is not an affine-invariant depth. Un-
+der this code, VG3R still has the lowest AbsRel and the
+highest δ1.25 on Sintel and Bonn after the scale-and-shift
+alignment, and the highest δ1.25 on both after the scale
+alignment, so its results on these benchmarks do not depend
+on aligning each method in its own output space.
+E. Further Qualitative Results
+This section shows more reconstructions, video depth and
+camera trajectories in the format of Figs. 4 to 6 of the main
+paper.
+Reconstruction.
+Figure 7 compares VG3R with Geom-
+etryCrafter [77], Aether [90] and Geo4D [24], the meth-
+ods built on video generation models that also predict cam-
+eras. GeometryCrafter leaves clouds of points in front of
+the surfaces, Aether bends walls and furniture, and Geo4D
+bends the counter of the NRGBD kitchen, whereas VG3R
+keeps the layout of each room close to the ground truth.
+This matches Tab. 1, where the accuracy error of VG3R is
+0.018 m on 7-Scenes and 0.032 m on NRGBD, against at
+least 0.047 m and 0.065 m for these three methods. Figure 8
+compares VG3R with the geometry foundation models on
+further ScanNet videos. Its point clouds and cameras are
+close to theirs, as its competitive accuracy in Tab. 1 indi-
+cates, although VG3R reconstructs with a video generation
+model instead of an image backbone.
+Video depth.
+Figure 9 shows the video depth of the meth-
+ods built on video generation models on further frames of
+Sintel, Bonn and KITTI. VG3R separates people, furniture
+and the background as the ground truth does, while Chron-
+oDepth and DKT lose contrast and Aether fails on the first
+Bonn frame. On Bonn, the AbsRel of VG3R in Tab. 1 is
+0.037, against at least 0.055 for these methods.
+Camera trajectories.
+Figure 10 shows the camera trajec-
+tories of six further videos. On each of them, the lowest
+ATE of GeometryCrafter, Aether and Geo4D is 2.7 to 5.6
+times that of VG3R, whose trajectory follows the ground
+truth where theirs drift.
+F. Analyses of ClipShift and LayerTap
+To assess ClipShift on the final model, Tab. 9 reads it with
+the ground-truth cameras in the ways of Tab. 3. The de-
+coded inverse depth without a shift reaches an F@5 of 19.6
+on eval20 and 25.4 on ARKit43, one constant shift, the
+mean of the predicted shifts over each set, reaches 53.2 and
+75.2, and the predicted shift, which ranges from 0.08 to 1.43
+across these clips, reaches 85.6 and 92.4, within 1.1 points
+of an affine fit to the ground truth. The predicted cameras
+lower F@5 by 8.8 and 13.1 points, so the cameras, not the
+shift, limit the reconstruction.
+Table 10 varies the camera head, the camera loss and
+the precision of the heads in runs of 10,000 steps on 16
+GPUs, each started from the LoRA of DVD v1.1 [85] with
+one seed and evaluated on eval20 and ARKit43. The base
+run trains on ScanNet++, TartanAir V2 and Matterport3D
+at 288 × 512 pixels, its camera head average-pools the to-
+kens of each latent frame by 2 × 2 and reads blocks 10 and
+20 besides the final tokens, and both heads run under bf16
+15
+
+
+Table 7. Settings of the compared methods: input size H × W on Sintel / Bonn / KITTI / ScanNet, with the size of Bonn for TUM-
+dynamics, 7-Scenes and NRGBD, window in frames, output, and fit of the video depth to the ground truth by scale and shift (s, t) or by
+scale (s).
+Method
+Input H × W
+Window
+Output
+Fit
+Built on video generation models
+DepthCrafter [19]
+448×1024 / 512×640 / 384×1280 / 640×832
+110, overlap 25
+disparity
+s, t
+Depth Any Video [78]
+416×960 / 480×640 / 288×960 / 704×960
+32, longer by key frames and
+interpolation
+disparity
+s, t
+DKT [76]
+480×832
+81, overlap of 3 latent frames
+disparity
+s, t
+DVD [85]
+480×1136 / 480×640 / 480×1600 / 480×656
+81, overlap 21
+disparity
+s, t
+ChronoDepth [52]
+448×1024 / 512×640 / 320×1024 / 768×1024
+10, overlap 5
+affine depth
+s, t
+GeometryCrafter [77]
+448×1024 / 512×640 / 384×1216 / 512×640
+110, overlap 25
+point map
+s
+GenCeption [63]
+480×832
+81, stride 60
+depth
+s
+Aether [90]
+480×1127 / 540×720 / 480×∼1590 / 538×720 in
+tiles of 480×720; cameras from a 480×720 center crop
+41, stride 8; cameras: 41,
+stride 32
+disparity, cameras
+s
+Geo4D [24]
+256×576 / 384×512 / 192×640 / 384×512
+16, stride 4, global alignment
+depth, cameras
+s
+Geometry foundation models
+VGGT [61]
+224×518 / 392×518 / 154×518 / 392×518
+whole video
+depth, cameras
+s
+π3 [70]
+224×504 / 378×504 / 154×504 / 378×504
+whole video
+point map, cameras
+s
+MapAnything [29]
+336×798 / 448×602 / 280×938 / 448×602
+whole video
+depth, cameras
+s
+DA3 [34]
+210×504 / 378×504 / 154×504 / 378×504
+whole video
+depth, cameras
+s
+VGGT-Ω[62]
+272×640 / 368×480 / 224×752 / 352×480
+whole video
+depth, cameras
+s
+VG3R
+256×592 / 336×448 / 208×704 / 336×448
+37, stride 24
+depth, cameras
+s
+Table 8. Video depth with the evaluation code of π3 [70]: AbsRel and δ < 1.25 after one alignment per video by scale and shift or by
+scale alone, and TAE [78] on 94 ScanNet sequences. Best and second best are shaded.
+Sintel
+Bonn
+KITTI
+ScanNet
+Alignment
+Method
+AbsRel↓
+δ1.25 ↑
+AbsRel↓
+δ1.25 ↑
+AbsRel↓
+δ1.25 ↑
+TAE↓
+Scale & shift
+VGGT [61]
+0.227
+0.684
+0.049
+0.974
+0.059
+0.961
+0.848
+π3 [70]
+0.211
+0.728
+0.045
+0.976
+0.037
+0.986
+0.626
+MapAnything [29]
+0.253
+0.632
+0.054
+0.975
+0.070
+0.973
+1.095
+DA3 [34]
+0.218
+0.683
+0.046
+0.973
+0.051
+0.977
+1.058
+VGGT-Ω[62]
+0.194
+0.649
+0.115
+0.932
+0.039
+0.987
+0.748
+VG3R
+0.182
+0.752
+0.036
+0.979
+0.044
+0.977
+0.734
+Scale
+VGGT [61]
+0.296
+0.647
+0.055
+0.971
+0.072
+0.965
+π3 [70]
+0.232
+0.665
+0.050
+0.975
+0.039
+0.986
+MapAnything [29]
+0.337
+0.580
+0.063
+0.972
+0.074
+0.972
+DA3 [34]
+0.313
+0.668
+0.049
+0.973
+0.057
+0.978
+VGGT-Ω[62]
+0.256
+0.660
+0.114
+0.933
+0.040
+0.987
+VG3R
+0.254
+0.699
+0.037
+0.979
+0.058
+0.979
+Table 9. Read-out of the final model: F@5 of the fused point
+cloud after one scale per clip, for different shifts of the decoded
+inverse depth and with ground-truth (GT) or its own cameras.
+Depth and cameras
+eval20 F@5↑
+ARKit43 F@5↑
+No shift, GT cam.
+19.6
+25.4
+Constant shift, GT cam.
+53.2
+75.2
+Predicted shift, GT cam.
+85.6
+92.4
+Affine fit, GT cam.
+84.5
+93.2
+Predicted shift, own cam.
+76.8
+79.3
+autocast. The camera head may instead read all 18 × 32 to-
+kens, add tokens of each RGB frame, also see the previous
+latent frame, or be replaced by a head on the camera and
+register tokens of VGGT-Ω[62] passed through the DiT,
+and the camera loss may be weighted twice or extended by
+the pairwise pose loss of VGGT-Ω. These are single short
+runs, and among the runs that change only the camera head,
+its loss or the precision of the heads, the AbsRel on eval20
+spans 0.052 to 0.058, so we do not read smaller differences
+as effects. Among the inputs of the camera head, the inter-
+mediate blocks matter most: without them, RPE-r doubles,
+from 3.79◦to 7.80◦on eval20 and from 3.41◦to 7.78◦on
+ARKit43, while every other change of the head, its loss or
+its precision moves it by at most about 1◦. Early in training,
+the camera head that also reads blocks 10 and 20 learns the
+translation faster (Fig. 11). Between steps 1000 and 1500,
+its translation error is 0.72 of that of predicting no motion,
+while the head on the final tokens alone, at 1.03, still errs
+more than predicting no motion; between steps 2400 and
+3000, the two reach 0.51 and 0.81.
+The final model reads all tokens of every latent frame and
+runs both heads in 32 bits; it trains at the four image sizes of
+the benchmarks, reads clips of 49 frames in a quarter of the
+steps and takes 60% of its microbatches from ScanNet [11],
+PointOdyssey [88], Spring [44], Virtual KITTI 2 [7], Dy-
+namic Replica [25], DL3DV-10K [35], the front camera of
+16
+
+
+GeometryCrafter
+Aether
+Geo4D
+VG3R (Ours)
+Ground truth
+Figure 7. Reconstructions of the methods built on video generation models on 7-Scenes heads-seq-01 and redkitchen-seq-12 and on
+NRGBD morning apartment and grey white room, in the format of Fig. 4: every method fuses the point maps of all frames with its own
+predicted cameras, without confidence filtering or other post-processing, and is aligned to the ground truth by a similarity transform.
+VGGT
+π3
+MapAnything
+DA3
+VGGT-Ω
+VG3R (Ours)
+Ground truth
+Figure 8. Reconstructions and cameras on ScanNet scene0735 00, scene0749 00 and scene0743 00, in the format of Fig. 4, with the
+predicted camera of every tenth frame colored by time.
+the Waymo Open Dataset [57] and RealEstate10K [89], of
+which DL3DV-10K and Waymo supervise only the cam-
+eras and sparse points and RealEstate10K only the cameras.
+From step 15,000 on, it draws the iPhone videos of Scan-
+Net++ from a larger set of scenes at the same share of the
+microbatches.
+G. Video Pretraining and Temporal Input
+To measure what the video pretraining and the temporal in-
+put contribute, we train depth models that share the train-
+17
+
+
+Input
+Ground truth
+DepthCrafter
+Depth Any Video
+DKT
+DVD
+ChronoDepth
+GeometryCrafter
+GenCeption
+Aether
+Geo4D
+VG3R (Ours)
+Figure 9.
+Video depth on further frames of Sintel shaman 3 and market 2, Bonn synchronous and balloon2, and KITTI
+2011 09 29 drive 0026, in the format of Fig. 5: inverse depth after the alignment of Tab. 1, with one color range per sequence from
+the ground truth.
+ing data, the depth supervision and the number of steps and
+differ only in their initialization or their input, and we eval-
+uate them on held-out clips with the ground-truth cameras.
+Wan-LoRA is Wan2.1 [58] with LoRA as in VG3R, predict-
+ing depth only. Wan-Scratch is the DiT of Wan2.1 trained
+from random initialization, with the pretrained VAE. Wan-
+LoRA-DVD starts from the LoRA of DVD v1.1 [85]. With
+one-frame input, Wan-LoRA receives every frame as a one-
+frame video.
+Training.
+All models read the same stream of micro-
+batches and use the four depth terms of Eq. (6) with the
+same weights. Video clips come from the DSLR and iPhone
+captures of ScanNet++ [82] and from TartanAir V2 [68, 69],
+and single images from ScanNet++ and Matterport3D [9].
+A microbatch is one clip of 5 to 37 frames or eight images,
+and a step averages eight microbatches. Each model trains
+for 30,000 steps on four GH200 GPUs with AdamW [39],
+at a learning rate of 10−4 for Wan-LoRA and Wan-Scratch
+18
+
+
+Sintel
+TUM-dynamics
+ScanNet
+ATE 0.014, 0.089, 0.082
+VG3R  ATE 0.007
+ATE 0.156, 0.189, 0.140
+VG3R  ATE 0.040
+ATE 0.090, 0.108, 0.307
+VG3R  ATE 0.016
+Sintel
+TUM-dynamics
+ScanNet
+ATE 0.129, 0.117, 0.114
+VG3R  ATE 0.046
+ATE 0.030, 0.047, 0.043
+VG3R  ATE 0.011
+ATE 0.221, 0.200, 0.158
+VG3R  ATE 0.031
+Figure 10. Camera trajectories on further videos, in the format of Fig. 6: two more sequences per benchmark: Sintel alley 2 and
+market 6, two sequences with recognizable scenes on which VG3R has the lowest ATE, and TUM-dynamics walking rpy and sitting rpy
+and ScanNet scene0720 00 and scene0717 00, among the five where VG3R leads most in ATE. Left of each pair: GeometryCrafter (blue),
+Aether (purple) and Geo4D (yellow), with ATE reported in this order. Right: VG3R.
+Table 10. Ablations in shorter runs of 10,000 steps on 16 GPUs: AUC@5 and RPE-r of the predicted cameras, AbsRel of the depth and
+F@5 of the point cloud fused with the predicted cameras, after one scale per clip. Best and second best are shaded.
+eval20
+ARKit43
+Run
+AUC@5↑
+RPE-r↓
+AbsRel↓
+F@5↑
+AUC@5↑
+RPE-r↓
+AbsRel↓
+F@5↑
+Base
+5.53
+3.79
+0.053
+65.0
+4.42
+3.41
+0.042
+64.4
+Camera head
+Final tokens only
+2.15
+7.80
+0.055
+61.6
+1.39
+7.78
+0.043
+60.4
+No pooling of the tokens
+6.15
+2.75
+0.052
+65.7
+5.97
+2.40
+0.042
+64.9
+Tokens of each RGB frame
+5.60
+4.37
+0.058
+63.7
+4.50
+3.44
+0.042
+65.0
+Also the previous latent frame
+5.93
+2.99
+0.057
+64.7
+5.58
+2.85
+0.042
+65.6
+Camera and register tokens
+5.93
+3.19
+0.055
+66.2
+5.09
+2.31
+0.042
+62.3
+Camera loss
+Weight ×2
+6.09
+3.12
+0.054
+67.8
+5.89
+2.91
+0.042
+65.8
+Pairwise pose loss
+5.67
+2.76
+0.056
+66.0
+5.20
+2.94
+0.043
+65.3
+Precision of the heads
+32-bit
+5.59
+4.12
+0.058
+63.2
+4.68
+3.52
+0.042
+64.2
+32-bit, pairwise pose loss
+6.41
+3.34
+0.057
+64.4
+4.59
+3.16
+0.041
+64.6
+0
+1000
+2000
+3000
+Training step
+0.4
+0.6
+0.8
+1.0
+1.2
+1.4
+Translation error / no motion
+No motion
+Final tokens
+Final tokens + blocks 10, 20
+Figure 11. Inputs of the camera head over training: translation
+error relative to predicting no motion, in two runs of 3000 steps on
+16 GPUs on the same samples whose camera heads read the final
+tokens alone or also blocks 10 and 20, as a moving average over
+300 steps with the 25th to 75th percentiles as the band.
+and of 3×10−5 for Wan-LoRA-DVD. The checkpoint is se-
+lected on six held-out ScanNet++ scenes. Wan-Scratch was
+still improving at the end of training, with its selection score
+rising by 10.8, 10.1 and 5.4 points over the three blocks of
+10,000 steps, while that of Wan-LoRA changed by −1.1
+points in the last block.
+Evaluation.
+The held-out set has 79 clips of 37 frames
+at 288 × 512 pixels, 12 from TUM RGB-D [56], 20
+from the SLAM benchmark of ETH3D [50, 51] and 47
+from ARKitScenes [4]. The training data contain none of
+these datasets, and the whole training fold of ARKitScenes,
+which holds the 47 clips, is excluded from all our train-
+ing, while the undisclosed pretraining data of Wan2.1 may
+contain their public videos. Every model receives the RGB
+frames alone. Its depth is back-projected with the ground-
+truth cameras and fused with one scale per clip, the median
+ratio of ground truth to prediction, after one affine map per
+clip for a model that predicts affine-invariant inverse depth.
+F@5 is the F-score at 5 cm [50] against a mesh of the depth
+rendered from the laser scan for ARKitScenes and a TSDF
+fusion of the sensor depth for TUM RGB-D and ETH3D,
+19
+
+
+Table 11. Video pretraining, temporal input and initialization: median of the per-clip differences on the 79 held-out clips between the
+first and the second model of Sec. G, positive in favor of the first (a higher F@5 or a lower G5), and its 90% bootstrap interval. Solved
+shift: the shift of the decoded inverse depth solved from the known cameras, as for deployment; released DVD: the better of the released
+DVD v1.0 and v1.1 on each set.
+Comparison
+First model
+Second model
+Metric
+Median
+90% interval
+Pretraining
+Wan-LoRA
+Wan-Scratch
+F@5
++22.6
+[+22.0, +27.1]
+Video input
+Wan-LoRA
+Wan-LoRA, one-frame input
+F@5
++20.0
+[+16.5, +22.9]
+G5
++10.0
+[+6.7, +12.7]
+DVD start
+Wan-LoRA-DVD
+Wan-LoRA
+F@5
++10.5
+[+8.3, +11.8]
+Deployment
+Wan-LoRA-DVD, solved shift
+released DVD, solved shift
+F@5
++8.7
+[+7.0, +11.3]
+and the drift G5 is the F@5 gained by fitting one scale per
+frame instead of one per clip. Tables report medians over
+clips, and a comparison of two models uses the median of
+their per-clip differences with a 90% bootstrap interval.
+Decision rules.
+Each model was evaluated once on these
+clips with the same evaluation code. A model wins a com-
+parison of F@5 when the median difference is at least 3
+points in its favor, it is better on at least 70% of the clips,
+and P@5 and F@10 agree. A comparison of G5 passes un-
+der the same conditions on G5 if, in addition, G10 and the
+spread of the per-frame scales agree and the F@5 of the
+first model is at most 3 points lower. We set the margin of
+3 points on development data, without reading any held-out
+clip.
+Results.
+Table 11 gives the comparisons, and Tab. 5 of
+the main paper the medians of Wan-LoRA, its use with
+one-frame input and Wan-Scratch. The first model wins ev-
+ery comparison of F@5, and Wan-LoRA with video input
+passes the comparison of G5 against its use with one-frame
+input. Wan-LoRA is far more accurate than Wan-Scratch,
+which was still improving at the end of training. With one-
+frame input, Wan-LoRA is less accurate and drifts more,
+as in the main paper. Wan-LoRA-DVD, which also trains
+at a lower learning rate, is more accurate than Wan-LoRA.
+For deployment, the shift is solved from the known cam-
+eras instead of fitted to the ground truth, by modeling depth
+as s/(ˆx + c) with one s and one c per clip; with this shift,
+Wan-LoRA-DVD is more accurate than the best released
+DVD model. In sum, Wan-LoRA is more accurate than
+Wan-Scratch after the same number of steps by a median
+of 22.6 points of F@5 and than its use with one-frame input
+by 20.0 points, and starting from the LoRA of DVD adds
+10.5 points, so video pretraining and temporal input both
+contribute substantially to the accuracy within our training
+budget.
+H. Data and Licenses
+ScanNet++ [82] and Matterport3D [9] are used under their
+terms of use, which do not permit redistribution, so we re-
+distribute no image, depth map or mesh of either dataset.
+ScanNet v2 [11] is used under its Terms of Use for the
+benchmarks, the choice of the windows and the training
+of the final model, and ARKitScenes [4] under the li-
+cense of Apple for non-commercial research. TUM RGB-
+D [56], TartanAir V2 [69] and Spring [44] are available
+under CC BY 4.0, the ETH3D SLAM sequences [51]
+and PointOdyssey [88] under CC BY-NC-SA 4.0, Vir-
+tual KITTI 2 [7] under CC BY-NC-SA 3.0, and the re-
+leased DVD weights [85] under CC BY-NC 4.0. DL3DV-
+10K [35] is used under its terms of use and CC BY-NC
+4.0, and Dynamic Replica [25] under its license agree-
+ment for non-commercial research. The camera poses of
+RealEstate10K [89] are available under CC BY 4.0, while
+its frames are third-party videos that no license of the
+dataset covers, and we redistribute none of them.
+The
+Waymo Open Dataset [1, 57] is used under the Waymo
+Dataset License Agreement for Non-Commercial Use.
+20

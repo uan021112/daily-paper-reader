@@ -1,0 +1,4222 @@
+PINE: Point, Instance and Normal Estimation in One-Step Diffusion Model
+Zeyu Ren1
+Jie Ni2∗
+Rui Qian3∗
+Jiahao Wei3
+Hao Tang4
+Yongtai Liu5
+Zeyu Zhang4†
+1The University of Melbourne
+2Southeast University
+3Fudan University
+4Peking University
+5Hanyang University
+∗Corresponding authors: njie@seu.edu.cn, qiianruii@gmail.com. †Project lead.
+K
+Normals
+Depth
+FoV 71°
+f = 435 px
+Depth
+Normals
+Instances
+In the wild
+3D instances
+PINE
+Figure 1. PINE predicts the point map, the normals and the instance map of an image in one forward pass. With limited supervision, it
+achieves state-of-the-art point maps and runs 5.7× faster than MoGe-3 combined with SAM.
+Abstract
+Understanding a scene requires both geometry and seman-
+tics: geometry recovers its spatial structure, and seman-
+tics separates it into objects. Current models obtain the
+two from separate networks or separate passes. We present
+PINE, a one-step Omni Diffusion Transformer that predicts
+the point map, the surface normals, and the instance map of
+an image in one forward pass. PINE treats each map as a
+token stream, and a stream mask decides which streams in-
+teract. A camera-aware ray encoding positions every token
+by its camera ray rather than its pixel. Grounding attention
+adds the affinity of pretrained DINOv3 features to the atten-
+tion logits. Trained on only 139K synthetic images for ge-
+ometry, PINE achieves state-of-the-art point maps whether
+or not intrinsics are given and the best average rank on
+surface normals.
+It also exceeds SAM on large objects
+with less than 1% of its training images, and it predicts all
+three maps 5.7× faster than MoGe-3 with SAM. Website:
+https://aigeeksgroup.github.io/PINE
+1. Introduction
+Understanding a scene requires both geometry and seman-
+tics [17, 75]. Geometry describes where each surface lies
+and how it is oriented, and semantics describes which sur-
+faces form one object. Specialist models [68, 82] now re-
+cover each part from a single image with high accuracy. The
+Depth Anything [30, 71, 72] and MoGe [24, 58, 59] series
+predict depth, point map and normals. Diffusion estima-
+tors such as Marigold [19, 42] and Lotus [14] predict de-
+tailed depth and surface normals, and GenPercept [64] and
+E2E-FT [37] reduce them to one sampling step. The SAM
+series [21, 49] segments any object under a prompt, and
+gen2seg [20] colors every instance with a generative model.
+None of these models predicts all three maps in one for-
+ward pass. A full parse of one image chains a geometry
+model and a segmentation model. Their latencies and mem-
+ory add up, and their maps do not share one camera. Point-
+map models [24, 30, 33, 45, 59] can take the intrinsics,
+whereas diffusion normal estimators [11, 14, 19, 37, 73]
+take the image alone, even when the intrinsics are given.
+arXiv:2611.29389v1  [cs.CV]  22 Nov 2026
+
+
+Generalist models such as 4M [40], Unified-IO [35], DI-
+CEPTION [78] and OneDiffusion [25] cast multiple tasks
+into one network. They do not remove the cost: DICEP-
+TION runs one forward pass per map, and OneDiffusion
+needs multiple sampling steps for each map. A direct so-
+lution is one Diffusion Transformer that predicts all maps
+together in one step. Yet a Diffusion Transformer [43] is
+designed for RGB images. The three maps break three of
+its assumptions. The instance map has no fixed target, be-
+cause it is correct under any permutation of its colors. The
+point map places each depth along the camera ray of its
+pixel, but a transformer indexes its tokens by pixel [43]. A
+full view and a zoomed crop then give one scene point two
+positions. The normals and the instance map are constant
+over surfaces and objects, but attention recovers this group-
+ing from the tokens alone. In practice, the attention of a
+patch spreads over other objects.
+Based on these observations, we present PINE, a one-
+step Omni Diffusion Transformer that predicts the point
+map, the normals and the instance map in one forward pass,
+as Fig. 1 shows. PINE revises these three assumptions. For
+the target, PINE represents each map as a token stream.
+The geometry streams follow flow matching at their own
+timesteps, while the instance stream regresses its map with
+a clustering loss. A stream mask keeps the instance stream
+apart from the geometry noise. For the position, the camera-
+aware ray encoding positions the tokens of every stream by
+the rays of one camera. When the intrinsics are unknown, a
+default camera takes their place. For the grouping, ground-
+ing attention writes the affinity of DINOv3 features [54]
+into the attention logits of the normal and instance streams.
+In summary, our contributions are as follows:
+• We present PINE, a one-step Omni Diffusion Trans-
+former. One forward pass replaces one specialist model
+per map and multiple sampling steps of diffusion estima-
+tors.
+• We introduce a camera-aware ray encoding, which posi-
+tions tokens by camera rays whether or not intrinsics are
+given, and grounding attention, which gives the normal
+and instance streams the grouping of their pixels.
+• PINE achieves state-of-the-art point maps whether or not
+intrinsics are given and the best average rank on surface
+normals, and it exceeds SAM on large objects with less
+than 1% of its training images. It runs 5.7 times faster
+than MoGe-3 combined with SAM.
+2. Related Work
+Monocular Geometry Estimation.
+MiDaS [47, 48] and
+Depth Anything [71, 72] train on mixed or large unlabeled
+data to predict affine-invariant depth.
+DUSt3R [60] re-
+gresses point maps directly, and MoGe [24, 58, 59] predicts
+affine-invariant point maps from a single image. Without
+intrinsics, the field of view is ambiguous. Metric3D [74],
+UniDepth [44, 45], Depth Pro [3], DA3 [30] and Founda-
+tionGeo [33] estimate the intrinsics or take them as input.
+DSINE [1] feeds per-pixel ray directions to a normal esti-
+mator. All of these models index their features by pixels and
+predict geometry only. GTA [39] and PRoPE [28] encode
+the relative cameras of multiple views in attention, whereas
+PINE positions the tokens of one image by their rays.
+Diffusion for Dense Prediction.
+Marigold [19] fine-tunes
+a pretrained latent diffusion model [16, 51] into a zero-shot
+depth estimator. GeoWizard [11], StableNormal [73] and
+Marigold V2 [42] extend this recipe to normals. FE2E [56]
+starts from an image editing model. GeoNeXt [69] starts
+from a video generative model and predicts depth and nor-
+mals as the next frames. GenPercept [64], Lotus [14] and
+E2E-FT [37] reduce the multiple sampling steps of these
+estimators to one deterministic step. TransNormal-2 [27]
+corrects the decoding errors of the autoencoder at object
+boundaries with pixel-space losses and a refinement mod-
+ule. PPD [65], PointDiT [66] and Lapis [32] avoid the de-
+tail loss of the autoencoder by denoising in pixel space [29].
+Each of these estimators predicts one or two geometric
+maps, whereas PINE predicts all three maps in one step.
+Instance
+Segmentation.
+Instance
+segmentation
+has
+moved from closed label sets [6, 15] to class-agnostic
+entities [36]. SimpleClick [34] segments the object under
+a click. The SAM series [21, 49] accepts any prompt and
+scales this ability with a large mask corpus. TokenCut [63],
+Deep Spectral Methods [38] and CutLER [61] group
+pixels into objects by the affinities of self-supervised
+features [41, 54].
+gen2seg [20] fine-tunes a generative
+model [51] to color every instance with a clustering loss [9].
+PINE predicts instances as one stream of a geometry model
+and writes the affinity of DINOv3 features into its attention.
+Omni Models for Dense Prediction.
+Multi-task net-
+works such as UberNet [23] and Omnidata [10] share one
+backbone across geometric and semantic tasks.
+Taskon-
+omy [75] measures how these tasks transfer.
+Generalist
+models cast multiple tasks into one interface, such as im-
+ages in Painter [62] and token sequences in 4M [40] and
+Unified-IO [35].
+DICEPTION [78] trains one diffusion
+model for all tasks but runs one forward pass per task. Gen-
+Ception [57] turns a video generation model into one per-
+ception model, where a text prompt selects the task. Uni-
+Diffuser [2] and OneDiffusion [25] give each modality or
+view its own timestep, so that any of them can condition
+the others over multiple sampling steps. PINE is an omni
+model of a different form: each map is a token stream, each
+geometry stream has its own timestep, and one forward pass
+gives all maps.
+
+
+Inputs
+Image
+Intrinsics \(K\)
+(optional)
+Noisy maps
+Camera-aware Tokenization
+image
+point
+normal
+inst.
+DINOv3
+Linear
+Embed
+Ray Encoding
+\(K\)
+\([\mathbf{u}'_j,1]^{\top}=K_\mathrm{ref}K^{-1}[\mathbf{u}_j,1]^{\top}\)
+\(K_\mathrm{ref}\)
++
+\(\rho_j\)
+Learned
+Embed
+Omni Diffusion Transformer
+Masked Joint Attention
+Grounding Attention
+Linear
+g
+U
+V
+q
+k
+RoPE
+b
+ℓ
+Linear Layer
+Outputs
+Point map
+Normals
+Instance map
+Figure 2. Overview of PINE. The point, normal and instance streams embed their maps with the frozen DINOv3 features and pass through
+DiT blocks as one sequence. In attention, the stream mask decides which streams interact, ray positions encode the intrinsics and grounding
+attention adds the DINOv3 affinity. Each stream decodes its own map, and one step at inference gives all three maps.
+3. Method
+We introduce PINE, a one-step diffusion model that takes
+an RGB image and, optionally, its intrinsics, and predicts
+an affine-invariant point map, surface normals and an in-
+stance map. Figure 2 shows its pipeline. The Omni Dif-
+fusion Transformer of Sec. 3.1 processes the three maps as
+token streams in one sequence. The camera-aware ray en-
+coding of Sec. 3.2 positions every token by its camera ray.
+Grounding attention in Sec. 3.3 adds the DINOv3 affinity
+to the attention logits of the normal and instance streams.
+Section 3.4 describes the training, and Algorithm 1 lists one
+training step and the one-step inference.
+3.1. Omni Diffusion Transformer
+Given an RGB image I and, optionally, its intrinsic matrix
+K, PINE predicts the three maps as
+(P, N, C) = Φθ(I, K),
+(1)
+where P is an affine-invariant point map whose z channel is
+the depth, N holds the surface normals and C is an instance
+map that assigns every object its own color. P and N have
+one correct value per pixel, whereas C is correct under any
+permutation of its colors and has no fixed target to denoise
+toward. We therefore learn P and N by flow matching and
+C with a clustering loss, and Φθ represents the three maps
+as token streams to combine both objectives.
+Pixel-Space Diffusion.
+Latent diffusion estimators [11,
+19] decode their maps through an autoencoder, whose lossy
+reconstruction smooths depth edges into flying points [65,
+66]. PINE denoises the maps in pixel space and avoids this
+loss. We index the streams by s ∈{p, n, i}. Each geometry
+map xs, with xp = P and xn = N, is noised at timestep
+ts ∈[0, 1] as
+zs = ts xs + (1 −ts) σϵs,
+ϵs ∼N(0, I),
+(2)
+where ts = 1 gives the clean map and σ is the noise scale.
+The network predicts the clean maps ˆxs from the inputs of
+all streams, and the predicted and target velocities are
+ˆvs = ˆxs −zs
+1 −ts
+,
+vs = xs −zs
+1 −ts
+.
+(3)
+For the instance stream, the random start of Eq. (2) is unnec-
+essary: C has no fixed target to reach, and a deterministic
+map needs no sampling. We fix its start at zi = 0 and its
+timestep at ti = 0, the inference timestep of all streams.
+The stream regresses its prediction ˆxi of C from image fea-
+tures in one step.
+Stream Mask.
+Each stream embeds its input map into
+L patch tokens, concatenates them with the frozen DI-
+NOv3 features [54] of the same patches and projects them
+to tokens Xs.
+The three streams form one sequence
+X = [Xp; Xn; Xi] of 3L tokens, which passes through DiT
+blocks [43] with adaLN-Zero conditioned on the timestep
+of each stream. Each stream decodes its output tokens with
+its own linear layer. Let sj denote the stream of token j, and
+let qj and kl be the query of token j and the key of token l.
+Every attention layer adds a stream mask Mjl to the logits
+as
+ajl = softmax
+l
+ ℓjl
+
+,
+ℓjl = q⊤
+j kl
+√
+d
++ Mjl,
+(4)
+
+
+Algorithm 1 One training step of PINE
+Require: image I; intrinsics K or ∅; targets xp, xn and
+instance ids; reference intrinsics Kref; weights θ
+Ensure: updated weights θ
+1: F ←DINOv3(I)
+▷frozen
+2: if K = ∅then
+3:
+K ←default camera, e ←learned embedding
+4: else
+5:
+e ←0
+6: end if
+7: ρj ←ray position of every patch j
+▷Eq. (6)
+8: for s ∈{p, n} do
+9:
+sample ts ∈[0, 1] and ϵs ∼N(0, I)
+10:
+zs ←ts xs + (1 −ts) σϵs
+▷Eq. (2)
+11: end for
+12: zi ←0, ti ←0
+13: Xs ←Embeds(zs, F, ρ) for s ∈{p, n, i}
+14: X ←[Xp; Xn; Xi]
+15: gj ←Linear(LayerNorm(Fj)) for every patch j
+16: for every DiT block and head do
+17:
+rotate qj and kl by ρj and ρl
+18:
+ℓjl ←q⊤
+j kl/
+√
+d + Mjl
+▷Eqs. (4) and (5)
+19:
+if sj = sl ∈{n, i} then
+20:
+ℓjl ←ℓjl + (Ugj)⊤(V gl)
+▷Eq. (8)
+21:
+end if
+22:
+X ←Block
+ X, softmaxl(ℓjl), ts, e
+
+23: end for
+24: ˆxs ←Linears(Xs) for s ∈{p, n, i}
+25: update θ with ∇θL
+▷Eq. (9)
+Inference: set ts = 0 and zs = σϵs in lines 9 and 10, skip
+line 25 and return (P, N, C) = (ˆxp, ˆxn, ˆxi). If K = ∅,
+recover the focal length by Eq. (7).
+where d is the head dimension and
+Mjl =
+(
+0,
+sj = sl or sj, sl ∈{p, n},
+−∞,
+otherwise.
+(5)
+The point map gives the position of every surface, and
+the normals give its orientation. The two geometry streams
+thus attend to each other. The mask blocks attention be-
+tween the geometry and instance streams in both directions.
+The instance map thus does not depend on the noise of the
+geometry streams during training and stays a deterministic
+function of the image.
+3.2. Camera-Aware Ray Encoding
+A point map back-projects every pixel u along its camera
+ray, P(u) = Z(u) K−1[u, 1]⊤with depth Z. The intrin-
+sics thus fix the direction along which each depth is placed.
+PINE therefore positions every token by the ray of its patch
+instead of its pixel.
+\(\mathbf{o}\)
+\(\rho_j\)
+\(\mathbf{u}_j\)
+\(K_\mathrm{ref}\)
+\(K\)
+\([\mathbf{u}'_j,1]^{\top}=K_\mathrm{ref}\,K^{-1}\,[\mathbf{u}_j,1]^{\top}\)
+(a)
+0
+3.1
+0
+7
+5.5
+7
+(b) Ray positions \(\rho\) on \(K_\mathrm{ref}\)
+(c) Patch indices on \(K\)
+Figure 3. Camera-aware ray encoding. (a) The position ρj of
+token j is the point where its ray meets the image plane of a ref-
+erence camera. (b) With ray positions, a zoomed crop lands inside
+the full view, and the point at the red cross keeps one position. (c)
+With patch indices, the crop has its own grid and gives the same
+point a second position.
+Ray Positions.
+The ray through the center uj of patch j
+meets the image plane of a reference camera with intrinsics
+Kref at the pixel u′
+j, given by
+[u′
+j, 1]⊤= KrefK−1[uj, 1]⊤.
+(6)
+The position of token j is this pixel in patch units, ρj =
+u′
+j/p −1
+2, where p is the patch size. When K = Kref,
+ρj is the integer patch index of token j. Patch indices are
+thus the special case in which every image comes from one
+fixed camera. The positions replace the patch indices in the
+sine-cosine encodings that form Xs and in the 2D rotary
+encoding of the queries and keys. Since the rotary encoding
+makes the positional part of q⊤
+j kl a function of ρl −ρj,
+attention sees the offset between two rays rather than their
+distance in pixels. Figure 3a shows this construction. With
+ray positions in Fig. 3b, a zoomed crop lands inside the full
+view, and the point at the red cross keeps one position. With
+patch indices in Fig. 3c, the crop has its own grid and gives
+the same point a second position.
+Unknown Intrinsics.
+Without intrinsics, PINE uses a de-
+fault camera with the field of view of the reference cam-
+era and its principal point at the image center. This camera
+places the tokens on a regular grid like patch indices. Given
+that these positions carry no information about the true in-
+trinsics, a learned embedding added to the timestep con-
+dition of every stream marks the missing intrinsics. PINE
+trains on both cases, and one model serves images whether
+or not intrinsics are given. After prediction, PINE recovers
+
+
+Image
+Attention
+Grounding attention
+Figure 4. Grounding attention. Each row shows an image and
+the attention of the query patch at the red cross, without and with
+grounding attention. Grounding attention keeps the attention on
+the region of the query patch.
+the focal length from its own point map, as MoGe does [58].
+With square pixels and the principal point at the image cen-
+ter, the shifted point map lies on the camera rays,
+Kf
+ P(u) + ∆
+
+∝[u, 1]⊤
+for every pixel u,
+(7)
+where Kf is the intrinsic matrix with focal length f and
+∆∈R3 is the unknown shift of the affine-invariant point
+map. For a fixed ∆z, Eq. (7) is linear in 1/f, ∆x and ∆y,
+which we solve by least squares. A one-dimensional search
+over ∆z completes the solution.
+3.3. Grounding Attention
+A normal is constant over a planar surface, and an instance
+label is constant over an object. Both maps thus depend on
+how pixels group into surfaces and objects. Self-supervised
+ViT features already encode this grouping in their affini-
+ties [38, 63]. Yet in Eq. (4), the DINOv3 features enter
+only the tokens, and attention infers from them which to-
+kens should exchange information. PINE therefore writes
+the affinity into the attention logits as a bias. A layer nor-
+malization and a linear projection map the DINOv3 feature
+of patch j to a grounding code gj. For normal-normal and
+instance-instance pairs, every layer adds a bias to ℓjl as
+bjl = (Ugj)⊤(V gl),
+(8)
+where each head of each block has its own learned low-rank
+projections U and V . The bias raises the attention between
+patches that look alike regardless of their positions and of
+the current geometry estimate. Figure 4 shows that ground-
+ing attention moves the attention of a patch onto its own
+object. The point stream does not use grounding attention,
+because depth also depends on the global layout: two walls
+that look alike can lie at different depths.
+3.4. Training
+Training Losses.
+We train PINE end-to-end with
+L = Lvel + λrelLrel + λgradLgrad + Lsink + λinstLinst,
+(9)
+where λrel, λgrad and λinst weight the terms. Let Ωdenote
+the valid non-sky pixels of a target and ⟨·⟩Ωthe mean over
+them. The velocity loss supervises both streams via Eq. (3),
+Lvel =
+X
+s∈{p,n}
+
+∥ˆvs −vs∥2
+Ω.
+(10)
+The other losses act on the clean predictions. The relative
+point loss Lrel =
+
+∥ˆxp −xp∥1/∥xp∥
+
+Ωdivides the error
+of every point by its distance to the center. The gradient
+loss Lgrad follows MiDaS [47] and sharpens depth edges.
+The normal loss Lsink follows Marigold V2 [42], and the in-
+stance loss Linst follows gen2seg [20], as detailed in Sec. A.
+4. Experiments
+4.1. Experimental Setups
+Implementation Details.
+PINE starts from the pretrained
+weights of PointDiT [66] and trains on the 139K synthetic
+and 24K real images of Tab. 7. Its B, L and H models use
+a frozen DINOv3 ViT-B/16, ViT-L/16 and ViT-H+/16 [54].
+The reference camera has the focal length fref = 420 pixels
+and its principal point at the image center. We clamp the
+denominator 1−ts of Eq. (3) at 0.05. We crop each training
+image at a random aspect ratio in [0.5, 3.5], flip it and jitter
+its color, and Sec. A lists the full augmentation. The loss
+weights are λrel = 0.1, λgrad = 0.5 and λinst = 0.02, and the
+sky pixels add the error of Eq. (10) with a weight of 0.01.
+We train for 20 epochs with AdamW, a constant learning
+rate of 10−5 and a batch size of 64 in bfloat16. Training
+PINE-L takes about 20 hours on 8 A100 GPUs.
+Evaluation.
+We evaluate point maps and depth on 3,444
+images from DIODE [55], KITTI [12], NYUv2 [53],
+ETH3D
+[52],
+HAMMER
+[18],
+iBims-1
+[22]
+and
+Booster [46], and we report the relative error Rel and
+the accuracy δ1.
+We evaluate normals on NYUv2 [53],
+ScanNet [8], iBims-1 [22] and Sintel [4] with the protocol
+of DSINE [1], and we report the mean angular error and
+the accuracy within 11.25◦.
+We evaluate instances on
+COCOexc [31], DRAM [7], EgoHOS [76], iShape [70]
+and PIDRay [77], where COCOexc holds the 46 COCO
+categories that gen2seg [20] excludes from training. Each
+method takes one point prompt per instance, and we report
+the mIoU of the resulting masks.
+Section B gives the
+alignment, the metric definitions and the prompt protocol.
+4.2. Main Results
+Results on Point Maps and Depth.
+PINE-H has the low-
+est average Relp and the highest average δp
+1 of all methods
+in Tab. 1 in both settings, although it also predicts nor-
+mals and instances in the same forward pass. Without in-
+trinsics, its largest gain is on HAMMER, where it lowers
+Relp from 3.51 for PointDiT-H, the second-best method, to
+
+
+Table 1.
+Average results on point maps and depth over the
+3,444 images of the seven datasets. Params and Latency are from
+Tab. 13, and the latency of PINE includes its normals and in-
+stances. Best results are in bold, separately for the settings with
+and without intrinsics.
+Method
+Point map
+Depth
+Params
+(B)
+Latency
+(ms)
+Relp ↓
+δp
+1 ↑
+Reld ↓
+δd
+1 ↑
+Without intrinsics
+GeometryCrafter [67]
+5.45
+96.75
+3.52
+97.84
+2.67
+964.7
+PPD [65]
+5.54
+96.59
+3.88
+97.78
+0.80
+691.9
+Depth Pro [3]
+5.71
+96.71
+3.72
+97.74
+0.95
+909.3
+UniDepthV2 [45]
+4.45
+97.35
+2.86
+98.52
+0.35
+23.3
+DA3 [30]
+4.77
+96.63
+3.22
+97.81
+1.36
+97.3
+MoGe [58]
+4.21
+97.45
+3.10
+98.01
+0.31
+86.0
+MoGe-2 [59]
+4.53
+97.46
+2.87
+98.50
+0.33
+67.9
+FoundationGeo [33]
+4.57
+97.71
+2.95
+98.52
+0.31
+90.1
+MoGe-3 [24]
+4.79
+97.36
+2.90
+98.43
+0.37
+360.5
+Marigold V2 [42]
+–
+–
+3.55
+98.59
+21.4
+491.6
+PointDiT-B [66]
+5.84
+96.69
+3.70
+97.84
+0.22
+23.3
+PointDiT-L [66]
+4.90
+97.42
+3.15
+98.22
+0.77
+45.8
+PointDiT-H [66]
+4.45
+97.93
+2.81
+98.51
+1.81
+62.5
+PINE-B
+5.62
+96.75
+3.70
+97.75
+0.24
+43.8
+PINE-L
+4.70
+97.78
+3.04
+98.29
+0.80
+82.6
+PINE-H
+4.16
+98.13
+2.79
+98.51
+1.85
+136.6
+With intrinsics
+Depth Pro [3]
+4.53
+97.35
+3.72
+97.74
+0.95
+909.3
+UniDepthV2 [45]
+3.70
+97.95
+2.87
+98.52
+0.35
+23.3
+DA3 [30]
+3.96
+97.10
+3.17
+97.89
+1.36
+97.3
+MoGe-2 [59]
+4.38
+97.58
+2.87
+98.50
+0.33
+67.9
+MoGe-3 [24]
+4.70
+97.35
+2.90
+98.43
+0.37
+360.5
+FoundationGeo [33]
+4.40
+97.85
+2.95
+98.52
+0.31
+90.1
+PINE-B
+4.69
+97.06
+3.60
+97.75
+0.24
+43.8
+PINE-L
+3.76
+97.90
+2.92
+98.32
+0.80
+82.6
+PINE-H
+3.33
+98.21
+2.65
+98.54
+1.85
+136.6
+Table 2. Quantitative comparison on zero-shot surface normal
+estimation. Mean angular error in degrees and accuracy within
+11.25◦under the full-frame protocol of DSINE. Best results are in
+bold, separately for the settings with and without intrinsics.
+Method
+NYUv2
+ScanNet
+iBims-1
+Sintel
+Avg.
+Rank ↓
+Mean↓11.25◦↑Mean↓11.25◦↑Mean↓11.25◦↑Mean↓11.25◦↑
+Without intrinsics
+GeoWizard [11]
+18.9
+50.7
+17.4
+53.8
+19.3
+63.0
+40.3
+12.3
+12.0
+StableNormal [73]
+18.6
+53.5
+17.1
+57.4
+18.2
+65.0
+36.7
+14.1
+11.0
+DSINE [1]
+16.4
+59.6
+16.2
+61.0
+17.1
+67.4
+34.9
+21.5
+9.3
+Lotus-D [14]
+16.2
+59.8
+14.7
+64.0
+17.1
+66.4
+32.3
+22.4
+7.8
+E2E-FT [37]
+16.5
+60.4
+14.7
+66.1
+16.1
+69.7
+33.5
+22.3
+7.6
+FE2E [56]
+16.2
+59.6
+13.8
+67.2
+15.1
+70.6
+31.2
+22.3
+5.5
+Marigold V2 [42]
+16.0
+61.6
+13.8
+67.9
+15.2
+71.9
+29.7
+27.3
+4.3
+TransNormal-2 [27]
+14.9
+62.4
+12.9
+69.1
+15.1
+70.1
+28.2
+28.1
+2.9
+MoGe-3 [24]
+14.7
+62.3
+12.8
+68.9
+14.8
+70.1
+26.4
+29.1
+2.4
+PINE-B
+16.4
+59.2
+15.3
+63.0
+16.5
+68.5
+30.4
+24.1
+8.0
+PINE-L
+15.7
+61.9
+14.1
+66.4
+15.5
+70.9
+27.5
+29.6
+4.3
+PINE-H
+15.3
+63.1
+13.3
+69.2
+15.1
+71.8
+25.6
+32.5
+1.8
+With intrinsics
+PINE-B
+16.3
+59.7
+14.9
+64.7
+16.2
+69.0
+30.0
+24.6
+–
+PINE-L
+15.6
+62.5
+13.6
+68.5
+15.1
+71.7
+26.5
+30.9
+–
+PINE-H
+15.1
+63.5
+13.0
+70.0
+14.8
+72.2
+25.0
+34.0
+–
+2.96, by 16%. With intrinsics, it lowers the average Relp
+to 3.33, against 3.70 for UniDepthV2.
+At every model
+size, PINE has a lower Relp than PointDiT. This gain does
+not come from the additional training: PointDiT with our
+Table 3. Point-prompted instance segmentation. mIoU with
+one point prompt per instance, where L, M and S split COCOexc
+into large, medium and small instances. ‡: re-evaluated under our
+protocol; SimpleClick is taken from gen2seg, and † merges the
+instances of one class.
+Method
+COCOL
+exc COCOM
+exc COCOS
+exc DRAM EgoHOS iShape PIDRay
+SAM (ViT-H) [21]‡
+58.7
+60.5
+57.2
+49.8
+58.2
+40.9
+44.2
+SimpleClick [34]
+1.4
+0.6
+0.2
+2.4
+1.6
+1.6†
+1.5
+gen2seg [20]‡
+59.6
+38.7
+8.3
+46.6
+42.9
+9.9
+35.6
+PINE-B
+68.6
+48.5
+9.2
+54.2
+54.1
+15.1
+41.8
+PINE-L
+75.2
+52.1
+9.3
+58.4
+52.3
+18.4
+45.6
+PINE-H
+76.3
+51.8
+9.2
+60.5
+53.7
+15.4
+42.5
+Table 4. Field-of-view estimation. Mean absolute error in degrees
+of the horizontal field of view recovered from the predicted point
+map without intrinsics. The Avg column is the sample-weighted
+mean over all 3,444 images.
+Method
+DIODE KITTI NYUv2 ETH3D HAMMER iBims-1 Booster
+Avg
+MoGe-2 [59]
+6.61
+10.64
+1.60
+3.73
+12.18
+4.77
+9.88
+7.28
+MoGe-3 [24]
+7.70
+12.02
+1.61
+4.00
+13.75
+5.54
+11.78
+8.22
+FoundationGeo [33]
+8.01
+4.56
+2.57
+4.43
+12.18
+4.49
+8.68
+6.70
+PointDiT-B [66]
+8.11
+17.65
+5.54
+20.11
+17.48
+6.70
+8.12
+13.08
+PointDiT-L [66]
+8.34
+14.02
+4.48
+11.00
+13.16
+5.35
+8.48
+10.03
+PointDiT-H [66]
+9.38
+19.70
+6.88
+12.92
+19.30
+6.81
+7.26
+13.46
+PINE-B
+7.97
+5.76
+7.30
+9.90
+6.66
+6.26
+7.59
+7.33
+PINE-L
+7.34
+5.45
+7.69
+7.80
+4.97
+4.93
+5.16
+6.48
+PINE-H
+7.76
+4.91
+4.01
+6.97
+3.70
+3.86
+5.63
+5.35
+recipe reaches only 5.01 against 4.82 for PINE in Tab. 5.
+This shows the benefit of positioning tokens by camera rays
+rather than by pixels. The gain carries over to depth, where
+PINE-H has the lowest average Reld in both settings, 2.79
+without and 2.65 with intrinsics. Figure 5 compares the 3D
+shapes of PINE-H and the baselines.
+Results on Surface Normals.
+PINE-H has the best aver-
+age rank of all methods in Tab. 2. Its largest gain is on Sin-
+tel, where it reaches a mean angular error of 25.6◦against
+26.4◦for MoGe-3, the second-best method. It also raises
+the Sintel accuracy within 11.25◦from 29.1% to 32.5%.
+PINE learns normals from only 139K synthetic images,
+while MoGe-3 trains on more than 8.9M frames. With in-
+trinsics, PINE-H lowers its error further on all four datasets.
+Figure 5 shows the normals of PINE-H and baselines.
+Results on Instances.
+PINE-H exceeds SAM on large
+COCO objects and DRAM by 17.6 and 10.7 mIoU in
+Tab. 3. It also outperforms gen2seg, a diffusion-based in-
+stance model, on every benchmark. PINE learns instances
+from only 87K images, while SAM trains on 11M images
+with 1.1B masks. This shows that instances can be learned
+as an additional stream of a geometry model, without a large
+mask corpus. On small COCO objects, PINE-H trails SAM
+with 9.2 against 57.2 mIoU, since a small object covers only
+a few patches. Figure 5 shows that PINE-H gives more com-
+plete masks of large objects than gen2seg.
+
+
+Point map
+Image
+GT
+MoGe-3
+FoundationGeo
+PINE
+Depth
+Image
+GT
+MoGe-3
+Marigold V2
+PINE
+Normal
+Image
+GT
+MoGe-3
+DSINE
+PINE
+Instance
+Image
+GT
+SAM
+gen2seg
+PINE
+Figure 5. Qualitative comparison on point maps, depth, normals and instances. The red dot marks the point prompt of each instance.
+Arrows highlight the regions we significantly improved.
+(a) Image
+1
+2
+3
+4
+5
+Ground truth
+Final recipe
+w/o camera-aware
+ray encoding
+Camera ray
+(b) Top view of the marked row
+1
+2
+3
+4
+5
+\(x\)
+\(z\)
+0.5 m
+camera ↓
+(c) Pixel 2
+lateral \(\varepsilon_{xy}\)
+depth \(\varepsilon_z\)
+Figure 6.
+Lateral and depth error with and without the
+camera-aware ray encoding. (a) Input image with five marked
+pixels on one row. (b) Top view of the points of this row. Each
+arrow points from the ground-truth point of a marked pixel to its
+predicted point. (c) The error of pixel 2, split into a lateral part εxy
+and a depth part εz.
+Results on Camera and Planes.
+PINE-H recovers the
+field of view with the lowest average error in Tab. 4, 5.35◦
+against 6.70◦for FoundationGeo and 13.46◦for PointDiT-
+H. Its largest gain is on HAMMER, where PINE-H reaches
+3.70◦against 19.30◦for PointDiT-H and 12.18◦for MoGe-
+2. At every model size, PINE lowers the field-of-view er-
+ror of PointDiT, by up to 60% for PINE-H. The camera-
+aware ray encoding thus lets PINE recover the intrinsics.
+On iBims-1, PINE-H lowers the planarity error of PointDiT-
+H from 0.62 to 0.54 cm in Tab. 16.
+4.3. Ablation Study
+Table 5 ablates the three components of PINE: the camera-
+aware ray encoding, the stream mask and grounding atten-
+tion. To limit the cost, we train each variant as a PINE-L
+model on Hypersim and Virtual KITTI 2 only, and the other
+settings follow Sec. 4.1. To separate the gain of PINE from
+the additional training, we also train the point-only Point-
+DiT architecture with the same recipe. The point maps, the
+depth and the normals use the benchmarks of Sec. 4.1, and
+the instances use COCOexc and DRAM.
+Camera-Aware Ray Encoding.
+In Tab. 5, without the en-
+coding, intrinsics have no effect, and Relp stays at 5.05 in
+both settings.
+With the encoding, intrinsics reduce Relp
+from 4.82 to 3.94 and the mean angular error from 18.23
+to 17.81. Without intrinsics, the encoding still reduces Relp
+from 5.05 to 4.82. We split the error of each point into a
+lateral part εxy and a depth part εz. Averaged over the valid
+pixels with intrinsics, the encoding reduces εxy from 2.28
+to 1.27, but εz only from 3.22 to 2.95. Figure 6 illustrates
+this split on one image row. The gap in lateral error grows
+with the distance to the principal point, where a wrong fo-
+cal length moves a point the most. During training, Relp
+with intrinsics stalls near 5.0 without the encoding but keeps
+dropping to 3.94 with it.
+Stream Mask.
+In Tab. 5, letting the instance tokens also
+attend to the geometry tokens raises Relp without intrinsics
+from 4.82 to 4.93 and lowers the COCOexc mIoU from 33.0
+to 32.4. PINE therefore isolates the instance stream. Re-
+moving the normal-to-point attention raises the mean angu-
+lar error with intrinsics from 17.81 to 17.94. The normal
+stream thus keeps its attention to the point stream.
+
+
+Table 5. Ablation of the camera-aware ray encoding, the stream mask and grounding attention. The first row is the final recipe with
+the mean and standard deviation over three seeds. PEimg and PEgeo are sine-cosine positions on the image features and the geometry tokens,
+and X←Y means that the tokens of X attend to the tokens of Y.
+Camera-aware ray encoding
+Stream mask
+Grounding
+Relp ↓
+Reld ↓
+Normal ↓
+Instance ↑
+RoPE PEimg
+PEgeo
+N←P I←G G←I
+w/o K
+with K
+w/o K
+with K
+w/o K
+with K
+COCOexc
+DRAM
+✓
+✓
+✓
+✓
+✗
+✗
+Attn.
+4.82±.03
+3.94±.03
+3.15±.01
+3.05±.02
+18.23±.03 17.81±.02
+33.0±.05
+54.8±.28
+✗
+✗
+✗
+✓
+✗
+✗
+Attn.
+5.05
+5.05
+3.14
+3.14
+18.23
+18.23
+33.1
+52.3
+✓
+✗
+✗
+✓
+✗
+✗
+Attn.
+5.05
+4.69
+3.21
+3.10
+18.33
+18.18
+33.1
+55.0
+✓
+✓
+✗
+✓
+✗
+✗
+Attn.
+5.04
+4.77
+3.20
+3.02
+18.22
+17.84
+32.6
+53.3
+✓
+✓
+✓
+✗
+✗
+✗
+Attn.
+4.81
+3.91
+3.16
+3.03
+18.23
+17.94
+33.0
+53.9
+✓
+✓
+✓
+✓
+✓
+✗
+Attn.
+4.93
+3.97
+3.18
+3.06
+18.25
+17.80
+32.4
+55.3
+✓
+✓
+✓
+✓
+✓
+✓
+Attn.
+4.96
+3.93
+3.15
+3.04
+18.29
+17.83
+33.0
+53.4
+✓
+✓
+✓
+✓
+✗
+✗
+✗
+4.79
+3.96
+3.14
+3.05
+18.47
+17.92
+32.1
+52.5
+✓
+✓
+✓
+✓
+✗
+✗
+adaLN
+4.85
+3.90
+3.13
+3.01
+18.32
+17.90
+33.1
+52.3
+PointDiT [66] (our recipe)
+5.01
+–
+3.20
+–
+–
+–
+–
+–
+50
+100
+200
+500
+1000
+2000
+Latency for the three maps (ms)
+3
+4
+5
+6
+Average rank ↓
+20B
+2B
+0.3B
+UniDepthV2 +
+Marigold V2 + SAM
+UniDepthV2 +
+FE2E + SAM
+PointDiT-H +
+DSINE + SAM
+PINE-H
+UniDepthV2 +
+DSINE + gen2seg
+MoGe-3 + SAM
+PINE-L
+PINE-B
+Figure 7. Average rank against latency for the three maps.
+Ranks are averaged over the columns of Tabs. 2, 3 and 17, with
+each PINE model ranked against the baselines only. Latency is
+measured on one A100 at 512 × 512 with batch size one.
+Grounding Attention.
+In Tab. 5, removing grounding at-
+tention lowers the COCOexc mIoU from 33.0 to 32.1 and
+raises the mean angular error from 18.23 to 18.47. Injecting
+its code through adaLN instead lowers the DRAM mIoU
+from 54.8 to 52.3. The region mass of a query patch is the
+share of its attention that falls on its own region. Table 6
+shows that grounding attention raises the region mass on all
+four benchmarks for all three models. For PINE-L, the gain
+is 13.8% on COCOexc and 20.3% on NYUv2. Section D
+defines the regions and reports all nine benchmarks.
+4.4. Runtime Analysis
+PINE-H has the best average rank over the three maps in
+Fig. 7 and runs 5.7 times faster than MoGe-3 combined with
+SAM. PINE-L matches the rank of UniDepthV2, Marigold
+V2 and SAM combined and runs 11 times faster. PINE-H
+runs 3.1 times faster than SAM alone, while it also predicts
+Table 6. Region mass with and without grounding attention.
+Region mass in percent, averaged over all blocks and all query
+patches of a benchmark. Chance is the region mass of uniform
+attention. The blue number is the gain, the relative increase of the
+region mass above chance.
+Instance
+Normal
+Model
+Grounding
+attention
+COCOexc
+DRAM
+NYUv2
+ScanNet
+Chance
+24.5
+33.7
+5.1
+12.9
+PINE-B
+✗
+35.5
+44.3
+11.7
+19.8
+✓
+36.6↑9.6%
+44.8↑4.5%
+13.2↑22.4% 21.2↑21.0%
+PINE-L
+✗
+32.8
+41.4
+10.1
+18.1
+✓
+33.9↑13.8% 42.2↑11.0% 11.1↑20.3% 19.2↑22.0%
+PINE-H
+✗
+33.5
+43.9
+10.8
+18.9
+✓
+34.5↑11.6% 44.8↑8.8%
+11.5↑13.5% 19.6↑11.3%
+the point map and the normals. Marigold V2 with SAM
+needs 22.3B parameters and 1399 ms, while PINE-H needs
+1.85B and 137 ms. This shows the benefit of one forward
+pass over one model per map.
+5. Conclusion
+We have presented PINE, a one-step Omni Diffusion Trans-
+former that predicts the point map, the normals and the in-
+stance map of an image in one forward pass. It achieves
+state-of-the-art point maps and the best average rank on nor-
+mals. It exceeds SAM on large objects but still trails it on
+medium and small objects. Camera-aware ray encoding ex-
+ploits intrinsics when given, and grounding attention groups
+pixels by object. Unlike chains of specialist models, its one-
+pass design suits interactive applications such as robotics.
+Its point maps lack metric scale. Future work can add met-
+ric scale and semantic classes as new streams.
+
+
+LLM Usage Statement
+We used ChatGPT (OpenAI) to edit and restructure the text,
+format the LATEX source, tables and figure layout, and check
+citations and the consistency of reported numbers, and to
+refine code written by the authors.
+The research ideas,
+method, experiments and results were conceived, imple-
+mented and verified by the authors, and the tools only edited
+or refined author-produced content. The authors reviewed
+every suggestion and take full responsibility for the content
+of this paper.
+References
+[1] Gwangbin Bae and Andrew J Davison. Rethinking inductive
+biases for surface normal estimation.
+In 2024 IEEE/CVF
+Conference on Computer Vision and Pattern Recognition
+(CVPR), pages 9535–9545. IEEE, 2024. 2, 5, 6, 7
+[2] Fan Bao, Shen Nie, Kaiwen Xue, Chongxuan Li, Shi Pu,
+Yaole Wang, Gang Yue, Yue Cao, Hang Su, and Jun Zhu.
+One transformer fits all distributions in multi-modal diffu-
+sion at scale. In International Conference on Machine Learn-
+ing, pages 1692–1717. PMLR, 2023. 2
+[3] Alexey Bochkovskiy, Ama¨el Delaunoy, Hugo Germain,
+Marcel Santos, Yichao Zhou, Stephan Richter, and Vladlen
+Koltun. Depth pro: Sharp monocular metric depth in less
+than a second. In International Conference on Learning Rep-
+resentations, pages 75602–75637, 2025. 2, 6, 7, 8
+[4] Daniel J Butler, Jonas Wulff, Garrett B Stanley, and
+Michael J Black. A naturalistic open source movie for op-
+tical flow evaluation. In European conference on computer
+vision, pages 611–625. Springer, 2012. 5
+[5] Yohann Cabon, Naila Murray, and Martin Humenberger. Vir-
+tual kitti 2. arXiv preprint arXiv:2001.10773, 2020. 1
+[6] Bowen Cheng, Ishan Misra, Alexander G Schwing, Alexan-
+der Kirillov, and Rohit Girdhar.
+Masked-attention mask
+transformer for universal image segmentation.
+In 2022
+IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), pages 1280–1289. IEEE, 2022. 2
+[7] Nadav Cohen, Yael Newman, and Ariel Shamir. Semantic
+segmentation in art paintings. In Computer graphics forum,
+pages 261–275. Wiley Online Library, 2022. 5
+[8] Angela Dai, Angel X Chang, Manolis Savva, Maciej Hal-
+ber, Thomas Funkhouser, and Matthias Nießner.
+Scan-
+net: Richly-annotated 3d reconstructions of indoor scenes.
+In 2017 IEEE conference on computer vision and pattern
+recognition (CVPR), pages 2432–2443. IEEE, 2017. 5
+[9] Bert De Brabandere, Davy Neven, and Luc Van Gool.
+Semantic instance segmentation with a discriminative loss
+function. arXiv preprint arXiv:1708.02551, 2017. 2, 1
+[10] Ainaz Eftekhar, Alexander Sax, Jitendra Malik, and Amir
+Zamir. Omnidata: A scalable pipeline for making multi-task
+mid-level vision datasets from 3d scans. In 2021 IEEE/CVF
+International Conference on Computer Vision (ICCV), pages
+10766–10776. IEEE, 2021. 2
+[11] Xiao Fu, Wei Yin, Mu Hu, Kaixuan Wang, Yuexin Ma, Ping
+Tan, Shaojie Shen, Dahua Lin, and Xiaoxiao Long. Geowiz-
+ard: Unleashing the diffusion priors for 3d geometry esti-
+mation from a single image.
+In European Conference on
+Computer Vision, pages 241–258. Springer, 2024. 1, 2, 3, 6,
+7
+[12] Andreas Geiger, Philip Lenz, Christoph Stiller, and Raquel
+Urtasun. Vision meets robotics: The kitti dataset. The in-
+ternational journal of robotics research, 32(11):1231–1237,
+2013. 5
+[13] Jose L G´omez, Manuel Silva, Antonio Seoane, Agnes
+Borr´as, Mario Noriega, Germ´an Ros, Jose A Iglesias-
+Guitian, and Antonio M L´opez. All for one, and one for
+all: Urbansyn dataset, the third musketeer of synthetic driv-
+ing scenes. Neurocomputing, 637:130038, 2025. 1
+[14] Jing He, Haodong Li, Wei Yin, Yixun Liang, Leheng Li,
+Kaiqiang Zhou, Hongbo Zhang, Bingbing Liu, and Ying-
+Cong Chen. Lotus: Diffusion-based visual foundation model
+for high-quality dense prediction.
+In International Con-
+ference on Learning Representations, pages 89454–89467,
+2025. 1, 2, 6, 7
+[15] Kaiming He, Georgia Gkioxari, Piotr Doll´ar, and Ross Gir-
+shick. Mask r-cnn. In Proceedings of the IEEE international
+conference on computer vision, pages 2961–2969, 2017. 2
+[16] Jonathan Ho, Ajay Jain, and Pieter Abbeel. Denoising dif-
+fusion probabilistic models. Advances in neural information
+processing systems, 33:6840–6851, 2020. 2
+[17] Derek Hoiem, Alexei A Efros, and Martial Hebert. Putting
+objects in perspective. International Journal of Computer
+Vision, 80(1):3–15, 2008. 1
+[18] HyunJun Jung, Patrick Ruhkamp, Guangyao Zhai, Niko-
+las Brasch, Yitong Li, Yannick Verdie, Jifei Song, Yiren
+Zhou, Anil Armagan, Slobodan Ilic, et al.
+Is my depth
+ground-truth good enough? hammer–highly accurate multi-
+modal dataset for dense 3d scene regression. arXiv preprint
+arXiv:2205.04565, 2022. 5
+[19] Bingxin Ke, Anton Obukhov, Shengyu Huang, Nando Met-
+zger, Rodrigo Caye Daudt, and Konrad Schindler. Repurpos-
+ing diffusion-based image generators for monocular depth
+estimation.
+In 2024 IEEE/CVF Conference on Computer
+Vision and Pattern Recognition (CVPR), pages 9492–9502.
+IEEE, 2024. 1, 2, 3, 7
+[20] Om Khangaonkar and Hamed Pirsiavash. gen2seg: Genera-
+tive models enable generalizable instance segmentation. In
+The Fourteenth International Conference on Learning Rep-
+resentations, 2026. 1, 2, 5, 6
+[21] Alexander Kirillov, Eric Mintun, Nikhila Ravi, Hanzi Mao,
+Chloe Rolland, Laura Gustafson, Tete Xiao, Spencer White-
+head, Alexander C Berg, Wan-Yen Lo, et al. Segment any-
+thing. In 2023 IEEE/CVF international conference on com-
+puter vision (ICCV), pages 3992–4003. IEEE, 2023. 1, 2,
+6
+[22] Tobias Koch, Lukas Liebel, Friedrich Fraundorfer, and
+Marco K¨orner. Evaluation of cnn-based single-image depth
+estimation methods. In European Conference on Computer
+Vision, pages 331–348. Springer, 2018. 5
+[23] Iasonas Kokkinos.
+Ubernet: Training a universal convo-
+lutional neural network for low-, mid-, and high-level vi-
+sion using diverse datasets and limited memory.
+In 2017
+
+
+IEEE Conference on Computer Vision and Pattern Recog-
+nition (CVPR), pages 5454–5463. IEEE, 2017. 2
+[24] Lingyu Kong, Ruicheng Li, Ruicheng Wang, Sicheng Xu,
+Chengtang Yao, Jianfeng Xiang, and Jiaolong Yang. Moge-
+3: Fine-detail monocular geometry estimation with self-
+guided sparse volumetric refinement. arXiv e-prints, pages
+arXiv–2607, 2026. 1, 2, 6, 4, 7, 8
+[25] Duong H Le, Tuan Pham, Sangho Lee, Christopher Clark,
+Aniruddha Kembhavi, Stephan Mandt, Ranjay Krishna, and
+Jiasen Lu.
+One diffusion to generate them all.
+In 2025
+IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), pages 2671–2682. IEEE, 2025. 2
+[26] Mingwei Li, Hehe Fan, and Yi Yang. Transnormal: Dense
+visual semantics for diffusion-based transparent object nor-
+mal estimation. In Forty-third International Conference on
+Machine Learning, 2026. 2, 7
+[27] Mingwei Li, Yi Yang, and Hehe Fan.
+Transnormal-2:
+Geometry-grounded rectified flow with edge-aware decod-
+ing for precise normal estimation, 2026. 2, 6, 7
+[28] Ruilong Li, Brent Yi, Junchen Liu, Hang Gao, Yi Ma, and
+Angjoo Kanazawa.
+Cameras as relative positional encod-
+ing. Advances in Neural Information Processing Systems,
+38:15984–16009, 2026. 2
+[29] Tianhong Li and Kaiming He. Back to basics: Let denoising
+generative models denoise. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition,
+pages 36115–36125, 2026. 2
+[30] Haotong Lin, Sili Chen, Jun Hao Liew, Donny Y. Chen,
+Zhenyu Li, Yang Zhao, Sida Peng, Hengkai Guo, Xiaowei
+Zhou, Guang Shi, Jiashi Feng, and Bingyi Kang. Depth any-
+thing 3: Recovering the visual space from any views. In The
+Fourteenth International Conference on Learning Represen-
+tations, 2026. 1, 2, 6, 7, 8
+[31] Tsung-Yi Lin, Michael Maire, Serge Belongie, James Hays,
+Pietro Perona, Deva Ramanan, Piotr Doll´ar, and C Lawrence
+Zitnick. Microsoft coco: Common objects in context. In
+European conference on computer vision, pages 740–755.
+Springer, 2014. 5
+[32] Bingde Liu, Wu Ran, Jinglei Zhang, Huanhuan Yuan, and
+Chao Ma. Efficient and high-quality depth estimation via
+pixel-space diffusion with linear attention. In Proceedings
+of the European Conference on Computer Vision (ECCV),
+2026. 2
+[33] Muxin Liu, Xiaoyang Lyu, Tianhe Ren, Peng Dai, Xiaoshan
+Wu, Zhiyue Zhang, Jiaqi Zhang, Jiehong Lin, Shaoshuai Shi,
+and Xiaojuan Qi.
+Foundationgeo: Learning spatial pixel-
+wise fields for monocular metric geometry.
+In European
+Conference on Computer Vision, pages 353–371. Springer,
+2026. 1, 2, 6, 4, 7, 8
+[34] Qin Liu, Zhenlin Xu, Gedas Bertasius, and Marc Nietham-
+mer. Simpleclick: Interactive image segmentation with sim-
+ple vision transformers. In 2023 IEEE/CVF International
+Conference on Computer Vision (ICCV), pages 22233–
+22243. IEEE, 2023. 2, 6
+[35] Jiasen Lu, Christopher Clark, Rowan Zellers, Roozbeh Mot-
+taghi, and Aniruddha Kembhavi. UNIFIED-IO: A unified
+model for vision, language, and multi-modal tasks. In The
+Eleventh International Conference on Learning Representa-
+tions, 2023. 2
+[36] Qi Lu, Jason Kuen, Shen Tiancheng, Gu Jiuxiang, Guo Wei-
+dong, Jia Jiaya, Lin Zhe, and Yang Ming-Hsuan.
+High-
+quality entity segmentation. In ICCV, 2023. 2, 1
+[37] Gonzalo Martin Garcia, Karim Knaebel, Christian Schmidt,
+Daan de Geus, Alexander Hermans, and Bastian Leibe. Fine-
+tuning image-conditional diffusion models is easier than you
+think. In Proceedings of the IEEE/CVF Winter Conference
+on Applications of Computer Vision (WACV), 2025. 1, 2, 6,
+7
+[38] Luke Melas-Kyriazi, Christian Rupprecht, Iro Laina, and
+Andrea Vedaldi.
+Deep spectral methods: A surprisingly
+strong baseline for unsupervised semantic segmentation and
+localization. In 2022 IEEE/CVF Conference on Computer
+Vision and Pattern Recognition (CVPR), pages 8354–8365.
+IEEE, 2022. 2, 5
+[39] Takeru Miyato, Bernhard Jaeger, Max Welling, and Andreas
+Geiger.
+Gta: A geometry-aware attention mechanism for
+multi-view transformers.
+In International Conference on
+Learning Representations, pages 8172–8208, 2024. 2
+[40] David Mizrahi, Roman Bachmann, Oguzhan Kar, Teresa
+Yeo, Mingfei Gao, Afshin Dehghan, and Amir Zamir. 4m:
+Massively multimodal masked modeling. Advances in Neu-
+ral Information Processing Systems, 36:58363–58408, 2023.
+2
+[41] Maxime Oquab, Timoth´ee Darcet, Th´eo Moutakanni, Huy V.
+Vo, Marc Szafraniec, Vasil Khalidov, Pierre Fernandez,
+Daniel HAZIZA, Francisco Massa, Alaaeldin El-Nouby,
+Mido Assran, Nicolas Ballas, Wojciech Galuba, Russell
+Howes, Po-Yao Huang, Shang-Wen Li, Ishan Misra, Michael
+Rabbat, Vasu Sharma, Gabriel Synnaeve, Hu Xu, Herve Je-
+gou, Julien Mairal, Patrick Labatut, Armand Joulin, and Pi-
+otr Bojanowski. DINOv2: Learning robust visual features
+without supervision. Transactions on Machine Learning Re-
+search, 2024. Featured Certification. 2
+[42] Igor Pavlovic, Thiemo Wandel, Anton Obukhov, Luca Bar-
+tolomei, Andrey Davydov, Fabio Tosi, Matteo Poggi, Sabine
+S¨usstrunk, and Dengxin Dai. Marigold v2: Revisiting dif-
+fusion transformers for monocular depth estimation. arXiv
+preprint arXiv:2609.08084, 2026. 1, 2, 5, 6, 7, 8
+[43] William Peebles and Saining Xie. Scalable diffusion models
+with transformers. In 2023 IEEE/CVF International Confer-
+ence on Computer Vision (ICCV), pages 4172–4182. IEEE,
+2023. 2, 3
+[44] Luigi Piccinelli, Yung-Hsu Yang, Christos Sakaridis, Mattia
+Segu, Siyuan Li, Luc Van Gool, and Fisher Yu. Unidepth:
+Universal monocular metric depth estimation.
+In 2024
+IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), pages 10106–10116. IEEE, 2024. 2
+[45] Luigi Piccinelli, Christos Sakaridis, Yung-Hsu Yang, Mat-
+tia Segu, Siyuan Li, Wim Abbeloos, and Luc Van Gool.
+Unidepthv2: Universal monocular metric depth estimation
+made simpler. IEEE Transactions on Pattern Analysis and
+Machine Intelligence, 2025. 1, 2, 6, 7, 8
+[46] Pierluigi Zama Ramirez, Alex Costanzino, Fabio Tosi, Mat-
+teo Poggi, Samuele Salti, Stefano Mattoccia, and Luigi
+
+
+Di Stefano. Booster: a benchmark for depth from images of
+specular and transparent surfaces. IEEE Transactions on Pat-
+tern Analysis and Machine Intelligence, 46(1):85–102, 2023.
+5
+[47] Ren´e Ranftl,
+Katrin Lasinger,
+David Hafner,
+Konrad
+Schindler, and Vladlen Koltun. Towards robust monocular
+depth estimation: Mixing datasets for zero-shot cross-dataset
+transfer. IEEE transactions on pattern analysis and machine
+intelligence, 44(3):1623–1637, 2020. 2, 5, 1
+[48] Ren´e Ranftl, Alexey Bochkovskiy, and Vladlen Koltun. Vi-
+sion transformers for dense prediction. In 2021 IEEE/CVF
+International Conference on Computer Vision (ICCV), pages
+12159–12168. IEEE, 2021. 2
+[49] Nikhila Ravi, Valentin Gabeur, Yuan-Ting Hu, Ronghang
+Hu, Chaitanya Ryali, Tengyu Ma, Haitham Khedr, Roman
+R¨adle, Chloe Rolland, Laura Gustafson, et al. Sam 2: Seg-
+ment anything in images and videos. In International Con-
+ference on Learning Representations, pages 28085–28128,
+2025. 1, 2
+[50] Mike Roberts, Jason Ramapuram, Anurag Ranjan, Atulit
+Kumar, Miguel Angel Bautista, Nathan Paczan, Russ Webb,
+and Joshua M Susskind. Hypersim: A photorealistic syn-
+thetic dataset for holistic indoor scene understanding.
+In
+2021 IEEE/CVF International Conference on Computer Vi-
+sion (ICCV), pages 10892–10902. IEEE, 2021. 1
+[51] Robin Rombach. High-resolution image synthesis with la-
+tent diffusion models.
+arXiv preprint arXiv:2112.10752,
+2022. 2
+[52] Thomas Schops, Johannes L Schonberger, Silvano Galliani,
+Torsten Sattler, Konrad Schindler, Marc Pollefeys, and An-
+dreas Geiger.
+A multi-view stereo benchmark with high-
+resolution images and multi-camera videos.
+In Proceed-
+ings of the IEEE conference on computer vision and pattern
+recognition, pages 3260–3269, 2017. 5
+[53] Nathan Silberman, Derek Hoiem, Pushmeet Kohli, and Rob
+Fergus.
+Indoor segmentation and support inference from
+rgbd images. In European conference on computer vision,
+pages 746–760. Springer, 2012. 5
+[54] Oriane Sim´eoni, Huy V Vo, Maximilian Seitzer, Federico
+Baldassarre, Maxime Oquab, Cijo Jose, Vasil Khalidov,
+Marc Szafraniec, Seungeun Yi, Micha¨el Ramamonjisoa,
+et al. Dinov3. arXiv preprint arXiv:2508.10104, 2025. 2,
+3, 5
+[55] Igor Vasiljevic, Nick Kolkin, Shanyi Zhang, Ruotian Luo,
+Haochen Wang, Falcon Z Dai, Andrea F Daniele, Moham-
+madreza Mostajabi, Steven Basart, Matthew R Walter, et al.
+Diode: A dense indoor and outdoor depth dataset.
+arXiv
+preprint arXiv:1908.00463, 2019. 5
+[56] JiYuan Wang, Chunyu Lin, Lei Sun, Rongying Liu, Lang
+Nie, Mingxing Li, Kang Liao, and Xiangxiang Chu.
+From editor to dense geometry estimator.
+arXiv preprint
+arXiv:2509.04338, 2025. 2, 6, 4, 7
+[57] Letian Wang, Chuhan Zhang, Rishabh Kabra, Jasper Ui-
+jlings, Steven Waslander, Andrew Zisserman, Joao Carreira,
+Kaiming He, Misha Andriluka, Eduard Gabriel Bazavan,
+Andrei Zanfir, and Cristian Sminchisescu.
+Video genera-
+tion models are general-purpose vision learners. In European
+Conference on Computer Vision (ECCV), 2026. 2
+[58] Ruicheng Wang, Sicheng Xu, Cassie Dai, Jianfeng Xiang,
+Yu Deng, Xin Tong, and Jiaolong Yang.
+Moge:
+Un-
+locking accurate monocular geometry estimation for open-
+domain images with optimal training supervision. In 2025
+IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), pages 5261–5271. IEEE, 2025. 1, 2,
+5, 6, 7, 8
+[59] Ruicheng Wang, Sicheng Xu, Yue Dong, Yu Deng, Jianfeng
+Xiang, Zelong Lv, Guangzhong Sun, Xin Tong, and Jiaolong
+Yang. Moge-2: Accurate monocular geometry with metric
+scale and sharp details. Advances in Neural Information Pro-
+cessing Systems, 38:35928–35959, 2026. 1, 2, 6, 4, 7, 8
+[60] Shuzhe Wang,
+Vincent Leroy,
+Yohann Cabon,
+Boris
+Chidlovskii, and Jerome Revaud. Dust3r: Geometric 3d vi-
+sion made easy. In 2024 IEEE/CVF Conference on Com-
+puter Vision and Pattern Recognition (CVPR), pages 20697–
+20709. IEEE, 2024. 2
+[61] Xudong Wang, Rohit Girdhar, Stella X Yu, and Ishan Misra.
+Cut and learn for unsupervised object detection and instance
+segmentation. In Proceedings of the IEEE/CVF conference
+on computer vision and pattern recognition, pages 3124–
+3134, 2023. 2
+[62] Xinlong Wang, Wen Wang, Yue Cao, Chunhua Shen, and
+Tiejun Huang. Images speak in images: A generalist painter
+for in-context visual learning. In 2023 IEEE/CVF Confer-
+ence on Computer Vision and Pattern Recognition (CVPR),
+pages 6830–6839. IEEE, 2023. 2
+[63] Yangtao Wang, Xi Shen, Shell Xu Hu, Yuan Yuan, James L
+Crowley, and Dominique Vaufreydaz. Self-supervised trans-
+formers for unsupervised object discovery using normal-
+ized cut. In 2022 IEEE/CVF Conference on Computer Vi-
+sion and Pattern Recognition (CVPR), pages 14523–14533.
+IEEE, 2022. 2, 5
+[64] Guangkai Xu, Yongtao Ge, Mingyu Liu, Chengxiang Fan,
+Kangyang Xie, Zhiyue Zhao, Hao Chen, and Chunhua Shen.
+What matters when repurposing diffusion models for gen-
+eral dense perception tasks? In The Thirteenth International
+Conference on Learning Representations, 2025. 1, 2, 7
+[65] Gangwei Xu, Haotong Lin, Hongcheng Luo, Xianqi Wang,
+Jingfeng Yao, Lianghui Zhu, Yuechuan Pu, Cheng Chi ,
+Haiyang Sun, Bing Wang, et al.
+Pixel-perfect depth
+with semantics-prompted diffusion transformers. Advances
+in Neural Information Processing Systems, 38:174731–
+174755, 2026. 2, 3, 6, 7, 8
+[66] Haofei Xu, Rundi Wu, Philipp Henzler, Nikolai Kalischek,
+Michael Oechsle, Fabian Manhardt, Marc Pollefeys, An-
+dreas Geiger, Federico Tombari, and Michael Niemeyer.
+Pointdit: Pixel-space diffusion for monocular geometry esti-
+mation. In Forty-third International Conference on Machine
+Learning, 2026. 2, 3, 5, 6, 8, 1, 4, 7
+[67] Tian-Xing Xu, Xiangjun Gao, Wenbo Hu, Xiaoyu Li, Song-
+Hai Zhang, and Ying Shan. Geometrycrafter: Consistent ge-
+ometry estimation for open-world videos with diffusion pri-
+ors. In 2025 IEEE/CVF International Conference on Com-
+puter Vision (ICCV), pages 1–13. IEEE, 2025. 6, 2, 7, 8
+[68] Zhen Xu, Hongyu Zhou, Sida Peng, Haotong Lin, Haoyu
+Guo, Jiahao Shao, Peishan Yang, Qinglin Yang, Sheng Miao,
+
+
+Xingyi He, et al. Towards depth foundation models: Recent
+trends in vision-based depth estimation. Computational Vi-
+sual Media, 2026. 1
+[69] Haosen Yang, Jifei Song, Zhensong Zhang, Xiatian Zhu,
+and Jiankang Deng. Video generative models as geometry
+learner. In European Conference on Computer Vision, pages
+21–39. Springer, 2026. 2
+[70] Lei Yang, Yan Zi Wei, Yisheng He, Wei Sun, Zhenhang
+Huang, Haibin Huang, and Haoqiang Fan. ishape: A first
+step towards irregular shape instance segmentation. arXiv
+preprint arXiv:2109.15068, 2021. 5
+[71] Lihe Yang, Bingyi Kang, Zilong Huang, Xiaogang Xu, Jiashi
+Feng, and Hengshuang Zhao. Depth anything: Unleashing
+the power of large-scale unlabeled data. In 2024 IEEE/CVF
+Conference on Computer Vision and Pattern Recognition
+(CVPR), pages 10371–10381. IEEE, 2024. 1, 2
+[72] Lihe Yang, Bingyi Kang, Zilong Huang, Zhen Zhao, Xiao-
+gang Xu, Jiashi Feng, and Hengshuang Zhao. Depth any-
+thing v2. Advances in neural information processing sys-
+tems, 37:21875–21911, 2024. 1, 2
+[73] Chongjie Ye,
+Lingteng Qiu,
+Xiaodong Gu,
+Qi Zuo,
+Yushuang Wu, Zilong Dong, Liefeng Bo, Yuliang Xiu, and
+Xiaoguang Han. Stablenormal: Reducing diffusion variance
+for stable and sharp normal. ACM Transactions on Graphics
+(ToG), 43(6):1–18, 2024. 1, 2, 6, 7
+[74] Wei Yin, Chi Zhang, Hao Chen, Zhipeng Cai, Gang Yu,
+Kaixuan Wang, Xiaozhi Chen, and Chunhua Shen. Metric3d:
+Towards zero-shot metric 3d prediction from a single image.
+In 2023 IEEE/CVF International Conference on Computer
+Vision (ICCV), pages 9009–9019. IEEE, 2023. 2
+[75] Amir R Zamir, Alexander Sax, William Shen, Leonidas J
+Guibas, Jitendra Malik, and Silvio Savarese. Taskonomy:
+Disentangling task transfer learning. In Proceedings of the
+IEEE conference on computer vision and pattern recogni-
+tion, pages 3712–3722, 2018. 1, 2
+[76] Lingzhi Zhang, Shenghao Zhou, Simon Stent, and Jianbo
+Shi.
+Fine-grained egocentric hand-object segmentation:
+Dataset, model, and applications. In European Conference
+on Computer Vision, pages 127–145. Springer, 2022. 5
+[77] Libo Zhang, Lutao Jiang, Ruyi Ji, and Heng Fan. Pidray: A
+large-scale x-ray benchmark for real-world prohibited item
+detection.
+International Journal of Computer Vision, 131
+(12):3170–3192, 2023. 5
+[78] Canyu Zhao, Yanlong Sun, Mingyu Liu, Huanyi Zheng,
+Muzhi Zhu, Zhiyue Zhao, Hao Chen, Tong He, and Chun-
+hua Shen. Diception: A generalist diffusion model for visual
+perceptual tasks. Advances in Neural Information Process-
+ing Systems, 38:40108–40155, 2026. 2
+[79] Jia Zheng, Junfei Zhang, Jing Li, Rui Tang, Shenghua Gao,
+and Zihan Zhou.
+Structured3d:
+A large photo-realistic
+dataset for structured 3d modeling. In European Conference
+on Computer Vision, pages 519–535. Springer, 2020. 1
+[80] Bolei Zhou, Hang Zhao, Xavier Puig, Sanja Fidler, Adela
+Barriuso, and Antonio Torralba.
+Scene parsing through
+ade20k dataset. In 2017 IEEE conference on computer vision
+and pattern recognition (CVPR), pages 5122–5130. IEEE,
+2017. 1
+[81] Bolei Zhou, Hang Zhao, Xavier Puig, Tete Xiao, Sanja Fi-
+dler, Adela Barriuso, and Antonio Torralba. Semantic under-
+standing of scenes through the ade20k dataset. International
+journal of computer vision, 127(3):302–321, 2019. 1
+[82] Tianfei Zhou, Wang Xia, Fei Zhang, Boyu Chang, Wenguan
+Wang, Ye Yuan, Ender Konukoglu, and Daniel Cremers. Im-
+age segmentation in foundation model era: A survey. arXiv
+preprint arXiv:2408.12957, 2024. 1
+
+
+PINE: Point, Instance and Normal Estimation in One-Step Diffusion Model
+Supplementary Material
+This supplementary material extends the main paper with
+implementation and evaluation details, further analyses of
+the camera-aware ray encoding and grounding attention,
+complete quantitative results and qualitative comparisons.
+It is organized as follows.
+1. Implementation details (Sec. A) . . . . . . . . . . . . . . . . . . . . 1
+2. Evaluation details (Sec. B) . . . . . . . . . . . . . . . . . . . . . . . . .1
+3. Analysis of the camera-aware ray encoding (Sec. C) . 2
+4. Analysis of grounding attention (Sec. D) . . . . . . . . . . . . 3
+5. Additional quantitative results (Sec. E) . . . . . . . . . . . . . .4
+6. Qualitative results (Sec. F) . . . . . . . . . . . . . . . . . . . . . . . . .6
+A. Implementation Details
+This section complements Secs. 3.4 and 4.1 of the main pa-
+per with the full training and inference setup. Table 7 lists
+the training data. The geometry streams train on the four
+synthetic datasets, and the instance stream also trains on the
+instance labels of EntitySeg and ADE20K. On Hypersim,
+the instance loss uses only the scenes with at least 10 anno-
+tated objects, as in gen2seg [20], which leaves 87K images
+with instance labels. We remove the 555 EntitySeg images
+that come from COCO val2017, so that no test image of
+COCOexc enters training. Tables 8 to 10 list the model sizes,
+the training hyperparameters and the inference settings.
+A.1. Training Losses
+The loss weights in Eq. (9) are λrel = 0.1, λgrad = 0.5 and
+λinst = 0.02. The point-map target xp is normalized for
+shift and scale as in PointDiT [66]. In Eq. (10), the sky pix-
+els add the same error, averaged separately and weighted by
+λsky = 0.01. The gradient loss Lgrad is the multi-scale gra-
+dient matching loss of MiDaS [47] on the log-depth error,
+which sharpens depth edges. The normal loss Lsink follows
+Marigold V2 [42]: inside every 5 × 5 window, a Sinkhorn
+plan matches the predicted normals to the target normals
+before the L1 error is taken. The instance loss Linst follows
+gen2seg [20], which adapts the discriminative loss of [9]. It
+pulls the predicted colors of every instance to their mean,
+pushes all other pixels away from that mean, pushes the
+means of different instances apart and pulls the background
+to black. Given that it uses the instance ids only to group
+pixels, the loss ignores which color an instance takes.
+A.2. Timesteps and Intrinsics
+The noise scale is σ = 2, and each geometry stream draws
+its own timestep ts = sigmoid(ξ) with ξ ∼N(−0.8, 0.82).
+With probability 0.1, ts is set to 0, the timestep of one-
+step inference. Each training image keeps its intrinsics with
+Table 7. Training data. P, N and I mark point map, normal and
+instance labels.
+Dataset
+Domain
+Images
+Labels
+Hypersim [50]
+synthetic indoor
+39,241
+P, N, I
+Virtual KITTI 2 [5]
+synthetic driving
+20,148
+P, N, I
+UrbanSyn [13]
+synthetic urban
+7,539
+P, N, I
+Structured3D [79]
+synthetic indoor
+72,058
+P, N
+EntitySeg [36]
+real
+6,369
+I
+ADE20K [80, 81]
+real
+17,277
+I
+Table 8. Model sizes.
+Model
+DINOv3
+DiT blocks
+Width
+Params (B)
+PINE-B
+ViT-B/16
+12
+768
+0.24
+PINE-L
+ViT-L/16
+24
+1024
+0.80
+PINE-H
+ViT-H+/16
+32
+1280
+1.85
+probability 0.8 and otherwise uses the default camera of
+Sec. 3.2.
+B. Evaluation Details
+This section details the evaluation protocol of Sec. 4.1: the
+alignment, the metrics and the settings of the baselines.
+B.1. Point Maps and Depth
+We center-crop each image to 512 × 512. We align each
+predicted point map ˆP to the ground truth P by a scale s
+and a 3D shift t. For depth, we align the z channel ˆz of
+the predicted point map to the ground-truth depth z by a
+separate scale a and shift b. We solve both alignments by
+the robust fit of MoGe [58],
+min
+s,t
+X
+u∈Ω′
+∥s ˆP(u) + t −P(u)∥1
+∥P(u)∥
+,
+(11)
+min
+a,b
+X
+u∈Ω′
+|aˆz(u) + b −z(u)|
+z(u)
+,
+(12)
+where Ω′ holds the valid pixels of a 64×64 nearest-neighbor
+downsampling. On the valid pixels Ωat full resolution, the
+point map metrics are
+Relp =
+D∥ˆP(u) −P(u)∥
+∥P(u)∥
+E
+Ω,
+(13)
+δp
+1 =
+D
+∥ˆP(u) −P(u)∥< 0.25 min
+ ∥P(u)∥, ∥ˆP(u)∥
+E
+Ω,
+(14)
+
+
+Table 9. Training hyperparameters.
+Hyperparameter
+Value
+Hardware
+8 × NVIDIA A100
+Training time
+∼20 hours for PINE-L
+Initialization
+PointDiT [66]
+Optimizer
+AdamW, β1 = 0.9, β2 = 0.95
+Learning rate
+10−5, constant
+Weight decay
+0
+Gradient clipping
+1.0, max ℓ2 norm
+Epochs
+20
+Samples per epoch
+162,632
+Batch size
+64
+Precision
+bfloat16
+EMA decay
+0.999
+Noise scale σ
+2
+Timestep distribution
+sigmoid(ξ), ξ ∼N(−0.8, 0.82)
+Probability of ts = 0
+0.1
+Clamp of 1 −ts
+0.05
+λrel, λgrad, λinst, λsky
+0.1, 0.5, 0.02, 0.01
+Sinkhorn window
+5 × 5
+Probability of keeping intrinsics
+0.8
+Reference focal length fref
+420 pixels
+Aspect ratio
+log-uniform in [0.5, 3.5]
+Crop side
+0.6 to 1.0 of the largest crop
+Resize
+height to 512, probability 0.5, always
+below 512
+Horizontal flip
+probability 0.5
+Color jitter
+brightness, contrast, saturation 0.1, hue
+0.05
+Blur,
+JPEG,
+autocontrast,
+equalization, channel permuta-
+tion, grayscale
+probability 0.2 each
+Table 10. Inference settings.
+Setting
+Value
+Sampling steps
+1
+Timestep of all streams
+0
+Start of the geometry streams
+N(0, σ2I)
+Start of the instance stream
+0
+Without intrinsics
+default camera with fref
+Focal recovery
+as in MoGe [58]
+Weights
+EMA
+Precision
+bfloat16
+where ˆP is the aligned prediction and [·] is 1 if the condition
+holds and 0 otherwise. Reld and δd
+1 are the same two metrics
+with the aligned depth in place of the point map.
+B.2. Baselines
+We
+compare
+the
+point
+maps
+with
+PointDiT
+[66],
+MoGe [58], MoGe-2 [59], MoGe-3 [24], Foundation-
+Geo [33], UniDepthV2 [45], Depth Pro [3], DA3 [30],
+GeometryCrafter [67] and PPD [65].
+We compare the
+normals with DSINE [1], MoGe-3 [24], Marigold [19],
+Marigold v1.1 [19], Marigold V2 [42], GeoWizard [11],
+StableNormal [73], GenPercept [64], Lotus-D [14], Lotus-
+G [14], E2E-FT [37], FE2E [56], TransNormal [26] and
+TransNormal-2 [27].
+We compare the instances with
+SAM [21], SimpleClick [34] and gen2seg [20]. We com-
+pare all methods without intrinsics and, for the baselines
+that accept them, also with intrinsics. We re-evaluate SAM
+and gen2seg with their released weights under our instance
+protocol and take the other instance results from gen2seg.
+With intrinsics, MoGe-2, MoGe-3 and FoundationGeo re-
+ceive the ground-truth horizontal field of view, because they
+accept no principal point. UniDepthV2 and DA3 receive the
+ground-truth intrinsics. Depth Pro back-projects its depth
+with the ground-truth intrinsics, because its focal length in-
+put only rescales the depth. For depth, we align MoGe,
+MoGe-2 and MoGe-3 in their affine-invariant space and
+Marigold V2 on log depth.
+B.3. Field of View and Planes
+We recover the horizontal field of view from each predicted
+point map by the camera evaluation of MoGe-2, with each
+image at its benchmark resolution and aspect ratio. For pla-
+narity, we align each prediction to the ground-truth depth
+by a least-squares scale and shift, on log depth for Marigold
+V2, before the official per-plane median scaling of iBims-1.
+The 155 planes contain 115 walls, 15 tables and 25 floors,
+and the ground-truth depth itself gives 0.19 cm and 0.20◦.
+B.4. Normals
+The accuracy within 11.25◦is the fraction of valid pixels
+with an angular error below 11.25◦.
+B.5. Instances
+The point prompt of each ground-truth instance is its inte-
+rior point farthest from the instance boundary. All meth-
+ods use the same point prompts. For PINE and gen2seg,
+we select a mask from the instance map by the rule of
+gen2seg [20].
+This rule takes the query color q as a
+Gaussian-weighted mean around the point prompt, with
+σ = 0.01. It scores every pixel of color c by 1/∥c −q∥
+and rescales the scores to [0, 255]. A joint bilateral filter of
+diameter 9, with both σ at 75, smooths the scores, and the
+pixels with a score above 3 form the mask. SAM [21] takes
+the point prompt as one positive point, and we keep the out-
+put mask with the highest predicted IoU. We split COCOexc
+into small, medium and large instances by the COCO area
+thresholds of 322 and 962 pixels.
+C. Camera-Aware Ray Encoding
+This section extends the camera-aware ray encoding abla-
+tion of Sec. 4.3. Figures 8 to 10 analyze the camera-aware
+ray encoding ablation of Tab. 5 with intrinsics.
+
+
+0.0
+0.5
+1.0
+Distance to principal point
+0
+2
+4
+Relative error (%)
+(a)
+0.0
+0.5
+1.0
+Depth rank (near to far)
+(b)
+Final recipe
+w/o camera-aware ray encoding
+lateral 
+depth 
+Figure 8. Error by distance and depth. Lateral error εxy and
+depth error εz in percent of ∥P(u)∥, over the valid pixels of the
+3,444 images with intrinsics. (a) Pixels in 8 bins of the distance to
+the principal point; (b) pixels in 8 bins of the depth rank.
+C.1. Lateral and Depth Error
+Without intrinsics, both models place the tokens on a reg-
+ular grid, but the camera-aware ray encoding still reduces
+Relp from 5.05 to 4.82.
+To locate the gain with intrin-
+sics, we split the aligned error e of each valid pixel into
+a lateral part εxy = ∥(ex, ey)∥/∥P(u)∥and a depth part
+εz = |ez|/∥P(u)∥. Averaged over the valid pixels with
+intrinsics, the encoding reduces εxy from 2.28 to 1.27, by
+44%, but εz only from 3.22 to 2.95, by 8%. It thus mainly
+corrects the lateral position of each point, as Fig. 6 illus-
+trates.
+This matches the back-projection of Sec. 3.2: a
+wrong focal length ˆf keeps the depth and scales x and y
+by f/ ˆf.
+C.2. Error by Distance and Depth
+Figure 8 bins the pixels by their distance to the principal
+point and by their depth rank. The camera-aware ray en-
+coding lowers the lateral error in every bin, while the depth
+error barely changes. The gap in lateral error grows with
+the distance to the principal point. This matches the back-
+projection of Sec. 3.2: a wrong focal length ˆf scales x and
+y by f/ ˆf, which moves a point more the farther it lies from
+the principal point. Figure 10 shows this pattern on one im-
+age.
+C.3. Training
+Figure 9 shows that the gap is not a matter of training
+time. Without the encoding, Relp stalls near 5.0 after a few
+epochs, the value it also reaches without intrinsics. With
+the encoding, Relp keeps dropping to 3.94, and the mean
+angular error stays lower over all epochs.
+1
+5
+10
+15
+20
+4.0
+4.5
+5.0
+Rel
+p ↓
+1
+5
+10
+15
+20
+17.5
+18.0
+18.5
+19.0
+19.5
+Normal error (°) ↓
+Epoch
+Full
+w/o camera-aware ray encoding
+Figure 9.
+Effect of the camera-aware ray encoding during
+training. Relp and mean angular error with intrinsics over the
+training epochs of the ablation model in Tab. 5, with and without
+the camera-aware ray encoding.
+Image / GT
+w/o camera-aware
+ray encoding
+Full
+Figure 10.
+Point error with and without the camera-aware
+ray encoding. Top: input image and predicted depth. Bottom:
+ground-truth depth and point error maps.
+D. Grounding Attention
+This section extends the grounding attention ablation of
+Sec. 4.3. Table 11 and Figs. 11 and 12 analyze how the
+grounding attention of Sec. 3.3 changes the attention.
+D.1. Region Mass
+The region mass of a query patch is the share of its attention
+that falls on its own region. For the instance stream, the re-
+gion is the ground-truth instance that covers more than half
+of the patch. For the normal stream, the region is the con-
+nected set of patches whose normals lie within 10◦of the
+normal of the query patch. We run each model once per
+image and compute the attention of every block twice, with
+and without grounding attention, that is, with and without
+the bias in the logits. Chance is the region mass of uniform
+attention, the area share of the region. The gain is the rel-
+ative increase of the region mass above chance. Table 11
+shows that grounding attention raises the region mass on all
+
+
+Table 11. Region mass with and without grounding attention. Region mass in percent, averaged over all blocks and all query patches
+of a benchmark, and All pools the query patches of a stream. Chance is the region mass of uniform attention. The blue number is the gain,
+the relative increase of the region mass above chance.
+Instance
+Normal
+Model
+Grounding
+attention
+COCOexc
+DRAM
+EgoHOS
+iShape
+PIDRay
+All
+NYUv2
+ScanNet
+iBims-1
+Sintel
+All
+Chance
+24.5
+33.7
+12.4
+8.6
+5.5
+17.0
+5.1
+12.9
+14.5
+3.6
+5.3
+PINE-B w/o
+35.5
+44.3
+23.7
+13.7
+20.4
+27.0
+11.7
+19.8
+22.5
+6.5
+9.5
+with
+36.6↑9.6%
+44.8↑4.5%
+25.4↑14.9% 14.4↑13.2% 22.8↑15.5% 28.1↑11.7% 13.2↑22.4% 21.2↑21.0% 24.2↑21.9% 7.5↑32.4% 10.6↑26.8%
+PINE-L w/o
+32.8
+41.4
+20.0
+12.0
+17.3
+24.3
+10.1
+18.1
+20.9
+5.8
+8.4
+with
+33.9↑13.8% 42.2↑11.0% 21.5↑19.9% 12.7↑20.7% 19.0↑15.2% 25.4↑15.6% 11.1↑20.3% 19.2↑22.0% 22.1↑19.4% 6.5↑35.2%
+9.3↑27.3%
+PINE-H w/o
+33.5
+43.9
+20.5
+12.1
+17.2
+24.8
+10.8
+18.9
+21.6
+6.2
+9.0
+with
+34.5↑11.6% 44.8↑8.8%
+21.7↑15.3% 12.5↑11.8% 18.6↑11.8% 25.8↑12.0% 11.5↑13.5% 19.6↑11.3% 22.5↑12.6% 6.7↑22.0%
+9.6↑17.1%
+0.0
+0.5
+1.0
+Block depth
+20
+25
+30
+Region mass (%)
+(a) Instance
+0.0
+0.5
+1.0
+Block depth
+8
+10
+12
+(b) Normal
+with grounding attention
+w/o grounding attention
+Figure 11. Region mass over the depth of PINE-L. Region mass
+with and without grounding attention for (a) the instance stream
+and (b) the normal stream. Each point averages three consecu-
+tive blocks and pools the query patches of all benchmarks of the
+stream.
+nine benchmarks for all three models. For PINE-L, the gain
+is 15.6% on the instance stream and 27.3% on the normal
+stream. This agrees with Tab. 5, where removing grounding
+attention lowers the COCOexc mIoU from 33.0 to 32.1 and
+raises the mean angular error from 18.23 to 18.47.
+D.2. Blocks
+Figure 11 plots the region mass of PINE-L over the depth
+of the network. Grounding attention raises the region mass
+at every depth for both streams. For the normal stream, the
+increase is largest in the second half of the network, at 1.5
+percentage points.
+D.3. Attention Maps
+Figure 12 shows the attention of one query patch of PINE-H
+on four selected images, averaged over all blocks. For the
+normal stream, the query patch is the patch with the largest
+Table 12. Field-of-view estimation. Mean absolute error in de-
+grees of the horizontal field of view recovered from the predicted
+point map without intrinsics.
+The Avg column is the sample-
+weighted mean over all 3,444 images.
+Method
+DIODE KITTI NYUv2
+ETH3D HAMMER
+iBims-1
+Booster
+Avg
+MoGe-2 [59]
+6.61
+10.64
+1.60
+3.73
+12.18
+4.77
+9.88
+7.28
+MoGe-3 [24]
+7.70
+12.02
+1.61
+4.00
+13.75
+5.54
+11.78
+8.22
+FoundationGeo [33]
+8.01
+4.56
+2.57
+4.43
+12.18
+4.49
+8.68
+6.70
+PointDiT-B [66]
+8.11
+17.65
+5.54
+20.11
+17.48
+6.70
+8.12
+13.08
+PointDiT-L [66]
+8.34
+14.02
+4.48
+11.00
+13.16
+5.35
+8.48
+10.03
+PointDiT-H [66]
+9.38
+19.70
+6.88
+12.92
+19.30
+6.81
+7.26
+13.46
+PINE-B
+7.97
+5.76
+7.30
+9.90
+6.66
+6.26
+7.59
+7.33
+PINE-L
+7.34
+5.45
+7.69
+7.80
+4.97
+4.93
+5.16
+6.48
+PINE-H
+7.76
+4.91
+4.01
+6.97
+3.70
+3.86
+5.63
+5.35
+region. For the instance stream, it is the middle patch of the
+largest instance. As in Fig. 4, grounding attention concen-
+trates the attention of the query patch on its own region.
+E. Additional Results
+This section gives the complete quantitative results behind
+the averages and summaries of Sec. 4.2.
+E.1. Point Maps
+Table 17 gives the per-dataset point map results that Tab. 1
+averages. PINE-H has the lowest average Relp in both set-
+tings without leading every dataset. Without intrinsics, it
+has the lowest Relp on HAMMER, ranks second on Booster
+and third on ETH3D. With intrinsics, it has the lowest Relp
+on DIODE, HAMMER, iBims-1 and Booster.
+E.2. Surface Normals
+Table 18 adds Marigold, Marigold v1.1, GenPercept,
+TransNormal and Lotus-G to Tab. 2. We evaluate MoGe-
+3, Marigold V2, TransNormal, TransNormal-2 and PINE
+ourselves and take the other results from FE2E [56]. The
+average rank is the mean rank over the eight metrics among
+the methods without intrinsics. PINE-H keeps the best av-
+erage rank among all these methods.
+
+
+nyuv2 218
+without bias: region mass 15.0%
+with bias: region mass 17.1%
+difference: +2.1 points
+ibims 33
+without bias: region mass 38.6%
+with bias: region mass 43.6%
+difference: +4.9 points
+dram impressionism/claude-monet/1882_212234
+without bias: region mass 51.5%
+with bias: region mass 52.8%
+difference: +1.3 points
+pidray 6321
+without bias: region mass 19.2%
+with bias: region mass 21.3%
+difference: +2.1 points
+Figure 12. Attention with and without grounding attention. Each row shows the image, the attention of the query patch without and
+with grounding attention, and their difference. The cross marks the query patch, and the contour marks its region.
+E.3. Depth
+Table 19 gives the per-dataset depth results that Tab. 1 av-
+erages. Without intrinsics, PINE-H has the lowest Reld on
+ETH3D, HAMMER and Booster.
+E.4. Field of View
+Table 12 gives the per-dataset field-of-view errors behind
+Tab. 4. At every model size, PINE lowers the average error
+of PointDiT, from 13.08◦to 7.33◦for B, from 10.03◦to
+6.48◦for L and from 13.46◦to 5.35◦for H.
+E.5. Planarity
+Table 16 gives the planarity on iBims-1. At every model
+size, PINE lowers the planarity error of PointDiT over all
+planes, from 1.00 to 0.85 cm for B, from 0.82 to 0.61 cm for
+L and from 0.62 to 0.54 cm for H. MoGe-3 keeps the lowest
+planarity error, 0.44 cm.
+E.6. Cost
+Tables 13 and 14 give the parameters and latencies behind
+Fig. 7. PINE-H predicts all three maps in 137 ms, while the
+fastest baseline pipeline, MoGe-2 with SAM, takes 493 ms.
+One forward pass thus costs less than one model per map.
+E.7. Sampling Steps
+Table 15 evaluates PINE with one to four sampling steps.
+From one to two steps, Relp changes by at most 0.04 for ev-
+ery model, and more steps raise all errors slightly. The mean
+angular error rises with every added step. PINE therefore
+uses one sampling step.
+
+
+Table 13. Cost of single models for one 512 × 512 image with
+batch size one on one A100. P, D, N and I mark point map, depth,
+normal and instance outputs, and SAM and SimpleClick take one
+point prompt.
+Method
+Output
+Params (B)
+Latency (ms) ↓
+Depth Pro [3]
+P
+0.95
+909.3
+UniDepthV2 [45]
+P
+0.35
+23.3
+DA3 [30]
+P
+1.36
+97.3
+MoGe-2 [59]
+P+N
+0.33
+67.9
+MoGe-3 [24]
+P+N
+0.37
+360.5
+FoundationGeo [33]
+P
+0.31
+90.1
+MoGe [58]
+P
+0.31
+86.0
+GeometryCrafter [67]
+P
+2.67
+964.7
+PPD (4 steps) [65]
+P
+0.80
+691.9
+Lotus-G [14]
+N
+1.29
+202.7
+DSINE [1]
+N
+0.07
+56.1
+FE2E [56]
+D+N
+12.5
+1808.3
+Marigold V2 [42] (depth)
+D
+21.4
+491.6
+Marigold V2 [42] (normal)
+N
+21.4
+482.0
+SAM (ViT-H) [21]
+I
+0.64
+425.1
+SimpleClick (ViT-H) [34]
+I
+0.66
+189.2
+gen2seg [20]
+I
+1.29
+371.5
+PointDiT-B [66]
+P
+0.22
+23.3
+PointDiT-L [66]
+P
+0.77
+45.8
+PointDiT-H [66]
+P
+1.81
+62.5
+PINE-B
+P+N+I
+0.24
+43.8
+PINE-L
+P+N+I
+0.80
+82.6
+PINE-H
+P+N+I
+1.85
+136.6
+Table 14. Cost of the three maps. Each baseline pipeline runs
+one model per map, and its latency sums the latencies in Tab. 13.
+Marigold V2 runs its depth and normal models, which share 21.3B
+parameters.
+Pipeline
+Params (B)
+Latency (ms) ↓
+MoGe-2 [59] + SAM [21]
+0.97
+493
+PointDiT-H [66] + DSINE [1] + SAM [21]
+2.52
+544
+MoGe-3 [24] + SAM [21]
+1.01
+786
+UniDepthV2 [45] + Marigold V2 [42] (N) + SAM [21]
+22.4
+930
+Marigold V2 [42] (D+N) + SAM [21]
+22.3
+1399
+FE2E [56] + SAM [21]
+13.2
+2233
+PINE-H
+1.85
+137
+Table 15. Sampling steps. Point-map and depth metrics over the
+3,444 images and normal metrics averaged over the four normal
+benchmarks. Best results within each model are in bold.
+Model
+Steps
+Relp ↓
+δp
+1 ↑
+Reld ↓
+δd
+1 ↑
+Mean ↓
+11.25◦↑
+w/o K
+with K
+w/o K
+w/o K
+with K
+w/o K
+w/o K
+with K
+w/o K
+with K
+PINE-B
+1
+5.62
+4.69
+96.75
+3.70
+3.60
+97.75
+19.63
+19.34
+53.7
+54.5
+2
+5.62
+4.65
+96.74
+3.69
+3.58
+97.72
+19.84
+19.55
+53.8
+54.5
+3
+5.69
+4.69
+96.70
+3.75
+3.63
+97.67
+20.11
+19.81
+53.5
+54.3
+4
+5.77
+4.75
+96.65
+3.82
+3.68
+97.61
+20.33
+20.02
+53.3
+54.0
+PINE-L
+1
+4.70
+3.76
+97.78
+3.04
+2.92
+98.29
+18.17
+17.68
+57.2
+58.4
+2
+4.72
+3.73
+97.74
+3.04
+2.92
+98.27
+18.40
+17.91
+57.0
+58.2
+3
+4.77
+3.78
+97.70
+3.09
+2.95
+98.24
+18.66
+18.17
+56.7
+57.9
+4
+4.83
+3.82
+97.65
+3.14
+3.00
+98.20
+18.86
+18.37
+56.5
+57.7
+PINE-H
+1
+4.16
+3.33
+98.13
+2.79
+2.65
+98.51
+17.31
+16.98
+59.2
+59.9
+2
+4.13
+3.33
+98.13
+2.80
+2.65
+98.49
+17.53
+17.20
+58.9
+59.7
+3
+4.19
+3.38
+98.08
+2.84
+2.69
+98.47
+17.77
+17.44
+58.6
+59.4
+4
+4.24
+3.42
+98.05
+2.88
+2.73
+98.41
+17.95
+17.62
+58.4
+59.1
+F. Qualitative Results
+This section complements Fig. 5 of the main paper with
+more examples. Figures 13 to 15 compare the point maps,
+Table 16. Planarity on iBims-1. Planarity error εplan in cm and
+orientation error εorie in degrees over 155 planes of 100 images.
+All models run without intrinsics on the full frame.
+All
+Wall
+Table
+Floor
+Method
+εplan↓εorie↓εplan↓εorie↓εplan↓εorie↓εplan↓εorie↓
+MoGe-2 [59]
+0.57
+1.92
+0.64
+2.05
+0.31
+1.81
+0.42
+1.39
+MoGe-3 [24]
+0.44
+1.96
+0.48
+2.05
+0.31
+1.89
+0.34
+1.58
+FoundationGeo [33]
+0.83
+2.42
+0.96
+2.69
+0.36
+1.78
+0.52
+1.57
+Marigold V2 [42]
+0.78
+2.50
+0.87
+2.77
+0.47
+2.22
+0.58
+1.44
+PointDiT-B [66]
+1.00
+3.00
+1.13
+3.20
+0.66
+2.49
+0.61
+2.37
+PointDiT-L [66]
+0.82
+2.35
+0.94
+2.61
+0.38
+1.80
+0.52
+1.53
+PointDiT-H [66]
+0.62
+2.30
+0.68
+2.38
+0.32
+2.49
+0.52
+1.84
+PINE-B
+0.85
+2.53
+0.87
+2.47
+0.77
+3.09
+0.79
+2.46
+PINE-L
+0.61
+2.10
+0.63
+2.20
+0.35
+2.18
+0.66
+1.63
+PINE-H
+0.54
+2.10
+0.56
+2.14
+0.37
+2.13
+0.54
+1.89
+Fig. 16 the depth, Fig. 17 the surface normals, Fig. 18 the
+planes of iBims-1, and Figs. 19 and 20 the point-prompted
+instances of PINE and the baselines.
+
+
+Table 17. Per-dataset point map results. The Avg column is the sample-weighted mean over all 3,444 images.
+Method
+DIODE
+KITTI
+NYUv2
+ETH3D
+HAMMER
+iBims-1
+Booster
+Avg
+Relp↓
+δp
+1↑
+Relp↓
+δp
+1↑
+Relp↓
+δp
+1↑
+Relp↓
+δp
+1↑
+Relp↓
+δp
+1↑
+Relp↓
+δp
+1↑
+Relp↓
+δp
+1↑
+Relp↓
+δp
+1↑
+Without intrinsics
+GeometryCrafter [67]
+5.88
+95.06
+4.84
+97.97
+4.10
+98.64
+5.46
+97.03
+6.75
+95.46
+5.50
+97.23
+3.73
+99.31
+5.45
+96.75
+PPD [65]
+6.35
+93.68
+7.04
+96.16
+4.10
+98.27
+5.08
+97.36
+5.19
+97.69
+4.55
+97.97
+3.32
+98.73
+5.54
+96.59
+Depth Pro [3]
+6.36
+94.11
+7.33
+95.97
+4.08
+98.48
+5.90
+96.85
+5.27
+98.03
+4.54
+98.11
+2.87
+99.81
+5.71
+96.71
+UniDepthV2 [45]
+6.02
+94.35
+4.03
+98.26
+3.29
+98.52
+4.02
+98.79
+4.57
+97.53
+4.07
+98.34
+3.78
+98.90
+4.45
+97.35
+DA3 [30]
+5.47
+93.68
+6.37
+96.72
+3.67
+98.20
+3.44
+98.20
+4.60
+96.95
+4.08
+97.81
+2.92
+99.03
+4.77
+96.63
+MoGe [58]
+4.25
+96.37
+4.10
+98.10
+3.48
+98.63
+3.35
+98.99
+5.51
+95.95
+3.95
+97.82
+2.74
+99.06
+4.21
+97.45
+MoGe-2 [59]
+4.57
+95.28
+5.87
+97.86
+3.13
+98.83
+3.73
+98.71
+5.19
+97.19
+4.00
+98.27
+2.59
+99.90
+4.53
+97.46
+MoGe-3 [24]
+4.91
+95.14
+6.04
+98.11
+3.09
+98.84
+3.67
+99.02
+5.91
+96.53
+4.05
+97.91
+2.98
+99.38
+4.79
+97.36
+FoundationGeo [33]
+5.44
+95.07
+5.21
+98.01
+3.43
+98.80
+3.83
+98.67
+4.71
+98.41
+4.08
+98.61
+3.08
+99.61
+4.57
+97.71
+PointDiT-B [66]
+6.75
+93.63
+5.54
+96.93
+5.08
+97.49
+6.46
+96.84
+5.68
+98.49
+4.96
+97.75
+3.72
+99.74
+5.84
+96.69
+PointDiT-L [66]
+5.88
+94.81
+5.25
+97.44
+4.32
+98.09
+5.02
+97.53
+4.23
+99.17
+4.24
+98.10
+3.11
+99.88
+4.90
+97.42
+PointDiT-H [66]
+5.27
+95.87
+5.21
+97.79
+3.93
+98.37
+4.53
+97.93
+3.51
+99.55
+3.95
+98.52
+3.06
+99.86
+4.45
+97.93
+PINE-B
+6.60
+93.17
+6.54
+96.64
+5.21
+97.45
+4.77
+97.86
+4.86
+98.95
+5.26
+97.19
+3.60
+99.69
+5.62
+96.75
+PINE-L
+5.39
+95.53
+5.40
+97.36
+4.87
+97.91
+4.22
+98.59
+3.74
+99.60
+4.20
+98.40
+2.75
+99.88
+4.70
+97.78
+PINE-H
+5.00
+96.16
+5.23
+97.74
+4.10
+98.21
+3.46
+98.97
+2.96
+99.70
+4.11
+98.75
+2.72
+99.89
+4.16
+98.13
+With intrinsics
+Depth Pro [3]
+5.64
+95.07
+4.30
+97.49
+3.93
+98.48
+5.09
+97.22
+4.00
+98.36
+3.59
+98.33
+2.71
+99.92
+4.53
+97.35
+UniDepthV2 [45]
+4.77
+95.81
+3.32
+98.36
+3.14
+98.80
+3.11
+99.02
+3.84
+98.27
+3.28
+98.54
+3.11
+98.82
+3.70
+97.95
+DA3 [30]
+4.93
+94.16
+4.47
+97.40
+3.49
+98.13
+3.21
+98.26
+3.58
+98.01
+3.05
+98.08
+2.93
+99.00
+3.96
+97.10
+MoGe-2 [59]
+4.25
+96.00
+5.56
+97.91
+3.05
+98.86
+3.47
+98.82
+5.30
+96.85
+3.84
+98.63
+2.65
+99.58
+4.38
+97.58
+MoGe-3 [24]
+4.68
+95.41
+6.36
+97.96
+3.05
+98.85
+3.51
+98.95
+5.59
+96.40
+3.96
+97.98
+2.81
+99.37
+4.70
+97.35
+FoundationGeo [33]
+5.19
+95.53
+5.27
+98.06
+3.35
+98.87
+3.67
+98.77
+4.31
+98.40
+4.00
+98.57
+3.00
+99.59
+4.40
+97.85
+PINE-B
+5.70
+93.88
+4.88
+97.16
+4.43
+97.68
+4.70
+97.94
+3.85
+98.94
+4.41
+97.31
+2.99
+99.74
+4.69
+97.06
+PINE-L
+4.52
+95.59
+4.39
+97.54
+3.46
+98.26
+4.11
+98.63
+2.68
+99.61
+3.06
+98.55
+2.19
+99.77
+3.76
+97.90
+PINE-H
+4.14
+96.13
+4.04
+97.84
+3.18
+98.53
+3.43
+98.98
+2.11
+99.73
+2.99
+98.80
+2.11
+99.89
+3.33
+98.21
+Table 18. Quantitative comparison on zero-shot surface normal estimation with all baselines. Mean angular error in degrees and
+accuracy within 11.25◦under the full-frame protocol of DSINE. ⋆: relies on pretrained Stable Diffusion; ‡: the Marigold normal model of
+its repository.
+Method
+NYUv2 (Indoor)
+ScanNet (Indoor)
+iBims-1 (Indoor)
+Sintel (Outdoor)
+Avg.
+Rank ↓
+MeanErr ↓11.25◦↑MeanErr ↓11.25◦↑MeanErr ↓11.25◦↑MeanErr ↓11.25◦↑
+Without intrinsics
+Marigold [19]‡⋆
+20.9
+50.5
+21.3
+45.6
+18.5
+64.7
+–
+–
+16.5
+GeoWizard [11]⋆
+18.9
+50.7
+17.4
+53.8
+19.3
+63.0
+40.3
+12.3
+15.9
+GenPercept [64]⋆
+18.2
+56.3
+17.7
+58.3
+18.2
+64.0
+37.6
+16.2
+14.4
+StableNormal [73]⋆
+18.6
+53.5
+17.1
+57.4
+18.2
+65.0
+36.7
+14.1
+14.3
+TransNormal [26]⋆
+16.6
+59.4
+15.5
+62.4
+17.2
+67.2
+35.1
+18.7
+12.0
+Lotus-G [14]
+16.5
+59.4
+15.1
+63.9
+17.2
+66.2
+33.6
+21.0
+11.2
+DSINE [1]
+16.4
+59.6
+16.2
+61.0
+17.1
+67.4
+34.9
+21.5
+10.8
+Lotus-D [14]⋆
+16.2
+59.8
+14.7
+64.0
+17.1
+66.4
+32.3
+22.4
+8.8
+E2E-FT [37]⋆
+16.5
+60.4
+14.7
+66.1
+16.1
+69.7
+33.5
+22.3
+8.3
+Marigold v1.1 [19]
+16.1
+60.5
+14.5
+66.1
+16.3
+68.5
+–
+–
+7.2
+FE2E [56]
+16.2
+59.6
+13.8
+67.2
+15.1
+70.6
+31.2
+22.3
+6.1
+Marigold V2 [42]
+16.0
+61.6
+13.8
+67.9
+15.2
+71.9
+29.7
+27.3
+4.3
+TransNormal-2 [27]⋆
+14.9
+62.4
+12.9
+69.1
+15.1
+70.1
+28.2
+28.1
+3.1
+MoGe-3 [24]
+14.7
+62.3
+12.8
+68.9
+14.8
+70.1
+26.4
+29.1
+2.4
+PINE-B
+16.4
+59.2
+15.3
+63.0
+16.5
+68.5
+30.4
+24.1
+9.3
+PINE-L
+15.7
+61.9
+14.1
+66.4
+15.5
+70.9
+27.5
+29.6
+4.3
+PINE-H
+15.3
+63.1
+13.3
+69.2
+15.1
+71.8
+25.6
+32.5
+1.9
+With intrinsics
+PINE-B
+16.3
+59.7
+14.9
+64.7
+16.2
+69.0
+30.0
+24.6
+–
+PINE-L
+15.6
+62.5
+13.6
+68.5
+15.1
+71.7
+26.5
+30.9
+–
+PINE-H
+15.1
+63.5
+13.0
+70.0
+14.8
+72.2
+25.0
+34.0
+–
+
+
+Table 19. Per-dataset depth results. The Avg column is the sample-weighted mean over all 3,444 images.
+Method
+DIODE
+KITTI
+NYUv2
+ETH3D
+HAMMER
+iBims-1
+Booster
+Avg
+Reld↓
+δd
+1↑
+Reld↓
+δd
+1↑
+Reld↓
+δd
+1↑
+Reld↓
+δd
+1↑
+Reld↓
+δd
+1↑
+Reld↓
+δd
+1↑
+Reld↓
+δd
+1↑
+Reld↓
+δd
+1↑
+Without intrinsics
+GeometryCrafter [67]
+3.74
+96.89
+3.73
+98.20
+2.99
+98.82
+3.26
+98.38
+3.86
+97.24
+2.95
+98.06
+2.25
+99.14
+3.52
+97.84
+PPD [65]
+4.69
+95.86
+4.81
+97.47
+3.57
+98.38
+4.15
+97.69
+2.57
+99.33
+3.11
+98.44
+2.56
+99.21
+3.88
+97.78
+Depth Pro [3]
+4.40
+95.84
+4.10
+97.59
+3.34
+98.65
+4.16
+97.65
+2.98
+98.83
+2.83
+98.60
+1.88
+99.92
+3.72
+97.74
+UniDepthV2 [45]
+3.62
+97.11
+3.25
+98.44
+2.60
+98.84
+2.65
+99.00
+2.23
+99.42
+2.46
+98.49
+2.27
+98.98
+2.86
+98.52
+DA3 [30]
+3.73
+96.26
+3.96
+97.40
+2.96
+98.46
+2.74
+98.45
+2.74
+98.63
+2.54
+98.35
+2.22
+99.42
+3.22
+97.81
+MoGe [58]
+3.17
+97.32
+3.26
+98.33
+2.64
+98.90
+2.53
+99.17
+3.75
+96.92
+2.57
+98.14
+2.21
+99.16
+3.10
+98.01
+MoGe-2 [59]
+2.89
+97.79
+3.10
+98.48
+2.54
+98.95
+2.58
+99.12
+3.24
+98.38
+2.17
+98.91
+1.94
+99.67
+2.87
+98.50
+MoGe-3 [24]
+3.00
+97.62
+3.04
+98.51
+2.56
+98.95
+2.49
+99.28
+3.35
+98.10
+2.18
+98.94
+1.99
+99.50
+2.90
+98.43
+FoundationGeo [33]
+3.38
+97.43
+3.32
+98.44
+2.69
+99.03
+2.72
+99.37
+2.67
+98.66
+2.49
+98.86
+2.08
+99.61
+2.95
+98.52
+Marigold V2 [42]
+4.48
+97.55
+3.96
+98.31
+3.50
+98.82
+3.46
+98.98
+2.52
+99.34
+2.89
+98.84
+1.97
+99.64
+3.55
+98.59
+PointDiT-B [66]
+4.08
+96.75
+4.28
+97.28
+3.58
+98.01
+3.43
+97.92
+3.23
+99.01
+3.02
+98.52
+2.63
+99.72
+3.70
+97.84
+PointDiT-L [66]
+3.48
+97.29
+4.07
+97.58
+3.05
+98.47
+2.96
+98.19
+2.40
+99.33
+2.49
+98.73
+1.99
+99.87
+3.15
+98.22
+PointDiT-H [66]
+3.01
+97.82
+3.91
+97.88
+2.79
+98.65
+2.64
+98.45
+1.90
+99.54
+2.38
+98.73
+1.84
+99.86
+2.81
+98.51
+PINE-B
+4.28
+96.12
+4.61
+97.17
+3.61
+98.00
+3.38
+98.20
+2.75
+99.20
+3.19
+98.29
+2.43
+99.74
+3.70
+97.75
+PINE-L
+3.40
+97.02
+4.19
+97.45
+3.00
+98.48
+2.71
+98.89
+2.07
+99.62
+2.49
+98.67
+1.89
+99.88
+3.04
+98.29
+PINE-H
+3.17
+97.42
+4.00
+97.85
+2.80
+98.57
+2.41
+99.06
+1.71
+99.67
+2.35
+98.83
+1.80
+99.88
+2.79
+98.51
+With intrinsics
+Depth Pro [3]
+4.39
+95.84
+4.10
+97.59
+3.34
+98.65
+4.18
+97.65
+2.98
+98.83
+2.83
+98.60
+1.88
+99.92
+3.72
+97.74
+UniDepthV2 [45]
+3.70
+96.94
+3.20
+98.39
+2.61
+98.87
+2.64
+99.16
+2.18
+99.48
+2.63
+98.61
+2.23
+99.06
+2.87
+98.52
+DA3 [30]
+3.73
+96.20
+3.89
+97.46
+3.01
+98.38
+2.73
+98.47
+2.52
+99.08
+2.57
+98.28
+2.31
+99.27
+3.17
+97.89
+MoGe-2 [59]
+2.89
+97.79
+3.10
+98.48
+2.54
+98.95
+2.58
+99.12
+3.24
+98.37
+2.17
+98.91
+1.94
+99.66
+2.87
+98.50
+MoGe-3 [24]
+3.00
+97.62
+3.04
+98.51
+2.56
+98.95
+2.49
+99.29
+3.35
+98.10
+2.18
+98.94
+1.99
+99.50
+2.90
+98.43
+FoundationGeo [33]
+3.38
+97.43
+3.32
+98.44
+2.69
+99.03
+2.72
+99.37
+2.67
+98.66
+2.49
+98.86
+2.08
+99.61
+2.95
+98.52
+PINE-B
+4.21
+95.99
+4.39
+97.23
+3.57
+98.03
+3.39
+98.19
+2.62
+99.28
+3.18
+98.17
+2.29
+99.83
+3.60
+97.75
+PINE-L
+3.37
+97.02
+4.04
+97.60
+2.90
+98.50
+2.71
+98.87
+1.77
+99.63
+2.45
+98.55
+1.73
+99.76
+2.92
+98.32
+PINE-H
+3.10
+97.39
+3.78
+97.92
+2.72
+98.64
+2.41
+99.05
+1.41
+99.72
+2.35
+98.66
+1.59
+99.89
+2.65
+98.54
+
+
+Image / GT
+MoGe-2
+MoGe-3
+FoundationGeo
+PointDiT-H
+PINE
+Figure 13. Point maps (1/3). For each image, the first row shows the input and the predicted point maps, and the second row shows the
+ground-truth point map and the point error map of each method.
+
+
+Image / GT
+MoGe-2
+MoGe-3
+FoundationGeo
+PointDiT-H
+PINE
+Figure 14. Point maps (2/3). For each image, the first row shows the input and the predicted point maps, and the second row shows the
+ground-truth point map and the point error map of each method.
+
+
+Image / GT
+MoGe-2
+MoGe-3
+FoundationGeo
+PointDiT-H
+PINE
+Figure 15. Point maps (3/3). For each image, the first row shows the input and the predicted point maps, and the second row shows the
+ground-truth point map and the point error map of each method.
+
+
+Image / GT
+MoGe-2
+MoGe-3
+Marigold V2
+PointDiT-H
+PINE
+Figure 16. Depth. For each image, the first row shows the input and the predicted depth maps, and the second row shows the ground-truth
+depth and the depth error map of each method.
+
+
+Image / GT
+DSINE
+Lotus-G
+MoGe-3
+Marigold V2
+PINE
+Figure 17. Surface normals. For each image, the first row shows the input and the predicted normals, and the second row shows the
+ground-truth normals and the angular error map of each method.
+
+
+Image
+GT
+MoGe-2
+MoGe-3
+FoundationGeo
+Marigold V2
+PointDiT-H
+PINE
+Figure 18. Planarity on iBims-1. Each row shows the input and, for the ground truth and each method, the signed distance of each point
+to the plane fitted to its annotated plane region. Red and blue mark the two sides of the plane, and gray marks pixels outside the planes.
+
+
+Image
+GT
+SAM
+gen2seg
+PINE
+Image
+GT
+SAM
+gen2seg
+PINE
+Figure 19. Point-prompted instances (1/2). Each row shows the input with its point prompt, the ground-truth instance and the masks of
+SAM, gen2seg and PINE for the same prompt.
+
+
+Image
+GT
+SAM
+gen2seg
+PINE
+Image
+GT
+SAM
+gen2seg
+PINE
+Figure 20. Point-prompted instances (2/2). Each row shows the input with its point prompt, the ground-truth instance and the masks of
+SAM, gen2seg and PINE for the same prompt.

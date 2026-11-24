@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-11-22</span>
+      <span class="dpr-home-dashboard-kicker">2026-11-24</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 25 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 39 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>10</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>24</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>15</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-11-22 00:11:18 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-11-24 05:18:12 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,9 +69,10 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-11-22：从具身智能到多视角生成，今日完成 25 篇论文筛选，精读 10 篇、速读 15 篇。</p>
-<p>最值得关注的是具身语言智能体的自进化动作约束，以及提升多视角生成效率的迭代式全局—局部注意力。</p>
-<p>建议先读这两篇精读论文，再按兴趣浏览机器人仿真、动作控制与视觉语言动作策略方向。</p>
+<p>今日共生成 39 篇推荐（精读 24 篇，速读 15 篇）</p>
+<p>精读：《PINE: Point, Instance and Normal Estimation in One-Step Diffusion Model》（10.0/10）, 《VG3R: Video Generation Model for Feed-Forward 3D Reconstruction》（9.5/10）</p>
+<p>速读：《RoboColiseum: Co-evolution of Simulation, Evaluation, and Models》（8.5/10）, 《GAAFormer: Geometry-Anchored Attention Transformer for Joint Point Cloud Denoising and Upsampling》（8.5/10）, 《QuantStream3D: Geometry-Aligned Low-Bit KV Cache Quantization for Streaming Visual Geometry Transformers》（8.5/10）</p>
+<p>这些结果覆盖了当下较热的方向，建议先看精读区论文的关键问题与方法。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -80,12 +81,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">10 篇</strong>
+    <strong class="dpr-home-dashboard-count">24 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="MetaAct: Self-Evolving Executable Action Constraints for Embodied Language Agents">MetaAct: Self-Evolving Executable Action Constraints for Embodied Language Agents</span></li><li><span class="dpr-home-dashboard-paper-title" title="Efficient Multi-View Generation with Iterative Global-Local Proxy Attention">Efficient Multi-View Generation with Iterative Global-Local Proxy Attention</span></li><li><span class="dpr-home-dashboard-paper-title" title="UNITE: Consolidating Embodied VLM Specialists via Shared-Anchor One-Bit Factorization">UNITE: Consolidating Embodied VLM Specialists via Shared-Anchor One-Bit Factorization</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="PINE: Point, Instance and Normal Estimation in One-Step Diffusion Model">PINE: Point, Instance and Normal Estimation in One-Step Diffusion Model</span></li><li><span class="dpr-home-dashboard-paper-title" title="VG3R: Video Generation Model for Feed-Forward 3D Reconstruction">VG3R: Video Generation Model for Feed-Forward 3D Reconstruction</span></li><li><span class="dpr-home-dashboard-paper-title" title="Dr. Grasp-RL: Diverse and Robust Dexterous Grasping via Reinforcement Learning">Dr. Grasp-RL: Diverse and Robust Dexterous Grasping via Reinforcement Learning</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>2</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>15</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>5</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>3</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -96,9 +97,9 @@
     <strong class="dpr-home-dashboard-count">15 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="TRR: A Thermal Interaction Engine for Robot Simulation and RGBT Data Generation">TRR: A Thermal Interaction Engine for Robot Simulation and RGBT Data Generation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Driving the Style: Velocity-Conditioned Whole-Body Control from Motion Demonstrations">Driving the Style: Velocity-Conditioned Whole-Body Control from Motion Demonstrations</span></li><li><span class="dpr-home-dashboard-paper-title" title="FAVR: Flow-Aware Visual Residual Alignment for Vision-Language-Action Policies">FAVR: Flow-Aware Visual Residual Alignment for Vision-Language-Action Policies</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="RoboColiseum: Co-evolution of Simulation, Evaluation, and Models">RoboColiseum: Co-evolution of Simulation, Evaluation, and Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="GAAFormer: Geometry-Anchored Attention Transformer for Joint Point Cloud Denoising and Upsampling">GAAFormer: Geometry-Anchored Attention Transformer for Joint Point Cloud Denoising and Upsampling</span></li><li><span class="dpr-home-dashboard-paper-title" title="QuantStream3D: Geometry-Aligned Low-Bit KV Cache Quantization for Streaming Visual Geometry Transformers">QuantStream3D: Geometry-Aligned Low-Bit KV Cache Quantization for Streaming Visual Geometry Transformers</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>15</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>4</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>4</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>3</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span></div>
 </section>
 </div>
 

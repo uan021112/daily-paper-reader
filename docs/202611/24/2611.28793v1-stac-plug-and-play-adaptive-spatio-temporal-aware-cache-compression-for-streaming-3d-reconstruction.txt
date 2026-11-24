@@ -1,0 +1,1764 @@
+STAC++: Plug-and-Play Adaptive Spatio-Temporal Aware Cache Compression
+for Streaming 3D Reconstruction
+Boyi Zhu1
+Youcheng Cai1
+Dong Wang2
+1University of Science and Technology of China
+2Anhui Jianzhu University
+Abstract
+Streaming 3D reconstruction must preserve geometry under
+limited memory, yet STAC’s fixed-resolution spatial key–
+value (KV) cache grows as scenes expand.
+We propose
+STAC++, a plug-and-play, training-free framework that
+compresses and reuses spatial memory for long-term recon-
+struction in unbounded scenes. Adaptive Spatial KV Cache
+(ASKC) organizes KV states into an octree with adaptive
+resolutions across regions and layers.
+Response-Aware
+Cache Compression (RACC) guides KV merging by mea-
+suring attention-output changes, balancing storage savings
+with geometric preservation.
+Temporal Context Refine-
+ment (TCR) reuses cached intermediate features and re-
+computes only a short backbone suffix to refine historical
+predictions with later observations.
+Integrated into four
+pretrained streaming backbones, STAC++ reduces spatial
+memory consumption while maintaining competitive recon-
+struction quality on long sequences and large scenes, with
+further quality gains from refinement at limited computa-
+tional overhead. The code will be made publicly available
+upon acceptance.
+1. Introduction
+3D reconstruction is a fundamental problem in computer
+vision and computer graphics, with a wide range of ap-
+plications including robotic mapping [44], augmented re-
+ality [28], and novel-view synthesis [16, 26]. Traditional
+image-based 3D reconstruction combines Structure-from-
+Motion (SfM) [30] for camera estimation and sparse struc-
+ture recovery with Multi-View Stereo (MVS) [31] for dense
+geometry. These pipelines rely on explicit correspondence
+matching and iterative geometric optimization.
+Recent
+feed-forward geometric models instead infer scene geom-
+etry directly from images using pretrained networks, reduc-
+ing reliance on scene-specific iterative optimization and im-
+proving reconstruction efficiency.
+Feed-forward reconstruction methods can be broadly
+categorized into offline methods that process a fixed image
+STAC   ·   Fixed voxels
+STAC++   ·   Adaptive octree
+ACC 2.782 m     Peak mem. 32.13 GiB
+ACC 2.474 m     Peak mem. 13.56 GiB
+Keble College-02   ·   3,840 frames
+ACC 2.164 m     Peak mem. 29.99 GiB
+ACC 1.966 m     Peak mem. 13.33 GiB
+Christ Church-02   ·   3,821 frames
+Figure 1. STAC vs. STAC++ on two Oxford sequences. STAC++
+achieves lower reconstruction error (ACC) and uses less peak GPU
+memory on both sequences.
+collection and online methods that process incoming im-
+ages sequentially. Offline methods include DUSt3R [42],
+which predicts pairwise pointmaps followed by global
+alignment, and VGGT [38], which jointly predicts cameras
+and dense geometry from multiple views. However, their
+computational and memory costs limit scalability to long
+sequences. Online methods [5, 17, 49, 54] instead reuse his-
+torical representations to reconstruct incoming frames in-
+crementally. StreamVGGT [54] adapts VGGT to stream-
+ing inference through causal attention and cached histor-
+ical key–value (KV) states, but its cache grows with se-
+quence length.
+InfiniteVGGT [49] controls this growth
+with a bounded rolling cache and diversity-aware token
+pruning, enabling long-sequence inference within a fixed
+memory budget. However, these methods do not explicitly
+exploit 3D spatial information in KV-cache management.
+STAC [41] introduces a spatial KV cache that merges his-
+torical tokens into voxel-aligned representatives, reducing
+spatial redundancy while preserving geometric evidence.
+However, its fixed-resolution grid allows the number of oc-
+cupied voxels to grow with scene extent, so long streams
+exploring unbounded environments can still exhaust GPU
+memory. Uniform voxel coarsening saves memory but risks
+losing fine geometric detail in complex regions.
+STAC uses spatial memory to reconstruct incoming
+1
+arXiv:2611.28793v1  [cs.GR]  21 Nov 2026
+
+
+frames, yet earlier predictions remain fixed even when later
+views reveal the same surfaces more clearly. These limita-
+tions motivate our central question: How can we adaptively
+compress and actively reuse spatial KV memory to support
+long-term reconstruction of unbounded scenes, while pre-
+serving geometric detail and refining earlier predictions un-
+der limited memory and computational budgets? Answer-
+ing this question poses two challenges. (1) Handling un-
+bounded scenes requires spatial representations that accom-
+modate continually expanding scene coverage while con-
+trolling cache growth and preserving geometric detail. (2)
+Operating within a bounded memory budget requires retain-
+ing informative historical evidence and efficiently reusing it
+to refine earlier predictions with later observations, without
+replaying the entire backbone.
+To address these challenges, we propose STAC++, a
+plug-and-play, training-free framework that controls spa-
+tial memory growth and efficiently reuses historical evi-
+dence for long-term streaming reconstruction in unbounded
+scenes (see Fig. 1). Firstly, Adaptive Spatial KV Cache
+(ASKC) organizes spatial KV states into an octree hier-
+archy with different resolutions across scene regions and
+transformer layers. This hierarchy supports merging fine-
+grained cells into coarser representations as the scene ex-
+pands. Secondly, Response-Aware Cache Compression
+(RACC) guides KV merging by evaluating how candi-
+date merges change the backbone’s attention outputs (here-
+after referred to as responses). It identifies spatial repre-
+sentations that can be consolidated with limited response
+changes, balancing memory savings against geometric in-
+formation preservation.
+Finally, Temporal Context Re-
+finement (TCR) revisits historical frames after a fixed de-
+lay, using later observations and accumulated spatial mem-
+ory to refine earlier predictions. By reusing cached interme-
+diate features and recomputing only a short backbone suf-
+fix, TCR creates additional opportunities to exploit spatial
+memory while limiting the computation required for refine-
+ment. We implement STAC++ as an inference-time plugin
+for STream3R [17], StreamVGGT [54], InfiniteVGGT [49],
+and LingBot-Map [5], preserving their pretrained weights
+without additional training. Experiments across these four
+backbones demonstrate that STAC++ reduces spatial mem-
+ory consumption while maintaining competitive reconstruc-
+tion quality, scales to long sequences and large scenes, and
+further improves reconstruction quality through delayed
+suffix refinement with limited computational overhead.
+Our main contributions are summarized as follows:
+• We propose STAC++, a plug-and-play, training-free
+framework that unifies adaptive spatial memory compres-
+sion and historical evidence reuse for long-term stream-
+ing reconstruction in unbounded scenes without modify-
+ing pretrained backbone weights.
+• We develop ASKC, RACC, and TCR for hierarchical
+spatial KV caching, response-guided merging, and suffix
+refinement of historical predictions, controlling memory
+and computation while preserving geometry.
+2. Related Work
+2.1. Offline Feed-Forward 3D Reconstruction
+DUSt3R [42] predicts pairwise pointmaps with global
+alignment; MASt3R [18] adds learned matching features.
+VGGT, Fast3R, and MUSt3R [3, 38, 48] extend predic-
+tion to multiple views, while FLARE [51] jointly recov-
+ers geometry, appearance, and cameras. π3 [43] removes
+reference-view dependence through permutation equivari-
+ance, and VGGT-Ω[39] scales geometric learning with ef-
+ficient register attention. Dense cross-view interaction nev-
+ertheless remains costly as the image collection grows.
+For scalability, MERG3R [8] partitions and aligns im-
+age subsets, while LiteVGGT [34] merges geometrically
+redundant tokens and reuses merge decisions across lay-
+ers. VGG-T3, ZipMap, and Scal3R [11, 14, 47] compress
+context into test-time-trained states, using fast weights or
+synchronized adaptive memory to retain information across
+image chunks; Test3R [50] adapts reconstruction models at
+test time. These approaches address offline scalability or
+adaptation rather than adaptive causal KV storage. Octree-
+GS [29] provides hierarchical spatial detail for Gaussian
+rendering; our hierarchy instead compresses transformer
+KV memory for subsequent streaming inference.
+2.2. Online Feed-Forward 3D Reconstruction
+Spann3R [37] queries external spatial memory to pre-
+dict globally aligned pointmaps,
+CUT3R [40] main-
+tains a recurrent scene state, and Point3R [45] intro-
+duces explicit spatial pointer memory.
+TTT3R [6] uses
+confidence-guided updates, while FILT3R [15] applies
+uncertainty-adaptive Kalman-style state updates without
+retraining.
+SLAM3R [22] learns local reconstruction
+and registration; MASt3R-SLAM and multi-agent MAG-
+iSt3R [12, 27] additionally use geometric optimization.
+LASER [10] enables training-free streaming through layer-
+wise depth-scale alignment across windows.
+STream3R
+and StreamVGGT [17, 54] use causal KV caching;
+LongStream [7] adds cache-aware training and refresh,
+while LingBot-Map [5] separates anchor, local, and trajec-
+tory context for stable long-sequence reconstruction.
+Growing caches motivate selective retention.
+In
+language
+models,
+H2O
+[53],
+StreamingLLM
+[46],
+and SnapKV [19] retain attention-heavy tokens,
+at-
+tention sinks, or head-specific evidence.
+For geome-
+try,
+InfiniteVGGT [49] uses diversity-aware pruning;
+OVGGT [23] protects anchors during residual-guided
+selection;
+RegVGGT [24] regulates incoming tokens.
+GHOST [4] performs geometry-guided eviction, whereas
+2
+
+
+RetrieveVGGT [55] retrieves context through query–key
+similarity and poses. Selection reduces cache growth but
+can discard useful geometric evidence; spatial aggregation
+offers a complementary way to retain information from
+repeated observations.
+Slot3R [52] avoids prematurely
+fusing
+complementary
+views
+by
+preserving
+multiple
+states per spatial address, and SURE-Map [21] uses
+cross-view uncertainty for local correction and periodic
+keyframe-window inference for consistent geometry.
+Most closely related to our work, STAC [41] combines
+temporal token retention with spatial KV fusion on a fixed-
+resolution voxel grid, enabling historical reuse without re-
+training the backbone. We extend this design with adap-
+tive spatial resolution and response-guided KV merging to
+control memory growth, and selective suffix refinement to
+improve earlier predictions using retained evidence.
+3. Preliminaries
+3.1. Causal Attention
+Causal attention enables streaming reconstruction by re-
+stricting each frame to information from the current and
+preceding frames, as adopted in STream3R [17] and
+StreamVGGT [54]. Let Ft denote the encoded features of
+frame t and Gt its geometric predictions. For a sequence of
+T frames, this process can be summarized as
+{Gt}T
+t=1 = Decoder
+ TemporalSelfAttn
+ {Ft}T
+t=1
+
+,
+(1)
+where TemporalSelfAttn applies a causal mask so that
+frame t attends only to frames 1, . . . , t, and Decoder maps
+the attended features to per-frame geometric predictions.
+During streaming inference, historical keys and values are
+cached and reused without reprocessing preceding frames.
+Retaining the full KV history, however, makes cache stor-
+age grow linearly with sequence length.
+3.2. Spatio-Temporal KV Caching
+STAC [41] maintains complementary temporal and spatial
+KV caches. The temporal cache Mtemp
+t
+retains first-frame
+references, recent frames and anchors. The spatial cache or-
+ganizes temporally evicted patch tokens into voxels of side
+length δ according to their predicted 3D positions. Retrieval
+from this cache provides the spatial context Mspat
+t
+.
+Spatial cache. Each voxel u stores up to P KV represen-
+tatives Gu and B buffered tokens Eu, consolidating tokens
+through aggregation when capacity is reached. Represen-
+tatives maintain fusion weights Wi, importance scores Si,
+and represented-token counts Ci, while buffered tokens re-
+tain importance scores and contribute only through aggre-
+gation. At frame t, retrieval searches the occupied voxels
+Nt within neighborhoods extending two voxel steps (2δ)
+in both directions along each axis around voxels contain-
+ing the preceding frame’s predicted 3D points. The spatial
+context is formed by selecting at most R representatives per
+attention head with the largest fusion weights:
+Mspat
+t
+= Top W
+R
+ [
+u∈Nt
+Gu
+!
+.
+(2)
+The retrieved spatial states, temporal cache, and current-
+frame KV Mcur
+t
+form the attention context Ct = Mtemp
+t
+∪
+Mspat
+t
+∪Mcur
+t
+. This work focuses on the spatial cache.
+4. Method
+We propose STAC++, a plug-and-play, training-free
+framework for controlling spatial KV memory growth and
+reusing historical evidence in streaming 3D reconstruction.
+STAC++ combines three modules (Fig. 2). Adaptive Spa-
+tial KV Cache (ASKC) organizes historical states at multi-
+ple spatial resolutions. Response-Aware Cache Compres-
+sion (RACC) determines which states can be merged by
+measuring their effect on attention outputs. Temporal Con-
+text Refinement (TCR) revisits historical frames after a de-
+lay, reusing cached intermediate features and recomputing
+a short backbone suffix to incorporate later observations.
+All three modules operate during inference and preserve the
+pretrained backbone weights.
+4.1. Adaptive Spatial KV Cache (ASKC)
+In unbounded scenes, fixed-resolution spatial caches grow
+with scene coverage and retain redundancy across neighbor-
+ing voxels. Uniform coarsening saves storage but may dis-
+card locally distinct geometric evidence. ASKC instead or-
+ganizes spatial KV states in an expanding octree, selectively
+merging neighboring fine-grained cells into coarser parents
+independently across layers while retaining finer represen-
+tations where detailed evidence remains necessary.
+Layer-wise modeling. For a backbone with L global-
+attention layers, layer ℓmaintains octree T (ℓ)
+t
+at time t, with
+finest cell side length δ (Sec. 3.2). Layers share the same
+subdivision rule but merge independently, allowing each
+layer to use a different spatial resolution for the same scene
+region. All H heads in a layer share cells but store sepa-
+rate KV states. We denote the layer’s token inputs by X(ℓ)
+t .
+Temporally evicted patch tokens enter cells containing their
+predicted 3D positions, including parents formed by earlier
+merges. We repeatedly double the shared root’s side length
+toward an out-of-bounds point until it is enclosed, retaining
+the old root as a child at each expansion step.
+Within-cell storage. Each cell u in layer ℓand head h
+stores up to P representatives Gu,ℓ,h and B buffered tokens
+Eu,ℓ,h. Following STAC’s online aggregation [41], we omit
+cell, layer, and head indices and write each representative as
+mi = (ki, vi), with key and value vectors ki and vi. When a
+new representative needs a slot but all P slots are occupied,
+3
+
+
+compatible with STream3R / StreamVGGT / InfiniteVGGT / LingBot-Map
+Image
+Tokens
+Frame
+Attention
+Global
+Attention
+Geometric
+Outputs
+3D geometry
+t − D
+t
+t + ⋯
+Cached Intermediate Features
+(from frame t − D)
+F⁵
+F¹²
+Recompute Suffix Only
+(with updated context)
+Attn-Layer
+18
+24
+Refine outputs at t − D 
+Dynamic root
+expansion
+Repeat as needed
+p
+p
+Side L
+Side 2L
+Old extent
+New point
+(end of stream)
+Adaptive Spatial KV Cache (ASKC)
+Ω
+(ℓ)
+t
+KV tokens
+Token routing
+Spatial retrieval
+Upper-level
+Intermediate
+Finest (side δ)
+Inactive
+Lookup region
+Spatial KV Cache
+Temporal KV Cache
+Response-Aware Cache Compression (RACC)
+On Merge Keyframe
+Sampled queries
+Q
+8 child cells
+Parent proposal
+Response (Before)
+Response (After)
+Response change
+ΔO
+Accept (Merge)
+Reject (Keep)
+Temporal Context Refinement (TCR)
+Decoder
+Updated geometry outputs
+camera pose
+depth map
+Attn-Layer
+Storage
+Retrieval
+Evicted
+Figure 2. Overview of STAC++. A plug-and-play, training-free framework for streaming 3D reconstruction. ASKC organizes spatial KV
+states in an adaptive octree; RACC guides cache compression using attention-output changes. TCR reuses cached features and recomputes
+a short backbone suffix to refine historical predictions with later observations.
+we fuse i with smallest Wi into the remaining representative
+j with highest key cosine similarity:
+mj ←Wjmj + ωijmi
+Wj + ωij
+,
+(3)
+where ωij = Wi exp(cos(ki, kj) −1). We update Wj ←
+Wj +ωij, Cj ←Cj +Ci, and Sj ←Sj +Si. An incoming
+token sufficiently similar to a representative uses the same
+update with ωij = exp(cos(ki, kj)) and Ci = 1. Suffi-
+ciently dissimilar tokens passing the importance threshold
+enter the buffer. When full, its highest-scoring token seeds
+aggregation of all entries into a new representative using
+exponential cosine-similarity weights.
+Spatial retrieval. Let Ωt be the lookup neighborhoods
+of the preceding frame’s predicted 3D points, expanded by
+2δ (Sec. 3.2), and N (ℓ)
+t
+all active cells whose extents inter-
+sect Ωt, including merged parents. For head h, Eq. 2 with
+N (ℓ)
+t
+and Gu,ℓ,h replacing Nt and Gu, respectively, yields
+Mspat
+t,ℓ,h under the same per-head budget R.
+Hierarchical coarsening. For each layer, an inactive
+parent is structurally eligible for merging if it has one to
+eight active direct children and no KV in its grandchildren
+or deeper descendants. Their consolidation into the parent
+is a parent proposal requiring RACC acceptance (Sec. 4.2).
+4.2. Response-Aware Cache Compression (RACC)
+Merging spatially adjacent states saves memory but can al-
+ter the geometric evidence available to the backbone. A
+straightforward approach is to explicitly compute the atten-
+tion responses before and after a candidate merge p and take
+their difference:
+∆op,ℓ,h = Att(bqℓ,h, Cp,ℓ,h) −Att(bqℓ,h, Cℓ,h),
+(4)
+where Att(·) denotes attention, bqℓ,h is the shared query, and
+Cℓ,h and Cp,ℓ,h are the contexts before and after the merge.
+The corresponding responses are denoted by oℓ,h and op,ℓ,h,
+respectively. However, directly evaluating this change for
+every candidate merge requires repeating query–key scor-
+ing, softmax normalization, and value aggregation over the
+full context, making evaluation costly. We therefore sam-
+ple a small set of queries and compute response changes
+incrementally, reusing the reference response and normal-
+izer while updating only the contributions of KV entries
+affected by each merge. RACC balances response preser-
+vation against storage savings.
+Merge scheduling.
+For merge keyframes spaced M
+4
+
+
+frames apart, we retain Ωt−M and full inputs X(ℓ)
+t−M to each
+global-attention layer. After keyframe t completes infer-
+ence, we sample queries from these inputs at all special-
+token positions and a uniform 4 × 4 patch grid to evalu-
+ate eligible parents in Ωt−M. This delay allows intervening
+frames to use the finer spatial representation before coars-
+ening. Pending keyframes use the available context at se-
+quence end.
+Parent proposal construction. At each layer ℓ, con-
+sider an eligible parent U in Ωt−M with child positions ui
+(i = 1, . . . , 8; empty branches give empty sets), omitting
+t −M below. Head h retains up to B buffered entries with
+highest importance from S8
+i=1 Eui,ℓ,h in EU,ℓ,h. Child rep-
+resentatives form GU,ℓ,h unchanged when P8
+i=1 |Gui,ℓ,h| ≤
+P; otherwise, we repeatedly apply the representative re-
+merging rule in Sec. 4.1 using Eq. 3 until P remain. The
+pairs pU,ℓ,h = (GU,ℓ,h, EU,ℓ,h) form proposal p, saving
+∆Np,ℓ,h =
+8
+X
+i=1
+(|Gui,ℓ,h| + |Eui,ℓ,h|)
+−|GU,ℓ,h| −|EU,ℓ,h|.
+(5)
+Summing over heads gives ∆Np,ℓ= PH
+h=1 ∆Np,ℓ,h.
+Response change evaluation. For sampled bqℓ,h, com-
+pute oℓ,h
+=
+Att(bqℓ,h, Cℓ,h) over Cℓ,h
+=
+Mtemp
+ℓ,h
+∪
+Mspat
+ℓ,h
+∪Mcur
+ℓ,h (time omitted).
+We retain Λℓ,h
+=
+log P
+i∈Cℓ,h exp(zi), where zi = bq⊤
+ℓ,hki/
+√
+d + log Ci, sup-
+pressing layer/head indices on tokens; d is the key dimen-
+sion and Ci = 1 for unmerged tokens. Proposal p replaces
+retrieved child representatives Rp with distinct parent rep-
+resentatives Ap ⊆GU,ℓ,h containing their contributions,
+giving Cp,ℓ,h = (Cℓ,h \ Rp) ∪Ap. The remaining con-
+text and retrieval ranking stay fixed. For i ∈Rp ∪Ap, set
+αi = exp(zi −Λℓ,h) using the reference normalizer. Equa-
+tion 4 becomes
+∆op,ℓ,h =
+X
+i∈Ap
+αi(vi −oℓ,h) −
+X
+i∈Rp
+αi(vi −oℓ,h)
+1 +
+X
+i∈Ap
+αi −
+X
+i∈Rp
+αi
+. (6)
+Equation 6 is exact for the fixed query and specified sub-
+stitution [9, 25]; only Rp and Ap require new scores and
+value accumulations. Unchanged contributions are reused
+through oℓ,h and Λℓ,h. Stacking reference responses and
+changes over sampled queries yields Oℓ,h and ∆Op,ℓ,h.
+Merge acceptance. We average normalized response
+changes across heads:
+Ep,ℓ= 1
+H
+H
+X
+h=1
+∥∆Op,ℓ,h∥F
+max(∥Oℓ,h∥F , ϵm),
+(7)
+with ϵm = 10−8 for stability. We accept p when
+Ep,ℓ≤τm + λ
+∆Np,ℓ
+H(P + B).
+(8)
+Here τm sets the baseline tolerance and λ weights stor-
+age savings.
+Each layer makes an independent decision
+shared across all heads; acceptance replaces child storage
+cells with their parent.
+4.3. Temporal Context Refinement (TCR)
+During causal streaming inference, each frame is recon-
+structed using only the observations available when it ar-
+rives. Later frames may provide complementary viewpoints
+and additional geometric evidence for previously observed
+regions, enriching the spatial cache. However, this updated
+memory benefits subsequent inference without automati-
+cally revising earlier predictions, which remain tied to their
+original, more limited context. The most direct approach is
+to reprocess historical frames through the entire backbone
+using the updated context. However, this repeats substantial
+feature computation. We therefore introduce TCR to refine
+historical predictions after a fixed delay using the updated
+temporal and spatial context. TCR retains intermediate fea-
+tures during initial inference and recomputes only a short
+backbone suffix, allowing earlier frames to reuse later ob-
+servations while limiting the additional computation.
+Refinement scheduling. During initial inference, we re-
+tain each frame’s decoder features from layers 5 and 12, the
+intermediate input needed for suffix recomputation, and its
+spatial lookup region. After a delay of D frames, we revisit
+the historical frame once using the updated context. The
+refinement delay is independent of the merge interval, and
+merge keyframes share their retained inputs with RACC.
+Refinement process. At time t, we refine frame t −D
+by resuming from its retained intermediate features.
+At
+each recomputed attention layer, queries from this revisited
+frame attend to the current temporal cache, spatial states re-
+trieved within its saved lookup region, and keys and values
+recomputed from the same frame’s features at that layer. Let
+X denote the retained intermediate input and C the updated
+context. Recomputing layers 18–24 gives
+  eF (18), eF (24)
+= Suffix18:24(X, C),
+(9)
+where Suffix18:24 denotes recomputation of backbone lay-
+ers 18–24 from the retained input X using the updated con-
+text C, returning the features at layers 18 and 24.
+Here
+F (ℓ) denotes the feature at layer ℓ, tildes mark refinement,
+and the frame index is omitted. The decoder combines the
+cached features from layers 5 and 12 with the updated fea-
+tures from layers 18 and 24:
+eG = Decoder
+
+F (5), F (12), eF (18), eF (24)
+,
+(10)
+5
+
+
+Table 1. 3D reconstruction on 7-Scenes, Neural RGB-D, and ETH3D. Across four online backbones, STAC++ uses less memory than
+STAC while maintaining competitive reconstruction quality. Memory denotes mean peak GPU usage in GiB.
+Method
+Type
+7-Scenes
+Neural RGB-D
+ETH3D
+Mem ↓
+Acc ↓
+Comp ↓
+F1 ↑
+Acc ↓
+Comp ↓
+F1 ↑
+Acc ↓
+Comp ↓
+F1 ↑
+(GiB)
+ViPE [13]
+Optim
+0.061
+0.032
+85.56
+0.183
+0.105
+61.05
+2.514
+3.493
+12.47
+11.38
+MegaSaM [20]
+Optim
+0.027
+0.026
+94.25
+0.047
+0.018
+93.81
+1.910
+1.981
+19.84
+10.70
+VGGT [38]
+Offline
+0.022
+0.022
+96.46
+0.017
+0.012
+99.04
+0.199
+0.128
+86.91
+16.88
+VGG-T3 [11]
+Offline
+0.046
+0.029
+92.06
+0.059
+0.025
+86.15
+0.441
+0.292
+70.47
+14.99
+CUT3R [40]
+Online
+0.093
+0.038
+81.09
+0.210
+0.095
+62.44
+0.933
+0.730
+58.57
+10.34
+TTT3R [6]
+Online
+0.035
+0.026
+92.99
+0.101
+0.031
+83.84
+0.607
+0.597
+63.20
+6.02
+ZipMap [14]
+Online
+0.114
+0.054
+76.14
+0.368
+0.271
+47.50
+0.807
+0.570
+60.83
+17.15
+STream3R [17]a
+Online
+0.043
+0.021
+95.52
+0.033
+0.010
+97.30
+0.553
+0.288
+70.33
+27.18
+STream3R-W
+Online
+0.082
+0.025
+89.63
+0.085
+0.017
+88.86
+0.556
+0.293
+70.24
+11.67
+STream3R-STAC
+Online
+0.048
+0.020
+95.38
+0.066
+0.013
+94.56
+0.492
+0.242
+70.59
+14.28
+STream3R-STAC++
+Online
+0.047
+0.020
+95.32
+0.063
+0.014
+94.14
+0.543
+0.234
+69.74
+10.84
+StreamVGGT [54]b
+Online
+0.046
+0.025
+90.74
+0.132
+0.064
+70.44
+0.674
+0.504
+56.96
+23.41
+StreamVGGT-W
+Online
+0.071
+0.031
+85.59
+0.165
+0.075
+62.85
+0.676
+0.503
+56.87
+11.41
+StreamVGGT-STAC
+Online
+0.056
+0.026
+89.21
+0.141
+0.056
+68.12
+0.604
+0.471
+59.59
+15.17
+StreamVGGT-STAC++
+Online
+0.053
+0.027
+89.76
+0.126
+0.046
+73.16
+0.596
+0.458
+56.64
+11.11
+InfiniteVGGT [49]
+Online
+0.048
+0.025
+90.27
+0.126
+0.059
+69.40
+0.637
+0.474
+57.14
+13.57
+InfiniteVGGT-STAC
+Online
+0.051
+0.027
+89.88
+0.129
+0.060
+69.42
+0.627
+0.463
+58.23
+15.43
+InfiniteVGGT-STAC++
+Online
+0.049
+0.028
+90.09
+0.121
+0.050
+72.18
+0.610
+0.442
+57.35
+12.75
+LingBot-Map [5]
+Online
+0.029
+0.020
+94.96
+0.057
+0.023
+89.08
+0.487
+0.514
+69.97
+13.35
+LingBot-Map-STAC
+Online
+0.028
+0.021
+95.13
+0.055
+0.021
+90.93
+0.487
+0.485
+69.53
+17.59
+LingBot-Map-STAC++
+Online
+0.028
+0.021
+95.08
+0.054
+0.021
+91.07
+0.480
+0.479
+70.68
+15.12
+a STream3R encounters OOM on 4 of 9 Neural RGB-D
+b StreamVGGT encounters OOM on 1 of 9 Neural RGB-D
+where eG denotes the refined geometric predictions pro-
+duced by the native dense and camera heads.
+5. Experiments
+5.1. Implementation Details
+STAC++ is a plug-and-play, training-free framework. We
+integrate it into four online reconstruction backbones:
+STream3R [17], StreamVGGT [54], InfiniteVGGT [49],
+and LingBot-Map [5], keeping their pretrained weights
+frozen.
+For comparison, we also extend STAC’s spa-
+tial caching [41] to InfiniteVGGT and LingBot-Map while
+preserving their native temporal memory policies.
+In-
+finiteVGGT evicts by token budget rather than a fixed tem-
+poral window; we archive evicted patch KV in spatial mem-
+ory once their 3D positions are predicted.
+Datasets and Metrics. We evaluate 3D reconstruction
+on 7-Scenes [33], Neural RGB-D [1], and ETH3D [32],
+as well as on Long3D [49] and Oxford Spires [36](christ-
+church-05 excluded) for large scenes and long streams. For
+camera pose estimation, we evaluate on ETH3D, Sintel [2],
+and TUM RGB-D [35].
+We report accuracy (Acc) and
+completeness (Comp) as mean prediction-to-reference and
+reference-to-prediction nearest-neighbor distances (m), re-
+spectively. F1 (%) uses thresholds of 0.10 m for 7-Scenes
+and Neural RGB-D and 0.25 m for ETH3D, Long3D, and
+Oxford Spires. For cameras, we report absolute trajectory
+error (ATE, m) after Sim(3) alignment and angular AUC
+(%) at 3◦and 30◦, using the larger relative rotation or
+translation-direction error per valid frame pair.
+Baselines. We integrate STAC++ into STream3R [17],
+StreamVGGT [54], InfiniteVGGT [49], and LingBot-
+Map [5]. For each backbone, we compare STAC++ with
+native inference and STAC [41], and additionally include
+windowed STream3R and StreamVGGT baselines.
+Implementation details. Following STAC [41], each
+cell stores up to P = 4 representatives and B = 8 buffered
+tokens per head. We use a finest cell size of δ = 0.05,
+merge parameters τm = λ = 5 × 10−4, suffix depth
+k = 8, and default refinement delay and merge interval
+D = M = 8 frames (For large scenes D = M = 16).
+STream3R-W and StreamVGGT-W use 36- and 48-frame
+windows, respectively, while their STAC and STAC++ vari-
+ants use eight-frame windows. InfiniteVGGT’s native token
+budget of 1,200,000 is reduced to 650,000 for STAC and
+STAC++. All LingBot-Map variants use a temporal window
+of 16 keyframes and retain eight scale anchors. In this way,
+STAC and STAC++ share temporal memory settings within
+each backbone. All experiments run on a single NVIDIA
+6
+
+
+InfiniteVGGT
+InfiniteVGGT-STAC++
+LingBot-Map
+LingBot-Map-STAC++
+GT
+Figure 3. Qualitative comparison of large-scene reconstructions. Blue insets compare InfiniteVGGT with its STAC++ variant, and red
+insets compare LingBot-Map with its STAC++ variant. The rightmost column shows the laser-scan ground truth.
+Table 2.
+Quantitative results on Long3D and Oxford Spires.
+STAC++ completes all evaluated sequences with InfiniteVGGT
+and LingBot-Map, while their STAC variants run out of memory.
+Memory is measured in GiB and inference time in ms/frame.
+Method
+Acc ↓
+Comp ↓
+F1 ↑
+Mem ↓Inference ↓
+Long3D
+STream3R [17]
+OOM
+OOM
+OOM
+OOM
+OOM
+STream3R-W
+2.815
+0.768
+26.06
+13.32
+224.26
+STream3R-STAC
+3.210
+0.917
+22.57
+15.69
+116.84
+STream3R-STAC++
+3.192
+0.858
+22.63
+10.75
+190.52
+StreamVGGT [54]
+OOM
+OOM
+OOM
+OOM
+OOM
+StreamVGGT-W
+2.717
+0.648
+23.76
+13.27
+285.96
+StreamVGGT-STACd
+2.691
+0.533
+25.82
+29.45
+118.49
+StreamVGGT-STAC++
+2.713
+1.003
+24.30
+11.39
+205.04
+InfiniteVGGT [49]
+3.136
+0.767
+22.08
+15.93
+419.29
+InfiniteVGGT-STACe
+3.276
+1.106
+23.87
+21.19
+386.82
+InfiniteVGGT-STAC++
+3.242
+1.559
+20.67
+15.72
+472.00
+LingBot-Map [5]
+2.007
+0.968
+29.89
+11.92
+252.26
+LingBot-Map-STAC
+OOM
+OOM
+OOM
+OOM
+OOM
+LingBot-Map-STAC++
+2.354
+0.948
+29.39
+16.48
+239.67
+Oxford Spires
+InfiniteVGGT [49]
+18.436
+5.907
+2.00
+15.54
+464.58
+InfiniteVGGT-STAC
+OOM
+OOM
+OOM
+OOM
+OOM
+InfiniteVGGT-STAC++ 11.594
+1.686
+4.96
+17.40
+628.46
+LingBot-Map [5]
+2.951
+1.730
+19.59
+15.43
+154.54
+LingBot-Map-STACc
+3.489
+1.665
+14.27
+35.47
+257.88
+LingBot-Map-STAC++
+2.783
+1.466
+19.28
+15.65
+204.08
+c LingBot-Map-STAC encounters OOM on 3/9 Oxford Spires
+d StreamVGGT-STAC encounters OOM on 1/5 Long3D
+e InfiniteVGGT-STAC encounters OOM on 1/5 Long3D
+GeForce RTX 4090 with 48 GiB of memory.
+5.2. 3D Reconstruction.
+Table 1 compares reconstruction on 7-Scenes, Neural RGB-
+D, and ETH3D. Relative to windowed STream3R and
+StreamVGGT and native InfiniteVGGT and LingBot-Map,
+STAC++ improves F1 in 9 of 12 settings. All four back-
+bones improve on Neural RGB-D, with gains of 1.99–10.31
+percentage points.
+At the same temporal window or to-
+ken budget as STAC, STAC++ reduces mean peak GPU
+memory by 14.0%–26.8% across backbones.
+This sug-
+gests that adaptive compression can reduce spatial redun-
+dancy while retaining evidence useful for reconstruction.
+When integrated into LingBot-Map, STAC++ outperforms
+CUT3R [40], TTT3R [6], and ZipMap [14] in accuracy,
+completeness, and F1 across these datasets.
+For large scenes and long streams, Table 2 reports re-
+sults on Long3D [49] and Oxford Spires [36]. VGGT [38],
+VGG-T3 [11], CUT3R [40], and ZipMap [14] encounter
+out-of-memory (OOM) failures on these large-scene bench-
+marks.
+With InfiniteVGGT and LingBot-Map, STAC++
+completes every evaluated sequence, whereas the STAC
+variants encounter out-of-memory failures on multiple se-
+quences. This difference highlights the importance of con-
+trolling spatial memory growth as trajectories lengthen and
+scene coverage expands.
+STAC++ also improves recon-
+struction quality on Oxford Spires, reducing both Acc and
+Comp for InfiniteVGGT and LingBot-Map. In terms of in-
+ference time, STAC++ is faster than windowed STream3R
+and StreamVGGT baselines on Long3D, while its runtime
+relative to native InfiniteVGGT and LingBot-Map varies
+across datasets. These results show that adaptive spatial
+caching supports more reliable long-stream inference while
+retaining geometric evidence, with the quality–memory
+trade-off varying across scenes evaluated in these bench-
+marks and across different pretrained backbones.
+As shown in Fig. 3, STAC++ produces high-quality
+7
+
+
+Table 3. Camera pose estimation on Sintel, TUM RGB-D, and ETH3D. Across four online backbones, STAC++ generally lowers ATE
+while using less memory than STAC. We report ATE (m), angular AUC (%), and mean peak GPU memory (GiB).
+Method
+Type
+Sintel
+TUM
+ETH3D
+Mem ↓
+ATE ↓
+AUC@3 ↑AUC@30 ↑
+ATE ↓
+AUC@3 ↑AUC@30 ↑
+ATE ↓
+AUC@3 ↑AUC@30 ↑
+(GiB)
+STream3R [17]
+Online
+0.214
+7.65
+53.02
+0.025
+7.10
+48.62
+1.906
+14.26
+62.45
+13.49
+STream3R-W
+Online
+0.214
+7.41
+52.76
+0.032
+3.93
+41.80
+1.855
+14.08
+61.80
+10.61
+STream3R-STAC
+Online
+0.204
+6.12
+53.01
+0.032
+6.06
+44.70
+1.433
+16.78
+67.25
+12.33
+STream3R-STAC++
+Online
+0.201
+6.27
+51.75
+0.031
+4.78
+44.89
+1.551
+17.00
+66.80
+9.07
+StreamVGGT [54]
+Online
+0.233
+6.00
+47.94
+0.026
+8.12
+53.48
+1.898
+13.59
+58.83
+11.83
+StreamVGGT-W
+Online
+0.233
+6.00
+47.94
+0.029
+7.76
+50.71
+1.900
+13.51
+58.58
+10.35
+StreamVGGT-STAC
+Online
+0.226
+10.03
+52.63
+0.026
+12.32
+58.44
+1.649
+16.46
+62.25
+13.22
+StreamVGGT-STAC++
+Online
+0.214
+8.26
+49.42
+0.025
+10.38
+56.11
+1.607
+15.85
+64.20
+9.65
+InfiniteVGGT [49]
+Online
+0.236
+6.36
+47.21
+0.027
+8.25
+52.60
+1.742
+12.87
+59.63
+12.15
+InfiniteVGGT-STAC
+Online
+0.238
+6.33
+47.25
+0.027
+8.13
+52.74
+1.755
+12.61
+59.67
+16.02
+InfiniteVGGT-STAC++
+Online
+0.229
+7.40
+48.00
+0.026
+7.66
+52.61
+1.724
+13.70
+61.79
+12.63
+LingBot-Map [5]
+Online
+0.126
+3.56
+50.44
+0.021
+11.72
+59.20
+0.712
+35.99
+75.49
+14.26
+LingBot-Map-STAC
+Online
+0.130
+3.47
+50.97
+0.019
+13.43
+62.39
+0.685
+38.08
+77.40
+18.66
+LingBot-Map-STAC++
+Online
+0.121
+3.70
+49.68
+0.018
+14.41
+63.55
+0.623
+38.87
+77.38
+14.56
+Table 4. Ablation of ASKC, RACC, and TCR for LingBot-Map-
+STAC++ on Oxford Spires. Memory is measured in GiB and in-
+ference time in ms/frame.
+Configuration
+Acc ↓
+F1 ↑
+Mem ↓
+Inference ↓
+w/o ASKC (STAC)c
+3.4888
+14.27
+35.47
+257.88
+w/o RACC
+2.9131
+18.62
+14.76
+172.13
+Random merging
+2.8929
+19.22
+14.87
+190.95
+w/o TCR
+2.7927
+19.22
+15.16
+163.54
+TCR (2-layer)
+2.7995
+19.52
+15.69
+204.31
+TCR (14-layer)
+2.8118
+18.99
+15.44
+216.01
+TCR (21-layer)
+2.8031
+19.06
+15.44
+239.34
+TCR (24-layer)
+2.8010
+18.94
+15.38
+239.96
+Full(8-layer)
+2.7828
+19.28
+15.65
+204.08
+large-scene reconstructions with both InfiniteVGGT and
+LingBot-Map. The results preserve coherent geometry and
+local structural details, demonstrating that compact spatial
+memory can maintain visual reconstruction quality.
+5.3. Camera Pose Estimation.
+Following prior work [5, 41], we evaluate camera pose esti-
+mation on Sintel [2], TUM RGB-D [35], and ETH3D [32].
+As shown in Table 3, STAC++ lowers ATE in all 12 com-
+parisons with the corresponding native baselines, using the
+windowed variants for STream3R and StreamVGGT. Com-
+pared with STAC under the same temporal window or to-
+ken budget, it lowers ATE in 11 of 12 settings and reduces
+mean peak GPU memory by 21.2%–27.0% across back-
+bones. This suggests that a more compact spatial cache can
+preserve evidence useful for camera localization while im-
+proving memory efficiency. Angular AUC gains vary across
+datasets and backbones, with both metrics improving for
+LingBot-Map on TUM RGB-D.
+5.4. Ablation Study
+We conduct ablation studies on Oxford Spires to evaluate
+ASKC, RACC, and TCR. The ASKC and RACC ablations
+examine spatial cache compression. The TCR ablation ex-
+amines temporal context refinement.
+Effect of ASKC. The w/o ASKC variant corresponds
+to STAC, which aggregates tokens only within fixed-
+resolution spatial cells (Table 4). Hierarchical merging sub-
+stantially reduces memory relative to this baseline.
+Effect of RACC. The w/o RACC variant accepts every
+eligible merge, while random merging uses the response-
+guided policy’s per-sequence acceptance rate, with re-
+sults averaged over three seeds. Response-guided merging
+achieves better Acc and F1 than random merging and w/o
+RACC at similar memory usage (Table 4).
+Effect of TCR. In Table 4, refining eight layers achieves
+the best Acc among the TCR variants. Shallower refinement
+offers little benefit, while deeper suffixes add computation
+without improving quality, supporting k = 8 as the default.
+6. Conclusion
+We presented STAC++, a plug-and-play, training-free
+framework for long-term streaming 3D reconstruction in
+unbounded scenes. Adaptive Spatial KV Cache (ASKC)
+organizes spatial KV states in an octree with adaptive reso-
+lutions across regions and transformer layers. Response-
+Aware Cache Compression (RACC) guides KV merging
+through attention-output changes to balance memory sav-
+ings with geometric preservation. Temporal Context Re-
+finement (TCR) reuses cached intermediate features and re-
+computes a short backbone suffix to refine historical predic-
+8
+
+
+tions with later observations. Experiments across four pre-
+trained backbones demonstrate reduced memory consump-
+tion and competitive reconstruction and camera pose esti-
+mation quality, with improved scalability to long sequences
+and large scenes. Delayed refinement further improves re-
+construction quality with limited computational overhead.
+LLM Usage Statement
+OpenAI Codex assisted with organizing the manuscript,
+editing language, checking correspondence between the de-
+scription and the implementation, and preparing LaTeX
+sources.
+The authors are responsible for validating the
+method, experiments, citations, and final claims.
+References
+[1] Dejan Azinovi´c, Ricardo Martin-Brualla, Dan B Goldman,
+Matthias Nießner, and Justus Thies. Neural RGB-D surface
+reconstruction. In Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition, pages 6290–
+6301, 2022. 6
+[2] Daniel J. Butler, Jonas Wulff, Garrett B. Stanley, and
+Michael J. Black. A naturalistic open source movie for op-
+tical flow evaluation. In European Conference on Computer
+Vision, pages 611–625, 2012. 6, 8
+[3] Yohann Cabon, Lucas Stoffl, Leonid Antsfeld, Gabriela
+Csurka, Boris Chidlovskii, Jerome Revaud, and Vincent
+Leroy.
+MUSt3R: Multi-view network for stereo 3D re-
+construction. In Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition, pages 1050–
+1060, 2025. 2
+[4] Leyang Chen, Junyi Wu, Zhiteng Li, and Yulun Zhang.
+GHOST: Geometry-hierarchical online streaming token
+eviction for efficient 3D reconstruction. In Advances in Neu-
+ral Information Processing Systems, 2026. To appear. 2
+[5] Lin-Zhuo Chen, Jian Gao, Shangzhan Zhang, Yihang Chen,
+Nan Xue, Jianyuan Wang, Christian Rupprecht, Xun Cao,
+Xing Zhu, Yujun Shen, Yao Yao, and Yinghao Xu. Geomet-
+ric context transformer for streaming 3D reconstruction. In
+European Conference on Computer Vision, pages 293–314,
+2026. 1, 2, 6, 7, 8
+[6] Xingyu Chen, Yue Chen, Yuliang Xiu, Andreas Geiger, and
+Anpei Chen. TTT3R: 3D reconstruction as test-time train-
+ing. In International Conference on Learning Representa-
+tions, 2026. 2, 6, 7
+[7] Chong Cheng, Xianda Chen, Tao Xie, Wei Yin, Weiqiang
+Ren,
+Qian Zhang,
+Xiaoyang Guo,
+and Hao Wang.
+LongStream: Long-sequence streaming autoregressive vi-
+sual geometry. In Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition, pages 272–
+283, 2026. 2
+[8] Leo Kaixuan Cheng, Abdus Shaikh, Ruofan Liang, Zhijie
+Wu, Yushi Guan, and Nandita Vijaykumar.
+MERG3R: A
+divide-and-conquer approach to large-scale neural visual ge-
+ometry.
+In Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition, pages 28969–
+28978, 2026. 2
+[9] Tri Dao, Daniel Y. Fu, Stefano Ermon, Atri Rudra, and
+Christopher R´e. FlashAttention: Fast and memory-efficient
+exact attention with IO-awareness. In Advances in Neural
+Information Processing Systems, pages 16344–16359, 2022.
+5
+[10] Tianye Ding, Yiming Xie, Yiqing Liang, Moitreya Chatter-
+jee, Pedro Miraldo, and Huaizu Jiang. LASER: Layer-wise
+scale alignment for training-free streaming 4D reconstruc-
+tion. In Proceedings of the IEEE/CVF Conference on Com-
+puter Vision and Pattern Recognition, pages 36433–36443,
+2026. 2
+[11] Sven Elflein, Ruilong Li, S´ergio Agostinho, Zan Gojcic,
+Laura Leal-Taix´e, Qunjie Zhou, and Aljosa Osep. VGG-T3:
+Offline feed-forward 3D reconstruction at scale. In Proceed-
+ings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition, pages 36464–36474, 2026. 2, 6, 7
+[12] Ziren Gong, Xiaohan Li, Fabio Tosi, Ninghui Xu, Stefano
+Mattoccia, Jianfei Cai, and Matteo Poggi.
+MAGiSt3R:
+Multi-agent feed-forward 3D reconstruction from monocular
+RGB videos. In European Conference on Computer Vision,
+pages 417–436, 2026. 2
+[13] Jiahui Huang, Qunjie Zhou, Hesam Rabeti, Aleksandr Ko-
+rovko, Huan Ling, Xuanchi Ren, Tianchang Shen, Jun Gao,
+Dmitry Slepichev, Chen-Hsuan Lin, Jiawei Ren, Kevin Xie,
+Joydeep Biswas, Laura Leal-Taix´e, and Sanja Fidler. ViPE:
+Video pose engine for 3D geometric perception.
+arXiv
+preprint arXiv:2508.10934, 2025. 6
+[14] Haian Jin,
+Rundi Wu,
+Tianyuan Zhang,
+Ruiqi Gao,
+Jonathan
+T.
+Barron,
+Noah
+Snavely,
+and
+Aleksander
+Hoły´nski. ZipMap: Linear-time stateful 3D reconstruction
+via test-time training. In Proceedings of the IEEE/CVF Con-
+ference on Computer Vision and Pattern Recognition, pages
+21748–21759, 2026. 2, 6, 7
+[15] Seonghyun Jin and Jong Chul Ye. FILT3R: Latent state adap-
+tive Kalman filter for streaming 3D reconstruction. In Euro-
+pean Conference on Computer Vision, pages 289–307, 2026.
+2
+[16] Bernhard Kerbl, Georgios Kopanas, Thomas Leimk¨uhler,
+and George Drettakis. 3D Gaussian splatting for real-time
+radiance field rendering. ACM Transactions on Graphics, 42
+(4):139:1–139:14, 2023. 1
+[17] Yushi Lan, Yihang Luo, Fangzhou Hong, Shangchen Zhou,
+Honghua Chen, Zhaoyang Lyu, Bo Dai, Shuai Yang,
+Chen Change Loy, and Xingang Pan. STream3R: Scalable
+sequential 3D reconstruction with causal transformer. In In-
+ternational Conference on Learning Representations, 2026.
+1, 2, 3, 6, 7, 8
+[18] Vincent Leroy, Yohann Cabon, and J´erˆome Revaud. Ground-
+ing image matching in 3D with MASt3R. In European Con-
+ference on Computer Vision, pages 71–91, 2024. 2
+[19] Yuhong
+Li,
+Yingbing
+Huang,
+Bowen
+Yang,
+Bharat
+Venkitesh, Acyr Locatelli, Hanchen Ye, Tianle Cai, Patrick
+Lewis, and Deming Chen. SnapKV: LLM knows what you
+are looking for before generation. In Advances in Neural
+Information Processing Systems, pages 22947–22970, 2024.
+2
+[20] Zhengqi Li, Richard Tucker, Forrester Cole, Qianqian Wang,
+Linyi Jin, Vickie Ye, Angjoo Kanazawa, Aleksander Holyn-
+9
+
+
+ski, and Noah Snavely. MegaSaM: Accurate, fast and robust
+structure and motion from casual dynamic videos. In Pro-
+ceedings of the IEEE/CVF Conference on Computer Vision
+and Pattern Recognition, pages 10486–10496, 2025. 6
+[21] Mingkai Liu, Hao Zhao, and Xingxing Zuo.
+SURE-
+Map: Self-correcting streaming geometric foundation mod-
+els. arXiv preprint arXiv:2609.15795, 2026. 3
+[22] Yuzheng Liu, Siyan Dong, Shuzhe Wang, Yingda Yin, Yan-
+chao Yang, Qingnan Fan, and Baoquan Chen. SLAM3R:
+Real-time dense scene reconstruction from monocular RGB
+videos.
+In Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition, pages 16651–
+16662, 2025. 2
+[23] Si-Yu Lu, Po-Ting Chen, Hui-Che Hsu, Sin-Ye Jhong, Wen-
+Huang Cheng, and Yung-Yao Chen. OVGGT: O(1) constant-
+cost streaming visual geometry transformer.
+In European
+Conference on Computer Vision, pages 112–129, 2026. 2
+[24] Hongbo Mao, Junjun Jiang, Youyu Chen, Jiaxin Zhang, Zhe-
+meng Dong, and Xianming Liu. RegVGGT: Sustainable vi-
+sual geometry grounding for streaming via regulated mem-
+ory. In European Conference on Computer Vision, pages 1–
+18, 2026. 2
+[25] Maxim Milakov and Natalia Gimelshein. Online normalizer
+calculation for softmax. arXiv preprint arXiv:1805.02867,
+2018. 5
+[26] Ben Mildenhall, Pratul P. Srinivasan, Matthew Tancik,
+Jonathan T. Barron, Ravi Ramamoorthi, and Ren Ng. NeRF:
+Representing scenes as neural radiance fields for view syn-
+thesis. In European Conference on Computer Vision, pages
+405–421, 2020. 1
+[27] Riku Murai, Eric Dexheimer, and Andrew J. Davison.
+MASt3R-SLAM: Real-time dense SLAM with 3D recon-
+struction priors. In Proceedings of the IEEE/CVF Confer-
+ence on Computer Vision and Pattern Recognition, pages
+16695–16705, 2025. 2
+[28] Richard A. Newcombe, Shahram Izadi, Otmar Hilliges,
+David Molyneaux, David Kim, Andrew J. Davison, Push-
+meet Kohli, Jamie Shotton, Steve Hodges, and Andrew
+Fitzgibbon. KinectFusion: Real-time dense surface mapping
+and tracking. In IEEE International Symposium on Mixed
+and Augmented Reality, pages 127–136, 2011. 1
+[29] Kerui Ren, Lihan Jiang, Tao Lu, Mulin Yu, Linning Xu,
+Zhangkai Ni, and Bo Dai.
+Octree-GS: Towards consis-
+tent real-time rendering with LOD-structured 3D Gaussians.
+IEEE Transactions on Pattern Analysis and Machine Intelli-
+gence, 2025. 2
+[30] Johannes
+Lutz
+Sch¨onberger
+and
+Jan-Michael
+Frahm.
+Structure-from-motion revisited. In Proceedings of the IEEE
+Conference on Computer Vision and Pattern Recognition,
+pages 4104–4113, 2016. 1
+[31] Johannes Lutz Sch¨onberger, Enliang Zheng, Marc Pollefeys,
+and Jan-Michael Frahm. Pixelwise view selection for un-
+structured multi-view stereo.
+In European Conference on
+Computer Vision, pages 501–518, 2016. 1
+[32] Thomas Sch¨ops, Johannes L. Sch¨onberger, Silvano Galliani,
+Torsten Sattler, Konrad Schindler, Marc Pollefeys, and An-
+dreas Geiger.
+A multi-view stereo benchmark with high-
+resolution images and multi-camera videos. In Proceedings
+of the IEEE Conference on Computer Vision and Pattern
+Recognition, pages 3260–3269, 2017. 6, 8
+[33] Jamie Shotton, Ben Glocker, Christopher Zach, Shahram
+Izadi, Antonio Criminisi, and Andrew Fitzgibbon.
+Scene
+coordinate regression forests for camera relocalization in
+RGB-D images.
+In Proceedings of the IEEE Conference
+on Computer Vision and Pattern Recognition, pages 2930–
+2937, 2013. 6
+[34] Zhijian Shu, Cheng Lin, Tao Xie, Wei Yin, Ben Li, Zhiyuan
+Pu, Weize Li, Yao Yao, Xun Cao, Xiaoyang Guo, and
+Xiao-Xiao Long. LiteVGGT: Boosting vanilla VGGT via
+geometry-aware cached token merging. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 36422–36432, 2026. 2
+[35] J¨urgen Sturm, Nikolas Engelhard, Felix Endres, Wolfram
+Burgard, and Daniel Cremers. A benchmark for the evalua-
+tion of RGB-D SLAM systems. In IEEE/RSJ International
+Conference on Intelligent Robots and Systems, pages 573–
+580, 2012. 6, 8
+[36] Yifu Tao, Miguel ´Angel Mu˜noz-Ba˜n´on, Lintong Zhang, Jia-
+hao Wang, Lanke Frank Tarimo Fu, and Maurice Fallon. The
+Oxford Spires Dataset: Benchmarking large-scale LiDAR-
+visual localisation, reconstruction and radiance field meth-
+ods. The International Journal of Robotics Research, 45(6):
+839–857, 2026. 6, 7
+[37] Hengyi Wang and Lourdes Agapito. 3D reconstruction with
+spatial memory. In International Conference on 3D Vision,
+pages 78–89, 2025. 2
+[38] Jianyuan Wang, Minghao Chen, Nikita Karaev, Andrea
+Vedaldi, Christian Rupprecht, and David Novotny. VGGT:
+Visual geometry grounded transformer. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 5294–5306, 2025. 1, 2, 6, 7
+[39] Jianyuan Wang, Minghao Chen, Shangzhan Zhang, Nikita
+Karaev, Johannes Sch¨onberger, Patrick Labatut, Piotr Bo-
+janowski, David Novotny, Andrea Vedaldi, and Christian
+Rupprecht. VGGT-Ω. In Proceedings of the IEEE/CVF Con-
+ference on Computer Vision and Pattern Recognition, pages
+21486–21499, 2026. 2
+[40] Qianqian
+Wang,
+Yifei
+Zhang,
+Aleksander
+Holynski,
+Alexei A. Efros, and Angjoo Kanazawa.
+Continuous 3D
+perception model with persistent state.
+In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 10510–10522, 2025. 2, 6, 7
+[41] Runze Wang, Yuxuan Song, Youcheng Cai, and Ligang Liu.
+STAC: Plug-and-play spatio-temporal aware cache compres-
+sion for streaming 3D reconstruction.
+In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 7567–7576, 2026. 1, 3, 6, 8
+[42] Shuzhe Wang,
+Vincent Leroy,
+Yohann Cabon,
+Boris
+Chidlovskii, and Jerome Revaud. DUSt3R: Geometric 3D
+vision made easy. In Proceedings of the IEEE/CVF Con-
+ference on Computer Vision and Pattern Recognition, pages
+20697–20709, 2024. 1, 2
+[43] Yifan Wang, Jianjun Zhou, Haoyi Zhu, Wenzheng Chang,
+Yang Zhou, Zizun Li, Junyi Chen, Jiangmiao Pang, Chun-
+hua Shen, and Tong He. π3: Permutation-equivariant visual
+10
+
+
+geometry learning. In International Conference on Learning
+Representations, 2026. 2
+[44] Thomas Whelan, Stefan Leutenegger, Renato Salas Moreno,
+Ben Glocker, and Andrew J. Davison. ElasticFusion: Dense
+SLAM without a pose graph. In Proceedings of Robotics:
+Science and Systems, 2015. 1
+[45] Yuqi Wu, Wenzhao Zheng, Jie Zhou, and Jiwen Lu. Point3R:
+Streaming 3D reconstruction with explicit spatial pointer
+memory. In Advances in Neural Information Processing Sys-
+tems, pages 77686–77710, 2025. 2
+[46] Guangxuan Xiao, Yuandong Tian, Beidi Chen, Song Han,
+and Mike Lewis. Efficient streaming language models with
+attention sinks.
+In International Conference on Learning
+Representations, 2024. 2
+[47] Tao Xie, Peishan Yang, Yudong Jin, Yingfeng Cai, Wei Yin,
+Weiqiang Ren, Qian Zhang, Wei Hua, Sida Peng, Xiaoyang
+Guo, and Xiaowei Zhou. Scal3R: Scalable test-time train-
+ing for large-scale 3D reconstruction.
+In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 21760–21771, 2026. 2
+[48] Jianing Yang, Alexander Sax, Kevin J. Liang, Mikael Henaff,
+Hao Tang, Ang Cao, Joyce Chai, Franziska Meier, and Matt
+Feiszli. Fast3R: Towards 3D reconstruction of 1000+ images
+in one forward pass. In Proceedings of the IEEE/CVF Con-
+ference on Computer Vision and Pattern Recognition, pages
+21924–21935, 2025. 2
+[49] Shuai Yuan, Yantai Yang, Xiaotian Yang, Xupeng Zhang,
+Zhonghao Zhao, Lingming Zhang, and Zhipeng Zhang. In-
+finiteVGGT: Visual geometry grounded transformer for end-
+less streams. arXiv preprint arXiv:2601.02281, 2026. 1, 2,
+6, 7, 8
+[50] Yuheng Yuan, Qiuhong Shen, Shizun Wang, Xingyi Yang,
+and Xinchao Wang. Test3R: Learning to reconstruct 3D at
+test time. In Advances in Neural Information Processing Sys-
+tems, pages 111375–111394, 2025. 2
+[51] Shangzhan Zhang, Jianyuan Wang, Yinghao Xu, Nan Xue,
+Christian Rupprecht, Xiaowei Zhou, Yujun Shen, and Gor-
+don Wetzstein. FLARE: Feed-forward geometry, appearance
+and camera estimation from uncalibrated sparse views. In
+Proceedings of the IEEE/CVF Conference on Computer Vi-
+sion and Pattern Recognition, pages 21936–21947, 2025. 2
+[52] Xiyuan Zhang, Yanming Yang, Kaiyuan Xu, Ruibo Li,
+and Chi Zhang.
+Slot3R: Set-associative spatial mem-
+ory for streaming 3D reconstruction.
+arXiv preprint
+arXiv:2610.12282, 2026. 3
+[53] Zhenyu Zhang, Ying Sheng, Tianyi Zhou, Tianlong Chen,
+Lianmin Zheng, Ruisi Cai, Zhao Song, Yuandong Tian,
+Christopher R´e, Clark Barrett, Zhangyang Wang, and Beidi
+Chen. H2O: Heavy-hitter oracle for efficient generative in-
+ference of large language models. In Advances in Neural
+Information Processing Systems, pages 34661–34710, 2023.
+2
+[54] Dong Zhuo, Wenzhao Zheng, Jiahe Guo, Yuqi Wu, Jie Zhou,
+and Jiwen Lu. Streaming visual geometry transformer. In In-
+ternational Conference on Learning Representations, 2026.
+1, 2, 3, 6, 7, 8
+[55] Zichen Zou, Xiaosong Jia, Zuxuan Wu, and Yu-Gang Jiang.
+Attention itself could retrieve. RetrieveVGGT: Training-free
+long context streaming 3D reconstruction via query-key sim-
+ilarity retrieval. In Advances in Neural Information Process-
+ing Systems, 2026. To appear. 3
+11

@@ -1,0 +1,787 @@
+Title: SANA-Robot: Efficient World Action Model with Hybrid Memory
+
+URL Source: https://arxiv.org/pdf/2611.28943v1
+
+Published Time: Tue, 24 Nov 2026 02:28:39 GMT
+
+Number of Pages: 24
+
+Markdown Content:
+2026-11-24 
+
+# SANA-Robot: Efficient World Action Model with Hybrid Memory 
+
+Yuyang Zhao 1* †, Zekai Li 1,2* †, Yicheng Pan 3†, Jiaming Tang 4, Zhuoyang Zhang 4, Jiaxu Xing 1,Moritz Reuss 1, Quanquan Peng 2, Junsong Chen 1,5 , Enze Xie 1, Zhijian Liu 2,6 , Song Han 1,4 
+
+> 1
+
+NVIDIA 2UCSD 3THU 4MIT 5HKU 6Inco AI 
+
+> *
+
+Equal contribution †Core contributor Project Page: https://nvlabs.github.io/Sana/Robot Abstract: World action models (WAMs) leverage the world knowledge of video generation models to improve action generation by aligning visual prediction with action prediction. However, their prediction overhead prevents real-time deployment on edge devices, and they usually lack an effective long-term memory. We introduce SANA-Robot, a 4.5B WAM with minute-level memory that runs in real time on edge devices, built on the following core designs: (1) hybrid memory at constant cost: our WAM relies on linear attention to maintain a global memory with a fixed-size state, and on sliding window softmax attention layers that propagate previous information, enabling high success rates on tasks requiring whole-episode memory while keeping an efficient and constant inference speed; (2) a unified model: by dynamically applying different noise levels to action and video tokens, SANA-Robot can serve not only as a policy but also as a world simulator; (3) a full-stack infrastructure for both memory training and inference, including efficient data packing and shuffling as well as memory-phase-based asynchronous execution. SANA-Robot achieves the best performance on the memory dimension of RoboDojo among models of medium size (about 5B) and the highest success rates on LIBERO-Plus, LIBERO-Pro and LIBERO-Max. In real-world deployment, SANA-Robot takes 135 ms per action chunk on an RTX 5090 with FP8 GEMMs and 115 ms with NVFP4 GEMMs, and achieves closed-loop, real-time asynchronous robot control at 30 Hz on edge devices, demonstrating both the efficiency and the effectiveness of SANA-Robot. (a) Real-World Rollouts     
+
+> Shell Game · Memory Tower of Hanoi · Long Horizon
+> Air Hockey · Async 30 Hz
+
+(b) Benchmark Results  (c) Speed vs. Memory           
+
+> SANA-Robot (Ours) InternW0-ΔOpenWAM-απ0.5
+> 50 100 200 500
+> 0
+> 10
+> 20
+> 30
+> 40
+> 50
+> 60
+> Latency per Chunk on RTX 5090 (ms, Log Scale)
+> RoboDojo Memory Score  Better
+> InternW0-Δ
+> OpenWAM-α
+> Fast-WAM
+> X-WAM
+> SANA-Robot (Ours) Make Coffee · Multi-Stage Success (%) RoboDojo Score 127.1 ms · 34.67 166.9 ms · 10.41 641.8 ms · 6.32 70.9 ms · 3.55
+> 135.1 ms · 52.73
+> 60 80 100 94.0
+> LIBERO-Plus 50 70 90 82.6
+> RoboTwin 2.0 020 40 60
+> 38.33
+> Precision
+> 48.68
+> Long Horizon
+> 34.31
+> Average
+
+Figure 1 | SANA-Robot at a glance. (a) Real-world rollouts. (b) Success rate on LIBERO-Plus and RoboTwin 2.0, and score on the precision and long-horizon dimensions of RoboDojo and its average over the five dimensions, compared with InternW0-Δ, OpenWAM-𝛼 and 𝜋 0.5. (c) Latency per action chunk against the score on the memory dimension of RoboDojo, all measured on one RTX 5090. 
+
+© 2026 NVIDIA. All rights reserved. arXiv:2611.28943v1 [cs.RO] 21 Nov 2026 SANA-Robot: Efficient World Action Model with Hybrid Memory 
+
+# 1. Introduction 
+
+World action models (WAMs) leverage the world knowledge of video generation models [1, 2, 3] to improve action generation by aligning visual prediction with action prediction [4, 5, 6, 7, 8]. They now match or surpass vision-language-action models (VLAs) [9, 10] on manipulation benchmarks [11, 12, 13], which makes them a strong candidate for the low-level policy that must run stably and safely on edge devices. However, current WAMs cannot yet serve as such a policy, for two reasons. First, video prediction adds a large overhead. Besides the actions, each action chunk requires denoising the far more numerous video tokens over several steps. Without optimization, a single request of our 4.5B model takes about 0.6 s on an RTX 5090, compared with less than 0.1 s for 𝜋 0.5 [10], and a synchronous robot stands still during each request. Second, many manipulation tasks depend on information that is no longer visible, such as the number of completed steps or the position of an occluded object. Existing WAMs either act from the current observation alone [5] or keep only a few sparsely sampled past frames [7, 8], which miss most of the episode and add to the latency as the memory grows. Instead, we present SANA-Robot, a 4.5B WAM trained from Sana-Video 2 [14] that runs in real time on edge devices with a fine-grained, minute-level memory. SANA-Robot is a hybrid linear diffusion transformer. It stacks 8 blocks, each with three Gated DeltaNet (GDN) layers [15] followed by one softmax attention layer. A GDN layer compresses the past into a fixed-size recurrent state, so its cost does not grow with the context. A softmax layer attends to every token exactly, at a cost that grows with the context. This architecture matches the needs of a real-time policy with memory, and we build three core designs on it (Figure 2). 
+
+Unified World Action Model. SANA-Robot is pretrained as one model that plays three roles. As a forward dynamics model (FDM), it predicts the future video caused by given actions and serves as a world simulator for policy evaluation (§9). As a policy, it predicts the actions and the future video from the current observation and drives manipulation (§§6 and 7). As an inverse dynamics model (IDM), it predicts the actions that explain a given video, which makes the video and the actions predicted by the policy more consistent. All three modes share one token sequence of multi-view video, proprioception and actions, and differ only in which tokens are clean conditions and which are noised targets. One network thus learns all three roles from the same data, 19.4K hours from 23 datasets of robots, handheld grippers, simulation and human video (§3). 
+
+Hybrid Memory at Constant Cost. Building on its hybrid architecture, we equip SANA-Robot with a hybrid memory. Attention is causal across action chunks, so each chunk reads the past but never the future. The softmax layers attend to the first frame and to a sliding window over the last few chunks, through which information propagates chunk by chunk. The GDN layers absorb every past chunk into their fixed-size state and thus keep a memory of the whole episode. Both memory types cover the long range, at different granularities (§8.3). During autoregressive generation, SANA-Robot writes each chunk into the memory once and keeps only the GDN state and a rolling KV cache over the sliding window. Every action chunk therefore has the same cost, while the memory spans up to about one minute on RoboDojo. 
+
+Full-Stack Infrastructure. The memory changes both training and deployment, and we design the infrastructure of SANA-Robot around it. For training, the memory must be learned on whole episodes, whose lengths vary widely. We propose multimodal sequence packing with task-balanced ordering, which trains on whole episodes without padding and with a stable task mix in every step (§4.3). Balanced and shuffled data loading further mixes many datasets in every step (§4.1). For deployment, we propose memory RTC for asynchronous execution, which hides the inference latency. It extends real-time chunking [16] to a policy with memory by keeping one memory per execution phase, so that every request reads a memory laid out as in training (§5.1). Fused kernels, CUDA graphs, prefix caching and low-bit GEMMs further reduce the latency by 5.3× to 115 ms per action chunk on an RTX 5090 (§5.2). Together, these components enable closed-loop control at 30 Hz on edge devices. In summary, SANA-Robot is a unified WAM with a hybrid memory that serves as both a policy and an FDM. It achieves state-of-the-art performance on the memory dimension of RoboDojo [11] among models of medium size, and the highest success rates on LIBERO-Plus [13], LIBERO-Pro [17] and LIBERO-Max [18]. As a world simulator, it ranks second on WorldArena [19] and behaves similarly to the real environment on DROID. On real-robot tasks, SANA-Robot demonstrates precise manipulation, long-term memory and real-time control, and outperforms baselines such as 𝜋 0.5 [10] and OpenWAM-𝛼 [5]. 
+
+> 2
+
+SANA-Robot: Efficient World Action Model with Hybrid Memory Prompt                           
+
+> Embodiment Type: Action Mode: Observation View: Instruction:
+> cross-attn
+> VAE
+> Softmax GDN
+> o0
+> window (last N)global state S
+> cc
+> Observation Future video Proprio. Actions
+> ozsaaa
+> Hybrid DiT (4.5B)
+> GDN GDN GDN Softmax
+> ×8
+> 24 GDN + 8 softmax layers
+> mRoPE
+> spatial
+> t
+> oz
+> s
+> temporal
+> Unified pretraining
+> FDM oszap(z | o, s, a)
+> IDM oszap(a | o, z, s)
+> Policy oszap(z, a | o, s)
+> loss on targets: L+λL video action
+> clean ( τ= 0 ): condition noised ( τ> 0 ): target with loss
+> ii
+> dual-arm robot. end-effector pose with joint. camera description. zip up the green jacket and leave it on the white tabletop.
+> Memory in SANA-Robot-AR
+
+Figure 2 | Overview of SANA-Robot, a unified world action model for FDM, IDM and policy. The video VAE encodes each camera view separately into the observation latent 𝑜 and the future video latent 𝑧 , which enter the DiT together with the proprioception 𝑠 and the actions 𝑎 ; mRoPE places the views on a 2 × 2 grid of positions. The hybrid DiT stacks 8 blocks, each with three GDN layers and one softmax layer. 
+
+# 2. SANA-Robot 
+
+SANA-Robot is a world action model (WAM) that jointly generates future video and robot actions with a single diffusion transformer. 
+
+2.1. Unified World Action Model Architecture. We build SANA-Robot on Sana-Video 2 [14], a hybrid linear diffusion transformer for video generation. Its self-attention layers interleave Gated DeltaNet (GDN) linear attention [15] with gated softmax attention, and separate cross-attention layers inject the text. SANA-Robot keeps this single-tower architecture for low latency: the visual and action tokens are placed in one sequence, without a separate action expert. As shown in Figure 2, the sequence holds the multi-view observation latent 𝑜 , one proprioception token 𝑠 , the future video latent 𝑧 and 32 action tokens 𝑎 , where 𝑠 
+
+and 𝑎 use the unified action space of §3.2. The causal video VAE of LTX-2 [3] compresses the video by 32 × 32 × 8,and 𝑧 encodes the frames of a 32-step chunk at a stride of 4. The full token sequence is 
+
+𝑥 = [ 𝑜 ; 𝑠 ; 𝑧 ; 𝑎 ], (1) where 𝑧 and 𝑎 attend to 𝑜 and 𝑠 but not the reverse. The text prompt states the embodiment type, the action representation, the camera views and the task instruction (§3.2), and every token reads it through the cross-attention layers. 
+
+Positional Encoding. We use the 3D multimodal RoPE (mRoPE) [20] with absolute temporal positions to align the video and action modalities. A 2 × 2 grid in the RoPE coordinates accommodates the varying camera setups of robot data: one or two head or external cameras occupy the top row, and the wrist cameras the bottom row; empty cells are padded. Temporally, all tokens share one physical clock: a latent frame is placed at the time of the frames it encodes, the proprioception at the time of the observation, and each action at its own control step. Video and action tokens that describe the same instant therefore share a temporal position, independent of the frame stride and the control frequency of a dataset. 
+
+Unified Training. SANA-Robot is trained with flow matching [21, 22], and every token 𝑖 carries its own noise level 𝜏 𝑖 
+
+(Figure 2). Clean tokens ( 𝜏 𝑖 = 0 ) serve as conditions, and noised tokens serve as targets that carry the loss. The choice of targets thus selects the conditional distribution that one network models: FDM: 𝑝 𝜃 (𝑧 | 𝑜 , 𝑠 , 𝑎 ), IDM: 𝑝 𝜃 (𝑎 | 𝑜 , 𝑧 , 𝑠 ), Policy: 𝑝 𝜃 (𝑧 , 𝑎 | 𝑜 , 𝑠 ), (2) where every mode is also conditioned on the text prompt. The Forward Dynamics Model (FDM) simulates the video that an action chunk causes, the Inverse Dynamics Model (IDM) recovers the actions that explain a video, and the Policy predicts both from the current observation and proprioception. In the Policy mode, the video and the actions of a chunk share one noise level and are denoised jointly. The loss sums the velocity errors over the target tokens, with the action dimensions that an embodiment lacks masked out (§3.2): 
+
+ℒ = ℒvideo + 𝜆 ℒaction , (3) where we set 𝜆 = 1 . The Policy mode drives manipulation (§§6 and 7), and the FDM serves as a world simulator (§9). 
+
+3SANA-Robot: Efficient World Action Model with Hybrid Memory 
+
+2.2. SANA-Robot Policy SANA-Robot-base. SANA-Robot-base uses the Policy mode of the unified model: it predicts the action chunk 𝑎 𝑐 and the future video 𝑧 𝑐 from the current observation 𝑜 𝑐 and the proprioception 𝑠 𝑐 . Since the conditions do not attend to the noisy targets (Equation (1)), their keys and values are computed once per request and reused across all denoising steps (§5.2). 
+
+SANA-Robot-AR. A policy that sees only the current observation cannot act correctly when the information that determines the action is occluded, out of view, or carried only by the progress of the task. SANA-Robot-AR therefore conditions the policy on the visual history of the episode. We treat an episode as a sequence of chunks with chunk-causal attention: chunk 𝑐 attends to the chunks before it but not to those after it, and within a chunk the video and action tokens attend to each other as in SANA-Robot-base. The memory holds the first frame of the episode, encoded on its own as a sink latent 𝑜 0, and the video latents 𝑣 <𝑐 of the past chunks, where 𝑣 𝑐 encodes the frames observed while chunk 𝑐 is executed; past actions are not stored. The policy then models 
+
+𝑝 𝜃 (︀ 𝑧 𝑐 , 𝑎 𝑐 ⃒⃒ 𝑜 0, 𝑣 <𝑐 , 𝑜 𝑐 , 𝑠 𝑐 )︀ . (4) The current observation 𝑜 𝑐 and the proprioception 𝑠 𝑐 read the memory and condition chunk 𝑐 causally, but they are never written into the memory, so later chunks access the past only through the video latents. Both choices are necessary (§8.2): without 𝑜 𝑐 , the policy loses precision, and when the targets and 𝑜 𝑐 attend to each other bidirectionally, the policy ignores the memory. The softmax layers attend to the sink and to the latents of the last 𝑁 chunks through a sliding window ( 𝑁 = 1 unless stated otherwise). Since the cached keys and values of each chunk were computed while it attended to its own window, older history propagates forward chunk by chunk. The GDN layers compress the whole history into a fixed-size state with a chunk-wise gated delta rule: 
+
+𝑆 𝑐 = 𝑔 𝑐 𝑆 𝑐 −1 + 𝐾 ⊤ 
+
+> 𝑐
+
+diag( 𝛽 𝑐 )(︀ 𝑉 𝑐 − 𝐾 𝑐 𝑔 𝑐 𝑆 𝑐 −1)︀ , (5) where 𝑆 𝑐 is the recurrent state, 𝑔 𝑐 a data-dependent decay, 𝛽 𝑐 the write strengths, and 𝐾 𝑐 , 𝑉 𝑐 the keys and values of chunk 𝑐 . The queries of chunk 𝑐 read the decayed previous state together with the keys and values of the chunk itself, so that the tokens within a chunk also see each other: 
+
+𝑂 𝑐 = 𝑄 𝑐 (︀ 𝑔 𝑐 𝑆 𝑐 −1 + 𝐾 ⊤ 
+
+> 𝑐
+
+diag( 𝛽 𝑐 ) 𝑉 𝑐 )︀ . (6) Both layer types thus cover the long range at different granularities (§8.3), and the cost per chunk stays constant. All tokens keep the physical-time positions of §2.1, except the sink in the softmax layers. Following StreamingLLM [23], we place the sink at most 7 chunks before its reader, so that this distance stays within the range of the 8-chunk training windows. 
+
+Continued Training with Hybrid Memory. SANA-Robot-AR is initialized from the unified model and continues pretraining in the Policy mode with the hybrid memory on all data sources, so that the memory is learned before post-training on downstream data. Since filtering and clip splitting shorten the continuous spans of the data (§3), the training windows span up to 8 chunks. We use chunk-causal teacher forcing: a clean copy of every chunk is written into the memory, while a noised copy, which reads the memory of the chunks before it, carries the loss, so that one forward and backward pass trains all chunks of a window (§4.2). 
+
+# 3. Data Pipeline 
+
+Pretraining a world action model across many robots requires data that is both broad and consistent, so that the model learns knowledge of the physical world that is shared across embodiments. We obtain breadth by collecting 23 datasets of four types: teleoperated robots, handheld UMI devices, simulation and human egocentric video (§3.1). We obtain consistency by converting them into one format (§3.2) and by filtering and balancing them (§3.3). From 23.8K raw hours, the pipeline produces 19.4K filtered hours and 133M training chunks (Figure 3). 
+
+3.1. Data Sources Real Robot Teleoperation. Teleoperated demonstrations provide the robot actions that the policy learns to produce. They make up 14.0K of the raw hours and come from 18 datasets covering 15 robot families. These include bimanual 
+
+> 4SANA-Robot: Efficient World Action Model with Hybrid Memory
+
+Table 1 | Pretraining data before and after filtering. Hours are real time, Views is the number of cameras, and FPS is the training frame-rate tier. Human video is recorded at 30 Hz and played at 15 Hz.                                                                                                                                                                                          
+
+> Raw Filtered Dataset Embodiment Views FPS Hours Episodes Hours Episodes
+> Real Robot
+> ABC-130K [24] YAM 3–4 30 3,553.4 129,616 2,971.3 122,559 MolmoAct2-BimanualYAM [25] YAM 330 703.8 32,234 463.3 31,958 FineART [26] Trossen AI 430 1,624.1 40,088 1,405.9 39,989 AgiBotWorld-Beta [27] AgiBot G1 330 2,706.9 165,416 2,175.4 162,763 AgiBotWorld 2026 [28] AgiBot G2 330 591.5 28,510 453.2 27,443 GM-100 [29] AgiBot G1 / AgileX / R1 Pro 315/30 567.5 45,462 499.1 45,225 RoboCOIN [30] 8 robots 3–4 30 1,023.7 128,759 789.9 123,533 RW-RL [31] SO-101 / AgiBot G2 / R1 Lite 315/30 486.0 23,161 394.5 21,985 Galaxea Open-World [32] Galaxea R1 Lite 415 527.4 22,438 430.0 22,243 DROID [33] Franka 315 346.1 57,639 317.1 57,456 RoboMIND [34] Franka 3–4 15 42.5 17,154 34.4 16,506 RoboMIND 2.0 [35] Franka FR3 (dual) 415 357.8 75,814 284.1 75,044 RealSource-World [36] RealSource RS-02 330 345.4 26,667 302.3 26,656 PrimeBot [37] PrimeBot X2W 330 502.7 30,170 456.6 30,166 ActionNet [38] Fourier GR-1 130 142.0 30,120 133.0 30,111 Unitree G1 Dex1 [39] Unitree G1 330 327.7 60,066 249.1 59,507 Unitree WBT [39] Unitree G1 330 120.5 11,242 79.3 10,611 Dexora [40] AIRBOT MMK2 420 43.2 12,045 39.9 11,932
+> Subtotal 14,012.3 936,601 11,478.3 915,687
+> UMI
+> HyEmbodied-UMI [41] UMI gripper 330 2,161.3 250,133 2,130.8 249,806
+> Simulation
+> InternData-A1 [42] Franka / Split ALOHA / Lift2 2–3 30 3,693.0 559,256 3,091.8 557,196 BEHAVIOR-1K [43] Galaxea R1 Pro 330 1,952.9 20,000 1,292.3 19,996
+> Subtotal 5,645.9 579,256 4,384.1 577,192
+> Human Egocentric
+> EgoDex [44] Human 115 829.4 338,234 592.7 277,600 EgoVerse [45] Human 115 1,141.4 410,172 798.4 324,076
+> Subtotal 1,970.8 748,406 1,391.0 601,676 Total 23,790.3 2,514,396 19,384.2 2,344,361
+
+YAM [24, 25], AgiBot [27, 28], Trossen [26], single- and dual-arm Franka [33, 34, 35], other wheeled, humanoid and arm platforms [29, 30, 31, 32, 36, 37, 39] and dexterous hands [38, 40]. 
+
+UMI Recordings. Handheld UMI grippers [46] provide end-effector actions without a robot, since the gripper is held by a person and tracked. HyEmbodied-UMI [41] contributes 2.2K hours of such recordings. 
+
+Simulation. Simulation contributes 5.6K raw hours with exact proprioception and action labels. InternData-A1 [42] provides Franka, Split ALOHA and ARX Lift2 scenes, and BEHAVIOR-1K [43] provides household tasks for the Galaxea R1 Pro. 
+
+Human Egocentric Video. Human egocentric video offers visual and task diversity that robot data lack. EgoDex [44] and EgoVerse [45] contribute 2.0K hours of people manipulating objects in everyday scenes. Videos recorded with fisheye cameras are undistorted to match the other sources. 
+
+3.2. Unified Format 
+
+Mixing these sources requires a common format for video, actions and language. We therefore assign every dataset one of a few frame-rate tiers, map all actions into one space with a shared physical meaning, and give all clips text prompts of one structure. 
+
+Time Base. The datasets are recorded at different frame rates and with unsynchronized streams. We assign each dataset the frame-rate tier (10, 15, 20, 24 or 30 Hz) closest to the median frame rate of its main camera. Sources faster than 40 Hz are downsampled to 30 Hz; all others keep their original frames. Within an episode, the frames of the main camera define the time steps. Every other stream, i.e. , the other cameras and the proprioception, commands and gripper of each arm, contributes its latest sample at or before each time step. Thus no step depends on future measurements, and no value is interpolated. In every tier, a training chunk covers 32 time steps, with 32 actions and 8 video frames at a stride 
+
+> 5SANA-Robot: Efficient World Action Model with Hybrid Memory
+
+of 4 after the observation frame. The physical clock of §2.1 accounts for the different durations. Human egocentric video, recorded at 30 Hz, is assigned the 15 Hz tier and therefore plays at half speed, which brings hand motion closer to the speed of teleoperated robots. 
+
+Action Space. All embodiments share one proprioception and action space, which includes absolute end-effector poses, absolute joint positions, and gripper or dexterous-hand values. A per-dimension mask removes the slots that an embodiment lacks from both the input and the loss. Because the same robot may carry different grippers, for real robots we recompute every end-effector pose at the flange from the joint positions with forward kinematics. UMI recordings and human video have no joints and fill only the end-effector and gripper slots; for human video, the wrist poses serve as end-effector poses and a virtual gripper represents each hand. Actions are normalized with embodiment-specific statistics, which all datasets of the same robot share. 
+
+Segment and Recaption. Several datasets contain episodes longer than 10 s that span several sub-tasks, and their global instruction alone does not ground each part of the episode in language. We therefore split such episodes into non-overlapping 10 s clips (the last one shorter) and recaption each clip with a VLM. The text prompt combines the embodiment type, the action representation, the view description and the global instruction, and during training adds the step instruction of the clip with probability 0.5, for example: 
+
+> Embodiment Type: dual-arm YAM robot with parallel grippers. Action Mode: robot_base_eef; end-effector targets are absolute future poses expressed in the robot base frame, joint targets are absolute future targets, and gripper targets are absolute future targets. Observation View: left wrist-mounted camera. Instruction: Zip up the green jacket and leave it on the white tabletop. Current step: Zip up the green jacket.
+
+3.3. Filtering and Balancing 
+
+Raw robot data contain defects that the model should not learn from: sensor glitches, idle periods, unusable frames, and video that does not show the recorded motion. Rather than discarding every episode that contains a defect, our filter removes only the affected time steps and keeps the clean spans in between; it drops an episode entirely only when a defect affects all of it. Overall, filtering keeps 81.5% of the raw hours and 93.2% of the episodes (Table 1). 
+
+Kinematic Validity. Actions that violate the kinematics of the robot indicate recording errors. We check every action against the kinematic model of the robot. We remove actions with invalid joint values, actions whose forward kinematics disagrees with the recorded end-effector pose, and actions whose gripper value lies far outside the range between its 1st and 99th percentiles. 
+
+Motion. Long idle periods add no supervision, and jumps indicate recording errors. We remove idle periods in which the joints and the gripper all stay still for more than 0.5 s, but keep shorter pauses, which are part of how a task is executed. A step whose speed between consecutive actions exceeds the physical speed limits (2 rad/s for joints; 0.5 m/s and 2 rad/s for the end effector) is a jump; we remove it and split the episode there. 
+
+Video Quality. Frames that are too dark, overexposed or of very low contrast show little of the scene. We estimate the brightness and contrast of each frame and remove such frames. 
+
+Video-Action Consistency. A video that does not show the motion described by the actions pairs every action with a wrong observation. Frames whose pixels change significantly while the robot is static, and arms whose largest motion is not visible in any of their cameras, are flagged and skipped in pretraining. We drop an entire episode when its video largely mismatches the proprioception, for example when the video lags behind it. 
+
+Balancing. Sampling in proportion to hours would let a few large datasets dominate training, while some high-quality robot families each hold less than 1%. We therefore balance the data by embodiment and data quality. The weight of a robot family grows with its filtered hours raised to the power 0.7, adjusted by a small family-specific prior that reflects data quality. Within a family, the weight of a dataset grows with its filtered hours raised to the power 0.9. Balancing thus gives small, high-quality families a larger share than their hours alone would. Figure 3 shows how filtering and balancing change the composition of the corpus. 
+
+> 6SANA-Robot: Efficient World Action Model with Hybrid Memory YAM
+> 17.9%
+> AgiBot
+> 15.4%
+> Trossen
+> 6.8%
+> Galaxea
+> 4.0%
+> Franka
+> 3.1%
+> Other Robots
+> 11.7%
+> Simulation
+> 23.7%
+> Human Video
+> 8.3%
+> UMI
+> 9.1%
+
+## 23.8K 
+
+> Hours
+
+Raw 
+
+> YAM
+> 17.7%
+> AgiBot
+> 15.1%
+> Trossen
+> 7.3%
+> Galaxea
+> 4.0%
+> Franka
+> 3.3%
+> Other Robots
+> 11.8%
+> Simulation
+> 22.6%
+> Human Video
+> 7.2%
+> UMI
+> 11.0%
+
+## 19.4K 
+
+> Hours
+
+After Filtering 
+
+> YAM
+> 17.2%
+> AgiBot
+> 11.1%
+> Trossen
+> 8.0%
+> Galaxea
+> 4.4%
+> Franka
+> 3.7%
+> Other Robots
+> 15.3%
+> Simulation
+> 22.7%
+> Human Video
+> 8.8%
+> UMI
+> 8.9%
+
+## 133M 
+
+> Chunks
+
+After Balancing 
+
+Figure 3 | Pretraining data by source: shares of the raw hours, of the filtered hours, and of the training chunks per epoch after balancing. Other Robots are the ten smaller robot families of Table 1. 
+
+# 4. Training Infrastructure 
+
+Training throughput determines how much data and how many design variants we can afford to train on. We raise it at three points: loading the corpus with a balanced mixture (§4.1), training all chunks of a window in one forward and backward pass (§4.2), and training SANA-Robot-AR on whole episodes of varying length (§4.3). 
+
+4.1. Data Loading Data Storage. We store every dataset as ZIP archives of up to 1,000 episodes each. An episode keeps its camera videos, its proprioception and action table and its metadata as separate files. They are stored without compression, so that a data-loader worker reads them directly from the archive. Episodes are packed in the order of their original keys, so the order of the episodes within an archive follows the source dataset rather than being random. The loader never expands the corpus into individual samples: it indexes the valid start of every training window in the spans kept by the filters (§3.3) and reads a window only when it is scheduled. 
+
+Balanced and Shuffled Sampling. Every window of a dataset should have the same chance of being used, so that each episode contributes in proportion to its length. However, opening archives at random would add RAM and CPU load. We therefore assign each archive to one GPU for the whole epoch, so that only the data-loader workers of that GPU open it. The archives are assigned longest first to the GPU with the fewest scheduled windows, which gives all GPUs nearly the same number of windows. Every GPU then runs the same number of steps. A GPU forms each batch from windows of one dataset with the same camera layout, resolution and horizon, so that no batch needs padding. Each GPU rotates through a pool of its archives, so that each batch mixes windows from many archives. Different GPUs draw on different datasets in the same step, so each global batch mixes many datasets. All GPUs derive the same plan from the random seed and the epoch without communication, which also lets an interrupted run resume at the exact batch where it stopped. 
+
+4.2. Chunk-Causal Teacher Forcing 
+
+SANA-Robot-AR is autoregressive: it predicts an episode chunk by chunk, and each chunk is conditioned on the memory of the chunks before it (Equation (4)). Unlike autoregressive video generation, where each frame is conditioned on the history the model has generated itself [47], robot manipulation is teacher-forced by nature: the memory is written from the observed frames, so the next chunk is always predicted from the real observations. A naive way to train such a policy samples a segment of an episode and supervises only its last chunk, with the earlier chunks serving as memory, so that each forward pass trains a single chunk. We instead train every chunk of a window in one forward and backward pass. Since a diffusion model sees each chunk noised whereas the memory must hold it clean, we place every chunk in the window twice (Figure 4a): a clean stream of the video latents builds the memory and carries no loss, and a noisy stream holds, for every chunk 𝑐 , 𝑜 𝑐 , 𝑠 𝑐 and the noised targets 𝑧 𝑐 and 𝑎 𝑐 , and carries the loss. The attention keeps this layout chunk-causal: in the softmax layers, noisy chunk 𝑐 reads the sink, the last 𝑁 clean chunks before it and its own entries, where 𝑜 𝑐 and 𝑠 𝑐 do not read the targets; in the GDN layers, it reads the state after the sink and the clean chunks before it, and its 𝑜 𝑐 and 𝑠 𝑐 update only a copy of that state, which is discarded after chunk 𝑐 . Each noisy chunk thus computes the same output as the forward pass that predicts it at deployment, and one pass over a sequence about twice as long as the window trains all 𝐿 chunks of the window, which the naive scheme trains in 𝐿 passes over segments of 1
+
+to 𝐿 chunks.            
+
+> 7SANA-Robot: Efficient World Action Model with Hybrid Memory Sink Clean
+> memory, no loss
+> Obs. + proprio. Noisy
+> loss
+> c0
+> c1
+> c2
+> o0
+> o1
+> o2
+> o3
+> n0
+> n1
+> n2
+> n3
+> sink c0c1c2o0o1o2o3n0n1n2n3
+> Visible Not visible
+
+(a) Chunk-causal attention mask Task A Task B Task C      
+
+> Task-Balanced Ordering
+> sort by midpoint
+> Queue step 1
+> Task-Balanced Ordering + Packing
+> GPU 1 GPU N
+> Length-Bucketed Padding
+> GPU 1 GPU N
+> Task Mix
+> Task A Task B Task C Padding
+
+(b) Ordering and packing Loss          
+
+> 0.08 0.09 0.10 0.11 0.12 0.13 0.14 1K 2K 3K 4K 5K 6K 7K
+> Training Step
+> Length-Bucketed Padding Task-Balanced Ordering + Packing
+> Detrended SD, 2K–6K
+> 0.0034 0.0018
+> Median Step Time
+> 3.95 s 3.62 s
+
+(c) Per-step training loss 
+
+Figure 4 | Training SANA-Robot-AR on whole episodes. (a) Attention mask of chunk-causal teacher forcing for a window of four chunks: each row is a query and each column a key, and 𝑐 𝑘 , 𝑜 𝑘 and 𝑛 𝑘 denote the clean, observation (with proprioception) and noisy entries of chunk 𝑘 . (b) Task-balanced ordering and one training step, schematic: the windows of each task are laid end to end on a line from 0 to 1 and sorted by their midpoints into one queue, which packing places on the GPUs without padding; length-bucketed padding wastes compute and skews the task mix of the step. (c) Per-step training loss when fine-tuning SANA-Robot-AR on RoboDojo: task-balanced ordering with packing halves the detrended loss fluctuation and shortens the median step time. 
+
+4.3. Variable-Length Causal Training 
+
+For every downstream dataset, we fine-tune SANA-Robot-AR on whole episodes, so that its memory spans the full task as it does at deployment. Each training window is then one complete episode of a single task, and its length varies with the task and the demonstration. In causal training, the windows vary in length, which raises three problems in turn: 1) GPUs with shorter windows wait for the one with the longest at every synchronization, which lowers the model FLOPs utilization (MFU); 2) padding the windows to a common length, the standard remedy, equalizes the GPUs but spends compute on the padding; 3) grouping windows of similar length to reduce the padding unbalances the tasks: windows of similar length often come from the same task, so the task mix of a step deviates strongly from that of the data and the loss fluctuates from step to step. We therefore order and pack the windows so that every step balances the load across GPUs, spends no compute on padding and keeps the task mix of the data. 
+
+Task-Balanced Ordering. We first arrange the windows of an epoch into one queue in which every stretch holds each task near its share of the data (Figure 4b). For each task, we shuffle its windows and lay them end to end on a line from 0 to 1, each window spanning a length in proportion to its number of chunks. Each window is keyed by the midpoint of its span, and the windows of all tasks are sorted by this key. Since all tasks advance along their lines at the same rate, up to any key 𝑥 every task has placed a fraction 𝑥 of its chunks, to within half a window, so every stretch of the queue keeps the task mix of the data, while the order within each task stays random. The packing below considers only the window lengths and the queue order, so every step inherits this balanced mix. On RoboDojo, even the least balanced steps then come close to the task mix of the whole epoch. Compared with length-bucketed padding, the detrended standard deviation of the per-step loss drops from 0.0034 to 0.0018 over steps 2K–6K (Figure 4c). 
+
+Sequence Packing for Load Balancing. Packing aims to give every GPU the same load without spending compute on padding, so that no GPU waits for another when they synchronize and the MFU stays high. Following the queue, we fill each GPU with windows of different lengths up to a fixed budget of chunks per step, as in sequence packing for LLM training [48]. Following the implementation of the variable-length attention of FlashAttention [49], the windows packed on a GPU do not interact: attention, the GDN state and the RoPE positions all restart at every window. On RoboDojo, packing cuts the median step time from 3.95 s to 3.62 s ( 8% ), although each step carries slightly more chunks (Figure 4c). 
+
+4.4. Robot Pretraining Implementation Details. We initialize SANA-Robot from Sana-Video 2 [14], whose backbone interleaves GDN and softmax attention, with softmax attention in a quarter of the self-attention layers. Each sample is a chunk of 𝐶 = 32 
+
+control steps: the observation latent of the current frame, the proprioception, 32 actions, and one future latent that encodes the frames for the next 32 actions. The camera views of every dataset are placed on the 2 × 2 RoPE grid at                    
+
+> 8SANA-Robot: Efficient World Action Model with Hybrid Memory LCΔt
+> Robot …chunk k−1 chunk kidle idle idle
+> Policy inference
+> osaaaCactions
+> Robot …chunk k−2 chunk k−1 chunk kchunk k+1
+> Policy inference
+> (a) Synchronous (b) Asynchronous
+
+Figure 5 | Synchronous and asynchronous inference. (a) Synchronous execution: the robot idles for the latency 𝐿 of each request and then executes all 𝐶 actions of the new chunk. (b) Asynchronous execution: the request at 𝑡 𝑘 is issued when 𝑑 actions of the current chunk remain and runs while the robot executes them; the first 𝑑 actions of chunk 𝑘 are dropped, and the robot executes the next 𝑃 = 𝐶 − 𝑑 .a base resolution of 256 pixels, and the data loader rotates each GPU through a pool of 32 archives. We train with AdamW and a cosine learning-rate schedule, clip the gradient norm at 1.0, use BF16 mixed precision with activation checkpointing, and keep an exponential moving average (EMA) of the weights. Flow matching uses a timestep shift [50] of 5 for the video and 1 for the actions. 
+
+Base Training. We first train the unified model of SANA-Robot on single chunks for 100k iterations with a peak learning rate of 10 −4, assigning each sample to the Policy, FDM or IDM mode at a ratio of 8:1:1. The base model is trained with a global batch size of 4,096 on 64 GB300 GPUs. For classifier-free guidance, we randomly drop the task instruction with probability 0.1. 
+
+Memory Training. We then continue training the Policy with the hybrid memory for 50k iterations with a peak learning rate of 5 × 10 −5 on windows of up to 8 chunks, using the chunk-causal teacher forcing of §4.2. 
+
+# 5. Real-Time Inference 
+
+Real-time closed-loop control requires the robot to run stably at its control frequency, 30 Hz in our deployment, without any idle time. This places two requirements on inference. 1) The pipeline must be asynchronous, since in synchronous execution the robot idles during every request (§5.1). 2) Inference must be fast, since a lower latency allows a smaller asynchronous delay, so that each chunk is planned from a more recent observation and asynchronous execution loses less accuracy (§5.2). §5.3 reports the resulting latency on server and edge GPUs. 
+
+5.1. Deployment Pipeline 
+
+In synchronous execution, the policy is requested once per chunk, and the robot executes all 𝐶 actions of the new chunk before the next request; with a control period Δ𝑡 and a per-request latency 𝐿 , each chunk takes 𝐶 Δ𝑡 + 𝐿 , of which the robot idles for 𝐿 . Asynchronous execution [16, 51] removes this idle time by overlapping inference with execution: the request for chunk 𝑘 is submitted at step 𝑡 𝑘 = 𝑘 (𝐶 − 𝑑 ), when 𝑑 actions of the current chunk remain to be executed. As long as 𝐿 ≤ 𝑑 Δ𝑡 , there will be no idle time with the first 𝑑 actions of chunk 𝑘 dropped, and the robot executes the next 
+
+𝐶 − 𝑑 actions (Figure 5b). 
+
+SANA-Robot-AR in Synchronous Execution. The softmax layers maintain a sliding-window KV cache over the sink and the last 𝑁 chunks, and the GDN layers maintain a global KV state 𝑆 over all past chunks. At the start of an episode, the first frame is encoded as the sink latent and prefilled into both. Each request then takes three steps: (i) encoding : the VAE encodes the frames observed during the last 𝐶 steps into a video latent and the current frames into 𝑜 ; (ii) prefill : the video latent is forwarded once and written into the memory, updating the sliding-window KV cache in a FIFO manner and the GDN state by eq. (5), and 𝑜 and 𝑠 are forwarded conditioned on the memory, without being written into it; (iii) generation : 𝑧 and 𝑎 are denoised in 𝐾 steps, conditioned on the memory and the prefilled conditions. Although SANA-Robot-AR uses 𝑁 = 1 by default, the cost of a request is nearly constant in 𝑁 rather than linear in it. Only the 8 softmax layers read the window, from a KV cache filled once per chunk, while the 24 GDN layers keep a state of constant size; from 𝑁 = 1 to 𝑁 = 4 , the latency on RTX 5090 rises by only 2.5 ms in BF16, from 173.3 to 175.8 ms. 
+
+SANA-Robot-AR in Asynchronous Execution (Memory RTC). In training, a chunk starting at step 𝑡 reads the                                    
+
+> 9SANA-Robot: Efficient World Action Model with Hybrid Memory executed dropped memory φ = 16 memory φ = 0 pad (first frame)
+> t1t2t3t4
+> chunk 0 chunk 1 φ = 16
+> chunk 2 0–32 φ = 0
+> chunk 3 16–48 φ = 16
+> chunk 4 32–64 0–32 φ = 0
+> 032 64 96 step
+> t1t2t3t4C = 32, d = 16
+> chunk 0 chunk 1 0–16
+> chunk 2 0–16 16–32
+> chunk 3 0–16 16–32 32–48
+> chunk 4 0–16 16–32 32–48 48–64
+> (a) Direct RTC (b) Memory RTC
+> memory (direct RTC) pad 0–16 pad 0–16
+> memory update
+
+Figure 6 | Asynchronous execution of SANA-Robot-AR with 𝐶 = 32 and 𝑑 = 16 . Request 𝑘 starts at step 𝑡 𝑘 , drops the first 𝑑 actions of its chunk and executes the next 𝐶 − 𝑑 . (a) Direct RTC keeps a single memory and writes the 𝐶 − 𝑑 
+
+executed steps as one memory chunk, so its memory chunks are shorter than in training. (b) Memory RTC keeps one memory per phase 𝜙 , whose chunks span 𝐶 steps as in training; at each 𝑡 𝑘 (triangles), the window that has just ended is written into the memory of phase 𝜙 𝑘 , here every 16 steps, alternating between the two memories. memory: 
+
+ℳ(𝑡 ) = {𝑜 0, 𝑣 (𝑡 ), 𝑣 (𝑡 − 𝐶 ), 𝑣 (𝑡 − 2𝐶 ), . . . }, (7) where 𝑣 (𝜏 ) encodes the frames observed in the 𝐶 steps before step 𝜏 , with copies of the first frame before the start of the episode. In asynchronous execution, however, consecutive requests are only 𝐶 − 𝑑 steps apart, so a single memory can serve all requests only by breaking the chunk structure of training: with 𝐶 = 32 and 𝑑 = 16 , every memory chunk covers 16 steps instead of 32 (Figure 6a), which raises the action error (Figure 7a). Therefore, we propose memory RTC , extending real-time chunking (RTC) [16] to policies with a chunk-causal memory. The chunk boundaries 𝑡, 𝑡 − 𝐶, 𝑡 − 2𝐶, . . . of ℳ(𝑡 ) share the remainder 𝜙 = 𝑡 mod 𝐶 , which we call the phase of the memory. In asynchronous execution, the phase 𝜙 𝑘 of request 𝑘 changes with 𝑡 𝑘 . Since 𝑡 𝑘 = 𝑘 (𝐶 − 𝑑 ), 𝜙 𝑘 cycles through 𝐶/ gcd( 𝐶, 𝑑 ) phases, e.g., two phases for 𝑑 = 16 and four for 𝑑 = 8 . We keep 𝑑 a multiple of the frame stride (§3.2), so that every phase falls on an encoded frame. Memory RTC therefore maintains one memory per phase (Figure 6b), and each request reads the memory of its own phase, which equals ℳ(𝑡 𝑘 ) in eq. (7). This is possible because training starts windows at every phase of the chunk grid, so every phase memory matches a memory seen in training. While the robot runs, 𝑣 (𝑡 ) is written into the memory of phase 𝜙 at every step 𝑡 with 𝑡 mod 𝐶 = 𝜙 (triangles in Figure 6b). Memory RTC thus trades one copy of the memory per phase for exact training-time memories, without recomputing the history at any request. We evaluate it on real-robot tasks in §7. 
+
+5.2. Inference Optimization 
+
+A request runs 𝐾 denoising steps of the 4.5B-parameter backbone, plus the prefill, which for SANA-Robot-AR also writes the last chunk into the memory. In eager PyTorch, a large part of its latency lies outside the GEMMs: in the GDN layers, whose computation runs as a chain of small kernels, in the normalization, rotary and modulation operations around each GEMM, in the video VAE, and in recomputing the conditions in every forward pass. We reduce it with kernel fusion, CUDA graphs, prefix caching and, optionally, low-bit GEMMs; Figure 7b shows the latency of SANA-Robot-AR as they are added one by one. 
+
+Kernel Fusion. We implement fused Triton kernels for the operations outside the GEMMs: 1) each GDN layer runs as a single kernel, and for SANA-Robot-AR one kernel updates the GDN state when a chunk is written into the memory while another reads it; 2) RMSNorm and RoPE of query and key are fused into one kernel; 3) the attention residuals [52], the adaLN modulation and the gated residual connections around each sublayer are fused into one kernel; 4) the SwiGLU activation is fused into the epilogue of the gate and up projections. The kernels are tuned separately for each GPU, and all of them match eager execution bitwise or within BF16 rounding. The VAE encoder is compiled as well.     
+
+> 10 SANA-Robot: Efficient World Action Model with Hybrid Memory 1× 2× 4× 6× 8× 0816 24
+> 2.7× 4.8× 7.1× 0.98–0.99×
+> Action error vs. sync
+> delay d
+> Direct RTC Memory RTC Sync
+
+(a) Asynchronous action error Eager + Kernel fusion + CUDA graphs + Prefix caching + NVFP4                  
+
+> 324 92 192 607.8 ms
+> 40 57 128 224.7 ms
+> 40 52 117 208.7 ms
+> 40 41 92 173.3 ms
+> 40 29 46 115.0 ms
+> 0200 400 600
+> Latency (ms)
+
+2.70× 1.08× 1.20× 1.51× 
+
+5.3× overall     
+
+> VAE encoding Prefill Denoise ( K= 4)
+
+(b) Latency of SANA-Robot-AR ( 𝑁 = 1 )
+
+Figure 7 | (a) Open-loop end-effector position error of asynchronous execution relative to synchronous execution (𝐶 = 32 ) on 70 RoboDojo episodes. Memory RTC stays at the error of synchronous execution for every 𝑑 , whereas direct RTC degrades as 𝑑 grows. (b) Per-request latency of SANA-Robot-AR on RTX 5090 as the optimizations are added cumulatively. Table 2 | Per-request latency (ms) of SANA-Robot-AR ( 𝑁 = 1 ) in synchronous execution with 𝐾 = 4 : the sum of video encoding, prefill and 𝐾 denoising steps. Opt.: kernel fusion, CUDA graphs and prefix caching in BF16; +FP8 and +NVFP4: with low-bit GEMMs. Speed-ups over eager in parentheses. 
+
+GPU Eager Opt. +FP8 +NVFP4 RTX PRO 6000 573.3 175.0 (3.3 ×) 140.6 (4.1 ×) 123.1 (4.7 ×)
+
+RTX 5090 607.8 173.3 (3.5 ×) 135.1 (4.5 ×) 115.0 (5.3 ×)
+
+Jetson Thor 1390.1 420.2 (3.3 ×) 333.6 (4.2 ×) 288.0 (4.8 ×)
+
+CUDA Graphs. We capture each request of SANA-Robot-AR as two CUDA graphs, one writing the last chunk into the memory and one prefilling the conditions and generating, both on the memory in static buffers. Under asynchronous execution, the memory of each phase is copied into these buffers before its request, so one set of graphs serves all phases. The compiled VAE encoder is captured as well. 
+
+Prefix Caching. The conditions, including text prompt and observation, do not attend to the targets (§2.2), so their keys and values are the same in all 𝐾 denoising steps. Therefore, we pre-compute them before the denoising steps and reuse them during multiple denoising steps. 
+
+Low-Bit GEMMs. On edge devices, the GEMM throughput is the main bottleneck once the remaining operations are fused. We therefore run the large linear layers of the backbone in FP8 (E4M3) with per-tensor scaling, or in NVFP4 (E2M1 with an FP8 scale per block of 16 elements), both with FP32 accumulation, which further reduces latency with only a marginal loss in accuracy (§7). 
+
+5.3. Latency and On-Edge Deployment 
+
+Table 2 reports the per-request latency of SANA-Robot-AR on RTX PRO 6000, RTX 5090 and Jetson Thor, with 𝐾 = 4 
+
+denoising steps and three camera views. We measure the full request as deployed in synchronous execution, i.e., the sum of the latencies of all its components, which run one after another: video encoding, prefill (including the memory) and 
+
+𝐾 denoising steps. The text prompt and the sink, encoded once per episode, are excluded. Figure 7b breaks this latency down into its stages on RTX 5090. Combining the asynchronous pipeline of §5.1 with the optimizations of §5.2, SANA-Robot-AR runs in real time on all three devices. The optimizations reduce its latency by 3.3–3.5× in BF16, 4.1–4.5× with FP8 GEMMs and 4.7–5.3×
+
+with NVFP4 GEMMs, to 115 ms per request on RTX 5090 and 288 ms on Jetson Thor. Under the real-time condition 
+
+𝐿 ≤ 𝑑 Δ𝑡 , a 30 Hz control loop is thus met with 𝑑 = 8 on RTX PRO 6000 and RTX 5090 ( 𝑑 = 4 with NVFP4) and with 𝑑 = 16 on Jetson Thor ( 𝑑 = 12 with FP8 or NVFP4). At these delays, memory RTC keeps the action error of synchronous execution (Figure 7a). We demonstrate 30 Hz closed-loop control on the dynamic Air Hockey task in §7. 
+
+> 11 SANA-Robot: Efficient World Action Model with Hybrid Memory
+
+Table 3 | Results on RoboDojo [11] (simulation). Each cell: average score / success rate (%). Generalization is the mean of the standard and randomized settings, and the average is taken over the five dimensions. All results, including SANA-Robot-AR, are from the official leaderboard.                                                                                                                            
+
+> Method Generalization Precision Long horizon Memory Open Avg.
+> VLA
+> 𝜋 0[9] 3.95 / 2.56 3.56 / 0.75 6.19 / 2.00 3.47 / 2.11 0.25 / 0.25 3.48 / 1.53 StarVLA-𝛼 [53] 3.94 / 2.34 9.90 / 4.33 14.15 / 6.50 3.34 / 2.44 0.67 / 0.58 6.40 / 3.24 X-VLA [54] 10.47 / 6.78 18.32 / 12.00 16.53 / 9.75 4.76 / 3.56 0.55 / 0.50 10.13 / 6.52
+> 𝜋 0.5[10] 13.38 / 8.17 12.40 / 5.50 23.54 / 14.67 5.89 / 4.67 1.98 / 1.67 11.44 / 6.93 Spatial Forcing [55] 14.12 / 9.34 17.32 / 10.58 23.26 / 14.58 5.43 / 4.11 1.78 / 1.58 12.38 / 8.04 Hy-Embodied-0.5-VLA [41] 11.78 / 8.39 13.81 / 8.00 25.74 / 14.92 13.37 / 12.11 0.65 / 0.58 13.07 / 8.80 Xiaomi-Robotics-1 [56] 23.55 / 17.00 26.69 / 18.83 38.39 / 23.67 7.81 / 6.56 3.94 / 3.58 20.07 / 13.93 Galaxea G0.5 [57] 18.46 / 12.83 28.25 / 20.42 44.12 / 32.25 8.61 / 7.33 1.73 / 1.58 20.23 / 14.88 DM0.5 [58] 15.78 / 10.95 24.82 / 16.75 33.70 / 19.50 47.74 / 47.44 2.43 / 2.08 24.90 / 19.34
+> WAM
+> Fast-WAM [6] 2.34 / 1.11 1.96 / 0.00 9.14 / 5.17 3.55 / 3.44 0.42 / 0.42 3.48 / 2.03 AHA-WAM [59] 5.79 / 3.28 5.86 / 2.42 8.61 / 2.67 2.97 / 2.78 0.88 / 0.83 4.82 / 2.39 GigaWorld-Policy [60] 5.35 / 2.89 6.15 / 1.83 15.51 / 8.92 3.46 / 2.22 0.54 / 0.50 6.20 / 3.27 X-WAM [61] 7.39 / 3.33 6.72 / 1.83 17.47 / 9.08 6.32 / 4.67 0.57 / 0.25 7.69 / 3.83 OpenWAM-𝛼 [5] 20.71 / 14.84 18.45 / 9.25 34.93 / 25.33 10.41 / 9.11 1.41 / 1.08 17.18 / 11.92 InternW0-Δ[7] 30.09 / 22.78 31.98 / 23.25 46.29 / 29.33 34.67 / 34.00 10.84 / 10.17 30.77 / 23.91
+> LLM as policy
+> GPT-6 Astra [62] 33.36 /30.50 12.65 / 4.00 21.45 / 8.25 43.04 / 38.67 34.36 / 31.00 28.97 / 22.48
+> SANA-Robot-AR 26.61 / 21.11 38.33 /28.67 48.68 / 28.75 52.73 /52.33 5.21 / 4.58 34.31 /27.09
+
+# 6. Simulation Benchmark Results 
+
+On each benchmark, we post-train SANA-Robot-AR from the pretrained model on whole episodes of the demonstrations, which fill every GPU up to a fixed budget of chunks (§4.3). All runs use AdamW with 1,000 warmup iterations and a cosine schedule that decays to 1% of the peak learning rate, and each run stops before the end of its schedule. Baseline results are taken from the official leaderboards or from the papers that report them. 
+
+6.1. RoboDojo 
+
+The benchmark [11] contains 42 bimanual simulation tasks on the ARX X5 robot, grouped into five capability dimensions: generalization; precision; long-horizon execution; memory, whose tasks depend on information observed earlier in the episode; and open-vocabulary instruction following. Following the official protocol, we report the average score, which credits partial progress, and the success rate, each averaged over the tasks of a dimension and then over the five dimensions. In view of the small items in the scenes, we use the head camera at 384 × 480 and the two wrist cameras at 
+
+192 × 256 in a T-shaped layout on the RoPE grid, and predict absolute end-effector poses in the robot base frame. The episodes span 4 to 49 chunks, and we pack them with task-balanced ordering (§4.3) into 142 chunks per GPU. We train with a peak learning rate of 1 × 10 −4 and a cosine schedule over 50k iterations with 32 GB300 GPUs. Table 3 compares SANA-Robot-AR with VLAs, WAMs and GPT-6 Astra, a frontier foundation model used directly as a policy. With 4.5B parameters, SANA-Robot-AR achieves the best average among them, 34.31 / 27.09%. Specifically, on the memory dimension, SANA-Robot-AR achieves a success rate of 52.33, outperforming GPT-6 Astra’s 38.67 and InternW0-Δ’s 34 by a large margin. In addition, SANA-Robot-AR achieves the best scores on the precision and long-horizon dimensions, demonstrating that our hybrid memory model supports both long-term history and precise control. 
+
+6.2. RoboTwin 2.0 
+
+The benchmark [12] contains 50 bimanual tasks on the ALOHA-AgileX robot with a head camera and two wrist cameras. We follow the Clean2Random protocol: we post-train only on the 2,500 demonstrations collected in clean scenes, and evaluate the same checkpoint both in clean scenes and in randomized scenes with changed backgrounds, lighting, clutter and table height. We use the same T-shaped camera layout and action space as on RoboDojo. The episodes span 3 to 29 
+
+> 12 SANA-Robot: Efficient World Action Model with Hybrid Memory
+
+Table 5 | Zero-shot success rate (%) on LIBERO-Plus [13] of policies trained on the LIBERO [69] dataset. 
+
+Method Camera Robot Language Light Background Noise Layout Total 
+
+VLA 
+
+𝜋 0 [9] 13.8 6.0 58.8 85.0 81.4 79.0 68.9 53.6 
+
+𝜋 0-FAST [70] 65.1 21.6 61.0 73.2 73.2 74.4 68.8 61.6 RIPT-VLA [71] 55.2 31.2 77.6 88.4 91.6 73.5 74.2 68.4 OpenVLA-OFT [72] 56.4 31.9 79.5 88.7 93.3 75.8 74.2 69.6 StarVLA [64] 52.5 49.8 88.5 95.7 95.7 73.0 76.9 74.1 VLA-JEPA [73] 63.3 67.1 85.4 95.6 93.6 66.3 85.1 79.5 VLAct [74] 73.9 68.4 81.5 96.7 96.7 86.0 83.3 82.6 
+
+𝜋 0.5 [10] 78.4 73.6 80.8 96.2 94.1 89.0 84.5 84.4 InternVLA-A1.5 [75] 83.1 55.1 86.9 96.4 98.2 95.6 85.2 84.8 Qwen-RobotManip-Context [67] 89.9 83.9 86.5 98.6 99.9 97.9 87.5 91.4 
+
+WAM 
+
+Fast-WAM [6] 16.4 44.5 68.9 78.2 53.7 37.7 60.7 51.5 OpenWAM-𝛼 [5] 33.8 76.1 88.0 97.0 87.1 39.8 77.5 69.2 4D-WAM [68] 45.2 64.3 90.6 94.3 57.7 69.1 79.2 71.0 ST-WAM [76] 55.4 60.1 79.3 93.0 74.2 79.5 74.3 72.8 Faster-WAM [77] 67.9 49.0 92.1 94.3 57.0 82.3 82.7 75.0 JEPA-WAM [78] 79.2 59.2 68.2 93.3 94.6 83.6 76.1 79.2 Cosmos-Policy [4] 75.8 63.3 81.7 96.5 88.9 92.7 82.2 82.2 ImageWAM [79] 80.8 50.3 91.4 98.1 85.5 93.8 80.5 83.1 ABot-M0.5 [80] 70.5 87.4 88.6 94.0 89.7 75.5 85.2 83.4 Being-H0.7 [81] 82.0 59.0 82.8 97.8 90.0 93.5 88.5 84.8 InternW0-Δ [7] 90.6 91.1 92.9 95.8 99.4 94.0 88.4 92.8 
+
+SANA-Robot-AR 84.1 98.4 93.9 99.7 98.8 94.4 91.8 94.0 
+
+chunks, and each GPU packs whole episodes up to a budget of 15 chunks per step; a longer episode takes a GPU on its own and sets the budget of its step. We train the model with a peak learning rate of 5 × 10 −5 and a cosine schedule over 20k iterations with 32 H200 GPUs. Table 4 | Results on RoboTwin 2.0 [12] with clean-only training (Clean2Random). 
+
+Method Clean Rand. Avg. 
+
+VLA 
+
+GR00T N1.7 [63] 43.6 20.7 32.2 StarVLA [64] 58.1 10.6 34.4 X-VLA [54] 68.0 20.9 44.5 Spatial Forcing [55] 77.2 26.7 52.0 ABot-M0 [65] 70.7 36.0 53.4 
+
+𝜋 0.5 [10] 73.1 47.9 60.5 GigaBrain-0.7 [66] 66.8 67.9 67.4 Qwen-RobotManip [67] 84.7 69.4 77.1 
+
+WAM 
+
+AHA-WAM [59] 64.3 3.2 33.8 Fast-WAM [6] 77.8 1.9 39.9 X-WAM [61] 70.0 25.8 47.9 4D-WAM [68] 81.5 41.8 61.7 OpenWAM-𝛼 [5] 89.4 48.7 69.0 InternW0-Δ [7] 90.0 71.9 81.0 
+
+SANA-Robot-AR 91.8 73.3 82.6 
+
+On the RoboTwin 2.0 [12] benchmark, SANA-Robot-AR achieves the best success rate on both clean and randomized settings. Such results demonstrate the effectiveness of our robot pretraining in improving the robustness of the world action model. 
+
+6.3. LIBERO-Plus, LIBERO-Pro and LIBERO-Max 
+
+LIBERO [69] is a single-arm benchmark with a Franka robot and four task suites: Spatial, Object, Goal and Long. We post-train SANA-Robot-AR jointly on the demonstrations of the four suites and evaluate it on three robustness benchmarks built on them, including LIBERO-Plus [13], LIBERO-Pro [17] and LIBERO-Max [18]. For this post-training, we follow the pretraining image grid RoPE to place the external camera and wrist camera, each at a resolution of 256 × 256 . The episodes span 3 to 17 chunks; we train for 8k iterations with about 178 chunks per iteration, with a peak learning rate of 5 × 10 −5 and a cosine schedule over 20k iterations. On LIBERO-Plus (Table 5), SANA-Robot-AR succeeds in 94.0% of all perturbed episodes, ahead of InternW0-Δ (92.8%) and Qwen-RobotManip-Context (91.4%). On LIBERO-Pro (Table 6), it achieves the best average, 68.1% against 64.0% for the next best method, largely through position perturbations, under which it succeeds in 47.7% of the episodes, against at most 39.3% for the other methods. On LIBERO-Max (Table 7), it achieves the highest success rate in both the base (88.3%) and the 
+
+> 13 SANA-Robot: Efficient World Action Model with Hybrid Memory
+
+Table 6 | Zero-shot success rate (%) on LIBERO-Pro [17] of policies trained on the LIBERO [69] dataset.                                                                                              
+
+> Method Object Position Semantic Task Avg.
+> VLA
+> OpenVLA-OFT [72] 27.63 5.75 59.00 0.63 23.25 NORA [82] 70.50 0.00 86.25 0.00 39.00 MolmoAct [83] 76.00 1.50 85.75 1.50 41.00
+> 𝜋 0[9] 90.50 0.00 90.50 0.00 45.25 X-VLA [54] 79.00 0.75 96.75 6.75 46.00 VLA-Adapter [84] 73.75 0.00 90.75 19.75 46.06 OpenVLA [85] 93.00 0.00 97.25 0.00 47.56 SimVLA [86] 81.50 8.30 98.80 6.00 48.60 HABILIS Brain 0 [87] 71.85 18.05 93.00 21.45 51.09
+> 𝜋 0.5[10] 96.00 20.75 95.75 0.75 53.31 Quantile Head [88] 85.80 31.30 97.80 26.00 60.20 QuoVLA [89] 88.25 36.00 99.50 25.50 62.31 Continuous Reasoning [90] 84.60 39.30 94.90 37.10 64.00
+> WAM
+> PatchWAM [91] 80.80 8.80 96.80 5.00 47.85 Flex-𝜋 [92] 87.25 11.75 98.25 5.00 51.00 GAM [93] 75.75 32.75 95.00 40.50 61.00
+> SANA-Robot-AR 88.95 47.65 98.10 37.65 68.09
+
+Table 7 | Zero-shot success rate (%) on LIBERO-Max [18] of policies trained on the LIBERO [69] dataset.                                  
+
+> Method Base Dynamic
+> VLA
+> SmolVLA [94] 26.1 15.0 X-VLA [54] 62.6 37.7 OpenVLA-OFT [72] 64.3 43.2 GR00T N1.7 [63] 69.3 50.0 Xiaomi-Robotics-0 [95] 70.3 52.0 VLA-JEPA [73] 73.5 54.3 DM0.5 [58] 79.8 62.1
+> 𝜋 0.5[10] 79.7 65.7 MolmoAct2 [25] 80.3 66.9
+> WAM
+> Fast-WAM [6] 42.0 24.0 Light-WAM [96] 54.8 37.3 DiT4DiT [97] 65.1 39.4 HiMem-WAM [98] 73.0 57.7 Cosmos-Policy [4] 77.4 59.3
+> SANA-Robot-AR 88.3 76.1
+
+dynamic rollouts (76.1%), outperforming the previous best dynamic model (MolmoAct2 [25]) by nearly 10%. These results demonstrate our foundation model has strong robustness and transfer ability. 
+
+# 7. Real-World Experiments 
+
+Beyond the benchmark, we design five tasks: three short tasks, Magic Cube, Three-Cup Shell Game and Air Hockey, and two long-horizon tasks, Make Coffee and Tower of Hanoi. We compare SANA-Robot-AR with baselines on Make Coffee, Tower of Hanoi and Magic Cube, and use Three-Cup Shell Game and Air Hockey to examine its memory and asynchronous control; on Tower of Hanoi and Air Hockey, we also compare inference with BF16, FP8 and NVFP4 GEMMs. 
+
+7.1. Setup Hardware and Training. Four tasks run on a YAM Ultra robot, and Make Coffee runs on a Galaxea R1. For each task, we collect 100 episodes and train a separate policy on them, initialized from the pretrained SANA-Robot-AR (§2.2), for 10k steps on two H100 nodes; as in §4.3, each step fills every GPU with a budget of 48 chunks rather than a fixed batch of episodes. At deployment, the policy runs on an RTX PRO 6000 (Tower of Hanoi, Magic Cube, Three-Cup Shell Game and Air Hockey) or an RTX 5090 (Make Coffee). 
+
+Evaluation. We evaluate every task over 20 rollouts, with the following metrics: 1) Three-Cup Shell Game: a rollout succeeds if the robot picks the cup that hides the ball; 2) Air Hockey and Magic Cube: each successful hit of the puck or turn of the cube counts as a success, and each failed one as a failure; 3) Tower of Hanoi: the number of rings stacked consecutively in the correct order, counted until the first misplaced ring and divided by the total of 7, averaged over the rollouts; 4) Make Coffee: the long-horizon task can be split into 7 sub-tasks, from picking up the capsule to handing over the coffee cup, and each rollout is scored by sub-tasks. 
+
+7.2. Results Long-Horizon and Precision. We compare SANA-Robot-AR with 𝜋 0.5 [10], an open-source VLA, and OpenWAM-
+
+𝛼 [5], an open-source WAM, both fine-tuned on the same demonstrations of each task (Table 8). Make Coffee and Tower of Hanoi test long-horizon execution: Make Coffee contains seven stages, and Tower of Hanoi requires stacking seven rings one after another; in both tasks, an error at one step compromises all the steps after it. On Tower of Hanoi, SANA-Robot-AR stacks on average 83.6% of the rings before the first error, against 45.7% for OpenWAM-𝛼 and 44.3% 
+
+> 14 SANA-Robot: Efficient World Action Model with Hybrid Memory
+
+Table 8 | Real-world comparison with baselines (%). Make Coffee: the number of finished steps before the first error. Tower of Hanoi: rings stacked consecutively in the correct order before the first error, out of 7. Magic Cube: successful turns of the cube. 
+
+Method Make Coffee Tower of Hanoi Magic Cube 
+
+𝜋 0.5 [10] 57.1 44.3 70.0 OpenWAM-𝛼 [5] 65.7 45.7 60.0 
+
+SANA-Robot-AR 87.1 83.6 75.0 Success (%) 
+
+> 025 50 75 100 30
+> SANA-Robot-base
+> 75
+> SANA-Robot-AR
+> random guessing
+
+(a) Three-Cup Shell Game 050 100 45 60   
+
+> Success (%)
+> Sync Async
+> 050 100 150 200 181.3 4
+> Stall time (ms per chunk)
+> 010 20 30 40 25.6 30
+> 30 Hz cap
+> Frequency (Hz)
+
+(b) Air Hockey Success (%)       
+
+> 025 50 75 100 83.6 82.9 81.4
+> Tower of Hanoi
+> 60 60 50
+> Air Hockey
+> BF16 FP8 NVFP4
+
+(c) BF16, FP8 and NVFP4 
+
+Figure 8 | Real-world capabilities. (a) SANA-Robot-base and SANA-Robot-AR; the dashed line marks random guessing. (b) Synchronous and asynchronous execution of SANA-Robot-AR with BF16 GEMMs: success rate, stall time per chunk and effective control frequency; the dashed line marks the 30 Hz cap of the controller. (c) Success on Tower of Hanoi and Air Hockey with BF16, FP8 and NVFP4 GEMMs. for 𝜋 0.5, and on Make Coffee it reaches 87.1%, against 65.7% and 57.1%. Tower of Hanoi and Magic Cube also require precise manipulation: each ring must be lowered with its hole aligned to the peg, and each turn must grasp one layer of the cube and rotate it without moving the others. On Magic Cube, SANA-Robot-AR succeeds in 75% of the turns, against 70% for 𝜋 0.5 and 60% for OpenWAM-𝛼 . These results agree with the long-horizon and precision dimensions of RoboDojo, on which SANA-Robot-AR also achieves the highest scores (Table 3). 
+
+Long Memory. In the Three-Cup Shell Game, a ball is hidden under one of three cups and the cups are shuffled, after which the policy must lift the cup that hides the ball. SANA-Robot-AR, with a window of 𝑁 = 3 , succeeds in 75% of the rollouts, whereas SANA-Robot-base, which sees only the current observation, succeeds in 30%, no better than chance (Figure 8a). 
+
+Fast Reaction. Air Hockey requires the robot to react to a fast-moving puck, so every pause between chunks costs hits. In synchronous execution with BF16 GEMMs, the robot stalls for 181.3 ms before each chunk while SANA-Robot-AR runs, and hits the puck in 45% of the attempts. Asynchronous execution with 𝑑 = 8 (§5.1) overlaps inference with the execution of the current chunk and cuts the stall to about 4 ms (network latency), raising the success rate to 60% (Figure 8b). It also keeps the effective control frequency at 30 Hz, the cap of our controller, which executes each action for about 33 ms, whereas the stalls of synchronous execution lower it to 25.6 Hz. 
+
+Low-Bit Inference. FP8 and NVFP4 GEMMs (§5.2) reduce the latency of SANA-Robot-AR on RTX PRO 6000 by 20% and 30% over BF16, from 175.0 ms to 140.6 ms and 123.1 ms (Table 2), but quantize the weights and activations of the backbone to 8 and 4 bits. We therefore deploy SANA-Robot-AR with BF16, FP8 and NVFP4 GEMMs on Tower of Hanoi and Air Hockey (Figure 8c). Both low-bit variants largely retain the performance of BF16: FP8 reaches 82.9% on Tower of Hanoi and 60% on Air Hockey, against 83.6% and 60% with BF16, and NVFP4 reaches 81.4% and 50%, the latter amounting to two more missed hits in 20 attempts. Low-bit GEMMs thus cut the latency by up to 30% while keeping the success close to that of BF16. 
+
+# 8. Memory Analysis 
+
+In this section, we analyze the memory of SANA-Robot-AR along three questions. §8.1 compares it with the memory designs of VPP2 and InternW0-Δ. §8.2 shows why the current observation must be a causal condition of the target chunk, rather than left out or attended bidirectionally. §8.3 examines what the softmax and the GDN layers each read from the memory. Unless stated otherwise, we evaluate on the memory tasks of RoboDojo, which require information that is no longer visible in the current observation. All variants in this section, including SANA-Robot-AR, are evaluated                     
+
+> 15 SANA-Robot: Efficient World Action Model with Hybrid Memory memory frame (RGB) memory chunk (latent) discarded targets
+> VPP2 memory o0
+> 8 frames, stride 25 steps
+> oza
+> InternW0-Δmemory o0
+> 1 frame, 32 steps back
+> oza
+> softmax o0oza
+> window (last N)GDN ozaglobal state over all chunks S
+> SANA-Robot-AR
+> c−2 c−1 cepisode time (chunks)
+
+(a) History read by chunk 𝑐 Success (%)  
+
+> 025 50 75 100 28.3
+> SANA-Robot-base + VPP2
+> 31.4
+> SANA-Robot-base + InternW0-Δ
+> 48.8
+> SANA-Robot-AR
+
+(b) Memory-task success 
+
+Figure 9 | Memory designs on RoboDojo. The baseline memories are used to post-train SANA-Robot-base with the same data and initialization as SANA-Robot-AR; (b) reports the success rate on the memory tasks. in our own runs rather than in the official evaluation, so the numbers of SANA-Robot-AR here differ from those in Table 3. 
+
+8.1. Memory Designs 
+
+We compare our memory with those of two recent WAMs by post-training SANA-Robot-base on RoboDojo with each of them, with the same data and initialization as SANA-Robot-AR (Figure 9a): 1) VPP2 memory keeps the sink and 8 frames sampled backward from the current step at intervals of 1 s; 2) InternW0-Δ memory keeps the sink and a single frame 32 steps back. Both designs share three limitations. First, their memory has a fixed capacity, so all history other than the kept frames is lost. Second, sparsely sampled RGB frames are coarse, since they may miss the key motions or object states. Third, the memory frames are encoded and forwarded again at every request, so the inference cost grows with the length of the memory. SANA-Robot-AR instead uses a hybrid memory (§2.2): the GDN layers keep a global state over all past chunks, and the softmax layers attend causally to the sink and the last 𝑁 chunks through a sliding window, which carries earlier history forward, chunk by chunk, into the current window. The memory is chunk-level: each chunk stores the video latent of its full span of 32 control steps, so it keeps fine-grained information, such as every position the target cup passes through in the Three-Cup Shell Game (§7), which sparsely sampled frames may miss. Each chunk is encoded and written into the memory once, after it has been observed (§5.1), so the memory covers the whole episode, and our model predicts each chunk at a constant cost per request. This pays off in both performance and efficiency. On the memory tasks of RoboDojo, SANA-Robot-AR reaches 48.8% success, against 28.3% and 31.4% for SANA-Robot-base post-trained with the memory of VPP2 and InternW0-Δ, respectively (Figure 9b). Our memory is particularly strong on tasks that need a long memory span: on press-by-number, where the policy must count how often it has pressed each button, SANA-Robot-AR succeeds in 82.67% of the episodes in the official evaluation, against 3.3% with the memory of InternW0-Δ.
+
+8.2. Conditioning on the Current Observation 
+
+The current observation is an essential input of a WAM. In developing SANA-Robot-AR, we compared three ways for the target chunk to read it: 1) bidirectional: 𝑜 𝑐 and the targets attend to each other (Figure 10b); 2) w/o observation: the target chunk has no observation token, and the current frame enters only through the memory, as the last frame of the previous chunk 𝑣 𝑐 −1 (Figure 10a); 3) causal (SANA-Robot-AR): the targets read 𝑜 𝑐 , but 𝑜 𝑐 does not read them and is not written into the memory (Figure 10c). We evaluate them on the memory and the precision tasks of RoboDojo, which test the use of the history and of the current state, respectively (Figure 10d). We observe that each alternative fails at one of the two: the bidirectional policy ignores the memory, and the policy without the observation loses precision. With bidirectional attention, the policy takes a shortcut through the current frame and succeeds in only 9.1% of the memory tasks; it puts 14% of its softmax attention on the memory (45% without the observation), and removing the memory raises its action MSE by only 1.3× (249 × without the observation). Without the observation, the policy is forced to use the memory (49.6%), but it sees the current state only as part of the previous chunk, without the fine details of the current frame, so its precision drops to 21.3%. Our causal observation keeps both, with 48.8% on the memory and 30.1% on the precision tasks. It also allows prefix caching: the keys and values of 𝑜 𝑐 are computed once per request and reused in all 𝐾 denoising steps (§5.2).   
+
+> 16 SANA-Robot: Efficient World Action Model with Hybrid Memory obs video action obs video action
+
+(a) w/o observation obs video action obs video action (b) Bidirectional obs video action obs video action (c) SANA-Robot-AR Variant Memory Precision w/o observation 49.78 / 49.56 28.46 / 21.33 Bidirectional 10.38 / 9.11 35.47 / 26.08 SANA-Robot-AR 49.10 / 48.78 39.41 / 30.08 (d) RoboDojo results 
+
+Figure 10 | Three ways to condition the target chunk on the current observation 𝑜 𝑐 . (a) 𝑜 𝑐 is not in the target chunk and appears only as the last frame of the previous chunk in the memory. (b) 𝑜 𝑐 and the targets attend to each other. (c) The targets read 𝑜 𝑐 , but 𝑜 𝑐 does not read them and is not written into the memory. Filled: attention; dashed: no attention. (d) Average score / success rate (%) on the memory and the precision tasks. Full w/o GDN history w/o sliding window w/o GDN history & sliding window w/o sink previous chunk only    
+
+> 12510 20 5k 10k 15k 20k
+> post-training steps Action MSE (×10 ⁻⁴ )
+> 16.83 10.34 4.79 2.54 2.22 1.43
+
+(a) Training dynamics Action MSE increase (×)         
+
+> 1× 2× 3× 5× 10× 12–3 4–15 ≥16
+> w/o GDN history
+> Memory Long-Horizon Precision Generalization
+> 12–3 4–15 ≥16
+> w/o sliding window
+> chunk index c
+
+(b) Reliance by chunk index 
+
+Figure 11 | Memory analysis of SANA-Robot-AR offline on RoboDojo. (a) Action MSE on the memory tasks during post-training, with sources of history removed; “w/o sliding window” writes the past chunks without the window. (b) Increase of the action MSE at 20k steps when the GDN history is removed or the sliding window is cut, by chunk index 
+
+𝑐 and task category. 
+
+8.3. How Softmax and GDN Layers Use Memory 
+
+SANA-Robot-AR is, to our knowledge, the first WAM with a hybrid memory, which raises a question that does not arise in WAMs with a single type of attention: what do the softmax and the GDN layers each learn to remember, and how does this history reach the actions? We answer it offline, with teacher forcing on 140 RoboDojo episodes, using the intermediate checkpoints from 5k to 20k post-training steps. To measure how much the policy relies on a source of history, we cut it from the forward pass while keeping the current observation, and report the action MSE relative to the full model, as a geometric mean over the chunks 𝑐 ≥ 2, where 𝑐 is the index of a chunk within its episode (on the memory tasks unless stated otherwise). 
+
+Each Memory Component Matters. Removing any component of the memory sharply raises the action MSE at 20k steps (Figure 11a): by 1.8× without the sink ( 5.3× at 𝑐 = 1 ), 1.6× without the GDN state, 3.4× without the sliding window, 7.2× without both, and 12 × with the previous chunk as the only history. The policy learns to use these components during post-training: from 5k to 20k steps, the action MSE of the full model falls by 2.4×, while without the GDN state and the sliding window it stays flat, so the gains of post-training come from the memory. The reliance holds in every category of RoboDojo, not only on the memory tasks (up to 19 × with the previous chunk alone). 
+
+Softmax and GDN Layers Learn Memories of Different Granularity. The two types of layers carry the history beyond the previous chunk along two paths: the softmax layers pass exact latents forward chunk by chunk through the sliding window, while the GDN layers compress the whole episode into a fixed-size state. The policy relies on both, and increasingly so as the episode grows (Figure 11b). On the memory tasks, cutting the sliding window raises the action MSE by 1.6× for 𝑐 = 2 –3 and by 6.7× for 𝑐 ≥ 16 , and removing the GDN state raises it by 1.1× and 2.2×, with the same trend in every category. The coarse GDN state thus complements the fine-grained window over the long range. 
+
+The Predicted Video Bridges the History to the Actions. In the softmax layers, the actions barely read the history directly: cutting these reads raises the action MSE by only 1.05 ×. Instead, the video predicted for the current chunk reads the history, and the actions read this video: preventing the video from reading the history raises the action MSE by 
+
+3.8×, and cutting the read of the actions on the video raises it by 8.0×. Predicting the video is therefore not only an auxiliary objective but a bridge through which the actions recall the past, which is also why the memory stores only video latents. 
+
+> 17 SANA-Robot: Efficient World Action Model with Hybrid Memory
+
+# 9. SANA-Robot World Simulator 
+
+Beyond acting as a policy, the FDM mode of SANA-Robot serves as a world simulator. We first formulate the simulation problem (§9.1), then describe how we post-train the simulator for long, few-step rollouts (§9.2), and finally evaluate it on WorldArena and on policy evaluation with DROID policies (§9.3). 
+
+9.1. Problem Formulation 
+
+Our simulator starts from the FDM mode of the unified model. For each chunk 𝑐 , it takes the clean observation latent 𝑜 𝑐 ,robot state 𝑠 𝑐 , and an action chunk 𝑎 𝑐 supplied by an external policy, and denoises the future video latents 𝑧 𝑐 . Unlike the policy mode, which receives the real observations, the world simulator acts as the environment itself. Therefore, the continuous generation of the world simulator relies on its previous output as memory: 
+
+𝑝 (︀ 𝑧 1: 𝑁 | ^𝑜 1, 𝑠 1, 𝑎 1: 𝑁 )︀ =
+
+> 𝑁
+
+∏︁ 
+
+> 𝑐 =1
+
+𝑝 𝜃 (︀ 𝑧 𝑐 | ^𝑜 𝑐 , 𝑠 𝑐 , 𝑎 𝑐 , 𝑧 <𝑐 )︀ , (8) where ^𝑜 𝑐 for 𝑐 > 1 is taken from the generated chunk 𝑧 𝑐 −1, and 𝑧 <𝑐 is the history of generated chunks. The actions 𝑎 𝑐 
+
+come from a policy that reads the generated observation. Since each chunk conditions on previously generated rather than ground-truth content, errors can accumulate during the continuous rollout. Therefore, we introduce our world simulator post-training in this section to improve the long-range generation quality and efficiency. 
+
+9.2. Long-Video Post-Training 
+
+The world simulator is post-trained in two stages: (1) reducing the error accumulated with teacher forcing and resampling forcing; (2) improving the efficiency with few-step distillation. 
+
+Stage 1: Teacher and Resampling Forcing. Starting from the pretrained SANA-Robot-base, we first adapt it to chunk-causal generation with teacher forcing, where every chunk conditions on the ground-truth history. We then continue training with Resampling Forcing [99] to improve the robustness to rollout errors. Specifically, we partially noise the ground-truth video latents and denoise them autoregressively with the current model, which yields a perturbed history. Then the perturbed history is adopted as the condition for future chunks, enabling the model to tolerate errors in its history. 
+
+Stage 2: Few-Step Distillation. We freeze the Stage-1 model as the teacher and distill a 4-step student from it with continuous-time consistency distillation (sCM) [100]. The teacher provides the velocity at the sampled noise level, and the student learns to map every point on the teacher’s probability-flow trajectory to the same clean endpoint. After sCM, we apply Self-Forcing [47] to further reduce the accumulated error. 
+
+9.3. Experiments 
+
+A useful simulator should not only produce realistic video but also reproduce the task success that a policy reaches on the real robot. We therefore evaluate it in two settings: action-conditioned video generation on WorldArena (§9.3.1), and policy evaluation with DROID policies following Ctrl-World [101] (§9.3.2). 
+
+9.3.1. WorldArena 
+
+Benchmark and Protocol. WorldArena [19] evaluates embodied world models on a curated subset of RoboTwin 2.0 (§6.2): the Clean-50 configuration with 50 bimanual tasks and 50 episodes per task, 2,500 episodes in total for training and another 1,000 episodes for testing. The video-quality track leaderboard scores the generated videos with fifteen metrics grouped into six dimensions: visual quality, motion quality, content consistency, physics adherence, 3D accuracy and controllability. EWMScore-P is the arithmetic mean of all metrics, scaled to 100. 
+
+Results. Table 9 shows that SANA-Robot reaches an EWMScore-P of 66.8, second only to BWM. It obtains the highest visual quality and its weakest dimension is motion quality, which is likely due to the high temporal compression rate of our VAE. The 4-step student keeps most of the overall score and improves dramatically in terms of latency. 
+
+> 18 SANA-Robot: Efficient World Action Model with Hybrid Memory
+
+Table 9 | Results on WorldArena [19]. Latency is the end-to-end time in seconds to generate 30 frames at 640 × 480 on one H100 GPU.                                                                         
+
+> Dimension scores Method EWMScore-P Visual Motion Consist. Physics 3D Acc. Control Latency (s) TesserAct [102] 54.9 38.9 38.9 65.9 39.5 79.1 77.7 95.1 Cosmos-Predict 2.5 [103] 57.8 58.1 31.5 61.7 44.0 87.5 75.2 11.4 IRASim [104] 59.6 56.1 32.5 65.7 49.3 88.8 77.4 11.9 CogVideoX [105] 62.7 55.8 42.2 67.7 50.9 88.3 82.6 58.7 Ctrl-World [101] 63.7 57.4 50.9 62.2 55.4 88.5 78.2 38.8 BWM [106] 68.6 63.5 42.0 67.6 69.0 97.3 88.6 4.9
+> SANA-Robot 66.8 63.8 40.8 65.3 62.3 96.8 86.9 3.9
+> SANA-Robot (4-step) 66.2 63.1 39.2 64.9 62.8 96.5 86.6 0.3
+
+9.3.2. DROID Policy Evaluation 0    
+
+> 0
+> 20
+> 20
+> 40
+> 40
+> 60
+> 60
+> 80
+> 80
+> 100
+> 100
+> World-Model Success Rate (%)
+> Real-Robot Success Rate (%)
+> SANA-Robot Ctrl-World y=x
+
+Figure 12 | Comparison of policy success rate in real robot and world simulator. The closer to the dashed line ( 𝑦 = 𝑥 ), the better the world simulator agrees with real deploy-ment. 
+
+Benchmark and Protocol. Following Ctrl-World [101], we measure how well a world model can stand in for real-robot evaluation of gen-eralist policies on the DROID platform [33]. It evaluates three policies, 
+
+𝜋 0-DROID, 𝜋 0-FAST-DROID and 𝜋 0.5-DROID, on seven tasks: pick and place, towel folding, drawer, stacking, tissue, closing a laptop and table wiping, which gives 21 policy–task pairs with known real-robot success rates. Each policy is rolled out in the world model on every pair, and human annotators label each rollout video as a success or a failure of the task; the annotators do not see which model generated a video, and all videos are re-encoded identically. For a fair comparison, we also roll out the public Ctrl-World checkpoint under the same protocol, 20 rollouts per pair, and mix its videos with ours in one shuffled pool, so that both models are annotated blindly in the same round. 
+
+Implementation Details. We evaluate a policy with policy-in-the-loop simulation: the policy reads the generated observation and proposes the next action chunk, and the simulator renders its visual consequences. Repeating this process produces policy-in-the-loop rollouts entirely in imagination. We generate the rollouts in the same way as Ctrl-World [101]. The simulator is trained on DROID with three camera views at 320 × 192 on the 2 × 2 grid, and is conditioned on absolute end-effector poses and joint positions. 
+
+Results. Figure 12 plots the world-model success rate of each pair against its real-robot success rate. A faithful simulator puts the points on 𝑦 = 𝑥 . Ctrl-World lies mostly below this line: its fit is 𝑦 = 0 .82 𝑥 − 10 .8, and its mean success rate over the 21 pairs is 32.4%, against 52.6% on the real robot. The fit of SANA-Robot, 𝑦 = 0 .93 𝑥 + 9 .4, is closer to 𝑦 = 𝑥 in slope, with a mean success rate of 58.3%. 
+
+# 10. Related Work 
+
+Robot Policy Models. Vision-language-action models (VLAs) adapt pretrained vision-language models to output robot actions [107, 85, 9, 10, 63, 54]; they inherit the semantic knowledge of web-scale image-text data, but learn how a scene changes under their actions only from robot data. A second line of work builds on video generation models, i.e. , world action models (WAMs), which predict actions aligned with the future video [108, 109, 110, 111, 4, 112, 113, 5, 7, 8]. Since WAMs inherit the cost of video generation, recent work makes them faster by decoding the actions without generating the video at test time [109, 6, 60, 7], by using a compact backbone or a lightweight action module [96, 77], by reducing the video to one or a few denoising steps [112, 8], and by system-level optimization such as low-bit inference [112]. SANA-Robot instead makes the backbone itself efficient: it builds on a hybrid linear video DiT [14, 114, 115], keeps generating the video, through which the actions read the history, and adds the deployment optimizations. 
+
+Memory in World Action Models. Most VLAs and WAMs act from the current observation, although many manipula-
+
+> 19
+
+SANA-Robot: Efficient World Action Model with Hybrid Memory 
+
+tion tasks depend on what is no longer visible. Therefore, history is crucial for some long-horizon tasks, but the cost of each decision grows with the length of the history. VLAs thus compress the history: they keep a bank of perceptual and cognitive memory tokens [116], aggregate features or compact tokens of past frames [117, 118, 119], or retrieve task-relevant keyframes [120]. Among WAMs, VPP2 [8] conditions on the first frame and eight past frames sampled at one-second intervals, and InternW0-Δ [7] keeps the first frame and a single past frame 32 steps back; both encode these frames again at every request. Autoregressive WAMs [112, 113, 121] attend to a cache of past chunks with softmax attention, whose cost grows with the number of cached chunks. SANA-Robot introduces a hybrid memory to WAMs, combining linear and softmax attention: the GDN state keeps a global memory of the whole episode at a constant cost, and the softmax window resolves the recent chunks in detail. 
+
+# 11. Conclusion 
+
+We presented SANA-Robot, a 4.5B world action model with a minute-level memory that runs in real time on edge devices. Built on a hybrid linear diffusion transformer and pretrained on 19.4K hours of diverse data, SANA-Robot serves as a policy, a forward dynamics model and an inverse dynamics model. Its memory pairs GDN layers, which keep the whole episode in a fixed-size state, with softmax attention over the first frame and the most recent chunks, so that every action chunk costs the same however long the episode runs. Around this memory, we built the training and deployment infrastructure: multimodal sequence packing with task-balanced ordering trains on whole episodes without padding, memory RTC extends real-time chunking to a policy with memory, and fused kernels, CUDA graphs, prefix caching and low-bit GEMMs bring a request of SANA-Robot-AR to 115 ms on an RTX 5090, which supports asynchronous control at 30 Hz. In addition to the efficient deployment, SANA-Robot achieves the best performance on several simulation benchmarks, outperforms 𝜋 0.5 and OpenWAM-𝛼 on real-world tasks and works as a simulator environment for DROID policies. In conclusion, SANA-Robot is an effective and efficient unified robotics foundation model. 
+
+# References 
+
+[1] Team Wan, Ang Wang, Baole Ai, Bin Wen, Chaojie Mao, Chen-Wei Xie, Di Chen, Feiwu Yu, Haiming Zhao, Jianxiao Yang, et al. Wan: Open and advanced large-scale video generative models. arXiv preprint arXiv:2503.20314 , 2025. [2] Niket Agarwal, Arslan Ali, Maciej Bala, Yogesh Balaji, Erik Barker, Tiffany Cai, Prithvijit Chattopadhyay, Yongxin Chen, Yin Cui, Yifan Ding, et al. Cosmos world foundation model platform for physical ai. arXiv preprint arXiv:2501.03575 , 2025. [3] Yoav HaCohen, Benny Brazowski, Nisan Chiprut, Yaki Bitterman, Andrew Kvochko, Avishai Berkowitz, Daniel Shalem, Daphna Lifschitz, Dudu Moshe, Eitan Porat, et al. Ltx-2: Efficient joint audio-visual foundation model. arXiv preprint arXiv:2601.03233 , 2026. [4] Moo Jin Kim, Yihuai Gao, Tsung-Yi Lin, Yen-Chen Lin, Yunhao Ge, Grace Lam, Percy Liang, Shuran Song, Ming-Yu Liu, Chelsea Finn, et al. Cosmos policy: Fine-tuning video models for visuomotor control and planning. arXiv preprint arXiv:2601.16163 , 2026. [5] Yuran Wang, Siqiao Huang, Mingleyang Li, Chenhao Zhang, Jiaqi Liang, Weiyang Jin, Yue Chen, Xuemin Chi, Donghao Zhou, Qize Yu, et al. Openwam: An open, modular exploration towards systematic world-action model pretraining. arXiv preprint arXiv:2609.07398 , 2026. [6] Tianyuan Yuan, Zibin Dong, Yicheng Liu, and Hang Zhao. Fast-wam: Do world action models need test-time future imagination? arXiv preprint arXiv:2603.16666 , 2026. [7] Xingyu Miao, Zizun Li, Baole Fang, Kaiwen Song, Tenghui Wang, Hanxue Zhang, Yating Wang, Xudong Li, Yuping He, Xueyuan Wei, et al. Internw0-𝛿 : A world action model bridging predictive dynamics and actions with 20k+ hours of open data. arXiv e-prints , pages arXiv–2609, 2026. [8] Yanjiang Guo, Haodong Yan, Zhide Zhong, Zhongru Zhang, Qingyuan Yang, Qingzhou Lu, Xiaoyu Chen, Yen-Jen Wang, Shuying Deng, Chenghan Yang, et al. Video prediction policy 2: Predict better, act better. arXiv preprint arXiv:2610.10270 , 2026. [9] Kevin Black, Noah Brown, Danny Driess, Adnan Esmail, Michael Equi, Chelsea Finn, Niccolo Fusai, Lachy Groom, Karol Hausman, Brian Ichter, et al. 𝑝𝑖 _0: A vision-language-action flow model for general robot control. arXiv preprint arXiv:2410.24164 , 2024. [10] Physical Intelligence, Kevin Black, Noah Brown, James Darpinian, Karan Dhabalia, Danny Driess, Adnan Esmail, Michael Equi, Chelsea Finn, Niccolo Fusai, et al. 𝑝𝑖 0.5: a vision-language-action model with open-world generalization. arXiv preprint arXiv:2504.16054 , 2025. [11] Tianxing Chen, Yue Chen, Zixuan Li, Junyuan Tang, Kailun Su, Haoran Lu, Weijie Wan, Baijun Chen, Songling Liu, Haowen Yan, et al. Robodojo: A unified sim-and-real benchmark for comprehensive evaluation of generalist robot manipulation policies. arXiv preprint arXiv:2607.04434 , 2026. [12] Tianxing Chen, Zanxin Chen, Baijun Chen, Zijian Cai, Yibin Liu, Zixuan Li, Qiwei Liang, Xianliang Lin, Yiheng Ge, Zhenyu Gu, et al. Robotwin 2.0: A scalable data generator and benchmark with strong domain randomization for robust bimanual robotic manipulation. arXiv preprint arXiv:2506.18088 , 2025. [13] Senyu Fei, Siyin Wang, Junhao Shi, Zihao Dai, Jikun Cai, Pengfang Qian, Li Ji, Xinzhe He, Shiduo Zhang, Zhaoye Fei, et al. Libero-plus: A progressive robustness benchmark for visual-language-action models. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition , pages 38574–38583, 2026. 20 SANA-Robot: Efficient World Action Model with Hybrid Memory [14] Junsong Chen, Jincheng Yu, Yitong Li, Shuchen Xue, Haozhe Liu, Jingyu Xin, Yuyang Zhao, Tian Ye, Zhangjie Wu, Zian Wang, et al. Sana-video 2.0: Hybrid linear attention with attention residuals for efficient video generation. arXiv preprint arXiv:2607.21553 , 2026. [15] Songlin Yang, Jan Kautz, and Ali Hatamizadeh. Gated delta networks: Improving mamba2 with delta rule. In International Conference on Learning Representations , volume 2025, pages 29687–29707, 2025. [16] Kevin Black, Manuel Galliker, and Sergey Levine. Real-time execution of action chunking flow policies. Advances in Neural Information Processing Systems , 38:33383–33407, 2026. [17] Xueyang Zhou, Yangming Xu, Guiyao Tie, Yongchao Chen, Guowen Zhang, Duanfeng Chu, Pan Zhou, and Lichao Sun. Libero-pro: Towards robust and fair evaluation of vision-language-action models beyond memorization. arXiv preprint arXiv:2510.03827 , 2025. [18] Yunbei Zhang, Zijian Jin, Yuanzhe Liu, Janet Wang, Xilun Zhang, Yuyou Zhang, Zhenyu Zhang, Daoan Zhang, Shuaicheng Niu, Gen Li, et al. Libero-max: Do robot policies adapt when the world changes? arXiv preprint arXiv:2609.36518 , 2026. [19] Yu Shang, Zhuohang Li, Yiding Ma, Weikang Su, Xin Jin, Ziyou Wang, Lei Jin, Xin Zhang, Yinzhou Tang, Haisheng Su, et al. Worldarena: A unified benchmark for evaluating perception and functional utility of embodied world models. AI Open , 7:208–226, 2026. [20] Shuai Bai, Yuxuan Cai, Ruizhe Chen, Keqin Chen, Xionghui Chen, Zesen Cheng, Lianghao Deng, Wei Ding, Chang Gao, Chunjiang Ge, et al. Qwen3-vl technical report. arXiv preprint arXiv:2511.21631 , 2025. [21] Yaron Lipman, Ricky TQ Chen, Heli Ben-Hamu, Maximilian Nickel, and Matt Le. Flow matching for generative modeling. arXiv preprint arXiv:2210.02747 , 2022. [22] Xingchao Liu, Chengyue Gong, and Qiang Liu. Flow straight and fast: Learning to generate and transfer data with rectified flow. arXiv preprint arXiv:2209.03003 , 2022. [23] Guangxuan Xiao, Yuandong Tian, Beidi Chen, Song Han, and Mike Lewis. Efficient streaming language models with attention sinks. In 
+
+International Conference on Learning Representations , volume 2024, pages 21875–21895, 2024. [24] Arthur Allshire, Himanshu Gaurav Singh, Ritvik Singh, Adam Rashid, Hongsuk Choi, David McAllister, Justin Yu, Yiyuan Chen, Huang Huang, Pieter Abbeel, et al. Scalable behavior cloning with open data, training, and evaluation. arXiv preprint arXiv:2606.27375 , 2026. [25] Haoquan Fang, Jiafei Duan, Donovan Clay, Sam Wang, Shuo Liu, Weikai Huang, Xiang Fan, Wei-Chuan Tsai, Shirui Chen, Yi Ru Wang, et al. Molmoact2: Action reasoning models for real-world deployment. arXiv preprint arXiv:2605.02881 , 2026. [26] Jade Choghari, Pepijn Kooijmans, Mansi Agarwal, Yusuf Umut Ciftci, Aseem Doriwala, Catherine Weaver, Mouli Sivapurapu, Kai Yang, Jackson Lee, Thomas Wolf, et al. Fineart: Fine-grained annotated robotic trajectory dataset and vision-language-action model for bimanual manipulation. arXiv preprint arXiv:2609.36416 , 2026. [27] AgiBot World, Qingwen Bu, Jisong Cai, Li Chen, Xiuqi Cui, Yan Ding, Siyuan Feng, Shenyuan Gao, Xindong He, Xuan Hu, et al. Agibot world colosseo: A large-scale manipulation platform for scalable and intelligent embodied systems. arXiv preprint arXiv:2503.06669 , 2025. [28] AgiBot World Team. Agibot world 2026. https://huggingface.co/datasets/agibot-world/AgiBotWorld2026 , 2026. [29] Ziyu Wang, Chenyuan Liu, Yushun Xiang, Runhao Zhang, Qingbo Hao, Hongliang Lu, Houyu Chen, Zhizhong Feng, Kaiyue Zheng, Dehao Ye, et al. The great march 100: 100 detail-oriented tasks for evaluating embodied ai agents. arXiv preprint arXiv:2601.11421 , 2026. [30] Shihan Wu, Xuecheng Liu, Shaoxuan Xie, Pengwei Wang, Xinghang Li, Bowen Yang, Zhe Li, Kai Zhu, Hongyu Wu, Yiheng Liu, et al. Robocoin: An open-sourced bimanual robotic data collection for integrated manipulation. arXiv preprint arXiv:2511.17441 , 2025. [31] Kai Ye, Yifan Jin, Qianhang Luo, Hongru Zhang, Jiedong Zhang, Shuyuan Hu, Song-Yuan Wu, Jihai Xu, Jie Zhao, and Bo Zhao. Evo-rl: Iterative robot reinforcement learning from selective experience. arXiv preprint arXiv:2610.13345 , 2026. [32] Tao Jiang, Tianyuan Yuan, Yicheng Liu, Chenhao Lu, Jianning Cui, Xiao Liu, Shuiqi Cheng, Jiyang Gao, Huazhe Xu, and Hang Zhao. Galaxy open-world dataset and g0 dual-system vla model. In 2026 IEEE International Conference on Robotics and Automation (ICRA) , pages 20749–20756. IEEE, 2026. [33] Alexander Khazatsky, Karl Pertsch, Suraj Nair, Ashwin Balakrishna, Sudeep Dasari, Siddharth Karamcheti, Soroush Nasiriany, Mohan Ku-mar Srirama, Lawrence Yunliang Chen, Kirsty Ellis, et al. Droid: A large-scale in-the-wild robot manipulation dataset. arXiv preprint arXiv:2403.12945 , 2024. [34] Kun Wu, Chengkai Hou, Jiaming Liu, Zhengping Che, Xiaozhu Ju, Zhuqin Yang, Meng Li, Yinuo Zhao, Zhiyuan Xu, Guang Yang, et al. Robomind: Benchmark on multi-embodiment intelligence normative data for robot manipulation. arXiv preprint arXiv:2412.13877 , 2024. [35] Chengkai Hou, Kun Wu, Jiaming Liu, Zhengping Che, Di Wu, Fei Liao, Guangrun Li, Jingyang He, Qiuxuan Feng, Zhao Jin, et al. Robomind 2.0: A multimodal, bimanual mobile manipulation dataset for generalizable embodied intelligence. arXiv preprint arXiv:2512.24653 , 2025. [36] RealSource. Realsource world: A large-scale real-world dual-arm manipulation dataset. https://huggingface.co/datasets/ RealSourceData/RealSource-World , 2025. [37] Jiafeng Xu, Qi Li, Yan Shen, Yiyu Ren, Travis Davies, Shaowen He, Ze Wang, Yifan Yang, Ran Cheng, and Hao Dong. Scaling bimanual household manipulation from 1,500 hours of demonstrations to on-policy corrections. arXiv preprint arXiv:2609.03591 , 2026. [38] Fourier ActionNet Team and Yao Mu. ActionNet: A dataset for dexterous bimanual manipulation. 2025. [39] Unitree Robotics. XR-Teleoperate: An open-source teleoperation framework and data collection toolkit for embodied intelligence. https: //github.com/unitreerobotics/xr_teleoperate , 2024. Accessed: 2026-02. [40] Zongzheng Zhang, Jingrui Pang, Zhuo Yang, Kun Li, Minwen Liao, Saining Zhang, Guoxuan Chi, Jinbang Guo, Huan-ang Gao, Modi Shi, et al. Dexora: Open-source vla for high-dof bimanual dexterity. arXiv preprint arXiv:2605.18722 , 2026. [41] He Zhang, Lingzhu Xiang, Haitao Lin, Zeyu Huang, Minghui Wang, Dingyan Zhong, Yubo Dong, Yihao Wu, Yongming Rao, Dongsheng Zhang, et al. Hy-embodied-0.5-vla: From vision-language-action models to a real-world robot learning stack. arXiv preprint arXiv:2606.14409 ,2026. 21 SANA-Robot: Efficient World Action Model with Hybrid Memory [42] Yang Tian, Yuyin Yang, Yiman Xie, Zetao Cai, Xu Shi, Ning Gao, Hangxu Liu, Xuekun Jiang, Zherui Qiu, Feng Yuan, et al. Interndata-a1: Pioneering high-fidelity synthetic data for pre-training generalist policy. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition , pages 976–985, 2026. [43] Chengshu Li, Ruohan Zhang, Josiah Wong, Cem Gokmen, Sanjana Srivastava, Roberto Martín-Martín, Chen Wang, Gabrael Levine, Michael Lingelbach, Jiankai Sun, et al. Behavior-1k: A benchmark for embodied ai with 1,000 everyday activities and realistic simulation. In 
+
+Conference on Robot Learning , pages 80–93. PMLR, 2023. [44] Ryan Hoque, Peide Huang, David Yoon, Jian Zhang, et al. Egodex: Learning dexterous manipulation from large-scale egocentric video. In 
+
+International Conference on Learning Representations , volume 2026, pages 4218–4237, 2026. [45] Ryan Punamiya, Simar Kareer, Zeyi Liu, Josh Citron, Ri-Zhao Qiu, Xiongyi Cai, Alexey Gavryushin, Jiaqi Chen, Davide Liconti, Lawrence Y Zhu, et al. Egoverse: An egocentric human dataset for robot learning from around the world. arXiv preprint arXiv:2604.07607 , 2026. [46] Cheng Chi, Zhenjia Xu, Chuer Pan, Eric Cousineau, Benjamin Burchfiel, Siyuan Feng, Russ Tedrake, and Shuran Song. Universal manipulation interface: In-the-wild robot teaching without in-the-wild robots. arXiv preprint arXiv:2402.10329 , 2024. [47] Xun Huang, Zhengqi Li, Guande He, Mingyuan Zhou, and Eli Shechtman. Self forcing: Bridging the train-test gap in autoregressive video diffusion. Advances in Neural Information Processing Systems , 38:167283–167308, 2026. [48] Mario Michael Krell, Matej Kosec, Sergio P Perez, and Andrew Fitzgibbon. Efficient sequence packing without cross-contamination: Accelerating large language models without impacting performance. arXiv preprint arXiv:2107.02027 , 2021. [49] Tri Dao. Flashattention-2: Faster attention with better parallelism and work partitioning. In International Conference on Learning Representa-tions , volume 2024, pages 35549–35562, 2024. [50] Patrick Esser, Sumith Kulal, Andreas Blattmann, Rahim Entezari, Jonas Müller, Harry Saini, Yam Levi, Dominik Lorenz, Axel Sauer, Frederic Boesel, et al. Scaling rectified flow transformers for high-resolution image synthesis. In Forty-first international conference on machine learning , 2024. [51] Zekai Li, Jiaming Tang, and Zhijian Liu. Flashvla: Streaming action decoding for fast and asynchronous vla inference. arXiv preprint arXiv:2608.27384 , 2026. [52] Kimi Team, Guangyu Chen, Yu Zhang, Jianlin Su, Weixin Xu, Siyuan Pan, Yaoyu Wang, Yucheng Wang, Guanduo Chen, Bohong Yin, et al. Attention residuals. arXiv preprint arXiv:2603.15031 , 2026. [53] Jinhui Ye, Ning Gao, Senqiao Yang, Jinliang Zheng, Zixuan Wang, Yuxin Chen, Pengguang Chen, Yilun Chen, Shu Liu, and Jiaya Jia. Starvla-𝛼 : Reducing complexity in vision-language-action systems. In European Conference on Computer Vision , pages 351–369. Springer, 2026. [54] Jinliang Zheng, Jianxiong Li, Zhihao Wang, Dongxiu Liu, Xirui Kang, Yuchun Feng, Yinan Zheng, Jiayin Zou, Yilun Chen, Jia Zeng, et al. X-vla: Soft-prompted transformer as scalable cross-embodiment vision-language-action model. In International Conference on Learning Representations , volume 2026, pages 60580–60606, 2026. [55] Fuhao Li, Wenxuan Song, Han Zhao, Jingbo Wang, Pengxiang Ding, Donglin Wang, Long Zeng, and Haoang Li. Spatial forcing: Implicit spatial representation alignment for vision-language-action model. In International Conference on Learning Representations , volume 2026, pages 132324–132345, 2026. [56] Xiaomi Robotics Team, Jun Guo, Piaopiao Jin, Jason Li, Peiyan Li, Yingyan Li, Futeng Liu, Wanli Peng, Optimus Qin, Yifei Su, et al. Xiaomi-robotics-1: Scaling vision-language-action models with over 100k hours of real-world trajectories. arXiv preprint arXiv:2607.15330 ,2026. [57] Yicheng Liu, Zibin Dong, Baijun Ye, Tianyuan Yuan, Tao Jiang, Anqi Yang, Shicheng Cao, Haonan Liu, Yue Sun, Zihan Guo, et al. G0. 5: One autoregressive stream for robot reasoning and action. arXiv preprint arXiv:2608.11739 , 2026. [58] Dexmal Team. DM0.5: An open-world foundation model for general-purpose embodied intelligence, July 2026. [59] Jisong Cai, Long Ling, Shiwei Chu, Zhongshan Liu, Jiayue Kang, Zhixuan Liang, Wenjie Xu, Yinan Mao, Weinan Zhang, Xiaokang Yang, et al. Aha-wam: Asynchronous horizon-adaptive world-action modeling with observation-guided context routing. arXiv preprint arXiv:2606.09811 ,2026. [60] Chaojun Ni, Xinyu Zhou, Yukun Zhou, Jingyu Liu, Xiaofeng Wang, Zheng Zhu, Yang Wang, Qiuping Deng, Yun Ye, Hao Li, et al. Gigaworld-policy: An efficient action-centered world–action model. In European Conference on Computer Vision , pages 315–333. Springer, 2026. [61] Jun Guo, Qiwei Li, Peiyan Li, Zilong Chen, Nan Sun, Yifei Su, Heyun Wang, Yuan Zhang, Xinghang Li, and Huaping Liu. Unified 4d world action modeling from video priors with asynchronous denoising. arXiv preprint arXiv:2604.26694 , 2026. [62] Wenbo Zhang, Kaixuan Wang, Yutao Ouyang, Xiaoyu Huang, Liyang Li, Kailun Su, Weiyang Jin, Wenhao Chai, Haotian Liang, Zhiyang Dou, et al. An unexpected robot policy: Early evaluations of gpt-6 astra on robodojo and beyond. arXiv preprint arXiv:2609.24170 , 2026. [63] Johan Bjorck, Fernando Castañeda, Nikita Cherniadev, Xingye Da, Runyu Ding, Linxi Fan, Yu Fang, Dieter Fox, Fengyuan Hu, Spencer Huang, et al. Gr00t n1: An open foundation model for generalist humanoid robots. arXiv preprint arXiv:2503.14734 , 2025. [64] StarVLA Community. Starvla: A lego-like codebase for vision-language-action model developing. arXiv preprint arXiv:2604.05014 , 2026. [65] Yandan Yang, Shuang Zeng, Tong Lin, Xinyuan Chang, Dekang Qi, Junjin Xiao, Haoyun Liu, Ronghan Chen, Yuzhi Chen, Dongjie Huo, et al. Abot-m0: Vla foundation model for robotic manipulation with action manifold learning. arXiv preprint arXiv:2602.11236 , 2026. [66] GigaBrain Team, Angen Ye, Axiang Sun, Can Jin, Chenxi Cheng, Chong Shi, Dengke Shang, Dingqian Zhang, Guan Huang, Guangqiang Wang, et al. Gigabrain-0.7: Scaling embodied foundation models to emergent capabilities with a three-system architecture. arXiv preprint arXiv:2608.15875 , 2026. [67] Haoqi Yuan, Zhixuan Liang, Anzhe Chen, Ye Wang, Haoyang Li, Pei Lin, Yiyang Huang, Zixing Lei, Tong Zhang, Jiazhao Zhang, et al. Qwen-robotmanip technical report: Alignment unlocks scale for robotic manipulation foundation models. arXiv preprint arXiv:2606.17846 ,2026. 22 SANA-Robot: Efficient World Action Model with Hybrid Memory [68] Lishan Yang, Wenxuan Song, Xi Wang, Pingyue Sheng, Zheng Fang, Ziyang Zhou, Junjie He, Haodong Yan, Jiayi Chen, Nan Sun, et al. 4d-wam: Infusing spatiotemporal awareness into world action models through trajectory fields. arXiv preprint arXiv:2608.08023 , 2026. [69] Bo Liu, Yifeng Zhu, Chongkai Gao, Yihao Feng, Qiang Liu, Yuke Zhu, and Peter Stone. Libero: Benchmarking knowledge transfer for lifelong robot learning. Advances in Neural Information Processing Systems , 36:44776–44791, 2023. [70] Karl Pertsch, Kyle Stachowicz, Brian Ichter, Danny Driess, Suraj Nair, Quan Vuong, Oier Mees, Chelsea Finn, and Sergey Levine. Fast: Efficient action tokenization for vision-language-action models. arXiv preprint arXiv:2501.09747 , 2025. [71] Shuhan Tan, Kairan Dou, Yue Zhao, and Philipp Krähenbühl. Interactive post-training for vision-language-action models. arXiv preprint arXiv:2505.17016 , 2025. [72] Moo Jin Kim, Chelsea Finn, and Percy Liang. Fine-tuning vision-language-action models: Optimizing speed and success. arXiv preprint arXiv:2502.19645 , 2025. [73] Jingwen Sun, Wenyao Zhang, Zekun Qi, Shaojie Ren, Zezhi Liu, Hanxin Zhu, Guangzhong Sun, Xin Jin, and Zhibo Chen. Vla-jepa: Enhancing vision-language-action model with latent world model. In European Conference on Computer Vision , pages 478–497. Springer, 2026. [74] Senqiao Yang, Chengyao Wang, Yuxin Chen, Zixuan Wang, Longxiang Tang, Haokun Gui, Jinhui Ye, Changsheng Lu, Xiaoyang Wu, Mingkang Zhu, et al. Beyond data scaling: Representation-centric continued pre-training for vision-language-action models. arXiv preprint arXiv:2608.27550 , 2026. [75] Haoxiang Ma, Junhao Cai, Xiaoxu Xu, Hao Li, Yuyin Yang, Yang Tian, Jiafei Cao, Hongrui Zhu, Zherui Qiu, Yuqiang Yang, et al. Internvla-a1. 5: Unifying understanding, latent foresight, and action for compositional generalization. arXiv preprint arXiv:2607.04988 , 2026. [76] Mingxin Wang, Bin Hu, Bin Qian, Kaitao Jiang, Haoning Wu, Feng Yan, Bowen Jing, Ruiyang Hao, Enyi Wang, Kangning Niu, et al. St-wam: Semantic-temporal world action model for robust manipulation under visual distribution shifts. arXiv preprint arXiv:2607.28993 , 2026. [77] Liheng Ma, Rui Heng Yang, Zhanguang Zhang, Mateo Clemente, Ziwen Hu, Tongtong Cao, and Yingxue Zhang. Faster-wam: Do world action models need deep action modules? arXiv preprint arXiv:2608.02365 , 2026. [78] Yihan Lin, Jiawei He, Shifeng Bao, Chen Zhao, Yang Li, Xiaobo Wang, Yan Wang, Cheng Chi, and Jing Zhang. Jepa-wam: Learning vision-language-action policies with joint-embedding world modeling. arXiv preprint arXiv:2608.09381 , 2026. [79] Yuyang Zhang, Wenyao Zhang, Zekun Qi, He Zhang, Haitao Lin, Jingbo Zhang, Yao Mu, Xiaokang Yang, Wenjun Zeng, and Xin Jin. Imagewam: Do world action models really need video generation, or just image editing? arXiv preprint arXiv:2606.19531 , 2026. [80] Ronghan Chen, Yandan Yang, Zuojin Tang, Dongjie Huo, Tong Lin, Haoning Wu, Haoyun Liu, Yuzhi Chen, Lulu Zheng, Botai Yuan, et al. Abot-m0. 5: Unified mobility-and-manipulation world action model. arXiv preprint arXiv:2607.00678 , 2026. [81] Hao Luo, Wanpeng Zhang, Yicheng Feng, Sipeng Zheng, Haiweng Xu, Chaoyi Xu, Ziheng Xi, Yuhui Fu, and Zongqing Lu. Being-h0. 7: A latent world-action model from egocentric videos. arXiv preprint arXiv:2605.00078 , 2026. [82] Chia-Yu Hung, Qi Sun, Pengfei Hong, Amir Zadeh, Chuan Li, U Tan, Navonil Majumder, Soujanya Poria, et al. Nora: A small open-sourced generalist vision language action model for embodied tasks. arXiv preprint arXiv:2504.19854 , 2025. [83] Jason Lee, Jiafei Duan, Haoquan Fang, Yuquan Deng, Shuo Liu, Boyang Li, Bohan Fang, Jieyu Zhang, Yi Ru Wang, Sangho Lee, et al. Molmoact: Action reasoning models that can reason in space. In 2026 IEEE International Conference on Robotics and Automation (ICRA) ,pages 2585–2592. IEEE, 2026. [84] Yihao Wang, Pengxiang Ding, Lingxiao Li, Can Cui, Zirui Ge, Xinyang Tong, Wenxuan Song, Han Zhao, Wei Zhao, Pengxu Hou, et al. Vla-adapter: An effective paradigm for tiny-scale vision-language-action model. In Proceedings of the AAAI conference on artificial intelligence ,2026. [85] Moo Jin Kim, Karl Pertsch, Siddharth Karamcheti, Ted Xiao, Ashwin Balakrishna, Suraj Nair, Rafael Rafailov, Ethan Foster, Grace Lam, Pannag Sanketi, et al. Openvla: An open-source vision-language-action model. arXiv preprint arXiv:2406.09246 , 2024. [86] Yuankai Luo, Woping Chen, Tong Liang, Baiqiao Wang, and Zhenguo Li. Simvla: A simple vla baseline for robotic manipulation. arXiv preprint arXiv:2602.18224 , 2026. [87] Jinu Pahk, Jesoon Kang, Taegeon Park, Jisu An, Soo Min Kimm, Jaejoon Kim, and Byoung-Tak Zhang. Habilis brain 0: Geometry-change supervision for vision-language-action and residual flow recovery. arXiv preprint arXiv:2609.25558 , 2026. [88] Xuan Wang, Yinan Wu, Haoran Duan, and Jungong Han. Quantile head for vision-language-action models. arXiv preprint arXiv:2609.34061 ,2026. [89] Xuan Wang, Yinan Wu, Haoran Duan, and Jungong Han. Quovla: Quotient space for vision-language-action models. arXiv preprint arXiv:2605.24890 , 2026. [90] Yueh-Hua Wu, Tatsuya Matsushima, and Kei Ota. Continuous reasoning for vision-language-action. arXiv preprint arXiv:2606.00229 , 2026. [91] Tianheng Wang, Zhou Xie, Heng Jia, Jianhua Xu, Tong Zhang, and Kaicheng Yu. An action is worth one patch: Unified world-action modeling with patchwam. arXiv preprint arXiv:2609.25961 , 2026. [92] Ge Yan, Jinghao Liu, Yuzhi Fan, Lei Cai, Minwen Liao, Jesse Zhang, and Dieter Fox. Flex-𝜋 : A multi-stream world-action model with compute flexibility. arXiv preprint arXiv:2608.10860 , 2026. [93] Gehao Zhang, Weikai Huang, Shailesh Shailesh, Yiyan Peng, Jiafei Duan, and Ranjay Krishna. Grounded action model: 3d grounding as a foundation for robotics. arXiv preprint arXiv:2609.23863 , 2026. [94] Mustafa Shukor, Dana Aubakirova, Francesco Capuano, Pepijn Kooijmans, Steven Palma, Adil Zouitine, Michel Aractingi, Caroline Pascal, Martino Russi, Andres Marafioti, et al. Smolvla: A vision-language-action model for affordable and efficient robotics. arXiv preprint arXiv:2506.01844 , 2025. [95] Rui Cai, Jun Guo, Xinze He, Piaopiao Jin, Jie Li, Bingxuan Lin, Futeng Liu, Wei Liu, Fei Ma, Kun Ma, et al. Xiaomi-robotics-0: An open-sourced vision-language-action model with real-time execution. arXiv preprint arXiv:2602.12684 , 2026. 23 SANA-Robot: Efficient World Action Model with Hybrid Memory [96] Ziang Li, Dongzhou Cheng, Yibin Wang, Shiyue Wang, Xiaoyang Xu, Lingxuan Weng, Juan Wang, and Jiaqi Wang. Light-wam: Efficient world action models with state-fusion action decoding. arXiv preprint arXiv:2606.08242 , 2026. [97] Teli Ma, Jia Zheng, Zifan Wang, Chunli Jiang, Andy Cui, Junwei Liang, and Shuo Yang. Dit4dit: Jointly modeling video dynamics and actions for generalizable robot control. arXiv preprint arXiv:2603.10448 , 2026. [98] Xiaoquan Sun, Ruijian Zhang, Chen Cao, Yihan Sun, Jiahui Chen, Zetian Xu, Bo Chen, Haijier Chen, Zhen Yang, Jiarun Zhu, et al. Himem-wam: Hierarchical memory-gated world action models for robotic manipulation. arXiv preprint arXiv:2606.10363 , 2026. [99] Yuwei Guo, Ceyuan Yang, Hao He, Yang Zhao, Meng Wei, Zhenheng Yang, Weilin Huang, and Dahua Lin. End-to-end training for autoregressive video diffusion via self-resampling. In European Conference on Computer Vision , pages 324–344. Springer, 2026. [100] Cheng Lu and Yang Song. Simplifying, stabilizing and scaling continuous-time consistency models. In International Conference on Learning Representations , volume 2025, pages 50611–50649, 2025. [101] Yanjiang Guo, Lucy Shi, Jianyu Chen, and Chelsea Finn. Ctrl-world: A controllable generative world model for robot manipulation. In 
+
+International Conference on Learning Representations , volume 2026, pages 6121–6138, 2026. [102] Haoyu Zhen, Qiao Sun, Hongxin Zhang, Junyan Li, Siyuan Zhou, Yilun Du, and Chuang Gan. Tesseract: learning 4d embodied world models. 
+
+arXiv preprint arXiv:2504.20995 , 2025. [103] Arslan Ali, Junjie Bai, Maciej Bala, Yogesh Balaji, Aaron Blakeman, Tiffany Cai, Jiaxin Cao, Tianshi Cao, Elizabeth Cha, Yu-Wei Chao, et al. World simulation with video foundation models for physical ai. arXiv preprint arXiv:2511.00062 , 2025. [104] Fangqi Zhu, Hongtao Wu, Song Guo, Yuxiao Liu, Chilam Cheang, and Tao Kong. Irasim: A fine-grained world model for robot manipulation. In 2025 IEEE/CVF International Conference on Computer Vision (ICCV) , pages 9834–9844. IEEE, 2025. [105] Zhuoyi Yang, Jiayan Teng, Wendi Zheng, Ming Ding, Shiyu Huang, Jiazheng Xu, Yuanming Yang, Wenyi Hong, Xiaohan Zhang, Guanyu Feng, et al. Cogvideox: Text-to-video diffusion models with an expert transformer. In International Conference on Learning Representations ,volume 2025, pages 83048–83077, 2025. [106] BWM Team et al. Bwm: A low-cost high-fidelity world simulator for robot learning. arXiv preprint arXiv:2607.29302 , 2026. [107] Anthony Brohan, Noah Brown, Justice Carbajal, Yevgen Chebotar, Xi Chen, Krzysztof Choromanski, Tianli Ding, Danny Driess, Avinava Dubey, Chelsea Finn, et al. Rt-2: Vision-language-action models transfer web knowledge to robotic control. arXiv preprint arXiv:2307.15818 ,2023. [108] Yanjiang Guo, Yucheng Hu, Jianke Zhang, Yen-Jen Wang, Xiaoyu Chen, Chaochao Lu, and Jianyu Chen. Prediction with action: Visual policy learning via joint denoising process. Advances in Neural Information Processing Systems , 37:112386–112410, 2024. [109] Shuang Li, Yihuai Gao, Dorsa Sadigh, and Shuran Song. Unified video action model, 2025. arXiv preprint arXiv:2503.00200 , 2025. [110] Chuning Zhu, Raymond Yu, Siyuan Feng, Benjamin Burchfiel, Paarth Shah, and Abhishek Gupta. Unified world models: Coupling video and action diffusion for pretraining on large robotic datasets. arXiv preprint arXiv:2504.02792 , 2025. [111] Yue Liao, Pengfei Zhou, Siyuan Huang, Donglin Yang, Shengcong Chen, Yuxin Jiang, Yue Hu, Si Liu, Jianlan Luo, Liliang Chen, et al. Genie envisioner: A unified world foundation platform for robotic manipulation. In International Conference on Learning Representations , volume 2026, pages 88446–88463, 2026. [112] Seonghyeon Ye, Yunhao Ge, Kaiyuan Zheng, Shenyuan Gao, Sihyun Yu, George Kurian, Suneel Indupuru, You Liang Tan, Chuning Zhu, Jiannan Xiang, et al. World action models are zero-shot policies. arXiv preprint arXiv:2602.15922 , 2026. [113] Lin Li, Qihang Zhang, Yiming Luo, Shuai Yang, Ruilin Wang, Fei Han, Mingrui Yu, Zelin Gao, Nan Xue, Xing Zhu, et al. Causal world modeling for robot control. arXiv preprint arXiv:2601.21998 , 2026. [114] Yuyang Zhao, Yicheng Pan, Qiyuan He, Jincheng Yu, Junsong Chen, Tian Ye, Haozhe Liu, Enze Xie, and Song Han. Sana-streaming: Real-time streaming video editing with hybrid diffusion transformer. arXiv preprint arXiv:2605.30409 , 2026. [115] Haoyi Zhu, Haozhe Liu, Yuyang Zhao, Tian Ye, Junsong Chen, Jincheng Yu, Tong He, Song Han, and Enze Xie. Sana-wm: Efficient minute-scale world modeling with hybrid linear diffusion transformer. arXiv preprint arXiv:2605.15178 , 2026. [116] Hao Shi, Bin Xie, Yingfei Liu, Lin Sun, Fengrong Liu, Tiancai Wang, Erjin Zhou, Haoqiang Fan, Xiangyu Zhang, and Gao Huang. Memoryvla: Perceptual-cognitive memory in vision-language-action models for robotic manipulation. In International Conference on Learning Representations , volume 2026, pages 18567–18602, 2026. [117] Hao Li, Shuai Yang, Yilun Chen, Xinyi Chen, Xiaoda Yang, Yang Tian, Hanqing Wang, Tai Wang, Dahua Lin, Feng Zhao, et al. Cronusvla: Towards efficient and robust manipulation via multi-frame vision-language-action modeling. arXiv preprint arXiv:2506.19816 , 2025. [118] Huiwon Jang, Sihyun Yu, Heeseung Kwon, Hojin Jeon, Younggyo Seo, and Jinwoo Shin. Contextvla: Vision-language-action model with amortized multi-frame context. arXiv preprint arXiv:2510.04246 , 2025. [119] Myungkyu Koo, Daewon Choi, Taeyoung Kim, Kyungmin Lee, Changyeon Kim, Younggyo Seo, and Jinwoo Shin. Hamlet: Switch your vision-language-action model into a history-aware policy. In International Conference on Learning Representations , volume 2026, pages 101537–101558, 2026. [120] Ajay Sridhar, Jennifer Pan, Satvik Sharma, and Chelsea Finn. Scaling up memory for robotic control via experience retrieval. In International Conference on Learning Representations , volume 2026, pages 97142–97166, 2026. [121] Wei Huang, Bohan Zhang, Chenzhi Liu, Isabella Liu, Shuai Yang, Weian Mao, Luozhou Wang, Yicheng Xiao, Weifeng Lin, Qixin Hu, et al. Long-wam: Scaling the context of world-action models. arXiv preprint arXiv:2610.10528 , 2026. 24
