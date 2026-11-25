@@ -1,0 +1,1204 @@
+© 2026 IEEE. Personal use of this material is permitted. Permission from IEEE must be obtained for all other uses, in any current or future media, including reprinting/republishing
+this material for advertising or promotional purposes, creating new collective works, for resale or redistribution to servers or lists, or reuse of any copyrighted component of this
+work in other works.
+3D Open-Vocabulary Detection via
+Visual Alignment and Generative Captions
+Thomas E. Huang, Alex Zihao Zhu, Hao Xiang, Tianyi Cai, Jingwei Ji,
+Yuliang Zou, Jiafan Yu, Xin Huang, and Mingxing Tan
+Waymo
+Abstract— Open-vocabulary 3D object detection remains a
+significant challenge for outdoor scenes, with existing methods
+often struggling to effectively transfer the rich semantic
+knowledge from powerful 2D Vision-Language Models (VLMs)
+into a 3D context. We propose a novel, two-part framework for
+this task. First, we introduce a direct, object-level distillation
+method. We generate class-agnostic 3D proposals to source
+regions from the entire scene, without relying on any manual
+labels. We leverage a spatially-aware VLM to extract a semantic
+embedding from each proposal’s projected 2D bounding box
+and supervise our 3D model to predict this embedding on a per-
+instance basis. Second, to enhance zero-shot capability and inject
+domain-specific information, we employ a powerful Multimodal
+Large Language Model (MLLM) as an image captioner to
+generate rich textual captions for each of these proposals. These
+captions are integrated into the training objective to directly
+align the 3D features with these rich semantics, creating a
+composite loss that combines direct feature distillation with
+caption-based semantic enrichment. Our experiments validate
+the effectiveness of our approach, establishing a new state of
+the art in 3D open-vocabulary detection on the Waymo Open
+Dataset and nuScenes.
+I. INTRODUCTION
+Accurate 3D object detection is foundational for safety-
+critical applications like autonomous driving. Current state-of-
+the-art 3D detectors, which rely on LiDAR point clouds [1],
+[2] and multi-view images [3], [4], have achieved remarkable
+performance on challenging benchmarks [5], [6]. However,
+these methods are fundamentally limited: they can only
+identify and localize objects that belong to a pre-defined set
+of categories seen during training. In real-world environments,
+systems constantly encounter novel objects and long-tail
+concepts, rendering closed-set detectors unreliable. When
+a closed-set detector fails to identify a novel obstacle such as
+debris or an unconventional vehicle, it poses a direct threat to
+downstream motion planning and collision avoidance systems.
+The emerging field of open-vocabulary 3D object detection
+addresses this limitation by aiming to detect arbitrary objects
+described by natural language. To achieve this open-set
+capability, prevailing approaches typically rely on knowledge
+distillation from large-scale pre-trained 2D Vision-Language
+Models (VLMs) [7]. These methods transfer the VLM’s rich
+semantic features to the 3D detector, either by projecting 2D
+features to 3D points/voxels for alignment [8], or by using
+2D open-vocabulary detections [9], [10] as pseudo-labels for
+3D localization [11], [12]. This enables the 3D model to
+predict an embedding vector that can be compared against
+Pedestrian, Television, Pole, Fire Hydrant, Street Sign
+Fig. 1. 3D Open-Vocabulary Detection Results. Given text prompts for
+each class, our detector can retrieve corresponding objects in 3D, without
+using any ground-truth data during training. Our detector can even generalize
+to novel object classes like TVs.
+arbitrary text queries (e.g., object names) at inference time.
+The primary challenge in this domain is bridging the
+knowledge gap between the feature-rich 2D domain, where
+vast Vision-Language Models (VLMs) like CLIP [7] have
+acquired broad open-world knowledge, and the sparse, 3D
+domain. Directly aligning sparse, unorganized, 3D features
+with dense, pre-trained 2D image features is notoriously noisy.
+Additionally, the 2D VLMs are pre-trained on web-scale
+data, which are general, but may create significant domain
+gaps when applied to specific domains. 3D autonomous
+driving environments are often cluttered, occluded, and have
+highly varied-perspective views. Relying solely on this visual-
+only alignment is insufficient; the 2D visual features are
+often semantically ambiguous and lack the granularity to
+distinguish between fine-grained categories (e.g., ‘trailer’ vs.
+‘truck’). This forces the 3D model to learn a similarly coarse
+representation, limiting its generalization.
+In this work, we introduce a novel, end-to-end framework
+that effectively transfers and grounds open-world semantic
+knowledge to a 3D detector. First, our Visual Alignment
+stage (Section III-B) creates a robust visual foundation. To
+overcome the noise and sparsity of 3D-to-2D projection, we
+distill knowledge in an object-centric manner. We first gener-
+arXiv:2611.26842v1  [cs.CV]  19 Nov 2026
+
+
+ate class-agnostic 3D box proposals using DBSCAN [13] on
+the raw point cloud, allowing us to source distillation targets
+from all regions of the scene, including background and
+potential novel objects, without relying on any ground-truth
+labels or prior knowledge. We aggregate 2D VLM features at
+the object level and use this stable visual signal to supervise
+the underlying 3D voxel features. This efficiently distills the
+VLM’s rich visual knowledge into the 3D backbone, creating
+a feature space that is visually discriminative.
+While this VLM distillation provides general open-world
+knowledge, the original image embeddings are pre-trained to
+cover a broad range of captions, and may miss domain specific
+context. To this end, we propose a second Language Align-
+ment stage (Section III-C) which complements this visual-
+alignment and instills fine-grained semantic understanding.
+We leverage a powerful Multimodal Large Language Model
+(MLLM) as an image captioner and domain adapter. Using
+the same DBSCAN-generated 3D regions, we generate high-
+fidelity, descriptive captions directly from the 3D dataset’s
+image patches. These captions are then embedded into the
+VLM embedding space with the VLM text encoder. By
+aligning the visually-grounded 3D features (from Stage 1)
+to these domain-specific text embeddings, we overcome the
+semantic ambiguity of 2D visual features and explicitly force
+it to learn the nuanced semantics of the 3D environment (e.g.,
+“a white sedan stopped in traffic”). In short, our loss combines
+the breadth of pre-trained image embedding distillation with
+the depth of per-object caption embedding distillation.
+Our contributions are summarized as follows:
+1) We introduce a Visual Alignment strategy that uses
+class-agnostic proposals to distill object-level 2D VLM
+features into their corresponding 3D voxels, enabling
+robust feature learning from the entire scene without
+manual labels.
+2) We propose a Language Alignment strategy that uses
+an MLLM to generate high-fidelity, contextual text
+captions for these same scene regions, grounding the
+3D features in rich, descriptive language.
+3) We achieve state-of-the-art results for open-vocabulary
+3D object detection on the challenging Waymo Open
+Dataset and nuScenes benchmarks.
+II. RELATED WORK
+A. 3D Closed-Vocabulary Object Detection
+Mainstream 3D object detectors can be broadly categorized
+by their data representation. Early works [14], [15] operated
+directly on raw point clouds, but were often computationally
+expensive. The dominant paradigm shifted to voxel-based
+methods [16], [17], which discretize the scene into a regular
+grid, enabling efficient 3D sparse convolutions. This was
+further refined by hybrid point-voxel architectures [18] and
+efficient anchor-free heads like CenterPoint [19]. More
+recently, Transformer-based detectors [20], [21], [2], [1], [4],
+[3] have achieved state-of-the-art performance. Despite their
+high accuracy, these methods are fundamentally ”closed-set”:
+they are trained with a fixed vocabulary (e.g., car, pedestrian)
+and cannot detect any object outside this pre-defined list.
+B. Vision-Language Modeling
+The dominant paradigm in training Vision-Language Mod-
+els (VLMs) has been contrastive learning on web-scale image-
+text pairs, pioneered by CLIP [7] and ALIGN [22]. These
+models learn a joint embedding space, enabling powerful
+zero-shot image-level classification. However, this image-
+level supervision limits their spatial granularity, making
+them suboptimal for dense prediction tasks like detection.
+Subsequent works have focused on adapting these models
+for region-level understanding, either by fine-tuning on
+detection data [23], [24], creating dense feature maps [25], or
+incorporating self-supervised objectives for spatial awareness,
+such as TIPS [26]. A separate and parallel class of models,
+Multimodal Large Language Models (MLLMs), has emerged
+by connecting vision encoders to Large Language Models
+(LLMs) [27], [28], [29]. These models excel at complex
+reasoning and generative tasks like captioning.
+C. Open-Vocabulary Object Detection
+Open-vocabulary detection was first popularized in 2D.
+Early methods [30] focused on distilling knowledge from
+a VLM like CLIP [7] into a region-based detector [31] by
+aligning region-of-interest (RoI) features with the VLM’s text
+embeddings. More recent approaches have developed end-to-
+end transformer frameworks [32] or improved performance
+by pre-training on large-scale grounded image-text data [23],
+[10]. Extending this to 3D introduces the significant challenge
+of bridging the 2D-3D modality gap. One line of work
+applies 2D open-vocabulary models to multi-view images
+and “lifts” the resulting 2D boxes into 3D space [11], [12],
+[33], [34]. However, the open vocabulary needs to be known
+before training, and extension to new categories require data
+regeneration and retraining. A more direct approach aligns
+3D features directly with the VLM’s embedding space. This
+is often done by projecting entire 3D point clouds into 2D
+views [35], [36], [37] or by distilling 2D VLM features into
+3D point or voxel features [8], [38]. Our work follows this
+latter distillation-based approach.
+III. METHOD
+In this section, we introduce our method for 3D open-
+vocabulary object detection. We first provide the setting, and
+then we describe key components of our method, Visual
+Alignment and Language Alignment. The full training and
+inference pipeline is shown in Fig. 2.
+A. Setting
+For LiDAR-based object detection in outdoor scenes, the
+input is a 3D point cloud P, represented as a set of N points,
+P = {pi}N
+i=1, where each point pi ∈R3+F includes its 3D
+coordinates (x,y,z) and optionally F additional features (e.g.,
+intensity, color). The detector processes this input point cloud
+and is tasked with predicting M objects, G = {(bj,c j)}M
+j=1,
+where bj is the 3D bounding box and cj is the class
+label. A 3D bounding box is parameterized by its center
+(x,y,z), dimensions (l,w,h), and yaw orientation θ. Thus,
+bj = (x j,y j,z j,l j,w j,h j,θ j). In standard detection, cj is from
+
+
+3D Encoder
+Point Cloud
+Object
+Captions
+Images
+Visual Alignment
+Language Alignment
+Open-Vocabulary Embeddings 
+Dual 
+Alignment
+Class-Agnostic Bounding Boxes
+3D Boxes
+(a) Training
+🔒
+VLM 
+Vision 
+Encoder
+🔒
+VLM
+Text 
+Encoder
+Open-Vocabulary 
+Queries
+Pedestrian
+Trash Can
+Cosine 
+Similarity
+Visual Feature 
+Extraction
+Geometric
+Clustering
+🔒
+VLM
+Text 
+Encoder
+Class 
+Label
+(b) Inference
+…
+Sensor Suite
+Fig. 2. Overall Pipeline. During (a) training, our detector is supervised with three losses: class-agnostic bounding box loss Ldet along with two distillation
+losses, Visual Alignment loss Lvis and Language Alignment loss Llang, for feature alignment. During (b) inference, we directly use the trained detector
+to predict boxes and open-vocabulary embeddings. Text-based queries are encoded by the VLM text encoder, and cosine similarity between the embeddings
+and queries are used to assign the final class label.
+a fixed set of object classes, Ctrain = {c1,...,cK}. Along
+with the LiDAR point cloud, a set of L synchronized multi-
+view images covering different perspectives I = {Il}L
+l=1 with
+corresponding extrinsic Rl and intrinsic Kl camera parameters
+are provided. We only use the images during training.
+In 3D open-vocabulary object detection, the detector is
+tasked with predicting objects from an “open” vocabulary,
+including categories unseen during training. Standard classi-
+fication does not work in this setting. Typically, language is
+used as an intermediary [32], [10], and the detector predicts
+an open-vocabulary embedding for each object, rather than the
+standard classification objective. This enables classification
+through comparison against arbitrary text queries during
+inference, thereby generalizing to unseen categories.
+B. Visual Alignment
+The first component of our method focuses on establishing
+a visual-semantic link between the 3D features and the rich,
+pre-trained knowledge embedded in a VLM. We aim to
+directly distill such knowledge into the 3D features to enable
+open-vocabulary classification directly in 3D.
+3D Feature Extraction. Our alignment framework is de-
+signed to be agnostic to the 3D backbone. For our experiments,
+we build upon a Transformer-based point cloud detector,
+SWFormer [21]. Given an input point cloud, SWFormer first
+applies voxelization and then uses a series of sparse window
+Transformer blocks for feature processing and multi-scale
+feature fusion to produce voxel features F3D ∈RNv×D.
+Generic Objects Extraction. A primary challenge in aligning
+3D features with 2D VLM features is establishing a robust
+correspondence. The most direct approach is to perform point-
+to-pixel alignment [8]. This is achieved by projecting each
+3D point pi onto the 2D image plane using the given extrinsic
+Rl and intrinsic Kl camera parameters:
+p2D
+li = Kl ·Rl · pi.
+(1)
+However, this point-to-pixel strategy is quite brittle, especially
+for outdoor scenes. A 3D point can be easily assigned an
+incorrect 2D semantic feature due to minor calibration errors
+or small occlusions (e.g., a pole in front of a vehicle), which
+in turn introduces noise into the training signal.
+To mitigate the noise inherent in point-to-pixel alignment,
+we adopt an object-centric distillation strategy without relying
+on manual labels. We deviate, however, from the standard
+practice of lifting 2D detection boxes [11], [12], which neces-
+sitate a fixed list of categories during training for prompting
+the 2D detectors and limits true open-vocabulary generaliza-
+tion. Instead, we treat object discovery as a geometric problem
+rather than a semantic one. We employ RANSAC [39] to
+separate the ground plane and DBSCAN [13] to cluster the
+remaining points into distinct entities. This strategy generates
+a comprehensive set of class-agnostic 3D proposals covering
+the entire scene. For each 3D proposal b′
+j, we compute its
+2D projection b2D
+l j across all camera views using Equation 1.
+This process is visualized in Fig. 3 (a).
+Projecting all 3D geometric proposals to 2D indiscrimi-
+nately can still generate low-quality pairs. This introduces
+noise, for example, by forcing the model to align a 3D object
+with a 2D crop of its occluder. To ensure high-fidelity 2D-3D
+correspondence, we apply a rigorous filtering process. First,
+we perform view frustum and depth filtering. We discard
+any 2D projected boxes that are fully outside the image
+bounds, are too small or large, or whose corresponding 3D
+box is closer than 5m or further than 50m. Second, we
+perform occlusion filtering to resolve ambiguity in the camera
+perspective. We calculate the Intersection over Area (IoA)
+for overlapping boxes and remove any box that has a high
+IoA with another box and is further away from the camera,
+as it is presumed to be occluded.
+Vision-Language Model. Our object-centric distillation
+requires a VLM that can produce spatially-aware, high-
+resolution feature maps. Standard VLMs like CLIP [7] are
+not ideal for this, as they are trained for image-level tasks
+with a global image-text alignment objective. Consequently,
+prior works [40] using CLIP must rely on an inefficient
+process: running separate forward passes on individual image
+crops to extract visual features for each object. This approach,
+however, is context-poor, as it discards all surrounding scene
+
+
+Point Cloud
+Multi-View 
+Camera Images
+Generic Object 
+Regions
+RANSAC + DBSCAN
+3D to 2D
+Crop
++ Mask
+Object
+Masks
+(a) Generic Objects Extraction
+Instruction
+Describe the object..
+Captions
+●A newspaper stand.
+●A newspaper stand made of metal…
+●The newspaper stand is on a sidewalk…
+(c) Language Feature Extraction
+🔒
+VLM 
+Vision 
+Encoder
+RoI Pool
+(b) Visual Feature Extraction
+🔒
+VLM
+Text 
+Encoder
+        MLLM
+Fig. 3. Data Generation Pipeline. (a) Generic Objects Extraction: We use RANSAC and DBSCAN on the raw point cloud to generate class-agnostic 3D
+proposals across the entire scene, which are then projected to all 2D camera views. (b) Visual Feature Extraction: The proposals are used to RoI pool
+features from the VLM vision encoder, creating the visual distillation targets f vis. (c) Language Feature Extraction: The proposals are used to crop and
+mask the images and then sent to a MLLM for captioning, which are then encoded by the VLM text encoder to create the language distillation targets etext.
+Fig. 4. TIPS Features. Comparison of visual features from TIPS [26]
+(middle) and CLIP [7] (right). TIPS produce features that are higher resolution
+and more spatially aligned.
+information. To overcome this, we use TIPS [26]. TIPS
+is explicitly designed for spatial awareness, leveraging a
+DINO-like self-supervised loss [41] and a CLIP-style loss
+to produce high-resolution, spatially-aligned visual features
+(Fig. 4). This key property allows us to extract meaningful
+2D features from a dense feature map of the entire image.
+Furthermore, each patch retains global scene context due to
+its attention mechanism. For our pipeline, we encode each
+image at full resolution to obtain high-resolution feature
+maps EV(Il) = FTIPS
+l
+for l = 1,...,L, where EV is the TIPS
+vision encoder and FTIPS ∈RL×H×W×C. These features can
+be computed offline and do not incur any cost during training.
+Visual Distillation. For each 2D box, we apply RoI pooling
+on the VLM features to obtain a single, robust 2D visual
+feature vector,
+f vis
+j
+=
+1
+|Lv
+j| ∑
+l∈Lv
+j
+ RoIPool(b2D
+l j ,FTIPS
+l
+)
+
+,
+(2)
+where Lv
+j represent the set of camera indices with valid 3D-
+to-2D projections for box b′
+j. The resulting features represent
+the visual VLM features that act as the targets for distillation.
+For visual feature alignment, we first use a lightweight
+open-vocabulary embedding head to predict an embedding for
+each voxel, f emb = MLP(F3D). We then take the predictions
+corresponding to voxels within each object’s 3D bounding
+box and minimize the cosine distance between the predicted
+and the target embeddings:
+Lvis = 1
+M′
+M′
+∑
+j=1
+1
+Nv
+Nv
+∑
+i=1
+1(vi ∈b′
+j)
+ 
+1−
+f emb
+i
+· f vis
+j
+∥f emb
+i
+∥∥f vis
+j
+∥
+!
+,
+(3)
+where M′ is the number of object boxes after filtering, Nv
+is the total number of voxels, and 1 is an indicator function
+representing the indices of all voxels that belong to object
+j. This loss forces the 3D features to encode rich visual
+information consistent with VLM’s 2D representation.
+C. Language Alignment
+While visual alignment transfers visual knowledge from
+pre-trained VLMs, the VLM image encoder is trained on
+a large corpus of image-text pairs, and so the image-text
+similarity may not be sufficiently discriminative for any given
+text prompt. Additionally, the image embeddings suffer from
+visual ambiguity (e.g., distinguishing a truck from a semi-
+truck solely by its 2D patch) and the limited textual diversity
+of standard class labels. To overcome this and instill a
+richer semantic understanding, our second component focuses
+on bridging this vision-language gap through leveraging
+contextually-rich language generated by a Multimodal Large
+Language Model (MLLM) image captioner. We posit that
+aligning to MLLM-generated captions, which are rich in
+contextual and descriptive attributes (e.g., ‘a white sedan
+stopped in traffic’), forces the 3D model to learn a more
+nuanced semantic space than aligning to the fixed, iconic
+visual concepts learned by the VLM (e.g., a general ‘car’).
+Captioning. We use the publicly available Gemini 2.5
+Flash [29] as our captioning MLLM. Using the same set
+of class-agnostic 3D proposals b′
+j from Section III-B, we
+project points within each 3D bounding box to the 2D image
+planes and compute convex hulls of the LiDAR points inside
+the box, representing visible regions of each object. After
+filtering and occlusion handling, we convert each convex hull
+
+
+A person on a segway 
+on the sidewalk.
+A minion wearing an 
+oversized pirate hat.
+A flower bed made of brick 
+with a white border.
+Fig. 5. Example Captions. We obtain detailed descriptions of rare objects
+in the Waymo Open Dataset.
+to a binary mask and crop the camera images around each
+mask. To incorporate more context information into each
+crop, we enlarge each crop by a constant factor and dim
+the brightness of the background region. We pair each crop
+with an instruction, asking Gemini to generate a set of text
+descriptions, each corresponding to a different attribute: object
+type, appearance, surroundings, and action. During training,
+we randomly sample one of these attributes to be used as the
+caption for each object. The full captioning pipeline is shown
+in Fig. 3 (c). Examples of image inputs and partial responses
+from Gemini (appearance description) are shown in Fig. 5.
+This process generates high-fidelity, contextual text descrip-
+tions Tj based on the MLLM’s immense world knowledge,
+which provide richer semantic signals than using coarse
+category names, critical for grounding fine-grained and novel
+concepts. Additionally, this removes the need for a pre-defined
+category list for novel objects, which many previous methods
+rely on [11], [12], [34]. We encode these descriptions using
+the VLM’s pre-trained text encoder ET to obtain object text
+embeddings ET(Tj) = etext
+j
+.
+Text Distillation. To align the open-vocabulary embeddings
+from the detector with the MLLM-generated text embeddings,
+we first use a lightweight adapter to project the visual-aligned
+features to the text feature space eemb = MLP
+ f emb
+. Then,
+we minimize the cosine distance:
+Llang = 1
+M′
+M′
+∑
+j=1
+1
+Nv
+Nv
+∑
+i=1
+1(vi ∈b′
+j)
+ 
+1−
+eemb
+i
+·etext
+j
+∥eemb
+i
+∥∥etext
+j
+∥
+!
+.
+(4)
+This loss explicitly grounds the 3D object features in the
+semantic space defined by human language, improving the
+model’s ability to match the 3D observations to open-
+vocabulary textual queries during inference.
+D. Model Details
+We provide additional details regarding our model.
+Localization. Following [21], we utilize a CenterNet detection
+head for regressing 3D bounding boxes from voxel features.
+Since we do not have access to a pre-defined vocabulary
+during training, we use a single detection head for all objects,
+and we modify the classification branch to output a binary
+foreground/background prediction rather than classify into
+object classes. As 3D localization training requires precise
+bounding boxes, this component is trained with a separate
+set of standard, amodal 3D boxes for supervision, rather than
+the DBSCAN boxes used for alignment.
+Training. We train our detector in an end-to-end manner by
+jointly optimizing all objectives:
+Ltotal = Ldet +λvisLvis +λlangLlang,
+(5)
+where Ldet is the standard loss for the CenterNet detection
+head, including heatmap, size, and offset regression losses,
+and λvis and λlang are used to weight the alignment losses.
+Our method does not require images during inference
+time, and the proposed alignment components are only used
+during training. Thus, the only additional computation are
+the lightweight open-vocabulary embedding heads, which are
+a tiny fraction of the overall detector.
+Inference. To classify objects into open-vocabulary categories,
+we rely on the open-vocabulary embeddings from the model.
+During inference, we take textual descriptions of categories
+of interest Tc and encode them using the VLM text encoder
+ET(Tc) = ec. These descriptions can be any free-form text
+(Fig. 6). Then, we simply compute the cosine similarity
+between the predicted and the provided text embeddings and
+assign the label with the highest score.
+IV. EXPERIMENTS
+A. Experimental Setup
+Dataset. We conduct experiments on the Waymo Open
+Dataset (WOD) [5] and nuScenes [6]. WOD includes 1000
+sequences, split into 798 for training and 202 for validation.
+The dataset uses five cameras, covering a 270-degree view
+around the vehicle. WOD contains annotations for three object
+categories: vehicle, pedestrian, and cyclist. The nuScenes
+dataset contains 1000 driving sequences, split into 700 for
+training, 150 for validation, and 150 for testing. Each sequence
+is 20 seconds in length and annotated at 2Hz. It also has
+images taken from six cameras, covering 360-degrees around
+the vehicle. nuScenes provides annotations for ten object
+categories for the detection task.
+Evaluation Settings. The core contribution of our work is the
+open-vocabulary alignment pipeline, which is agnostic to the
+underlying 3D localization method. To isolate the performance
+of our alignment strategy, we conduct experiments using
+boxes that are available to us, including unsupervised, amodal
+pseudo-labels from [33] on WOD and ground-truth (GT)
+boxes (no class labels) on nuScenes. These boxes are used
+to supervise our class-agnostic detection branch.
+For WOD, we follow existing open-vocabulary proto-
+cols [42], [33] and evaluate zero-shot 3D detection per-
+formance without utilizing any GT labels. We report 3D
+and BEV Average Precision (AP) at an IoU threshold of
+0.4 and difficulty level 2 (all objects). We use two range
+settings: the standard range (100m × 40m around the ego-
+vehicle) and the extended range (160m x 160m). As [33] and
+[42] use slightly different evaluation protocols, we compare
+with each separately. We compare with methods that support
+open-vocabulary inference (ViLGOD [42], UP-VL [33]) and
+unsupervised detection methods with GT label assignment
+(OYSTER [44], LISO [45]).
+For nuScenes, we found that most existing open-vocabulary
+results were skewed by the performance of the box generation
+
+
+TABLE I. Open-vocabulary 3D object detection on WOD (ViLGOD [42] setting). No ground-truth labels are used during training. AP is computed with
+IoU=0.4 at difficulty level L2. † indicates evaluation using ground-truth class labels, results from [42].
+Method
+BEV AP
+3D AP
+Vehicle
+Pedestrian
+Cyclist
+mAP
+Vehicle
+Pedestrian
+Cyclist
+mAP
+Standard range (100m x 40m)
+DBSCAN [13] †
+18.4
+0.2
+0.1
+6.2
+4.8
+0.0
+0.0
+1.6
+LSF [43] †
+10.9
+0.0
+0.2
+3.7
+7.4
+0.0
+0.0
+2.5
+OYSTER [44] †
+56.2
+0.0
+0.0
+18.7
+20.4
+0.0
+0.0
+6.8
+LISO [45] †
+69.5
+5.5
+2.2
+25.7
+54.3
+3.7
+1.6
+19.9
+ViLGOD [42]
+49.0
+16.8
+7.6
+24.5
+44.8
+14.1
+7.4
+22.1
+ViLGOD-CP [42]
+64.4
+38.8
+7.5
+36.9
+62.4
+35.9
+7.5
+35.3
+Class-Agnostic Baseline
+8.9
+8.0
+1.0
+6.0
+7.8
+6.3
+0.8
+5.0
+Ours
+63.7
+36.0
+42.3
+47.3 (+10.3)
+59.3
+32.5
+42.3
+44.7 (+9.4)
+Extended range (160m x 160m)
+ViLGOD [42]
+27.2
+12.3
+4.7
+14.7
+-
+-
+-
+-
+ViLGOD-CP [42]
+29.5
+23.9
+4.6
+19.3
+-
+-
+-
+-
+Class-Agnostic Baseline
+7.1
+2.6
+0.9
+3.5
+5.7
+2.1
+0.8
+2.9
+Ours
+38.1
+27.4
+27.7
+31.1 (+11.8)
+36.4
+26.7
+27.4
+30.2
+TABLE II. Open-vocabulary 3D object detection on WOD (standard range)
+(UP-VL [33] setting). No ground-truth labels are used during training. VRU
+combines pedestrians and cyclists into a single class. AP is computed with
+IoU=0.4 at difficulty level L2. * indicates class-agnostic AP is used.
+Method
+VLM
+3D AP
+Vehicle
+VRU
+mAP
+Clustering [46]
+-
+-
+-
+11.6*
+Clustering [46]
+OpenSeg [47]
+16.1
+10.0
+13.1
+Auto labels [33]
+OpenSeg [47]
+30.2
+14.7
+22.4
+UP-VL [33]
+OpenSeg [47]
+52.0
+19.7
+35.8
+Class-Agnostic
+-
+7.8
+3.2
+5.5
+Ours
+TIPS [26]
+59.3
+29.7
+44.5 (+8.7)
+pipeline. In order to focus on open-vocabulary classification,
+we compare with OpenSight [11] and its baselines that report
+performance using GT boxes (but not classes) for training.
+We report nuScenes mAP, NDS, and individual class APs.
+B. Main Results
+In this section, we present the main results of our method.
+For the class-agnostic baseline, we use the same class-agnostic
+detector as our method to generate boxes, but assign class
+labels of all classes to each box.
+Waymo Open Dataset. The results on the WOD dataset are
+shown in Table I and Table II. Compared with ViLGOD [42],
+our method obtains competitive performance on vehicles
+and pedestrians but significantly better results on cyclists,
+resulting in an overall 3D mAP improvement of 9.4 points.
+Previous methods perform worse for cyclists due to rarity and
+similarity to pedestrians, while our detector can successfully
+detect them with high accuracy. In addition, we demonstrate
+our method’s generalization to long ranges by evaluating on
+the extended range setting from ViLGOD [42]. Our method
+achieves an mAP of 31.1, significantly outperforming the
+ViLGOD by 11.8 points. Notably, we see massive gains in
+detecting vulnerable road users (VRUs), with Cyclist AP
+improving from 4.6 to 27.7 (+23.1).
+Compared to UP-VL [33], our method achieves large
+performance gains across both vehicles and VRUs, improving
+overall mAP by 8.7 points. As we use the same auto labels,
+this demonstrate that our distillation strategy is more effective
+in transferring world knowledge to the 3D detector compared
+to the point-to-pixel strategy employed in UP-VL.
+nuScenes. The results on the nuScenes dataset are presented
+in Table III. OpenSight [11] relies on Grounding DINO [10]
+for open-vocabulary classification by providing the 2D
+detector with prompts of class names both during training
+for feature alignment and inference for feature integration.
+This results in limited generalization to truly novel classes
+where the names are not known beforehand. Our method
+does not have such a limitation. Despite this, our method
+achieves 36.9 mAP, a 2.7 points improvement over OpenSight,
+demonstrating the effectiveness of our alignment protocol.
+C. Ablation Studies
+We conduct comprehensive ablation studies on the WOD
+validation set to verify the contribution of each component.
+We use the same setting as Table I with the standard range
+setting for all ablation experiments.
+Component Analysis. We first analyze the impact of our two
+proposed alignment stages in Table IV. Without any alignment,
+the detector is unable to classify objects, achieving a low
+mAP of 6.0. Using only Visual Alignment yields a strong
+score of 44.8 mAP, confirming that distilling spatially-aware
+TIPS features is effective. Using only Language Alignment
+also performs well at 45.7 mAP, showing that generative
+captions alone can provide strong supervision. Combining
+both streams achieves the best performance (47.3 mAP). This
+indicates that the two modalities are complementary: visual
+alignment provides fine-grained spatial cues, while language
+alignment provides richer semantic grounding.
+Visual Alignment Strategy. We now ablate the different
+design choices of our Visual Alignment component in
+Table V. Simply projecting all 3D bounding boxes to 2D
+and performing distillation with all correspondences can
+enable open-vocabulary detection but only achieves 35.7 mAP.
+Projecting points within each 3D bounding box instead to filter
+boxes without visible points can improve the performance
+to 39.0 mAP. Finally, using occlusion handling to filter
+out boxes that are overlapping with others can further
+
+
+TABLE III. Open-vocabulary 3D object detection on nuScenes. For fair comparison, all methods use ground-truth boxes for training (no class labels). We
+report the overall mAP, NDS, and individual class APs. Results with † are taken from [11].
+Method
+VLM
+mAP
+NDS
+Car
+Truck
+C.V.
+Bus
+Trailer
+Barrier
+Bicycle
+T.C.
+Motor.
+Ped.
+OV-PointCLIP [35] †
+CLIP [7]
+0.1
+5.0
+0.0
+0.0
+0.0
+0.0
+0.0
+0.0
+0.7
+0.2
+0.0
+0.1
+OV-PointCLIPv2 [36] †
+CLIP [7]
+2.8
+10.9
+0.0
+2.7
+0.0
+0.0
+0.0
+22.0
+0.0
+0.2
+0.0
+3.2
+OpenSight [11] †
+G.DINO [10]
+34.2
+39.0
+53.2
+20.1
+7.4
+20.5
+0.7
+50.1
+37.8
+52.6
+39.1
+60.8
+Class-Agnostic Baseline
+-
+5.4
+23.1
+25.5
+0.0
+0.0
+0.0
+0.0
+3.2
+0.0
+0.2
+0.0
+25.5
+Ours
+TIPS [26]
+36.9 (+2.7)
+40.3 (+1.3)
+71.2
+21.3
+0.0
+31.9
+0.4
+63.1
+19.5
+54.2
+37.6
+70.0
+Pedestrian on the street.
+Traffic cone on side of road.
+Trash bins.
+Round bollard.
+Parking meter.
+Parked mail truck.
+Fig. 6. Qualitative Zero-Shot Results. Our model successfully detects objects when given diverse, fine-grained textual descriptions.
+TABLE IV. Ablation study on our proposed alignment losses. Each loss
+alone significantly improves classification performance, and the joint loss
+provides significantly improved results.
+Visual
+Language
+BEV AP
+Vehicle
+Pedestrian
+Cyclist
+mAP
+✗
+✗
+8.9
+8.0
+1.0
+6.0
+✓
+✗
+63.8
+32.7
+37.9
+44.8
+✗
+✓
+63.0
+34.2
+39.9
+45.7
+✓
+✓
+63.7
+36.0
+42.3
+47.3
+TABLE V. Ablation study on the Visual Alignment strategy. Ground-Truth
+Box denotes using GT instead of DBSCAN boxes for Visual Alignment.
+Strategy
+BEV AP
+Vehicle
+Pedestrian
+Cyclist
+mAP
+Baseline
+8.9
+8.0
+1.0
+6.0
++ Full 2D Box
+53.1
+25.6
+28.4
+35.7
++ Visible Points Filtering
+56.0
+27.9
+33.2
+39.0
++ Occlusion Handling
+63.8
+32.7
+37.9
+44.8
++ Ground-Truth Box
+51.0
+23.0
+22.8
+32.3
+improve detection accuracy to 44.8 mAP. We also show that
+performing distillation in all regions is beneficial for learning
+by comparing with using ground-truth regions only for Visual
+Alignment. The results indicate that limiting to such regions
+hurts performance significantly, resulting in only 32.3 mAP.
+Language Alignment Strategy. We also ablate the different
+design choices of our Language Alignment component in
+Table VI. Specifically, we investigate the impact of using
+different attributes as captions for distillation. Using only
+textual descriptions about each object’s type, or each object’s
+appearance can already achieve strong performance of 45.6
+TABLE VI. Ablation study on the captions used for Language Alignment.
+Ground-Truth Classes denotes using GT class names instead of generated
+captions for Language Alignment.
+Strategy
+BEV AP
+Vehicle
+Pedestrian
+Cyclist
+mAP
+Baseline
+8.9
+8.0
+1.0
+6.0
+Object Type
+62.6
+33.6
+40.6
+45.6
+Object Appearance
+63.5
+35.0
+38.4
+45.5
+All Captions
+63.0
+34.2
+39.9
+45.7
+Ground-Truth Classes
+49.7
+26.6
+27.0
+34.4
+and 45.5 mAP, respectively. Using object types can help better
+classify cyclists, while using object appearance descriptions
+further enhances accuracy on more common vehicles and
+pedestrians. Using all available captions (type, appearance,
+surroundings, action) gives us the benefits of multiple aspects,
+providing a balance that improves overall mAP. We further
+compare with utilizing ground-truth class names as the text
+target for Language Alignment by distilling only in ground-
+truth regions. The results show that the lack of diversity in
+captions hurt the overall performance.
+Visualization. We provide qualitative results in Fig. 6 to
+demonstrate our detector’s ability to detect objects with
+arbitrary text queries. Without any ground-truth annotations
+during training, our detector is able to handle diverse and
+fine-grained textual descriptions during inference.
+V. CONCLUSION
+In this work, we presented a novel 3D open-vocabulary
+framework that learns robust, open-world representations
+by aligning 3D features to both spatially-aware VLMs and
+
+
+generative MLLM captions. We use class-agnostic geometric
+clustering to source proposals directly from the point cloud
+and a dual-stream multi-modal distillation framework to align
+these proposals with the VLM features. Our experiments
+demonstrate state-of-the-art open-vocabulary detection perfor-
+mance on the Waymo Open Dataset and nuScenes, validating
+that our approach can better align 3D geometry with 2D
+large-scale pre-trained models.
+REFERENCES
+[1] H. Wang, C. Shi, S. Shi, M. Lei, S. Wang, D. He, B. Schiele, and
+L. Wang, “Dsvt: Dynamic sparse voxel transformer with rotated sets,”
+in CVPR, 2023.
+[2] L. Fan, Y. Wang, T. Wang, Y. Zhang, and Y. Liu, “Fully sparse 3d
+object detection,” in CVPR, 2023.
+[3] Z. Li, W. Wang, H. Li, E. Xie, C. Sima, T. Lu, Q. Yu, and J. Dai,
+“Bevformer: learning bird’s-eye-view representation from lidar-camera
+via spatiotemporal transformers,” TPAMI, 2024.
+[4] H. Wang, H. Tang, S. Shi, A. Li, Z. Li, B. Schiele, and L. Wang, “Unitr:
+A unified and efficient multi-modal transformer for bird’s-eye-view
+representation,” in ICCV, 2023.
+[5] P. Sun, H. Kretzschmar, X. Dotiwalla, A. Chouard, V. Patnaik, P. Tsui,
+J. Guo, Y. Zhou, Y. Chai, B. Caine, V. Vasudevan, W. Han, J. Ngiam,
+H. Zhao, A. Timofeev, S. Ettinger, M. Krivokon, A. Gao, A. Joshi,
+Y. Zhang, J. Shlens, Z. Chen, and D. Anguelov, “Scalability in
+perception for autonomous driving: Waymo open dataset,” in CVPR,
+2020.
+[6] H. Caesar, V. Bankiti, A. H. Lang, S. Vora, V. E. Liong, Q. Xu,
+A. Krishnan, Y. Pan, G. Baldan, and O. Beijbom, “nuscenes: A
+multimodal dataset for autonomous driving,” in CVPR, 2020.
+[7] A. Radford, J. W. Kim, C. Hallacy, A. Ramesh, G. Goh, S. Agarwal,
+G. Sastry, A. Askell, P. Mishkin, J. Clark, et al., “Learning transferable
+visual models from natural language supervision,” in ICML, 2021.
+[8] S. Peng, K. Genova, C. Jiang, A. Tagliasacchi, M. Pollefeys,
+T. Funkhouser, et al., “Openscene: 3d scene understanding with open
+vocabularies,” in CVPR, 2023.
+[9] X. Zhou, R. Girdhar, A. Joulin, P. Kr¨ahenb¨uhl, and I. Misra, “Detecting
+twenty-thousand classes using image-level supervision,” in ECCV, 2022.
+[10] S. Liu, Z. Zeng, T. Ren, F. Li, H. Zhang, J. Yang, Q. Jiang, C. Li,
+J. Yang, H. Su, et al., “Grounding dino: Marrying dino with grounded
+pre-training for open-set object detection,” in ECCV, 2024.
+[11] H. Zhang, J. Xu, T. Tang, H. Sun, X. Yu, Z. Huang, and K. Yu,
+“Opensight: A simple open-vocabulary framework for lidar-based object
+detection,” in ECCV, 2024.
+[12] D. Etchegaray, Z. Huang, T. Harada, and Y. Luo, “Find n’propagate:
+Open-vocabulary 3d object detection in urban environments,” in ECCV,
+2024.
+[13] M. Ester, H.-P. Kriegel, J. Sander, and X. Xu, “A density-based
+algorithm for discovering clusters in large spatial databases with noise.”
+in KDD, 1996.
+[14] C. R. Qi, L. Yi, H. Su, and L. J. Guibas, “Pointnet++: Deep hierarchical
+feature learning on point sets in a metric space,” in NeurIPS, 2017.
+[15] S. Shi, X. Wang, and H. Li, “Pointrcnn: 3d object proposal generation
+and detection from point cloud,” in CVPR, 2019.
+[16] Y. Zhou and O. Tuzel, “Voxelnet: End-to-end learning for point cloud
+based 3d object detection,” in CVPR, 2018.
+[17] Y. Yan, Y. Mao, and B. Li, “Second: Sparsely embedded convolutional
+detection,” Sensors, vol. 18, no. 10, p. 3337, 2018.
+[18] S. Shi, C. Guo, L. Jiang, Z. Wang, J. Shi, X. Wang, and H. Li, “Pv-rcnn:
+Point-voxel feature set abstraction for 3d object detection,” in CVPR,
+2020.
+[19] T. Yin, X. Zhou, and P. Krahenbuhl, “Center-based 3d object detection
+and tracking,” in CVPR, 2021.
+[20] X. Bai, Z. Hu, X. Zhu, Q. Huang, Y. Chen, H. Fu, and C.-L. Tai,
+“Transfusion: Robust lidar-camera fusion for 3d object detection with
+transformers,” in CVPR, 2022.
+[21] P. Sun, M. Tan, W. Wang, C. Liu, F. Xia, Z. Leng, and D. Anguelov,
+“Swformer: Sparse window transformer for 3d object detection in point
+clouds,” in ECCV, 2022.
+[22] C. Jia, Y. Yang, Y. Xia, Y.-T. Chen, Z. Parekh, H. Pham, Q. Le, Y.-H.
+Sung, Z. L. Li, and T. Duerig, “Scaling up visual and vision-language
+representation learning with noisy text supervision,” in ICML, 2021.
+[23] L. H. Li, M. Yatskar, D. Yin, C.-J. Hsieh, and K.-W. Chang, “Grounded
+language-image pre-training,” in CVPR, 2022.
+[24] Y. Zhong, W. Shen, S. Wang, Y. Liu, J. Guo, Y. Wang, J. Yuan, J. Gao,
+and L. Wang, “Regionclip: Region-based language-image pretraining,”
+in CVPR, 2022.
+[25] Y. Zhou, K. Chen, K.-K. Maninis, G. Gkioxari, A. Araujo, and
+V. Ferrari, “Denseclip: Language-guided dense prediction with context-
+aware prompting,” in CVPR, 2022.
+[26] K. kokitsi Maninis, K. Chen, S. Ghosh, A. Karpur, K. Chen, Y. Xia,
+B. Cao, D. Salz, G. Han, J. Dlabal, D. Gnanapragasam, M. Seyedhos-
+seini, H. Zhou, and A. Araujo, “TIPS: Text-image pretraining with
+spatial awareness,” in ICLR, 2025.
+[27] H. Liu, C. Li, Q. Wu, and Y. J. Lee, “Visual instruction tuning,” in
+NeurIPS, 2023.
+[28] W. Dai, J. Li, D. Li, A. M. H. Tiong, J. Zhao, W. Wang, B. Li,
+S. Savarese, and S. Hoi, “Instructblip: Towards general-purpose vision-
+language models with instruction tuning,” in NeurIPS, 2023.
+[29] G. Comanici, E. Bieber, M. Schaekermann, I. Pasupat, N. Sachdeva,
+I. Dhillon, M. Blistein, O. Ram, D. Zhang, E. Rosen, et al., “Gemini
+2.5: Pushing the frontier with advanced reasoning, multimodality,
+long context, and next generation agentic capabilities,” arXiv preprint
+arXiv:2507.06261, 2025.
+[30] X. Gu, T.-Y. Lin, W. Kuo, and Y. Cui, “Open-vocabulary object
+detection via vision and language knowledge distillation,” arXiv preprint
+arXiv:2104.13921, 2021.
+[31] S. Ren, K. He, R. Girshick, and J. Sun, “Faster r-cnn: Towards real-time
+object detection with region proposal networks,” in NeurIPS, 2015.
+[32] M. Minderer, A. Gritsenko, A. Stone, M. Neumann, D. Weissenborn,
+A. Dosovitskiy, A. Mahendran, A. Arnab, M. Dehghani, Z. Shen, et al.,
+“Simple open-vocabulary object detection,” in ECCV, 2022.
+[33] M. Najibi, J. Ji, Y. Zhou, C. R. Qi, X. Yan, S. Ettinger, and D. Anguelov,
+“Unsupervised 3d perception with 2d vision-language distillation for
+autonomous driving,” in ICCV, 2023.
+[34] A. Chow, E. Riddell, Y. Wang, S. Sedwards, and K. Czarnecki, “Ov-
+scan: Semantically consistent alignment for novel object discovery in
+open-vocabulary 3d object detection,” arXiv preprint arXiv:2503.06435,
+2025.
+[35] R. Zhang, Z. Guo, W. Zhang, K. Li, X. Miao, B. Cui, Y. Qiao, P. Gao,
+and H. Li, “Pointclip: Point cloud understanding by clip,” in CVPR,
+2022.
+[36] X. Zhu, R. Zhang, B. He, Z. Guo, Z. Zeng, Z. Qin, S. Zhang, and
+P. Gao, “Pointclip v2: Prompting clip and gpt for powerful 3d open-
+world learning,” in ICCV, 2023.
+[37] J. Lin, W. Wang, Z. Liu, J. See, and S. Wang, “L3det: A lidar-based
+3d detector with efficient language-lidar joint pre-training,” in ACM
+Multimedia, 2023.
+[38] R. Chen, X. Qian, X. Zhu, L. Zhang, Y. Li, G. Lin, Y. Zhu, S. Li,
+J. Yue, and H. Zhao, “Clip2scene: Towards transmitting scene-level
+knowledge from 2d to 3d,” in ICCV, 2023.
+[39] M. A. Fischler and R. C. Bolles, “Random sample consensus: a
+paradigm for model fitting with applications to image analysis and
+automated cartography,” Commun. ACM, vol. 24, no. 6, p. 381–395,
+June 1981. [Online]. Available: https://doi.org/10.1145/358669.358692
+[40] Y. Cao, Z. Yihan, H. Xu, and D. Xu, “Coda: Collaborative novel box
+discovery and cross-modal alignment for open-vocabulary 3d object
+detection,” in NeurIPS, 2023.
+[41] M. Caron, H. Touvron, I. Misra, H. J´egou, J. Mairal, P. Bojanowski, and
+A. Joulin, “Emerging properties in self-supervised vision transformers,”
+in ICCV, 2021.
+[42] C. Fruhwirth-Reisinger, W. Lin, D. Mali´c, H. Bischof, and H. Possegger,
+“Vision-language guidance for lidar-based unsupervised 3d object
+detection,” arXiv preprint arXiv:2408.03790, 2024.
+[43] D. Deng and A. Zakhor, “Rsf: Optimizing rigid scene flow from 3d
+point clouds without labels,” in WACV, 2023.
+[44] L. Zhang, A. J. Yang, Y. Xiong, S. Casas, B. Yang, M. Ren, and
+R. Urtasun, “Towards unsupervised object detection from lidar point
+clouds,” in CVPR, 2023.
+[45] S. Baur, F. Moosmann, and A. Geiger, “Liso: Lidar-only self-supervised
+3d object detection,” in ECCV, 2024.
+[46] M. Najibi, J. Ji, Y. Zhou, C. R. Qi, X. Yan, S. Ettinger, and D. Anguelov,
+“Motion inspired unsupervised perception and prediction in autonomous
+driving,” in ECCV, 2022.
+[47] G. Ghiasi, X. Gu, Y. Cui, and T.-Y. Lin, “Scaling open-vocabulary
+image segmentation with image-level labels,” in ECCV, 2022.

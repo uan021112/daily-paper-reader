@@ -1,0 +1,836 @@
+1
+Autonomous Track Racing with a Commercially Available Humanoid:
+System Design and Real-World Deployment
+Koki Inami1, Takashi Sato2, Hiroyuki Oka2, Shota Takizawa1, Yuya Takahashi1,
+Amon Suzuki2, Hayato Ono2, Kohtaro Ihara2, Yuki Noka2, and Shohei Matsugu1
+Offline
+lane detector
+1 PC3 (backpack): Jetson AGX Orin
+3 PC2 (built-in): Jetson Orin NX
+Ethernet
+DDS/UDP
+Offline
+running policy
+Real
++
+Synthetic
+CLRerNet
+fine-tuning
+2 D555, 15 Hz
+RGB-D + IMU
+Lane detection
++ 3D tracking
+Path tracking, 100 Hz
+look-ahead 6 m
+(v, ω)
+Speed cap
+min(·)
+Per-event
+schedule
+Thermal limiter
+Policy
+50 Hz
+Unitree G1
+MIT control
+Front
+Rear
+2
+1
+3
+Human runner
+motion capture
+RL training
+in simulation
+clip v
+clip v
+Motor-driver temp.
+Position targets + FF torques
+State
+Fig. 1. Overview of the autonomous running system deployed on a commercially available Unitree G1 for the 100 m, 400 m, and 1500 m events at the World
+Humanoid Robot Games 2026. The outlined boxes show the two onboard computers we programmed. PC3 turns the head-camera images into the command
+(v, ω), and PC2 executes this command with the learned running policy. The shaded bands are offline training, and Section III describes the numbered
+components. The camera images show a single instant of the 1500 m race: the raw image and the image with the tracked lanes reprojected with their IDs.
+Abstract—Learning-based methods now let humanoids run
+robustly, and they have begun to compete in athletic events. Yet
+few reports describe a complete autonomous humanoid running
+system in an actual race, where the robot must follow a lane at a
+new venue, pace itself within hardware limits, and finish without
+intervention. We report such a system deployed on the Unitree
+G1, a commercially available general-purpose humanoid, in the
+100 m, 400 m, and 1500 m events of the World Humanoid Robot
+Games 2026. The system integrates vision-based lane perception,
+path tracking, and a running policy trained by reinforcement
+learning with a human motion prior. To address the challenges of
+humanoid running, we stabilize head-camera images against body
+motion and use IMU-assisted leg odometry to bridge flight phases.
+To manage motor heating, we penalize hip-pitch torque during
+training, add heat-dissipation plates, and apply temperature-
+based speed limiting with event-specific pacing. The robot placed
+13th of 74 in the 100 m, 10th of 44 in the 400 m first round before
+falling in the semifinal, and seventh of 35 in the 1500 m. In this
+deployment, thermal margin set the pace in every event, and the
+semifinal fall followed a lane-detection error.
+Index Terms—Humanoid Robot Systems, Engineering for
+Robotic Systems, Vision-Based Navigation, Reinforcement Learn-
+ing, Humanoid and Bipedal Locomotion
+I. INTRODUCTION
+E
+NTERING a track event demands more of an autonomous
+humanoid than generating a running gait. The robot
+must recognize and follow a lane at a venue absent from its
+real training images, negotiate the curves, select a pace that
+1GMO Internet Group, Inc., Tokyo, Japan
+2GMO Various Robotics Inc., Tokyo, Japan
+its hardware can sustain, and complete the attempt without
+intervention or a second chance. This paper describes one such
+system (Fig. 1) as deployed in an international competition.
+Because the races allowed no restart and a fall could damage
+the robot, we could not run extensive on-robot ablations.
+Instead, we focus on system integration, design decisions, race
+results, and observed failures.
+Lane detection is well established in autonomous driv-
+ing [1], [2], [3], [4], [5], while onboard vision has supported
+terrain traversal and navigation in legged robots [6], [7].
+Learning-based locomotion has advanced from quadrupeds to
+humanoid running [8], [9], [10], [11], [12], [13], [14]. Robot
+competitions have also produced system-level reports [15],
+[16], [17], [18], and a magazine report describes the hard-
+ware of a half-marathon-winning humanoid but not its auton-
+omy [19]. Reports of fully autonomous humanoid track racing
+under real-world perception and thermal constraints remain
+limited.
+Without developing a race-specific body, we entered a
+commercially available Unitree G1 in the 100 m, 400 m, and
+1500 m events at the World Humanoid Robot Games (WHRG)
+2026 in Beijing. The games were held on 22–26 August with
+666 teams across all events. Our G1 placed 13th of 74 entrants
+in the 100 m at 24.3 s, was 10th of 44 in the 400 m first round
+at 1:55.93 before falling in the semifinal, and placed seventh
+of 35 in the 1500 m at 7:43.89.
+This paper makes three practical contributions: (1) inte-
+gration and competition deployment of lane perception, path
+tracking, and learned running control on a commercially
+available humanoid (Sections III to V); (2) image stabilization
+and ground-plane lane tracking against head-camera shake,
+and leg odometry that bridges flight phases (Section IV); and
+This work has been submitted to the IEEE for possible publication. Copyright
+may be transferred without notice, after which this version may no longer be
+accessible.
+arXiv:2611.22445v1  [cs.RO]  17 Nov 2026
+
+
+2
+(3) torque-penalized training and per-event speed caps set by
+thermal margin (Section VI).
+II. COMPETITION SETTING
+The WHRG 2026 running events took place on an athletics
+track laid over an indoor speed-skating oval in Beijing, so
+its curves were tighter than those of standard athletics tracks,
+which constrained the lookahead and turning radius (Sec-
+tions IV and V). We entered the 100 m and 400 m small-class
+races (height up to 1.4 m) and the open 1500 m race (Table I).
+The rules required the robot to run autonomously, with
+no external control after the start, making onboard sensing
+the source of all steering commands (Section IV). The only
+operator input was the start command, issued just after the
+official start, so the official times include this delay.
+III. SYSTEM OVERVIEW
+We used a commercially available 29-DoF Unitree G1;
+Fig. 1 numbers the components we added or programmed.
+An added Jetson AGX Orin (marker 1), which we call PC3,
+processes images from a head-mounted Intel RealSense D555
+(marker 2) and generates the forward-speed and yaw-rate
+command (v, ω) (Section IV); the name PC3 follows the G1’s
+built-in PC1 and PC2. The D555 replaces the stock camera
+for its wider field of view and supplies RGB and depth
+images at 1280×720 and 15 Hz. The command is transmitted
+over Ethernet using ROS 2 [20] to the built-in Jetson Orin
+NX (PC2, marker 3), which executes the running policy and
+thermal speed limiter (Sections V and VI). As (v, ω) is the
+sole interface between perception and locomotion, we tuned
+the running policy with manually issued commands before
+integrating autonomy. We also added heat-dissipation plates to
+the actuators. The modifications increased the manufacturer’s
+stated mass of 35 kg [21] by 1.5 kg.
+IV. LANE PERCEPTION AND PATH TRACKING
+We adapted autonomous-driving techniques to humanoid
+running, where two assumptions failed: moderate camera
+motion (Section IV-A) and continuous ground contact for
+odometry (Section IV-B). Given limited on-site tuning time,
+we selected RGB-based lane detection rather than developing
+a LiDAR-based pipeline. The head-mounted D555 provides
+RGB images for lane detection, Ethernet connectivity to
+avoid vibration-induced USB disconnections, stereo depth for
+ground-plane estimation, and an IMU for image stabilization
+and leveling. To rehearse the venue before arrival, we built a
+replica of its track in MuJoCo [22] from the venue dimensions
+and ran the same ROS 2 stack, from detection to the running
+policy, in closed loop on rendered head-camera images.
+A. Lane perception
+We qualitatively compared GANet [3], BezierLaneNet [23],
+UFLDv2 [24], and CLRerNet [5] on stadium images. CLRer-
+Net produced the most stable lane detections for the ground-
+plane tracking described below and was therefore selected. We
+attribute this to its use of global image context: track lanes are
+spaced more narrowly than road lanes, and keypoint-based
+detectors [3] tended to merge them in their low-resolution
+heatmaps. We initialized its ResNet-34 backbone [25] from
+CULane [1] weights and fine-tuned it on 3000 real and 300
+synthetic frames. The real frames were recorded at 30 outdoor
+stadiums by a person running with an action camera, not by the
+robot. The synthetic indoor-venue frames were rendered from
+the replica and made photorealistic with an image-generation
+model, because a detector trained on real frames alone made
+many errors on them. A further 500 real and 200 synthetic
+frames were reserved for validation. Augmentation varied
+brightness, color, scale, and rotation while preserving the
+annotated lanes’ bottom-to-top direction, which the detector
+assumes. The detector runs in TensorRT FP16 at 17.6 ms per
+frame, supporting 15 Hz operation.
+The first failed assumption was that image motion is mod-
+erate, which running violated in two ways. First, the head
+camera’s roll oscillated around its intended orientation by 2.0–
+3.3◦root mean square (RMS) during the races, causing the
+apparent lane orientations to fluctuate. Second, a downward-
+tilted camera shifted the vanishing point upward relative to its
+position in the training images. To compensate for both, we
+stabilize and level each frame before lane detection. Following
+gyroscope-based video stabilization [26], we estimate the in-
+tended orientation using a Madgwick filter [27] and a low-pass
+filter with a 0.5 s time constant. A pure-rotation homography
+then removes the deviation from this intended orientation.
+We apply the same smoothing to the camera pose used for
+ground-plane projection, preventing lane oscillations caused by
+small phase mismatches between the stabilized image and the
+estimated pose. Training and testing without leveling visibly
+degraded detection, although we did not quantify this effect.
+Stabilization and roll leveling were used in all races, while
+camera-pitch correction for the second issue was introduced
+before the 100 m race (Section VII).
+Tracking lanes directly in the image proved unreliable
+because lane detections were occasionally missed or occluded
+by other robots. In the image, camera motion shifts each lane
+from frame to frame, so earlier detections cannot directly fill
+these gaps. We therefore project detections onto the ground
+plane and accumulate them in the odometry frame (Sec-
+tion IV-B), where lanes stay nearly fixed because robot motion
+is compensated, so detections from successive frames can be
+combined. The ground plane is estimated robustly from depth
+pixels with upward-facing surface normals. When insufficient
+valid depth data are available, such as in overexposed regions,
+we instead estimate the plane using the camera IMU and
+known camera height. The accumulation uses a 0.20 m voxel
+grid. Voxel weights decay over time without new observations.
+For each lane line, the accumulated points are then fitted with
+a cubic polynomial extending up to 18 m ahead. Across the
+three logged races, the detector identified at least four lane
+lines in every frame, so no frame lacked detections entirely;
+the accumulation only filled in lane lines that were missed or
+occluded.
+
+
+3
+B. Path tracking
+The second failed assumption was that ground contact is
+continuous for odometry. The velocity estimate provided with
+the G1 reverses sign during part of every step, so its integrated
+position advances at only about 1 m/s on average during
+running. We infer that its lagging contact detection keeps
+trusting the foot that has just lifted off. Our own leg-kinematic
+odometry therefore assumes a non-slipping stance foot [28],
+[29], detects stance from foot height, and bridges flight phases
+with the IMU. Over a 400 m lap of a practice track, the
+odometry measured 377 m (a ratio of 0.94), which we judged
+accurate enough for tracking the path relative to the detected
+lanes. At the venue, an overall ratio that also includes path-
+tracking offset and heading drift was about 0.90 (Appendix).
+Shortly after the start, the nearest tracked lane line to
+the right of the camera is selected, and the path is that
+line shifted toward the lane center. Vector pursuit [30], an
+extension of pure pursuit [31], tracks the path at 100 Hz with a
+6.0 m lookahead and a 16.5 m minimum turning radius. These
+settings kept the yaw-rate command within the ±0.4 rad/s
+command range of the controller, without requiring the robot
+to slow in curves.
+C. Venue adaptation
+The venue appeared in the training set only as synthetic
+frames rendered from a replica built to its dimensions. The
+venue was darker than the outdoor stadiums in the training
+set, and reflections from the ceiling lights made the brightness
+uneven along the track. We therefore recorded footage at the
+venue, fixed the camera exposure and gain manually, and
+confirmed on the footage that the detector found the lanes
+correctly before using it in the races. We did not retrain the
+detector on site, to avoid regressions.
+V. RUNNING CONTROL
+The running policy maps commanded speed and yaw rate
+to joint position targets and feedforward torques.
+A. Training
+We trained the running policy in Isaac Lab [32], building
+on Unitree’s open-source training code [33], in three stages:
+PPO [34], PPO with an adversarial motion prior (AMP) [35],
+[36], and final PPO fine-tuning. In simulation, the hip-pitch
+torque saturated when policies were trained without AMP.
+The AMP stage, which uses reference motions captured from
+human runners and retargeted as in [37], [38], [39] (Appendix),
+reduced this saturation. The reward included speed tracking
+and a penalty on squared hip-pitch torque as a proxy for
+resistive heating [40]. We targeted the hip pitch because it
+was the hottest joint in practice runs, as it also was in
+the 100 m race. Temperature was excluded from observations
+and rewards because actuator thermal behavior is difficult to
+simulate. The policy runs at 50 Hz using five steps of pro-
+prioceptive, command, and action history. It outputs position
+targets for 29 joints and feedforward torques for the hip-pitch
+and knee joints. PC2 interpolates the position targets to 1 kHz
+for MIT control [41]. We trained two policies, endurance
+and sprint, with forward-speed commands from 0 up to the
+curriculum levels reached by the deployed checkpoints, 5.46
+and 6.20 m/s, respectively (Table I); the endurance policy’s
+curve commands used ω = v/R for a sampled turning radius
+R, whereas the 100 m sprint policy, run on a straight, used
+none in its final training stage. Additional training settings are
+provided in the Appendix.
+B. Hardware-aware policy design
+• Low stiffness with feedforward torque on the propulsive
+joints. Prior work reports that the gains and action space
+shape what a policy learns [42], [43], [44]. These studies
+examine the effects of action spaces and controller gains,
+but do not evaluate the combination of position targets
+and feedforward torque used here. With position targets
+alone, the PD stiffness must generate the propulsive
+torque as well as track the targets, so we expected feedfor-
+ward torque to drive these joints more efficiently. Across
+the two policies, the hip-pitch and knee stiffness values
+were 10.0–10.7 and 15.0–15.3 N · m/rad, respectively,
+compared with 100 N · m/rad at hip roll and yaw.
+• Thermal degradation in simulation. To account for a
+possible reduction of the torque constant with heating,
+we added to the dynamics randomization [45] a per-joint
+first-order thermal model that lowers the torque constant
+within an episode (Appendix). The policy cannot observe
+this loss directly and must continue running despite it;
+this randomization targets robustness, not heat reduction.
+VI. THERMAL MANAGEMENT AND PACING
+A. Heat as the key speed constraint
+Sustained speed was limited primarily by motor heating.
+Before mitigation, the firmware’s over-temperature protection
+stopped the motors after approximately 50 m of running, caus-
+ing a fall. We therefore treated thermal margin as a primary
+constraint on race pacing. A half-marathon humanoid faced
+a similar limitation but addressed it through running-specific
+gearing and liquid cooling [19].
+B. Three mitigations
+• Policy-level. The reward penalizes torque as a proxy for
+heat (Section V-A).
+• Runtime limiter. We monitor the maximum motor-driver
+MOSFET temperature across all joints (the motor-driver
+temperature). Above 120 ◦C, the thermal cap decreases
+toward 2.0 m/s over 4 s; at 127 ◦C, which is below the
+observed 130 ◦C firmware cutoff, the robot is commanded
+to stop. A race-director node on PC2 sends the speed cap,
+the lower of the thermal and event-specific caps, to PC3,
+where path tracking uses it as the target forward speed
+v and recomputes ω = v/R to keep the path curvature;
+PC2 also clips the policy’s forward-speed command.
+• Hardware. Heat-dissipation plates on the hip-pitch, knee,
+and ankle actuators conduct motor heat to the housing
+(Section III).
+
+
+4
+TABLE I
+PER-EVENT SETTINGS AND RESULTS.
+100 m
+400 m
+1500 m
+Class
+small
+small
+open
+Entrants
+74
+44
+35
+Event-specific cap (m/s)
+5.6
+4.0 →5.0
+4.0
+Policy
+sprint
+endurance
+endurance
+Mean leg-odometry speed∗(m/s)
+4.26
+3.19 →3.78
+2.98
+Peak motor-driver temp. (◦C)†
+123
+106
+119
+Thermal limiter engaged
+yes
+no
+no
+Race time (s or min:s)
+24.3
+(first round)
+1:55.93
+(first round)
+7:43.89
+Final place
+13th
+DNF
+(semifinal)
+7th
+∗Low-passed at 0.5 Hz and averaged over 5–22.1 s after the start command
+(100 m, until the limiter engaged), 10–90 and 90–115.93 s (400 m, before
+and after the cap was raised), and 10–460 s (1500 m); not ground truth, as the
+scale error (Section IV) is not corrected. †Over the intervals plotted in Fig. 2.
+0.0
+2.0
+4.0
+6.0
+speed cap
+[m/s]
+100 m
+limiter
+400 m cap raised
+4
+5
+6
+0
+100
+200
+300
+400
+time from start command [s]
+50
+100
+120
+130
+motor-driver
+temperature [°C]
+firmware stop, observed (130 °C)
+limiter trigger (120 °C)
+0
+10
+20
+30
+60
+90
+120
+100 m
+400 m
+1500 m
+Fig. 2. Speed cap (top; the lower of the event-specific and thermal caps) and
+motor-driver temperature (bottom; the input of the thermal limiter, Section VI)
+in the three races, from the race logs. Time is from the start command, which
+the operator issued just after the official start, and each trace spans the official
+race time. Dotted vertical lines mark the limiter engaging in the 100 m and
+the 400 m cap rising. Insets enlarge the 100 m over 0–30 s.
+C. Per-event operating points
+Because heat accumulates over a race, we deliberately
+operated the same robot at different points on the speed-
+versus-completion-margin curve: the 100 m spent its thermal
+margin on speed, the 400 m raised the event-specific cap only
+for the last straight, and the 1500 m held one constant cap.
+Apart from the camera-pitch correction added before the 100 m
+(Section VII), two settings changed between events (Table I):
+the policy and the event-specific cap, which was scheduled by
+distance, time, and detected curve state.
+VII. RESULTS AT WHRG 2026
+The robot finished every race it started except the 400 m
+semifinal, in which it fell (Table I); the motor-driver tempera-
+ture remained a limiting factor (Fig. 2). The 400 m and 1500 m
+races were held on 23 August and the 100 m on 25 August.
+A. 400 m
+The robot qualified in 10th place in the first round and did
+not finish the semifinal. In the first round, 90.4 s after the start
+command, the event-specific cap rose from 4.0 to 5.0 m/s for
+the final sprint on the last straight. At system start-up before
+the semifinal, lane detection appeared abnormal, and there was
+no time to correct it during setup; in the race, the robot moved
+diagonally to the right across its lane and fell approximately
+5 s after the start. No log was recorded for this run because
+of a technical problem, so the cause could not be identified.
+The semifinal was run in lane 1, where detection and running
+had worked in practice; one unverified hypothesis is that the
+camera mount was bent in a fall during morning practice,
+tilting the camera downward and shifting the vanishing point
+relative to the training images. For the 100 m race, held on a
+later day, we warped each image by the camera pitch estimated
+from the camera IMU, keeping the vanishing point near the
+center.
+B. 1500 m
+The motor-driver temperature rose from 53 ◦C at the start
+command and peaked 460.6 s later, near the end of the plotted
+interval, at 119 ◦C: 1 ◦C below the limiter trigger and 11 ◦C
+below the observed 130 ◦C firmware cutoff. From 10 to 460 s
+after the start command, the logged speed command stayed at
+4.0 m/s, whereas the leg-odometry speed averaged 2.98 m/s,
+1.02 m/s lower. The official time gives a mean speed of
+3.23 m/s over the race distance, including the start, so the
+robot ran below the command; the lower odometry speed
+is consistent with the odometry scale error at the venue
+(Section IV-B). Seven of the 35 entrants finished the race.
+C. 100 m
+The robot did not advance beyond the first round. Its
+high-speed setting reached the limiter trigger. The motor-
+driver temperature rose from 52 ◦C at the start command and
+crossed the 120 ◦C limiter trigger 22.1 s after the command;
+the limiter began lowering the speed cap from 5.6 m/s, and
+the temperature peaked at 123 ◦C, 4 ◦C below the 127 ◦C stop
+command. Because the logs are not aligned with the official
+timing, the time lost to the slowdown is unknown.
+VIII. CONCLUSION
+At WHRG 2026, a commercially available Unitree G1
+completed three of four autonomous races; it fell in the 400 m
+semifinal after a lane-detection error whose cause could not
+be identified. This experience provides four practical lessons
+for real-world deployment. First, perception must withstand
+body motion and occlusion: head-camera roll of 2.0–3.3◦
+RMS motivated image stabilization and ground-plane lane
+tracking, and lanes were detected in every logged race frame
+(Section IV). Second, state estimation must bridge the flight
+phases of running, which leg odometry with IMU bridging pro-
+vided (Section IV). Third, adapting perception to a new venue
+need not require retraining on site: in the three logged races,
+fixing camera exposure and gain sufficed for a detector already
+trained on synthetic frames of the venue (Section IV). Finally,
+reliable running benefits from hardware-aware policy training
+and thermal management (Sections V and VI). Together, these
+findings identify perception robustness, state estimation, venue
+adaptation, and thermal management as key barriers to reliable
+humanoid running in real-world environments.
+
+
+5
+ACKNOWLEDGMENT
+We thank the team members who built, tuned, and operated
+the robot during the competition, the runners whose motion
+was captured for the reference gait, and the organizers and
+venue staff of WHRG 2026.
+We used Claude Code (Anthropic) to assist with the
+implementation of training, motion-retargeting, and onboard
+software, the analysis of competition logs, and manuscript
+preparation, including text and figures. We also used Gemini
+(gemini-3.1-flash-image, Google) to make synthetic
+lane-detector training images photorealistic, as described in
+Section IV and the Appendix. We reviewed all AI-assisted
+content.
+REFERENCES
+[1] X. Pan, J. Shi, P. Luo, X. Wang, and X. Tang, “Spatial as deep: Spatial
+CNN for traffic scene understanding,” in Proc. AAAI Conf. Artif. Intell.,
+vol. 32, no. 1, 2018, pp. 7276–7283.
+[2] Z. Qin, H. Wang, and X. Li, “Ultra fast structure-aware deep lane
+detection,” in Proc. Eur. Conf. Comput. Vis. (ECCV), 2020, pp. 276–
+291.
+[3] J. Wang et al., “A keypoint-based global association network for lane
+detection,” in Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit.
+(CVPR), 2022, pp. 1382–1391.
+[4] T. Zheng et al., “CLRNet: Cross layer refinement network for lane
+detection,” in Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit.
+(CVPR), 2022, pp. 888–897.
+[5] H. Honda and Y. Uchida, “CLRerNet: Improving confidence of lane de-
+tection with LaneIoU,” in Proc. IEEE/CVF Winter Conf. Appl. Comput.
+Vis. (WACV), 2024, pp. 1165–1174.
+[6] A. Agarwal, A. Kumar, J. Malik, and D. Pathak, “Legged locomotion
+in challenging terrains using egocentric vision,” in Proc. Conf. Robot
+Learn. (CoRL), ser. PMLR, vol. 205, 2023, pp. 403–415.
+[7] Z. Fu, A. Kumar, A. Agarwal, H. Qi, J. Malik, and D. Pathak, “Coupling
+vision and proprioception for navigation of legged robots,” in Proc.
+IEEE/CVF Conf. Comput. Vis. Pattern Recognit. (CVPR), 2022, pp.
+17 252–17 262.
+[8] J. Hwangbo et al., “Learning agile and dynamic motor skills for legged
+robots,” Sci. Robot., vol. 4, no. 26, p. eaau5872, Jan. 2019.
+[9] N. Rudin, D. Hoeller, P. Reist, and M. Hutter, “Learning to walk in
+minutes using massively parallel deep reinforcement learning,” in Proc.
+Conf. Robot Learn. (CoRL), ser. PMLR, vol. 164, 2022, pp. 91–100.
+[10] I. Radosavovic, T. Xiao, B. Zhang, T. Darrell, J. Malik, and K. Sreenath,
+“Real-world humanoid locomotion with reinforcement learning,” Sci.
+Robot., vol. 9, no. 89, p. eadi9579, Apr. 2024.
+[11] T. He et al., “ASAP: Aligning simulation and real-world physics for
+learning agile humanoid whole-body skills,” in Proc. Robot.: Sci. Syst.
+(RSS), 2025.
+[12] J. Siekmann, Y. Godse, A. Fern, and J. Hurst, “Sim-to-real learning of
+all common bipedal gaits via periodic reward composition,” in Proc.
+IEEE Int. Conf. Robot. Autom. (ICRA), 2021, pp. 7309–7315.
+[13] Z. Li, X. B. Peng, P. Abbeel, S. Levine, G. Berseth, and K. Sreenath,
+“Reinforcement learning for versatile, dynamic, and robust bipedal
+locomotion control,” Int. J. Robot. Res., vol. 44, no. 5, pp. 840–888,
+Apr. 2025.
+[14] Y. Wei et al., “SPRINT: Efficient spectral priors for humanoid athletic
+sprints,” 2026, arXiv:2605.28549.
+[15] E. Krotkov et al., “The DARPA Robotics Challenge finals: Results and
+perspectives,” J. Field Robot., vol. 34, no. 2, pp. 229–240, Mar. 2017.
+[16] C. G. Atkeson et al., “What happened at the DARPA Robotics Challenge
+finals,” in The DARPA Robotics Challenge Finals: Humanoid Robots
+To The Rescue, ser. Springer Tracts in Advanced Robotics, M. Spenko,
+S. Buerger, and K. Iagnemma, Eds. Cham, Switzerland: Springer, 2018,
+vol. 121, pp. 667–684.
+[17] M. Tranzatto et al., “CERBERUS: Autonomous legged and aerial robotic
+exploration in the tunnel and urban circuits of the DARPA Subterranean
+Challenge,” Field Robot., vol. 2, no. 1, pp. 274–324, Mar. 2022.
+[18] Q. Wang et al., “A hierarchical, model-based system for high-
+performance humanoid soccer,” 2025, arXiv:2512.09431.
+[19] A. De, “The secret to marathon-winning humanoid robots,” IEEE
+Spectrum, Jun. 17, 2026, Accessed: Jun. 26, 2026. [Online]. Available:
+https://spectrum.ieee.org/china-humanoid-robot-marathon
+[20] S. Macenski, T. Foote, B. Gerkey, C. Lalancette, and W. Woodall, “Robot
+Operating System 2: Design, architecture, and uses in the wild,” Sci.
+Robot., vol. 7, no. 66, p. eabm6074, May 2022.
+[21] Unitree Robotics, “Unitree G1 humanoid robot,” Accessed: Sep. 18,
+2026. [Online]. Available: https://www.unitree.com/g1/
+[22] E. Todorov, T. Erez, and Y. Tassa, “MuJoCo: A physics engine for
+model-based control,” in Proc. IEEE/RSJ Int. Conf. Intell. Robots Syst.
+(IROS), 2012, pp. 5026–5033.
+[23] Z. Feng, S. Guo, X. Tan, K. Xu, M. Wang, and L. Ma, “Rethinking
+efficient lane detection via curve modeling,” in Proc. IEEE/CVF Conf.
+Comput. Vis. Pattern Recognit. (CVPR), 2022, pp. 17 041–17 049.
+[24] Z. Qin, P. Zhang, and X. Li, “Ultra fast deep lane detection with hybrid
+anchor driven ordinal classification,” IEEE Trans. Pattern Anal. Mach.
+Intell., vol. 46, no. 5, pp. 2555–2568, May 2024.
+[25] K. He, X. Zhang, S. Ren, and J. Sun, “Deep residual learning for
+image recognition,” in Proc. IEEE Conf. Comput. Vis. Pattern Recognit.
+(CVPR), 2016, pp. 770–778.
+[26] A. Karpenko, D. Jacobs, J. Baek, and M. Levoy, “Digital video stabi-
+lization and rolling shutter correction using gyroscopes,” Stanford Univ.,
+Comput. Sci. Tech. Rep. CSTR 2011-03, 2011.
+[27] S. O. H. Madgwick, A. J. L. Harrison, and R. Vaidyanathan, “Estimation
+of IMU and MARG orientation using a gradient descent algorithm,” in
+Proc. IEEE Int. Conf. Rehabil. Robot. (ICORR), 2011, pp. 1–7.
+[28] M. Bloesch et al., “State estimation for legged robots: Consistent fusion
+of leg kinematics and IMU,” in Proc. Robot.: Sci. Syst. (RSS), 2012.
+[29] R. Hartley, M. Ghaffari Jadidi, J. Grizzle, and R. M. Eustice, “Contact-
+aided invariant extended Kalman filtering for legged robot state estima-
+tion,” in Proc. Robot.: Sci. Syst. (RSS), 2018.
+[30] J. Wit, C. D. Crane, and D. Armstrong, “Autonomous ground vehicle
+path tracking,” J. Robot. Syst., vol. 21, no. 8, pp. 439–449, Aug. 2004.
+[31] R. C. Coulter, “Implementation of the pure pursuit path tracking al-
+gorithm,” Robotics Inst., Carnegie Mellon Univ., Pittsburgh, PA, USA,
+Tech. Rep. CMU-RI-TR-92-01, Jan. 1992.
+[32] M. Mittal et al., “Isaac Lab: A GPU-accelerated simulation framework
+for multi-modal robot learning,” 2025, arXiv:2511.04831.
+[33] Unitree Robotics, “Unitree RL Lab,” GitHub, 2025, Accessed: Jun. 12,
+2026. [Online]. Available: https://github.com/unitreerobotics/unitree rl
+lab
+[34] J. Schulman, F. Wolski, P. Dhariwal, A. Radford, and O. Klimov,
+“Proximal policy optimization algorithms,” 2017, arXiv:1707.06347.
+[35] X. B. Peng, Z. Ma, P. Abbeel, S. Levine, and A. Kanazawa, “AMP:
+Adversarial motion priors for stylized physics-based character control,”
+ACM Trans. Graph., vol. 40, no. 4, pp. 144:1–144:20, Aug. 2021.
+[36] A. Escontrela et al., “Adversarial motion priors make good substitutes
+for complex reward functions,” in Proc. IEEE/RSJ Int. Conf. Intell.
+Robots Syst. (IROS), 2022, pp. 25–32.
+[37] X. B. Peng, P. Abbeel, S. Levine, and M. van de Panne, “DeepMimic:
+Example-guided deep reinforcement learning of physics-based character
+skills,” ACM Trans. Graph., vol. 37, no. 4, pp. 143:1–143:14, Aug. 2018.
+[38] X. B. Peng, E. Coumans, T. Zhang, T.-W. Lee, J. Tan, and S. Levine,
+“Learning agile robotic locomotion skills by imitating animals,” in Proc.
+Robot.: Sci. Syst. (RSS), 2020.
+[39] X. Cheng, Y. Ji, J. Chen, R. Yang, G. Yang, and X. Wang, “Expressive
+whole-body control for humanoid robots,” in Proc. Robot.: Sci. Syst.
+(RSS), 2024.
+[40] S. Seok et al., “Design principles for energy-efficient legged locomotion
+and implementation on the MIT Cheetah robot,” IEEE/ASME Trans.
+Mechatronics, vol. 20, no. 3, pp. 1117–1129, Jun. 2015.
+[41] P. M. Wensing, A. Wang, S. Seok, D. Otten, J. Lang, and S. Kim,
+“Proprioceptive actuator design in the MIT Cheetah: Impact mitigation
+and high-bandwidth physical interaction for dynamic legged robots,”
+IEEE Trans. Robot., vol. 33, no. 3, pp. 509–522, Jun. 2017.
+[42] X. B. Peng and M. van de Panne, “Learning locomotion skills using
+DeepRL: Does the choice of action space matter?” in Proc. ACM
+SIGGRAPH/Eurographics Symp. Comput. Animation (SCA), 2017, pp.
+12:1–12:13.
+[43] S. Chen, B. Zhang, M. W. Mueller, A. Rai, and K. Sreenath, “Learning
+torque control for quadrupedal locomotion,” in Proc. IEEE-RAS Int.
+Conf. Humanoid Robots (Humanoids), 2023, pp. 1–8.
+[44] A. Bronars, Y. Park, and P. Agrawal, “Tune to learn: How controller
+gains shape robot policy learning,” in Proc. Robot.: Sci. Syst. (RSS),
+2026.
+[45] X. B. Peng, M. Andrychowicz, W. Zaremba, and P. Abbeel, “Sim-to-
+real transfer of robotic control with dynamics randomization,” in Proc.
+IEEE Int. Conf. Robot. Autom. (ICRA), 2018, pp. 3803–3810.
+
+
+6
+Appendix: Supplementary Technical Details
+This appendix gives technical details that supplement the
+paper.
+LEG ODOMETRY IMPLEMENTATION AND ACCURACY
+Our odometry detects stance when a foot is within 2 cm of
+its lowest height over the preceding 0.8 s. During stance, foot-
+kinematic velocity and IMU-based prediction are combined
+with weights of 0.8 and 0.2, respectively; during flight, the
+estimate relies on the IMU alone. On a standard 400 m practice
+track, the odometry measured 377 m per lap, corresponding
+to a distance scale of 0.94. At the competition venue, we
+further assessed its consistency using the recorded trajectories.
+Because heading drift rotated the estimated oval between
+laps, we segmented laps by accumulated heading change and
+fitted circles to individual curve passes. In the 1500 m race,
+three complete laps measured 352.3, 345.1, and 349.3 m, with
+a standard deviation of 1.0 %. The estimated curve radius
+averaged 24.20 m across seven passes. The corresponding
+lane-center dimensions were 387.3 m per lap and 26.49 m in
+radius, giving an overall scale ratio of approximately 0.90.
+This ratio includes not only odometry error but also path-
+tracking offset, heading drift, and circle-fitting approximation.
+LANE DETECTOR TRAINING AND TRACKING
+CLRerNet uses a ResNet-34 backbone initialized from
+CULane weights, with an input resolution of 960 × 960.
+The training and validation sets contained 3000 and 500
+real stadium frames, respectively, and 300 and 200 synthetic
+frames. The synthetic frames reproduced indoor-venue features
+absent from the outdoor training images, including ceiling
+lights, advertising boards, and spectators. They were ren-
+dered using a replica of the competition track and made
+photorealistic with Gemini (gemini-3.1-flash-image,
+Google). We did not quantify the contribution of synthetic
+images to detection performance at the venue. For ground-
+plane lane tracking, voxel weights decay by a factor of 0.95
+per processed frame, and each lane line is fitted once at least
+eight voxels are available. Voxels are keyed by their position
+in the odometry frame and are not moved afterward; voxels
+more than 5 m behind the camera, 18 m ahead of it, or 8 m
+to either side are discarded. If the camera position jumps by
+2 m or more between frames, which we treat as an odometry
+reset, all accumulated voxels are discarded. Lane IDs are fixed
+approximately 2 s after the start. When no lanes are detected,
+the last estimated path is retained.
+RUNNING POLICY TRAINING
+Reference motion
+For the AMP stage (Section V-A), we captured seven 50 m
+sprints by two human runners at 240 Hz using an IMU-based
+motion-capture suit. Following the motion-imitation methods
+cited in Section V-A, joint angles were retargeted relative to
+a reference posture, and root motion was scaled by the leg-
+length ratio (0.85–0.91) to avoid crouching.
+TABLE S1
+FINAL-STAGE PPO SETTINGS
+Simulator / RL library
+Isaac Lab / RSL-RL
+Physics step / policy rate
+5 ms / 50 Hz
+Episode length
+40 s
+Actor and critic
+512–256–128, ELU
+Parallel environments
+4096 (each policy)
+Learning rate
+3 × 10−4, adaptive (KL target 0.01)
+Discount factor γ / GAE λ
+0.99 / 0.95
+PPO clipping ratio
+0.2
+Epochs / mini-batches per update
+5 / 4
+Rollout steps per environment per update
+24
+Entropy-bonus coefficient
+0.01
+TABLE S2
+FINAL-STAGE SETTINGS THAT DIFFER BETWEEN THE POLICIES
+Sprint
+Endurance
+Forward-speed
+command,
+curriculum level
+reached
+6.20 m/s
+5.46 m/s
+Curve commands
+None
+A quarter of commands;
+radius 18–80 m, either
+direction
+Curve-speed
+command,
+curriculum level
+reached
+–
+3.90 m/s
+Squared hip-pitch
+torque weight
+−1 × 10−4, reduced
+linearly to 0.3 times
+between 5.0 and
+6.5 m/s
+−5 × 10−4, raised
+linearly from 1× at
+2.5 m/s to 6× at 0 m/s
+Squared knee /
+hip-yaw / ankle
+torque weights
+−1 × 10−4 /
+−1 × 10−4 /
+−2 × 10−4
+−4 × 10−4 /
+−2 × 10−4 /
+−2 × 10−4
+Hip-pitch / knee
+stiffness (N · m/rad)
+10.7 / 15.0
+10.0 / 15.3
+Hip-pitch / knee
+damping
+(N · m · s/rad)
+2.69 / 5.49
+3.0 / 5.56
+TABLE S3
+DYNAMICS RANDOMIZATION AND THERMAL MODEL
+Friction
+0.6–1.1
+Mass, joint friction, armature
+×0.8–1.2
+Torque constant
+×0.9–1.1 at each reset
+Heating / cooling time constant
+5 / 120 s
+Torque-constant drop at full heating
+28 % × per-joint factor 0.6–1.4
+(16.8–39.2 %)
+Heating susceptibility
+×0.6–1.4 per joint
+Training settings
+The following settings apply to the final PPO stage (Ta-
+ble S1). The sprint and endurance policies differed in their
+motion-prior stages and in the final-stage settings of Ta-
+ble S2. Curricula raised the forward-speed and curve-speed
+commands; Table S2 lists the levels reached by the deployed
+checkpoints.
+
+
+7
+Rewards and commands
+In the final stage, only the sprint policy, used on the straight
+100 m, received no curve commands (Table S2). The reward
+penalized squared hip-pitch torque as a proxy for heating,
+without using temperature. Squared knee, hip-yaw, and ankle
+torques were also penalized, so that the load did not simply
+shift from the hip pitch to other joints. Table S2 gives these
+torque weights for each policy. An energy penalty based on
+P
+j | ˙qj||τj| across all 29 joints varied from −2 × 10−5 for
+walking to −5 × 10−6 for running, through a sigmoid of
+the commanded speed that switches between 1 and 5 m/s
+(midpoint 3 m/s, slope 2 s/m). The L1 feedforward-torque
+penalty had a weight of −1 × 10−4.
+Dynamics randomization
+Table S3 lists the randomized parameters and the con-
+stants of the thermal model. The thermal model described in
+Section V reduced the torque constant according to a first-
+order model driven by the squared ratio of joint torque to its
+limit. The per-joint factors in Table S3 were drawn uniformly.
+The model scaled each joint’s total output torque. The 28 %
+reduction and both time constants were assumed rather than
+measured. Episodes terminated when the base height fell
+below 0.2 m or the tilt exceeded 0.8 rad.
+SPEED LIMITS AT DEPLOYMENT
+The thermal cap (Section VI) recovers over 3 s once the
+motor-driver temperature falls back to 90 ◦C, which never
+occurred during a race. Path tracking changes the target for-
+ward speed v at no more than 2.0 m/s2 upward and 1.0 m/s2
+downward.

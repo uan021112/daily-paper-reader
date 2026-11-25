@@ -1,0 +1,1091 @@
+EmboEagle: An Efficient Agentic Embodied
+Framework for Long-horizon Robotic Manipulation
+Fan Xu1∗, Zhongtao Wang2∗, Hao Wu3, Yitong Zhu4, Wenzhuo Ma1, Long Li5, Zhuohao Li1,
+Zhisheng Chen6, Rui Su1, Kun Wang6, Xian Wu7†, Wanli Ouyang1,8†
+1Shenzhen Loop Area Institute, 2Sichuan University, 3Tsinghua University,
+4The Hong Kong University of Science and Technology (Guangzhou),
+5Griffith University, 6Nanyang Technological University,
+7Tencent, 8The Chinese University of Hong Kong
+∗Equal contribution
+†Corresponding Author
+Long-horizon robotic manipulation demands reliable execution across interdependent stages, yet
+standalone World-Action Models (WAMs) suffer from compounding physical errors, while stateless
+Vision-Language Model (VLM) supervision incurs prohibitive chunkwise latency and lacks 3D spatial
+persistence. We present EmboEagle, a closed-loop agentic framework that unifies subtask-conditioned
+WAM control, latent-space adaptive supervision, and memory-guided geometric recovery. First, we
+adapt sequential WAMs via decoupled two-stage flow matching that preserves cross-stage visual
+history while calibrating truncated action supervision at subtask boundaries. Second, without an
+auxiliary vision encoder, we distill teacher intervention decisions into a lightweight routing gate driven
+solely by the WAM Action Expert’s pre- and post-chunk latent transitions and subtask embeddings.
+Third, upon invocation, the VLM decouples diagnostic status from discrete routing actions and
+executes parameterized recovery primitives grounded in structured memory (initial references, active
+grasp bindings, and tool traces), followed by mandatory post-repair verification. Across RMBench
+and LIBERO-Mem, EmboEagle achieves 91.3% and 90.6% average success, surpassing the strongest
+baselines by 8.0 and 9.8 percentage points, while boosting real-world success over VoLoAgent under
+identical executor weights. Moreover, adaptive gating cuts VLM calls by 74.2% versus chunkwise
+monitoring (91.3% vs. 93.7% success).
+Date: Nov 18, 2026
+Author emails: markxu@mail.ustc.edu.cn
+§ Project: https://github.com/Markus-xu/EmboEagle
+1
+Introduction
+Long-horizon robotic manipulation requires a robot to preserve task intent across changing object configurations
+and grasp states, deciding when a subtask completes, retaining spatial cues needed by subsequent stages, and
+correcting physical errors before they compound. World-Action Models (WAMs) establish a strong foundation
+for this execution layer by coupling visual dynamics prediction with continuous action generation. Recent
+advances extend this paradigm through history-conditioned control in Long-WAM (Huang et al., 2026) and
+episodic visual guidance in MaP-WAM (Zhao et al., 2026a). Nevertheless, turning a capable visuomotor
+executor into a reliable long-horizon agent raises a complementary control question: how should a system
+allocate high-level supervision and translate its decisions into physical corrections during an ongoing task?
+VLM-based orchestration bridges learned policies with explicit planning, monitoring, and manipulation
+tools (Chen et al., 2026a; Gu et al., 2026b), yet the timing of this supervision imposes a sharp efficiency–
+responsiveness trade-off. As contrasted in Figure 1(a–b), open-loop execution lacks error recovery, whereas
+querying a VLM after every action chunk repeatedly returns routine continuation commands and incurs
+unnecessary overhead; conversely, lengthening a fixed checking interval delays the detection of subtask
+completions, auxiliary tool opportunities, and failed grasps. While progress-based and event-driven triggers
+mitigate parts of this cost (Gu et al., 2026b), existing triggers often rely on heuristic rules or auxiliary
+1
+arXiv:2611.31173v1  [cs.RO]  23 Nov 2026
+
+
+visual processing. We instead investigate whether a lightweight predictor can use the executor’s internal
+representations to anticipate a teacher’s intervention decisions, including stage advancement, proactive
+assistance, and failure recovery.
+Figure 1 Motivation of EmboEagle. (a) Open-loop WAM execution suffers from
+unrecoverable errors. (b) Fixed-interval VLM supervision incurs redundant
+overhead on routine chunks. (c) EmboEagle uses a lightweight gate to trigger
+VLM orchestration and geometric recovery only when needed.
+Beyond knowing when to inter-
+vene, effective recovery requires
+a persistent physical reference for
+what to restore. Returning a dis-
+placed object to an earlier loca-
+tion requires retaining that loca-
+tion after the object has moved,
+and placing a held object requires
+accounting for the spatial offset
+between its geometric anchor and
+the gripper. Because the live ob-
+servation, the initial scene refer-
+ence, and the active grasp record
+each supply distinct geometric ev-
+idence, structured memory is es-
+sential both for semantic interpre-
+tation and for synthesizing correc-
+tive trajectories. Moreover, once a
+corrective motion finishes, fresh observations must be reassessed before low-level policy control safely resumes.
+To address these challenges, we propose EmboEagle, an agentic framework that integrates subtask-conditioned
+WAM execution with adaptive VLM invocation and memory-guided geometric recovery (Figure 1(c)). Crucially,
+its design separates the decision to request supervision from the supervisory decision itself, uniting three tightly
+coupled components: ✿Boundary-aware subtask WAM adaptation. Starting from pretrained Long-WAM
+checkpoints, we perform decoupled two-stage flow-matching adaptation (Video DiT LoRA followed by full
+Action DiT fine-tuning) on subtask-conditioned demonstrations, preserving cross-stage visual history while
+truncating action supervision at subtask boundaries via a calibrated fixed-horizon loss. ✿Latent-delta adaptive
+VLM invocation. Rather than duplicating visual encoding with an external perception network, we train a
+lightweight routing gate distilled from teacher decisions using the WAM Action Expert’s pre- and post-chunk
+token transitions and subtask embeddings, keeping post-intervention verification outside optional gating.
+✿Decoupled orchestration and memory-guided recovery. When invoked, the VLM separates diagnostic status
+from discrete routing actions. Assist operations can establish gripper–object bindings for subsequent recovery
+or directly support execution. Recovery draws on these bindings, initial references, and recent tool feedback
+to select tool primitives, with immediate verification after each intervention. Our main contributions are
+threefold:
+➊Closed-loop agentic architecture. We present EmboEagle, which unifies subtask-conditioned WAM execution,
+decoupled VLM task orchestration, and persistent geometric memory with mandatory post-repair verification.
+➋Latent-space adaptive VLM invocation. We formulate selective monitoring as teacher-decision distillation
+over WAM action-token transitions and subtask semantics, enabling lightweight runtime gating without an
+auxiliary vision backbone.
+➌Boundary-aware WAM adaptation and empirical validation. We develop a two-stage subtask adaptation
+scheme to adapt to the long-horizon settings. We validate our method alongside closed-loop evaluations on
+RMBench and LIBERO-Mem.
+2
+Related Work
+World Action Models for Robotic Manipulation. World action models (WAMs) couple visual dynamics prediction
+with action generation to bring video pretraining into robot control. LingBot-VA (Li et al., 2026a) jointly learns
+frame prediction and policy execution through an autoregressive diffusion framework, while DreamZero (Ye
+2
+
+
+et al., 2026) adapts a pretrained video diffusion backbone to joint video–action modeling. Further, Fast-
+WAM (Yuan et al., 2026) retains video co-training while omitting explicit future prediction at inference,
+reducing action-generation latency.
+Long-WAM (Huang et al., 2026) studies how autoregressive video
+pretraining supports the use of extended observation histories and combines causal world-action adaptation
+with efficient execution. MaP-WAM (Zhao et al., 2026a) organizes historical observations into episodic records
+and generates language and visual plans from memory. Then it conditions action and progress prediction
+on those plans. These models provide predictive and temporal representations that support higher-level
+orchestration.
+Agentic Embodied Frameworks. Agentic embodied frameworks connect high-level reasoning to executable
+skills and use feedback to coordinate multi-stage tasks (Liu et al., 2023b; Huang et al., 2022). SayCan (Ahn
+et al., 2022) grounds language-based skill selection in learned affordance estimates. VoLo (Chen et al.,
+2026a) extends physical orchestration to interruptible learned policies, perception models, and manipulation
+primitives, allowing the controller to switch tools when execution requires correction. HarnessWAM (Gu et al.,
+2026b) maintains scene beliefs and a task graph, constrains plans to the executor’s capabilities, and combines
+outcome verification with local recovery. State maintenance provides another axis of design: HiMe (Ji et al.,
+2026) separates execution, working memory, and longer-term planning, whereas LAW (Cao et al., 2026)
+couples planning, status assessment, and action evaluation with hierarchical visual memory.
+VLM supervision. The cost of VLM supervision motivates separating frequent observation from expensive
+reasoning (Gu et al., 2026a). Checking every action chunk can repeat unchanged decisions, whereas fixed
+intervals cannot adapt to when transitions or failures occur. Existing systems use different signals to schedule
+deliberation. HarnessWAM (Gu et al., 2026b) uses learned progress and completion cues to trigger its task
+manager. Spotter (Li et al., 2026b) employs a local Qwen screener to flag potential errors for a VLM judge,
+with bounded asynchronous supervision and checks following repair. TUD (Yang et al., 2026) triggers generalist
+reasoning from the cross-step dispersion of action re-predictions, using computations already performed by its
+dual-system architecture.
+3
+Problem Definition
+We consider language-conditioned robotic manipulation in a partially observable environment, where ac-
+complishing a global instruction G requires completing a sequence of interdependent subtasks. At control
+step t, the robot receives multi-view RGB observations ot and proprioceptive state qt, with calibrated depth
+available for geometric perception. Let ht denote the interaction history of observations, robot states, and
+executed actions up to t; early observations often establish object identities or spatial relations required later
+in the task (Zhao et al., 2026a). We assume access to a pretrained World-Action Model and target-task
+demonstrations annotated with subtask instructions from a supported vocabulary G.
+Let gk(t) ∈G denote the active subtask instruction, whose index k(t) may span multiple control chunks.
+Conditioned on its retained observation history hW
+t , proprioception qt, and active instruction gk(t), the WAM
+policy πθ generates an H-step action chunk:
+At = (at, . . . , at+H−1) ∼πθ
+ · | hW
+t , qt, gk(t)
+
+,
+(1)
+where at ∈Rd is a robot control action and H is the chunk horizon.
+Executing long-horizon tasks purely in open loop leads to compounding errors and unrecoverable failures,
+whereas querying a Vision-Language Model (VLM) at every chunk boundary incurs substantial latency on
+routine motion. Our problem therefore requires coordinating low-level chunk execution with a selective VLM
+invocation decision bt ∈{0, 1} and structured physical recovery: bypassing supervision (bt = 0) during routine
+progress while invoking high-level orchestration (bt = 1) at stage transitions or failures to reliably fulfill G
+with minimal redundant VLM queries.
+3
+
+
+Figure 2 Overview of EmboEagle. (Left) Closed-loop architecture integrating WAM execution, gated VLM orchestration,
+and memory-guided recovery with post-repair verification. (Top Right) Stepwise workflow bypassing routine chunks.
+(Bottom Right) Latent-delta invocation gating and parameterized recovery skills.
+4
+Methodology
+Overview. Figure 2 presents the overall closed-loop workflow of EmboEagle. At runtime, a subtask-conditioned
+WAM executes chunkwise control while a structured memory anchors geometric invariants and a VLM
+orchestrates subtask transitions and physical recovery (▷Section 4.1). To eliminate redundant supervision
+during routine execution, a lightweight routing gate distilled from teacher decisions dynamically schedules VLM
+invocations from internal WAM transitions (▷Section 4.2). Finally, to support accurate stage execution and
+latent gating, we adapt the WAM through a boundary-aware two-stage flow-matching scheme (▷Section 4.3).
+4.1
+The Framework of EmboEagle
+High-level planning and structured state. EmboEagle organizes long-horizon execution through a hierarchical,
+tree-structured task plan rooted at the global goal G, decomposing the task into an ordered sequence of active
+and remaining subtasks Pt = (gk(t), Prem
+t
+) that can be dynamically pruned or regenerated upon replanning.
+Whenever high-level supervision is requested, the controller assembles a structured VLM state context:
+Xt = ⟨G, Pt, Vt, qt, mt⟩,
+(2)
+where Vt aggregates initial, current, and recent historical visual observations, qt provides end-effector poses
+and gripper openings, and mt denotes the structured recovery memory detailed below.
+Chunkwise execution. During routine control, the adapted WAM policy πθ predicts action chunks At via
+Eq. 1 (Section 4.3), executed directly as joint or end-effector commands on simulated or real-world robotic
+arms. To preserve physical consistency when resuming policy execution, active grasp bindings maintained in
+mt automatically enforce gripper closure, while single-arm instructions keep the non-active arm stationary.
+Upon completing each chunk, the routing gate evaluates bt (Section 4.2): on bt = 0, execution continues
+directly under gk(t); on bt = 1, the controller passes Xt to the VLM and pauses policy control. Upon a subtask
+transition or tool intervention, the controller clears pending actions while retaining and continuously updating
+the visual history hW
+t , allowing subsequent action predictions to incorporate the current subtask instruction
+and latest observations.
+VLM-based transition.
+When queried, the VLM orchestrator FVLM maps Xt to a structured response
+Yt = ⟨st, ut, ρt, Rt⟩, cleanly decoupling the diagnostic status st ∈{ongoing, achieved, abnormal} from
+the executable decision ut ∈{continue, update, recovery, assist} (with textual justification ρt). While st
+4
+
+
+supplies interpretable context for logging without overriding control routing, ut dispatches one of four distinct
+branches:
+➠Continuation (continue): Retains the active subtask instruction gk(t) for subsequent chunkwise execution.
+➠Plan Update (update): Either advances to the next subgoal or invokes an independent replanning query
+(via update_mode) that synthesizes a validated replacement plan from G and resets the plan index, with
+a bounded end-of-plan check to catch remaining work.
+➠Failure Recovery (recovery): Emits a skill plan Rt to physically rectify detected execution failures.
+➠Execution Assistance (assist): Emits a skill plan Rt to proactively assist ongoing execution.
+Memory-guided geometric recovery. To ground recovery and assist interventions in 3D space, the controller
+maintains and encapsulates the structured memory mt into a compact JSON record:
+mt =
+
+”refs” : E0, ”held” : Bt, ”last_tool” : Ft
+	
+,
+(3)
+where (i) E0 (refs) caches static 3D positions and planar orientations extracted from calibrated RGB-D
+observations at episode start; (ii) Bt (held) maintains per-arm object–gripper bindings, storing object anchor
+points in the gripper frame along with available relative orientation information; and (iii)Ft (last_tool) logs the
+latest skill execution results and error traces. Given a repair plan Rt = (ξ1, . . . , ξL), the controller sequentially
+executes parameterized primitives from a library of nine tools: motion and gripper resets (lift, home, release),
+memory grounding (bind, bind_reference), and RGB-D manipulation (grasp_point, place_ref, place_-
+point, press_point). Each skill projects image targets into 3D world coordinates via calibrated depth or
+retrieves stored poses from refs and held, solving joint trajectories through inverse kinematics. Crucially,
+both recovery and assist update Bt and Ft upon completion (or tool error), and immediately trigger a fresh
+observation-based VLM check before resuming WAM control.
+4.2
+Adaptive VLM Invocation
+Supervisory decision distillation. While monitoring every chunk reliably captures stage transitions and errors,
+most routine chunks simply continue the active subtask. To avoid redundant queries, we roll out full chunkwise
+teacher supervision across task episodes to curate a dataset of N chunk transitions paired with schema-valid
+VLM decisions, formulating invocation gating as binary classification (Skip vs. Call). The binary supervision
+target yi ∈{0, 1} is determined strictly by the teacher’s top-level action ui:
+yi = I[ui ∈{update, recovery, assist}] ,
+(4)
+where yi = 0 corresponds to continue, completely independent of the diagnostic status si.
+Invocation prediction. Rather than introducing an auxiliary vision encoder to re-process post-chunk frames,
+our routing gate fϕ operates directly on internal latent transitions of the WAM’s Action Expert conditioned
+on the active subtask. For a chunk completed at step t, let f −
+t , f +
+t denote the frozen Action Expert’s final
+action-token features before and after chunk execution, and let et be the cached subtask text embedding. We
+compute the latent transition delta and predicted invocation logit via a lightweight MLP fϕ:
+∆ft = f +
+t −f −
+t ,
+zt = N(∆ft, et),
+rt = fϕ(zt),
+(5)
+where N(·) standardizes and normalizes each feature block using training-split statistics while keeping all
+WAM and text features frozen. To handle task diversity, duplicate observations, and sparse Call events, we
+train fϕ with a weighted binary cross-entropy loss:
+Lgate = 1
+N
+N
+X
+i=1
+ωi
+
+softplus(ri) −yiri
+
+,
+(6)
+where ωi balances task and input frequencies while upweighting Call examples to prioritize intervention
+recall. At deployment, the controller evaluates bt = I[rt ≥η] at regular chunk boundaries (where η balances
+query savings against recall), while post-intervention verification and episode initialization bypass gating with
+mandatory VLM checks (bt = 1).
+5
+
+
+4.3
+Subtask-Conditioned WAM Adaptation
+Subtask data curation. To enable stage-aligned chunk execution, we adapt a pretrained sequential WAM (Huang
+et al., 2026) to follow subtask instructions from the controller vocabulary G (optionally paired with global
+task or progress cues). Demonstrations are partitioned by episode into contiguous subtask intervals [ts, te)
+prior to sampling training windows. For any start step t ∈[ts, te), the input visual history hW
+t
+spans across
+the subtask onset ts to preserve physical continuity across transitions (replicating the initial frame with a
+padding flag when history is insufficient at episode start), whereas future action supervision is truncated at
+te via the valid-action mask µt,j = I[t + j < te] for j ∈{0, . . . , H −1}. Future visual supervision retains
+observations up to the completion state at te (repeating and masking later frames), and boundary windows
+with fewer than H valid actions are preserved to ensure responsive behavior near subtask endings.
+Two-stage adaptation. We adapt the backbone through two decoupled flow-matching stages (Lipman et al.,
+2022) while keeping the proprioceptive, VAE, and text encoders frozen. First, we equip the Video DiT’s
+attention projections with LoRA adapters (Hu et al., 2021) and optimize a future-latent flow-matching
+objective. Second, we freeze the adapted video branch and fine-tune the full Action DiT under action flow
+matching: during training, the frozen video branch processes noised ground-truth future latents to supply
+visual key–value conditioning to the Action DiT, whereas at inference it synthesizes these future conditions
+directly from visual history.
+To prevent naive per-window normalization (1/Nt) from disproportionately amplifying gradients on short
+truncated windows near subtask endings, we optimize a fixed-horizon calibrated action loss across noise levels
+σ:
+Lact = E
+
+w(σ) C
+H
+H−1
+X
+j=0
+µt,jℓt,j
+
+,
+ℓt,j = 1
+d
+ˆvt,j −v∗
+t,j
+2
+2,
+C =
+H
+Et∼ptrain[Nt],
+(7)
+where Nt = P
+j µt,j, ˆvt,j and v∗
+t,j denote predicted and target action velocity flows, and w(σ) is the noise-level
+weight. Computed once from the training sampling distribution, C preserves expected supervision scale across
+the dataset while eliminating short-window gradient distortion.
+5
+Experiments
+5.1
+Experimental Settings
+Datasets. We evaluate long-horizon, subtask-wise robotic manipulation on RMBench (Chen et al., 2026b) and
+LIBERO-Mem (Chung et al., 2026) using full-task success rate. RMBench comprises nine bimanual tasks,
+including five M(1) tasks requiring a single task-relevant past observation and four M(n) tasks requiring
+multiple observations. LIBERO-Mem comprises ten single-arm tasks involving single placement, counting,
+and sequencing/spatial reasoning. We further design two real-world tasks: garbage sorting, which requires
+sorting colored objects into their corresponding containers, and bread toasting, which involves processing two
+slices of bread through a toaster-and-plate sequence. Both tasks require coordinating multiple manipulation
+stages while tracking which objects have already been processed.
+Baselines. We compare EmboEagle against four families of representative methods aligned with each eval-
+uation suite. ✤VLA-based policies include π0.5 (Intelligence et al., 2025), X-VLA (Zheng et al., 2026),
+MemoryVLA (Shi et al., 2026), and ActMem-VLA (Zhao et al., 2026b). ✤WAM-based policies include
+HiMem-WAM (Sun et al., 2026), AR-WAM (Jiang et al., 2026a), and MemoryVAM (Jiang et al., 2026b). ✤
+Agentic frameworks include 2AM (Hu et al., 2026), MaP-WAM (Zhao et al., 2026a), and VoLoAgent (Chen
+et al., 2026a). ✤Other policy baselines include DP (Chi et al., 2025), SlotSSM (Chung et al., 2026), and
+Mem-0 (Chen et al., 2026b) as visuomotor and memory-based policy references. See Appendix A for detailed
+descriptions.
+Implementation details. We segment demonstration episodes into subtasks via the VLM planner and initialize
+executors from Long-WAM (Huang et al., 2026) RoboTwin2.0 (Chen et al., 2025) and LIBERO (Liu et al.,
+2023a) checkpoints (the same architecture for real-world tasks). Policies condition on the active subtask for
+RMBench and additionally incorporate the global task and stage index for LIBERO-Mem, observing 48 steps
+of visual history to predict H = 32 action chunks. We train Video DiT LoRA adapters for 10k steps before
+6
+
+
+Table 1 Results on RMBench. Each cell reports task-wise success rate (%) across seven diverse baselines. Bold and
+underlined entries indicate the best and second-best results in each row, respectively.
+Tasks
+DP
+π0.5
+X-VLA
+Mem-0
+HiMem-WAM
+AR-WAM
+MaP-WAM
+EmboEagle(Ours)
+Observe and Pick Up
+1%
+9%
+9%
+4%
+28%
+84%
+19%
+89%
+Rearrange Blocks
+0%
+13%
+13%
+89%
+33%
+86%
+66%
+100%
+Put Back Block
+0%
+11%
+18%
+90%
+32%
+88%
+100%
+95%
+Swap Blocks
+11%
+24%
+16%
+67%
+38%
+82%
+97%
+92%
+Swap T
+20%
+15%
+3%
+14%
+27%
+16%
+96%
+100%
+Battery Try
+10%
+16%
+26%
+28%
+28%
+52%
+82%
+66%
+Blocks Ranking Try
+10%
+6%
+1%
+18%
+24%
+34%
+94%
+92%
+Cover Blocks
+0%
+0%
+2%
+68%
+19%
+78%
+100%
+93%
+Press Button
+0%
+0%
+0%
+0%
+8%
+90%
+96%
+95%
+Total Average
+5.8%
+10.4%
+9.8%
+42.0%
+26.3%
+67.8%
+83.3%
+91.3%
+Figure 3 Physical recovery and timely supervision. Left: recovery rectifies an execution error, whereas disabling it leads to
+failure. Right: 32-step checks catch errors in time, while a 64-step interval delays intervention. Orange boxes mark key
+scene changes.
+fine-tuning the full Action DiT for 30k steps on four NVIDIA H100 80GB GPUs. High-level orchestration uses
+GPT-6-Astra (Zhang et al., 2026) as FVLM, while the MLP routing gate fϕ is trained on frozen transition
+features with split-wise standardization.
+5.2
+Main Results
+RMBench. Across the nine memory-dependent bimanual tasks in Table 1, EmboEagle achieves 91.3% mean
+success, outperforming the strongest baseline MaP-WAM (83.3%) by 8.0 points and AR-WAM (67.8%) by
+23.5 points. Crucially, EmboEagle trains a single unified model across all tasks, whereas MaP-WAM trains a
+separate model per task. While flat visuomotor and VLA policies (DP, π0.5, X-VLA) stay below 11%, and
+memory-augmented baselines suffer sharp task-specific drops (e.g., MaP-WAM 19% on Observe and Pick Up;
+HiMem-WAM 8% on Press Button; AR-WAM 16% on Swap T), EmboEagle ranks top-two on all nine tasks
+(first on three) and reaches at least 89% on eight. Across memory regimes, EmboEagle attains 95.2% on M(1)
+tasks, substantially ahead of MaP-WAM (75.6%) and AR-WAM (71.2%), while maintaining 86.5% on M(n)
+tasks (versus 63.5% for AR-WAM and 19.8% for HiMem-WAM). On early-observation and stage-handoff
+tasks such as Observe and Pick Up (89% vs. 19% for MaP-WAM) and Rearrange Blocks (100% vs. 66%),
+closed-loop orchestration and 3D-memory grounding prevent early drift from compounding (Figure 3, left).
+Even on contact-sensitive Battery Try, EmboEagle scores 66% (second to MaP-WAM at 82%, and 14 points
+above AR-WAM), confirming consistent cross-task reliability.
+LIBERO-Mem. On the ten single-arm tasks of LIBERO-Mem (Table 2), EmboEagle achieves 90.6% average
+success, improving over the strongest baseline ActMem-VLA (80.8%) by 9.8 percentage points and the agentic
+framework 2AM (76.3%) by 14.3 points, while ranking first or tied first on seven tasks. On single-placement
+(P) and counting (C) tasks, EmboEagle achieves 100% and 96.8% average success, respectively. Notably,
+implicit-memory policies degrade sharply as repetition counts grow: on Bowl lift-and-return ×5 and ×7,
+MemoryVLA drops to 3% and 0%, and π0.5 falls from 82% to 35%, whereas EmboEagle maintains 100% and
+7
+
+
+Table 2 Results on Libero-Mem. Each cell reports task-wise success rate (%). Columns cover single placement (P),
+counting (C), and sequencing/spatial tasks (S). Bold and underlined entries indicate the best and second-best results
+in each row, respectively.
+Tasks
+Type
+SlotSSM
+π0.5
+MemoryVLA
+2AM
+MemoryVAM
+ActMem-VLA
+EmboEagle(Ours)
+Bowl lift-and-return
+P
+50%
+77%
+98%
+98%
+75%
+93%
+100%
+Bottle lift-and-return
+P
+0%
+90%
+88%
+100%
+65%
+93%
+100%
+Bowl lift-and-return ×3
+C
+33%
+52%
+15%
+96%
+65%
+81%
+92%
+Bottle lift-and-return ×3
+C
+0%
+40%
+20%
+86%
+15%
+86%
+97%
+Bowl lift-and-return ×5
+C
+14%
+82%
+3%
+97%
+55%
+95%
+100%
+Bowl lift-and-return ×7
+C
+0%
+35%
+0%
+96%
+35%
+76%
+98%
+Swap two bowls
+S
+0%
+25%
+33%
+42%
+10%
+33%
+58%
+Rotate three bowls
+S
+0%
+52%
+53%
+41%
+10%
+55%
+67%
+Center occupied basket
+S
+30%
+100%
+92%
+60%
+25%
+97%
+98%
+Center empty basket
+S
+20%
+100%
+92%
+48%
+50%
+99%
+96%
+Total Average
+-
+14.8%
+65.2%
+49.5%
+76.3%
+40.5%
+80.8%
+90.6%
+Figure 4 Real-world task demonstrations. Example sequences for garbage sorting (left) and bread toasting (right). The
+tasks involve repeated pick-and-place stages with task-dependent object and destination selection. These images show
+demonstration trajectories.
+98% by explicitly tracking progress in the hierarchical task plan Pt. On sequencing and spatial tasks (S),
+EmboEagle preserves high precision on basket centering (98% and 96%, versus 60% and 48% for 2AM) and
+establishes clear leads on multi-object permutations, outperforming all baselines by 16 points on Swap two
+bowls (58% vs. 42%) and 12 points on Rotate three bowls (67% vs. 55%), though visually symmetric object
+permutations remain the primary residual bottleneck.
+Table 3 Real-world framework comparison. Suc-
+cess rates (%) using the same WAM executor
+weights for both frameworks.
+Framework
+Garbage sorting
+Bread toasting
+VoLoAgent
+32%
+51%
+Ours
+45%
+67%
+Real-World Evaluation. To isolate orchestration and recovery
+gains from low-level policy capacity, we compare EmboEagle
+against VoLoAgent (Chen et al., 2026a) using identical WAM
+executor weights on both physical tasks (Figure 4). As shown
+in Table 3, EmboEagle substantially outperforms VoLoAgent
+on both garbage sorting and bread toasting. By anchoring
+targets in persistent 3D memory and enforcing post-repair
+visual verification before resuming WAM control, EmboEagle
+reliably recovers from real-world sensing and actuation errors
+across stage transitions.
+5.3
+Efficiency Analysis
+To evaluate the accuracy-efficiency trade-off of adaptive VLM invocation, we compare our learned routing
+gate against fixed 32-step (chunkwise) and 64-step monitoring schedules across the nine RMBench tasks.
+As shown in Figure 5(a–b), adaptive invocation achieves 91.3% mean success with only 3.93 VLM calls per
+successful episode, remaining within 2.4 percentage points of dense 32-step supervision (93.7%) while cutting
+query demand by 74.2% (from 15.26 calls). Moreover, adaptive scheduling strictly dominates the 64-step
+8
+
+
+Figure 5 Invocation scheduling on RMBench. (a) Full-task success rate for VLM monitoring every 32 or 64 control steps
+and adaptive invocation (Ours). (b) Mean monitoring-call counts per successful episode. Tasks 1–9 follow the row
+order of Table 1.
+fixed baseline in both metrics, improving mean success by 26.5 percentage points (91.3% vs. 64.8%) with
+54.6% fewer queries (3.93 vs. 8.66). Uniformly lengthening the interval misses consequential transitions and
+delays repair, depressing 64-step success on Blocks Ranking Try (25% vs. 92%) and Cover Blocks (36% vs.
+93%), consistent with Figure 3 (right). By contrast, our gate allocates supervision dynamically to match task
+demand, dropping to 2.1 calls on routine Rearrange Blocks while preserving 5.1 calls on Swap T.
+5.4
+Core Design Ablation
+Table 4 Performance of ablation study on RMBench. Bold
+and underlined entries indicate the best and second-best.
+Variants
+swap_T
+put_back_b
+rearrange_b
+cover_b
+WAM only
+5%
+11%
+8%
+0%
+w/o Recovery
+49%
+58%
+64%
+47%
+w/o Assist
+84%
+91%
+98%
+90%
+Ours
+100%
+95%
+100%
+93%
+To isolate each orchestration mechanism, we eval-
+uate three ablated variants of EmboEagle on
+four RMBench tasks using full-task success rate:
+❶WAMonly, which runs the adapted WAM without
+VLM orchestration, 3D memory, or skill interven-
+tions; ❷w/o Recovery, which disables reactive re-
+covery (and post-repair verification) while keeping
+stage updates and assist; and ❸w/o Assist, which
+removes proactive assist during ongoing execution
+while preserving stage updates and recovery.
+Table 4 shows that removing any module degrades task completion. WAM only collapses to 6.0% mean success
+(0% on Cover Blocks), confirming that local chunk execution alone fails over multi-stage horizons. Disabling
+recovery (w/o Recovery) lowers mean success by 42.5 points (97.0% to 54.5%), with the steepest drops on
+Swap T (100% to 49%) and Cover Blocks (93% to 47%), where unrectified slips or misalignments cascade into
+failure (Figure 3, left). Removing assist (w/o Assist) reduces mean success by 6.2 points to 90.8%, affecting
+Swap T (100% to 84%) far more than Put Back Block (95% to 91%) or Rearrange Blocks (100% to 98%).
+Overall, assist curbs nascent drift in precision stages, while recovery ensures a 3D-memory-anchored fallback.
+5.5
+Visualization and Analysis
+To examine how internal policy representations support selective VLM invocation, we analyze the latent
+transitions of the frozen Action Expert. At each chunk boundary, the pre-execution state f −
+t
+provides a
+reference baseline for interpreting the post-chunk representation f +
+t . Computing the action-token difference
+∆ft = f +
+t −f −
+t (Eq. 5) suppresses static scene features that remain invariant across the chunk while preserving
+directional dynamics relative to the active subtask et, distinguishing routine progress from stalls or stage
+transitions.
+Figure 6 compares t-SNE (Maaten & Hinton, 2008) projections and gate AUC across three input configurations.
+Using subtask text alone (Figure 6(a)) mixes Skip and Call thoroughly (0.665 AUC), as instructions provide
+9
+
+
+Figure 6 t-SNE of gate features using (a) text, (b) image + text, and (c) latent ∆ft + text (Skip: blue; Call: pink).
+no progress feedback. Adding current-frame image features (Figure 6(b)) forms task-level clusters and raises
+AUC to 0.925, yet Skip and Call remain entangled within clusters because static frames miss execution
+dynamics. In contrast, combining ∆ft with subtask text (Figure 6(c)) concentrates Call instances into a
+more separable region despite modest local overlap, pushing AUC to 0.980 and validating latent transitions as
+an effective, encoder-free routing signal.
+6
+Conclusion
+We presented EmboEagle, a closed-loop agentic framework for long-horizon robotic manipulation. Using
+decoupled two-stage flow matching, EmboEagle retains cross-stage visual history while calibrating boundary-
+truncated supervision for subtask-aligned control. A lightweight gate distilled from teacher decisions triggers
+VLM calls solely from the Action Expert’s latent transitions and subtask embeddings without auxiliary
+encoders. When invoked, the VLM decouples diagnostic status from routing actions and grounds recovery
+primitives in persistent geometric memory with post-repair verification. Jointly, these mechanisms unify
+execution-driven supervision timing with anchored physical repair across multi-stage tasks.
+References
+Michael Ahn, Anthony Brohan, Noah Brown, Yevgen Chebotar, Omar Cortes, Byron David, Chelsea Finn, Keerthana
+Gopalakrishnan, Karol Hausman, Alex Herzog, Daniel Ho, Jasmine Hsu, Julian Ibarz, Brian Ichter, Alex Irpan,
+Eric Jang, Rosario Jauregui Ruano, Kyle Jeffrey, Sally Jesmonth, Nikhil J Joshi, Ryan Julian, Dmitry Kalashnikov,
+Yuheng Kuang, Kuang-Huei Lee, Sergey Levine, Yao Lu, Linda Luu, Carolina Parada, Peter Pastor, Jornell
+Quiambao, Kanishka Rao, Jarek Rettinghouse, Diego Reyes, Pierre Sermanet, Nicolas Sievers, Clayton Tan,
+Alexander Toshev, Vincent Vanhoucke, Fei Xia, Ted Xiao, Peng Xu, Sichun Xu, and Mengyuan Yan. Do As I
+Can, Not As I Say: Grounding Language in Robotic Affordances. arXiv preprint arXiv:2204.01691, 2022. URL
+https://arxiv.org/abs/2204.01691v1.
+Jiajun Cao, Kai Tang, Bohua Zhang, Zezhong Qian, Ying Li, Xiaozhu Ju, Xiaobao Wei, Jiaming Liu, Yang Ding,
+Sixiang Chen, Yiding Sun, Siyuan Qian, Tinghao Wang, Jixian Wu, Yichen Guo, Yi Zhang, Shilong Zou, Yong Dai,
+Jian Tang, and Shanghang Zhang. LAW: Unifying Language, Action, and World Modeling for Agentic Physical
+Intelligence. arXiv preprint arXiv:2610.23334, 2026. URL https://arxiv.org/abs/2610.23334v1.
+Siyi Chen, Hugo Hadfield, Alex Zook, Mikaela Angelina Uy, Chan Hee Song, Erwin Coumans, Xuning Yang, Faisal
+Ladhak, Qing Qu, Stan Birchfield, Jonathan Tremblay, and Valts Blukis. VoLo: A Physical Orchestrator for
+Open-Vocabulary Long-Horizon Manipulation. arXiv preprint arXiv:2606.07723, 2026a. URL https://arxiv.org/
+abs/2606.07723v1.
+Tianxing Chen, Zanxin Chen, Baijun Chen, Zijian Cai, Yibin Liu, Zixuan Li, Qiwei Liang, Xianliang Lin, Yiheng Ge,
+Zhenyu Gu, et al. Robotwin 2.0: A scalable data generator and benchmark with strong domain randomization for
+robust bimanual robotic manipulation. arXiv preprint arXiv:2506.18088, 2025.
+10
+
+
+Tianxing Chen, Yuran Wang, Mingleyang Li, Yan Qin, Hao Shi, Zixuan Li, Yifan Hu, Yingsheng Zhang, Kaixuan
+Wang, Yue Chen, et al. Rmbench: Memory-dependent robotic manipulation benchmark with insights into policy
+design. arXiv preprint arXiv:2603.01229, 2026b.
+Cheng Chi, Zhenjia Xu, Siyuan Feng, Eric Cousineau, Yilun Du, Benjamin Burchfiel, Russ Tedrake, and Shuran Song.
+Diffusion policy: Visuomotor policy learning via action diffusion. The International Journal of Robotics Research,
+44(10-11):1684–1704, 2025.
+Nhat Chung, Taisei Hanyu, Toan Nguyen, Huy Le, Frederick Bumgarner, Duy Minh Ho Nguyen, Khoa Vo, Kashu
+Yamazaki, Chase Rainwater, Tung Kieu, et al. Rethinking progression of memory state in robotic manipulation:
+An object-centric perspective. In Proceedings of the AAAI Conference on Artificial Intelligence, volume 40, pp.
+3407–3415, 2026.
+Qiao Gu, Yuanliang Ju, Shengxiang Sun, Igor Gilitschenski, Haruki Nishimura, Masha Itkina, and Florian Shkurti.
+Safe: Multitask failure detection for vision-language-action models. Advances in Neural Information Processing
+Systems, 38:40041–40076, 2026a.
+Zhaopeng Gu, Bingke Zhu, Tianxi Lin, Guibo Zhu, Yingying Chen, Kai Wang, Tingyu Yuan, Fan Yang, Chaoyang
+Zhao, Zhaowen Li, Peng Su, and Jinqiao Wang. HarnessWAM: Bridging Prediction and Deliberation in World
+Action Models. arXiv preprint arXiv:2608.09516, 2026b. URL https://arxiv.org/abs/2608.09516v2.
+Edward J. Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean Wang, and Weizhu Chen. LoRA:
+Low-Rank Adaptation of Large Language Models. arXiv preprint arXiv:2106.09685, 2021. URL https://arxiv.org/
+abs/2106.09685v1.
+Yutong Hu, Fengjiao Chen, Xuezhi Cao, and Renaud Detry. 2am: Grounding agent-side memory as guidance for
+steerable action models in long-horizon manipulation. arXiv preprint arXiv:2609.11308, 2026.
+Wei Huang, Bohan Zhang, Chenzhi Liu, Isabella Liu, Shuai Yang, Weian Mao, Luozhou Wang, Yicheng Xiao, Weifeng
+Lin, Qixin Hu, Bryan Chu, Sifei Liu, Linxi Fan, Xiaojuan Qi, Song Han, and Yukang Chen. Long-WAM: Scaling the
+Context of World-Action Models. arXiv preprint arXiv:2610.10528, 2026. URL https://arxiv.org/abs/2610.10528v1.
+Wenlong Huang, Fei Xia, Ted Xiao, Harris Chan, Jacky Liang, Pete Florence, Andy Zeng, Jonathan Tompson, Igor
+Mordatch, Yevgen Chebotar, et al. Inner monologue: Embodied reasoning through planning with language models.
+arXiv preprint arXiv:2207.05608, 2022.
+Physical Intelligence, Kevin Black, Noah Brown, James Darpinian, Karan Dhabalia, Danny Driess, Adnan Esmail,
+Michael Equi, Chelsea Finn, Niccolo Fusai, et al. π0.5: A vision-language-action model with open-world generalization.
+arXiv preprint arXiv:2504.16054, 2025.
+Li Ji, Siyin Wang, Pengfang Qian, Xiaopeng Yu, Yihai Tian, Zhaoye Fei, Jingjing Gong, and Xipeng Qiu. HiMe:
+Hierarchical Embodied Memory for Long-Horizon Vision-Language-Action Control. arXiv preprint arXiv:2607.03449,
+2026. URL https://arxiv.org/abs/2607.03449v1.
+Yicheng Jiang, Zesen Gan, Xiaobo Wang, Tianlun He, Chenxu Zhao, Minghui Wu, Xinyue Wang, Jiaxu Wang, Junhao
+He, Jianan Wang, et al. Ar-wam: a visual-conditioned agent-ready world action model for robotic manipulation.
+arXiv preprint arXiv:2609.23578, 2026a.
+Yuxin Jiang, Chang Yu, Yunuo Chen, Xiang Feng, Yin Yang, Nishank Gite, and Chenfanfu Jiang. Memoryvam:
+Integrating memory into video action model for robot manipulation. arXiv preprint arXiv:2606.20679, 2026b.
+Lin Li, Qihang Zhang, Yiming Luo, Shuai Yang, Ruilin Wang, Fei Han, Mingrui Yu, Zelin Gao, Nan Xue, Xing Zhu,
+Yujun Shen, and Yinghao Xu. Causal World Modeling for Robot Control. arXiv preprint arXiv:2601.21998, 2026a.
+URL https://arxiv.org/abs/2601.21998v1.
+Long Li, Qichao Zhao, Yue Yang, Fan Xu, Zhe Wang, Alan Wee-Chung Liew, Chao Qu, Heng Tao Shen, and Shirui
+Pan. Spotter: Let the Embodied Model Lead, and the VLM Reflect for It. arXiv preprint arXiv:2609.36808, 2026b.
+URL https://arxiv.org/abs/2609.36808v1.
+Yaron Lipman, Ricky TQ Chen, Heli Ben-Hamu, Maximilian Nickel, and Matt Le. Flow matching for generative
+modeling. arXiv preprint arXiv:2210.02747, 2022.
+Bo Liu, Yifeng Zhu, Chongkai Gao, Yihao Feng, Qiang Liu, Yuke Zhu, and Peter Stone. Libero: Benchmarking
+knowledge transfer for lifelong robot learning. Advances in Neural Information Processing Systems, 36:44776–44791,
+2023a.
+11
+
+
+Zeyi Liu, Arpit Bahety, and Shuran Song. Reflect: Summarizing robot experiences for failure explanation and correction.
+arXiv preprint arXiv:2306.15724, 2023b.
+Laurens van der Maaten and Geoffrey Hinton. Visualizing data using t-sne. Journal of machine learning research, 9
+(Nov):2579–2605, 2008.
+Hao Shi, Bin Xie, Yingfei Liu, Lin Sun, Fengrong Liu, Tiancai Wang, Erjin Zhou, Haoqiang Fan, Xiangyu Zhang, and
+Gao Huang. Memoryvla: Perceptual-cognitive memory in vision-language-action models for robotic manipulation.
+In International Conference on Learning Representations, volume 2026, pp. 18567–18602, 2026.
+Xiaoquan Sun, Ruijian Zhang, Chen Cao, Yihan Sun, Jiahui Chen, Zetian Xu, Bo Chen, Haijier Chen, Zhen Yang,
+Jiarun Zhu, et al. Himem-wam: Hierarchical memory-gated world action models for robotic manipulation. arXiv
+preprint arXiv:2606.10363, 2026.
+Hyemin Yang, Wooseong Jeong, Giwon Lee, and Kuk-Jin Yoon. Triggering Generalist Reasoning via Predictive
+Uncertainty for Dual-System VLA. arXiv preprint arXiv:2610.05025, 2026. URL https://arxiv.org/abs/2610.
+05025v2.
+Seonghyeon Ye, Yunhao Ge, Kaiyuan Zheng, Shenyuan Gao, Sihyun Yu, George Kurian, Suneel Indupuru, You Liang
+Tan, Chuning Zhu, Jiannan Xiang, Ayaan Malik, Kyungmin Lee, William Liang, Nadun Ranawaka, Jiasheng Gu,
+Yinzhen Xu, Guanzhi Wang, Fengyuan Hu, Avnish Narayan, Johan Bjorck, Jing Wang, Gwanghyun Kim, Dantong
+Niu, Ruijie Zheng, Yuqi Xie, Jimmy Wu, Qi Wang, Ryan Julian, Danfei Xu, Yilun Du, Yevgen Chebotar, Scott
+Reed, Jan Kautz, Yuke Zhu, Linxi "Jim" Fan, and Joel Jang. World Action Models are Zero-shot Policies. arXiv
+preprint arXiv:2602.15922, 2026. URL https://arxiv.org/abs/2602.15922v1.
+Tianyuan Yuan, Zibin Dong, Yicheng Liu, and Hang Zhao. Fast-WAM: Do World Action Models Need Test-time
+Future Imagination? arXiv preprint arXiv:2603.16666, 2026. URL https://arxiv.org/abs/2603.16666v1.
+Wenbo Zhang, Kaixuan Wang, Yutao Ouyang, Xiaoyu Huang, Liyang Li, Kailun Su, Weiyang Jin, Wenhao Chai,
+Haotian Liang, Zhiyang Dou, et al. An unexpected robot policy: Early evaluations of gpt-6 astra on robodojo and
+beyond. arXiv preprint arXiv:2609.24170, 2026.
+Sizhe Zhao, Haozhe Xie, Weiyu Zhao, Chenchu Zhang, Huan Wang, Chenyang Wang, Qinglin Liu, and Shengping Zhang.
+Memory as Plans: World-Action Modeling with Memory-Grounded Planning. arXiv preprint arXiv:2609.11561,
+2026a. URL https://arxiv.org/abs/2609.11561v1.
+Yaxin Zhao, Dianye Huang, Chenwei Wang, Chenguang Yang, and Zhongliang Jiang. Remember what you did:
+Action-history memory with dual-expert denoising for long-horizon vision-language-action policies. arXiv preprint
+arXiv:2609.37307, 2026b.
+Jinliang Zheng, Jianxiong Li, Zhihao Wang, Dongxiu Liu, Xirui Kang, Yuchun Feng, Yinan Zheng, Jiayin Zou, Yilun
+Chen, Jia Zeng, et al. X-vla: Soft-prompted transformer as scalable cross-embodiment vision-language-action model.
+In International Conference on Learning Representations, volume 2026, pp. 60580–60606, 2026.
+12
+
+
+Appendix Contents
+A Detailed Experimental Settings . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 13
+A.1 Datasets and Preprocessing . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 13
+A.2 Details of Baselines . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 13
+A.3 Details of Implementations . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 14
+B Extended Experiments . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 15
+B.1 End-to-End Runtime Efficiency . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 15
+B.2 Ablation Study on Memory . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 16
+B.3 Analysis of Adaptive VLM Invocation . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 16
+C Limitations and Outlook . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 17
+A
+Detailed Experimental Settings
+A.1
+Datasets and Preprocessing
+RMBench. RMBench (Chen et al., 2026b) comprises nine bimanual manipulation tasks: five single-observation
+tasks, M(1) (Observe and Pick Up, Rearrange Blocks, Put Back Block, Swap Blocks, and Swap T), and
+four multi-observation tasks, M(n) (Battery Try, Blocks Ranking Try, Cover Blocks, and Press Button).
+For WAM adaptation, we split the demonstrations of each task by episode at a 9:1 training-to-validation
+ratio, segmenting each episode into contiguous subtask intervals conditioned on the corresponding subtask
+instruction. We combine the head and wrist camera views as visual inputs and standardize joint states,
+gripper states, and actions using training-split statistics.
+LIBERO-Mem. LIBERO-Mem (Chung et al., 2026) comprises ten single-arm manipulation tasks spanning
+three categories: two single-placement tasks, P (Bowl lift-and-return and Bottle lift-and-return), four counting
+tasks, C (Bowl lift-and-return ×3, Bottle lift-and-return ×3, Bowl lift-and-return ×5, and Bowl lift-and-return
+×7), and four sequencing and spatial tasks, S (Swap two bowls, Rotate three bowls, Center occupied basket,
+and Center empty basket). Within each task, successful demonstrations are split by episode at a 9:1 training-
+to-validation ratio and partitioned into sequential manipulation stages. Each stage pairs the scene and wrist
+camera views with the global instruction, active subtask, and stage index k/n to disambiguate repeated cycles.
+Real-world tasks. We collect demonstrations on a Franka robot arm equipped with a scene camera and a wrist
+camera across two multi-stage tasks: garbage sorting (sequentially placing green, blue, and red blocks into
+color-matched bins) and bread toasting (inserting bread slices into separate toaster slots, transferring them
+sequentially onto a plate stack, and pressing the red button). Complete trajectories are split by episode at
+a 9:1 training-to-validation ratio prior to extracting contiguous subtask segments. Each segment pairs the
+global instruction and active subtask with both camera views, 7-DoF joint positions, and gripper opening.
+A.2
+Details of Baselines
+We compare EmboEagle against four families of representative methods aligned with each evaluation suite,
+including (i) VLA-based policies, (ii) WAM-based policies, (iii) Agentic frameworks, (iv) Other policy baselines.
+➠VLA-based policies include:
+• π0.5 (Intelligence et al., 2025) co-trains on diverse robot demonstrations and web data to jointly predict
+semantic subtasks and continuous actions from visual-language inputs.
+• X-VLA (Zheng et al., 2026) introduces learnable source-specific soft prompts within a shared transformer
+backbone for scalable cross-embodiment action generation.
+13
+
+
+• MemoryVLA (Shi et al., 2026) retrieves visual details and semantic cues from perceptual-cognitive memory,
+fusing them with live observations for diffusion decoding.
+• ActMem-VLA (Zhao et al., 2026b) encodes executed action history via Mamba to guide early denoising
+steps before refining action sequences with a frozen action expert.
+➠WAM-based policies include:
+• HiMem-WAM (Sun et al., 2026) learns hierarchical motion-skill latents and updates task memory at skill
+transitions.
+• AR-WAM (Jiang et al., 2026a) conditions scene dynamics and action generation on target boxes and skill
+tokens.
+• MemoryVAM (Jiang et al., 2026b) compresses past visual observations into compact memory tokens that
+jointly condition video prediction and action decoding.
+➠Agentic frameworks include:
+• 2AM (Hu et al., 2026) employs a multimodal agent to track episode history and steer a low-level policy via
+subtask instructions and optional 2D spatial cues.
+• MaP-WAM (Zhao et al., 2026a) uses completed subtask records to generate language and visual plans that
+condition next-stage action and progress prediction.
+• VoLoAgent (Chen et al., 2026a) uses a VLM orchestrator to monitor execution and switch between learned
+policies and manipulation tools for error recovery, sharing identical WAM weights with EmboEagle in
+real-world tests.
+➠Other policy baselines include:
+• DP (Chi et al., 2025) generates action chunks via visual-conditioned denoising under receding-horizon
+control.
+• SlotSSM (Chung et al., 2026) tracks objects across frames with persistent object-centric slots and retains
+per-slot temporal histories via a state-space model for action prediction.
+• Mem-0 (Chen et al., 2026b) conditions actions on a subtask-start visual anchor and recent sliding-window
+frames.
+A.3
+Details of Implementations
+WAM adaptation. We initialize the RMBench and LIBERO-Mem executors from the RoboTwin2.0-IDM and
+LIBERO-IDM checkpoints of Long-WAM (Huang et al., 2026), respectively. Stage 1 trains rank-32 LoRA
+adapters (α = 32) on the query, key, value, and output projections of the Video DiT self- and cross-attention
+layers for 10k steps at a peak learning rate of 5×10−5. Stage 2 freezes the adapted video branch and fine-tunes
+all Action DiT parameters for 30k steps at a peak learning rate of 10−5, while keeping the VAE, text, and
+proprioceptive encoders frozen throughout. Both stages use AdamW (β1 = 0.9, β2 = 0.95, weight decay 0.01)
+with a global batch size of 32 across four 80 GB NVIDIA H100 GPUs, BF16 mixed-precision compute, and
+FP32 master weights. Each stage starts an independent cosine schedule with 500 warmup steps (1,500 steps
+for LIBERO-Mem action fine-tuning). Evaluating the training sampling distributions yields fixed-horizon
+calibration factors (Eq. (7) of the main paper) of C = 1.14 on RMBench and C = 1.23 on LIBERO-Mem.
+Gate training and calibration. We curate the distillation dataset by rolling out chunkwise teacher supervision
+across successful RMBench episodes to collect labeled chunk boundaries (Skip vs. Call), grouping episodes
+that share a task-seed pair or duplicate feature transitions into the same split to prevent leakage. At each
+boundary, the gate pairs the 1,024-dimensional action-token transition ∆ft = f +
+t −f −
+t with the 512-dimensional
+active subtask embedding et. Each block is standardized and ℓ2-normalized before concatenation and joint
+standardization via N(·), fitting all statistics on unique training transitions. The routing gate fϕ is a single-
+hidden-layer MLP (128 ReLU units, 0.2 dropout) trained for 100 full-batch epochs with AdamW (learning
+14
+
+
+rate 10−3, weight decay 0.01) under Eq. (6) of the main paper. On the validation split, we select the highest
+logit threshold η retaining at least 97% Call recall under both uniform and inverse-frequency weighting,
+yielding η = −4.71 (bt = I[rt ≥η]).
+Closed-loop supervision. At each scheduled RMBench check, GPT-6-Astra receives the structured context Xt
+comprising initial and current RGB views from the head and both wrist cameras, up to five temporally ordered
+recent head-camera frames, the global goal G and active plan Pt, end-effector poses and gripper openings qt,
+and the memory record mt (refs, held, and last_tool). Episode initialization and post-intervention verification
+always enforce mandatory VLM checks (bt = 1). For fixed-interval comparisons, the WAM retains chunk
+horizon H = 32 while querying the VLM every chunk (32 steps) or every second chunk (64 steps).
+Real-world execution. On each physical Franka task, EmboEagle and VoLoAgent share identical task-specific
+WAM executor weights for controlled comparison. Conditioned on live scene and wrist RGB views, 7-DoF
+joint positions, gripper opening, and global plus subtask instructions, the executor predicts H = 32 action
+steps specifying absolute 7-DoF joint targets and gripper commands.
+B
+Extended Experiments
+B.1
+End-to-End Runtime Efficiency
+Figure 7 End-to-end accuracy–efficiency comparison on RMBench. Task success rate (%) versus mean completion time over
+successful episodes (s, log scale) across five configurations (10 test episodes per task), comparing open-loop Long-WAM,
+64-step VoLoAgent, and adaptive EmboEagle under Qwen3.6-27B (thinking disabled) and GPT-6-Astra.
+To evaluate how adaptive supervision translates into end-to-end execution speed, we compare task success
+rate against mean wall-clock time per successful episode across five configurations on RMBench (Figure 7),
+sampling 10 test episodes per task. The vertical axis reports the proportion of successful test episodes,
+while the horizontal axis measures mean execution time (in seconds, log scale) computed exclusively over
+successful rollouts. As an open-loop baseline, Long-WAM (Huang et al., 2026) fine-tuned for 30k steps executes
+actions directly from the global task instruction, achieving 11% success with an average duration of 156 s.
+VoLoAgent (Chen et al., 2026a) adopts the 30k-step fine-tuned Long-WAM as its low-level executor and queries
+the VLM every two action chunks (64 control steps in total), whereas EmboEagle schedules VLM invocations
+adaptively during execution. Both frameworks are evaluated with GPT-6-Astra and Qwen3.6-27B, with
+thinking mode disabled across all Qwen configurations.
+Across both VLM backbones, EmboEagle substantially improves task completion while cutting episode runtime
+by over 60%. With GPT-6-Astra, EmboEagle raises success over VoLoAgent from 67% to 92% (+25 percentage
+points) while shortening mean successful episode time from 701 s to 277 s (a 60.5% reduction, or 2.5× faster).
+15
+
+
+Table 5 Ablation study on structured memory. Full-task success rates (%) with and without structured memory mt.
+Variants
+Swap T
+Put Back
+Block
+Rearrange
+Blocks
+Cover
+Blocks
+w/o Structured Memory
+21%
+63%
+97%
+46%
+Ours
+100%
+95%
+100%
+93%
+Table 6 Gate input ablation on RMBench. Routing performance (%) when pairing subtask text et with each candidate
+feature across three held-out splits (mean ± std).
+Feature
+AUROC
+AP
+Recall of Call
+F1
+et only
+66.52 ± 2.36
+44.80 ± 1.08
+97.37 ± 2.42
+47.05 ± 0.73
+Image
+92.49 ± 1.38
+86.29 ± 3.00
+98.56 ± 1.87
+53.21 ± 6.89
+f −
+t
+95.69 ± 0.33
+90.99 ± 1.80
+97.64 ± 2.86
+66.24 ± 13.33
+f +
+t
+96.61 ± 1.53
+91.92 ± 3.53
+98.92 ± 0.94
+67.02 ± 9.74
+∆ft (Ours)
+98.04 ± 1.03
+92.62 ± 2.67
+98.15 ± 0.78
+73.58 ± 1.32
+With Qwen3.6-27B, EmboEagle similarly lifts success from 10% to 18% (+8 percentage points) and reduces
+mean episode duration from 679 s to 264 s (a 61.1% reduction, or 2.6× faster).
+B.2
+Ablation Study on Memory
+To evaluate the contribution of structured recovery memory beyond VLM visual context, we ablate the
+structured memory mt across four RMBench tasks (Table 5). In w/o Structured Memory, the VLM still
+observes the initial and recent frames in Vt, but assist and recovery skills execute without cached initial poses
+(refs), active gripper–object bindings (held), or prior tool feedback (last_tool). Removing mt reduces mean
+success across the four tasks from 97.0% to 56.8% (−40.2 points), demonstrating the importance of structured
+recovery memory beyond image-level history during physical repair.
+Task-level sensitivity closely reflects geometric occlusion and pose-memory demands. The sharpest drop
+occurs on Swap T (100% →21%), where each T-block must assume the other’s initial 3D position and planar
+orientation; once the first block moves, its vacated pose is no longer recoverable from live RGB-D depth
+without refs and gripper-frame offsets in held. Similarly, removing memory costs 47 points on Cover Blocks
+(93% →46%), where opaque lids occlude the colored blocks needed for ordered uncovering, and 32 points on
+Put Back Block (95% →63%), where the block must return to its original mat after button pressing. By
+contrast, Rearrange Blocks remains at 97% without mt (vs. 100% for Ours), as target mats and open gaps
+stay directly visible in live RGB-D observations for memory-free point primitives.
+B.3
+Analysis of Adaptive VLM Invocation
+Gate input ablation. We compare five input configurations for the routing gate across held-out episodes of all
+nine RMBench tasks (Table 6), pairing the active subtask embedding et with each candidate signal under the
+same MLP architecture and training protocol from Appendix A.3. For each variant and split, the threshold η is
+calibrated on validation episodes to achieve at least 97% Call recall under both uniform and inverse-frequency
+weighting; test metrics use inverse-frequency weighting within each task and equal weight across tasks over
+three splits. Replacing external image features with the WAM’s post-chunk action token f +
+t raises average
+precision (AP) from 86.29% to 91.92% and F1 from 53.21% to 67.02% without an auxiliary vision encoder.
+Incorporating pre-execution context via the latent difference ∆ft = f +
+t −f −
+t
+further lifts AUROC to 98.04%,
+AP to 92.62%, and F1 to 73.58% (+6.56 points over f +
+t
+alone) while sharply reducing the cross-split F1
+standard deviation from 9.74 to 1.32, retaining 98.15% Call recall with a compact 197k-parameter gate.
+Recall breakdown by teacher action. To examine which supervisory events are easiest or hardest to anticipate,
+we stratify teacher Call boundaries by top-level action ut ∈{update, recovery, assist} using the deployed
+16
+
+
+Table 7 Gate recall breakdown by teacher action. Per-action Call recall and miss rate (%) of the ∆ft gate averaged
+across tasks containing each event over three splits (mean ± std).
+Teacher Action
+Tasks
+Call Recall
+Miss Rate
+update
+9
+99.74 ± 0.46
+0.26 ± 0.46
+recovery
+7
+92.09 ± 3.52
+7.91 ± 3.52
+assist
+3
+100.00 ± 0.00
+0.00 ± 0.00
+∆ft gate, averaging over the tasks in which each action occurs (Table 7). While overall Call recall reaches
+98.15%, stage transitions (update) and proactive assistance (assist) are captured almost without omission
+(99.74% and 100.00% recall, with miss rates of 0.26% and 0.00%). Reactive recovery exhibits a higher
+single-boundary miss rate of 7.91% (92.09% recall), as incipient physical slips can initially induce subtle latent
+shifts; nevertheless, in closed-loop execution, persistent drift amplifies ∆ft at subsequent chunk boundaries
+and still triggers timely repair.
+C
+Limitations and Outlook
+We note two main limitations of the current system. First, although our latent-delta routing gate eliminates
+74.2% of routine VLM checks, each triggered orchestration or post-intervention verification step still incurs
+non-trivial communication and inference latency when querying large VLM services, constraining deployment in
+strictly real-time or bandwidth-limited settings. Second, closed-loop reliability remains tied to the underlying
+VLM’s embodied scene understanding and spatial reasoning capacity. While EmboEagle achieves substantial
+gains over prior orchestrators under a capable backbone, substituting smaller models degrades progress
+diagnosis and tool parameterization across multi-stage tasks. Together, these factors motivate post-training
+or distilling embodied diagnostic and spatial grounding capabilities from frontier supervisors into compact,
+on-device vision-language models, paired with asynchronous deliberation overlapped with low-level WAM
+execution to narrow the lightweight-backbone gap and advance real-time responsiveness.
+17

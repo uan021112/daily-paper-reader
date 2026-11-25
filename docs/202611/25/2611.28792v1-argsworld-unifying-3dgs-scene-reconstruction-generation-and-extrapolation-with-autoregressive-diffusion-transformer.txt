@@ -1,0 +1,1653 @@
+ArgsWorld: Unifying 3DGS Scene Reconstruction, Generation and
+Extrapolation with Autoregressive Diffusion Transformer
+Weiming Chen1, Shuaiyan Liu2, Xinyu Shao1, Zhewen Chen1,
+Tian Guan1, Yonghong He1,†, Xitong Ling1,†, ‡
+1Tsinghua Shenzhen International Graduate School, Tsinghua University
+2Harbin Institute of Technology
+Abstract
+Autoregressive diffusion world models deliver strong video
+generation performance, yet they typically output only RGB
+frames rather than explicit 3D Gaussian Splatting (3DGS)
+scene representations, creating a gap between learned vi-
+sual world dynamics and usable 3D assets for downstream
+robotics, simulation and rendering.
+To bridge this gap,
+we introduce ArgsWorld, an autoregressive diffusion model
+that also produces an explicit 3DGS scene. For each gen-
+eration chunk, the diffusion transformer jointly processes
+clean historical image latents and noisy latents for new
+views. It keeps the historical image latents fixed and re-
+freshes the scene features so that the Gaussian representa-
+tion can be revised as new regions come into view. Our 3D
+Self-Forcing Distillation trains the model on its own gen-
+erated histories using a mixture of single-view and multi-
+view data. Distribution matching supervises direct image
+latents and latents of Gaussian renderings at both genera-
+tion and additional cameras. ArgsWorld unifies 3D scene
+reconstruction from posed images, scene generation from
+image or text prompts, and scene extrapolation across cam-
+era segments with disconnected endpoints. Experimental
+results demonstrate that ArgsWorld achieves state-of-the-
+art performance across multiple 3D scene modeling tasks.
+Project page: https://m4a1tastegood.github.
+io/ArgsWorld/
+1. Introduction
+Video diffusion models provide strong priors for visual syn-
+thesis [32]. Autoregressive generation extends these models
+beyond a single sampling window [15, 29], and camera con-
+ditioning lets users specify where to look next [29]. These
+models describe a scene through the RGB frames they gen-
+erate along a trajectory. An explicit scene representation
+†Corresponding authors.
+‡Project lead.
+1
+3
+6
+Reconstruct
+Generate
+Vertical Extrapolate
+Aerial Extrapolate
+(a) AR video diffusion
+(b) Single-image 3DGS
+Only RGB (e.g., SolarWM, Inspatio-World, ...)
+Only one trajectory (e.g., PixWorld, FlashWorld, ...)
+(c) ArgsWorld
+Autoregressive 3DGS World Generation
+Input
+Figure 1. ArgsWorld is an autoregressive 3DGS world model
+that unifies 3D scene reconstruction, trajectory-guided view gen-
+eration, and open-ended scene extrapolation. It reconstructs a 3D
+Gaussian scene from posed views (blue), generates views along
+the trajectory (green), and extrapolates along vertical (orange) and
+aerial (purple) camera paths.
+would also allow users to render the same world from addi-
+tional cameras and reuse it as a 3D asset.
+3D Gaussian Splatting (3DGS) represents a scene
+with explicit primitives and supports differentiable render-
+ing [18].
+Feed-forward methods such as pixelSplat [2],
+MVSplat [4], and AnySplat [16] recover Gaussian scenes
+from observed images. FlashWorld [19] extends this ca-
+pability to scene generation by coupling a video diffusion
+backbone with a Gaussian decoder, and PixWorld [8] uni-
+fies reconstruction and generation in pixel space. Building
+on these approaches, we ask how a generative model can
+revise and extend an explicit Gaussian scene as new camera
+queries arrive.
+Three challenges arise when generating a Gaussian scene
+1
+arXiv:2611.28792v1  [cs.CV]  21 Nov 2026
+
+
+(a) Chunk-wise Autoregressive 3DGS Reconstruction, Generation and Extrapolation
+Camera trajectory
+Partial reference frames
+Observed
+?
+Unobserved
+Observed
+?
+Unobserved
+z
+y
+x
+Chunk 1
+Chunk 2
+Chunk 3
+Novel-view renderings
+New chunk tokens
+···
+ArgsWorld · Chunk 1
+New chunk tokens
+···
+ArgsWorld · Chunk 2
+New chunk tokens
+···
+ArgsWorld · Chunk 3
+History tokens
+···
+History tokens
+···
+(b) Inside ArgsWorld
+New chunk tokens
+Camera
+trajectory
+Reference
+RGB latent
+3DGS
+latent feedback
+RGB
+latent feedback
+?
+Feedback: zero-initialized
+Noise
+ε
+Channel
+concat
+History tokens
+⋯
+Bidirectional DiT
+Within each chunk
+⋯
+RGB latent
+3DGS latent
+VAE
+3DGS
+decoder
+RGB frames
+3D Gaussians
+Novel cameras
+Renderer
+Rendered frames
+Output token schema
+Camera
+conditions
+Rendered
+RGB latent
+3DGS latent
+feedback
+RGB latent
+feedback
+Reused
+as history
+New tokens
+History / output tokens
+ε
+Noise
+Channel concat
+Data flow
+History tokens
+⋯
+Next chunk
+Figure 2. ArgsWorld inference. (a) We process a camera trajectory in successive chunks, using available reference images to condition
+the first chunk. Multiple input images enable scene reconstruction, while a single input image supports open-ended scene generation. (b)
+Each DiT call attends jointly to the current views and their clean history, predicting new RGB latents and refreshing features for Gaussian
+decoding across all views processed so far. 3DGS latents and DiT features feed the next denoising step within a chunk. Across chunks, the
+model carries forward its final direct RGB latents and 3DGS latents.
+over successive chunks of camera views. Plausible image
+predictions provide only an indirect constraint on the ge-
+ometry needed to render them. As the trajectory reveals new
+regions, newly predicted geometry must agree with the al-
+ready generated appearance in overlapping views. Finally, a
+model trained with ground-truth histories encounters a dif-
+ferent distribution of contexts when it must condition on its
+own predictions at inference time [15].
+We introduce ArgsWorld, an Autoregressive 3DGS
+World Model for reconstruction, generation, and spatial ex-
+trapolation. In Fig. 1, ArgsWorld reconstructs a 3D Gaus-
+sian scene from three posed images, generates views along
+the initial trajectory, and extends the scene along verti-
+cal and aerial camera paths.
+We build on the camera-
+conditioned, 3D-adapted Wan backbone of FlashWorld [19,
+32]. At each chunk, its diffusion transformer attends jointly
+to clean historical image latents and noisy new-view latents.
+The historical image latents anchor the appearance, and
+the model refreshes scene features across the active views
+to decode an updated set of Gaussians (Fig. 2). This lets
+ArgsWorld continue the same scene on a new camera orbit
+without generating bridging views.
+Our 3D Self-Forcing Distillation trains the model in
+the same autoregressive setting used for inference (Fig. 3).
+Completing all four denoising steps supplies the clean his-
+tory for the next chunk. During training, we replay a ran-
+domly selected denoising step with gradients and apply
+distribution-matching distillation [49, 50] to the direct im-
+age predictions and to renderings of the updated Gaussian
+scene at both generation and additional cameras. The train-
+ing mixture includes single-view images and posed multi-
+view sequences.
+Our contributions are threefold:
+• A unified 3DGS world model.
+ArgsWorld uses
+one camera-conditioned autoregressive diffusion 3DGS
+model to reconstruct scenes from posed images, gener-
+ate scenes from image or text prompts, and extrapolate
+scenes along an extended trajectory.
+• Consistent autoregressive scene expansion. ArgsWorld
+grows a Gaussian world one chunk at a time, using com-
+pleted generations as fixed visual context. Joint scene de-
+coding and rendering consistency supervision encourage
+consistent renderings at historical viewpoints while al-
+lowing the scene representation to evolve as new regions
+are generated.
+• 3D Self-Forcing Distillation. Training on self-generated
+histories and matching distributions in both the image and
+rendering branches yields a four-step autoregressive sam-
+pler with explicit 3DGS output.
+2
+
+
+2. Related Work
+Video generation and autoregressive world models.
+Video foundation models such as Wan [32] supply vi-
+sual priors for controllable world generation. Existing ap-
+proaches condition generation on actions [1] or camera tra-
+jectories [9, 39, 40]. Training autoregressive video diffu-
+sion on ground-truth histories can lead to error accumula-
+tion on generated histories at inference. Self Forcing [15]
+addresses this mismatch by training on self-generated roll-
+outs with sequence-level supervision. BiWM [29] retains
+bidirectional attention and combines camera-control adap-
+tation with few-step distillation.
+CausVid and LongLive
+accelerate causal rollouts [47, 51], while WorldMem re-
+trieves past views for consistency [44].
+SolarWM [13]
+scales long-horizon video training, and InSpatio-World [30]
+uses state-anchored autoregression for interactive 4D simu-
+lation. ArgsWorld uses self-generated histories to condition
+a bidirectional generator that jointly predicts images and up-
+dates an explicit Gaussian scene.
+Gaussian
+scene
+reconstruction
+and
+generation.
+NeRF [25] and 3D Gaussian Splatting [18] enable differen-
+tiable rendering, with 3DGS providing explicit primitives.
+Feed-forward models estimate multiview geometry [34, 37]
+or synthesize novel views [17, 36]. pixelSplat, MVSplat,
+and DepthSplat reconstruct Gaussians from posed im-
+ages [2, 4, 46]. AnySplat [16] handles uncalibrated image
+collections by predicting Gaussian primitives and camera
+parameters jointly.
+Diffusion priors support novel-view
+synthesis [7, 24, 54] and text-driven 3D generation [12, 27].
+FlashWorld [19] integrates Gaussian decoding into video
+diffusion for image- or text-conditioned generation.
+For
+extrapolation,
+WonderWorld [53] constructs Gaussian
+surfels from outpainted views, and LucidDreamer [5]
+uses diffusion-guided completion and alignment.
+Won-
+derTurbo [26] combines image inpainting and depth
+completion with incremental fusion of newly predicted
+3D Gaussians. ArgsWorld revises the scene jointly across
+historical and new views within a single autoregressive
+generator.
+Distribution-matching distillation.
+Distribution Match-
+ing Distillation (DMD) [50] trains a fast generator using the
+difference between the scores of a pretrained teacher and
+an online model of the generated distribution. DMD2 [49]
+improves score estimation through a two-time-scale update
+rule and adds adversarial supervision. FlashWorld [19] uses
+distribution matching to transfer its multi-view image prior
+to Gaussian renderings. BiWM [29] distills bidirectional
+video generation from self-generated histories. ArgsWorld
+applies distribution matching to the direct image sequence
+and to renderings of the updated scene at two sets of cam-
+eras. This supplies training signals for both image synthesis
+and geometry through the same rollout.
+3. Method
+ArgsWorld takes an ordered sequence of calibrated cam-
+eras, optional posed reference images, and an optional text
+prompt.
+It produces an explicit 3D Gaussian scene that
+can be rendered at additional query cameras. We initial-
+ize the model from a 3D adaptation of a video diffusion
+transformer (Sec. 3.1), then extend it to generate views in
+successive chunks (Sec. 3.2). We train this autoregressive
+model by distilling its own rollouts in both image and ren-
+dering space (Sec. 3.3).
+3.1. 3D Adaptation
+The backbone is a camera-conditioned Wan2.2-TI2V-5B
+diffusion transformer (DiT) [32]. We encode each RGB
+frame independently with the same frozen variational au-
+toencoder (VAE), obtaining one normalized spatial latent
+grid per camera pose. Compression is spatial within each
+frame, so four input frames yield four latent grids. This pre-
+serves view-specific structure, such as contours and occlu-
+sion boundaries, and keeps it aligned with the correspond-
+ing camera rays for 3D decoding. For a camera ray with
+origin o and unit direction d, the six-channel ray map con-
+catenates d and o −(o⊤d)d. The DiT takes noisy RGB
+latents, ray maps, and reference latents concatenated along
+the channel axis, with text supplied through cross-attention.
+Reference latents occupy the slots of their calibrated cam-
+eras, and unobserved slots are zero-filled.
+Image and Gaussian outputs.
+We form the noisy latent
+xσ = (1 −σ)z + σϵ from a clean latent z and Gaussian
+noise ϵ ∼N(0, I). The DiT predicts a 48-channel velocity
+vθ and a 1024-channel feature map per view. With the flow-
+matching velocity target ϵ −z [22], the clean prediction is
+ˆz = xσ −σvθ.
+(1)
+A separate Gaussian decoder takes the predicted features,
+the detached clean latents, and the cameras. It uses a train-
+able copy of the Wan VAE decoder with feature injection
+and a pixel-aligned head that predicts two Gaussians per
+grid location. Each center is obtained from a subpixel ray
+offset and positive depth. The remaining outputs are opac-
+ity, anisotropic scale, rotation, and spherical harmonic ap-
+pearance coefficients [18].
+Initialization.
+We use the pretrained checkpoints from
+FlashWorld [19]. The few-step checkpoint initializes the
+student DiT and Gaussian decoder, and the 3D-adapted dif-
+fusion checkpoint provides the frozen teacher.
+3
+
+
+3.2. Chunk-wise Autoregressive Inference
+We split the trajectory into ordered camera chunks
+C1, . . . , CB. At chunk b, the state contains the cameras
+C<b, the final direct RGB latents Hb−1, and the most re-
+cently computed features for those cameras. For the first
+chunk the history is empty, and any reference images en-
+ter through the reference channels at their matching camera
+slots. The model initializes the noisy RGB stream for the
+current chunk from Gaussian noise and the current feedback
+channels from zeros. This shared input format supports re-
+construction with several posed references, generation with
+optional image or text prompts, and extrapolation by con-
+tinuing a saved rollout with new cameras.
+Bidirectional attention and scene update.
+At step j, we
+prepend Hb−1 to the noisy current latents xb,j. Historical
+tokens receive timestep zero, and current tokens receive the
+noise level σj. The stored RGB latents and features also en-
+ter their conditioning channels in Fig. 2. With bidirectional
+attention over C≤b, the DiT predicts clean latents ˆzb,j for
+the current views via Eq. (1) and refreshes features Fb,j for
+all views. The decoder DGS rebuilds the scene using the
+features and the combined sequence Zb,j = [Hb−1; ˆzb,j],
+Gb,j = DGS(Fb,j, sg(Zb,j), C≤b) ,
+(2)
+where sg denotes stop-gradient. For ray construction and
+decoding, we center the camera prefix at the first camera
+and normalize by its spatial extent. We then map Gaus-
+sian centers and scales back to the fixed scene frame. The
+clean RGB history anchors appearance during each update.
+Newly generated views can refine geometry in overlapping
+regions through the refreshed historical features. The de-
+coder uses the current-view features to add geometry for
+regions revealed by the new cameras.
+Rendering feedback and history.
+We write ¯z(G, C) =
+E(R(G, C)) for the latent obtained by rendering a scene
+G at cameras C and encoding the resulting views with
+the frozen VAE encoder E. Between denoising steps, the
+current-view render latents ¯z(Gb,j, Cb) and features feed
+back into the DiT. We re-noise those render latents for the
+next step,
+xb,j+1 = (1 −σj+1) ¯z(Gb,j, Cb) + σj+1ϵ,
+(3)
+with fresh Gaussian noise ϵ. After S = 4 steps, we carry
+Hb = Zb,S and Fb,S into the next chunk and use Gb,S as
+the scene for rendering.
+3.3. 3D Self-Forcing Distillation
+Training on generated histories.
+Following Self Forc-
+ing [15] and BiWM [29], we train the student on its own
+Clean history (t = 0)
+Noisy new views
+Student DiT · 4 steps
+Cameras + text
+Shared random step k
+Direct RGB latents
+VAE decoder
+Direct RGB
+2 history + 2 current
+3DGS decoder
+3D Gaussians
+Input-view render
+Novel-view render
+Shared VAE encoder
+2D–3D latent consistency
+ℒcons
+Re-noise all 4 latents
+Each DMD branch
+Frozen teacher
+Online critic
+Real score
+Fake score
+∇ℒDMD
+Student update
+Figure 3. 3D Self-Forcing Distillation. We replay a shared de-
+noising step in each chunk and apply DMD to the direct RGB la-
+tents and both rendering branches. The input-view render latents
+also match the final chunk’s clean RGB context.
+rollouts. Each chunk completes all S denoising steps with-
+out gradients to supply the history for the next chunk. We
+sample a shared step k uniformly from {1, . . . , S} and re-
+play it with gradients from cached inputs. Appendix Ap-
+pendix B gives the training pseudocode.
+Three distillation branches.
+We apply DMD to the di-
+rect predictions from all chunks and to two sets of views
+rendered from the final chunk’s scene (Fig. 3).
+zrgb = [ˆz1,k; . . . ; ˆzB,k],
+direct RGB
+zin = ¯z(GB,k, C≤B),
+input-view renders
+znov = ¯z(GB,k, Cnov),
+novel-view renders
+(4)
+Here C≤B contains all cameras in the rollout, and Cnov con-
+tains extra cameras sampled along the training trajectory. At
+novel views, both score networks condition only on cam-
+eras and text. The novel-view branch provides a training
+signal at cameras that contribute no image features to the
+Gaussian decoder, complementing supervision at the rollout
+cameras. Both rendering branches supervise the Gaussian
+decoder through differentiable rendering and VAE encod-
+ing.
+4
+
+
+Distribution matching.
+The frozen teacher and the on-
+line critic denoise the same detached student sample af-
+ter re-noising at a random noise level.
+Let ˆzreal and
+ˆzfake denote their clean estimates from Eq. (1). Following
+DMD [19, 49, 50], the score-difference update in this clean-
+latent parameterization gives the gradient at an unobserved
+view i,
+
+∇zLDMD
+
+i = −2
+Nw (ˆzreal,i −ˆzfake,i) .
+(5)
+Here N is the number of latent elements in the branch out-
+put z, and w is the mean absolute difference between z and
+the teacher estimate, floored at δ. At reference views, the
+encoded observation replaces the teacher estimate in w and
+serves as the MSE target under the same reduction. The
+teacher uses text classifier-free guidance, and the branch-
+conditioned critic is trained by flow matching on detached
+student outputs.
+2D–3D latent consistency.
+To preserve appearance as the
+scene is revised, we match the input-view render latents to
+the completed history and the final chunk’s direct prediction
+used to decode the scene,
+Lcons = MSE(zin, [HB−1; ˆzB,k]) .
+(6)
+4. Experiments
+Training details.
+We initialize Wan2.2-TI2V-5B with
+FlashWorld weights [19].
+We alternate mixed-data and
+multi-view-only training stages. We use a curated, high-
+quality subset of DL3DV-10K [21], RealEstate10K [56],
+ACID [23], and SpatialVID [35] with sharp, high-fidelity
+clips, substantial camera motion, and high aesthetic qual-
+ity [8].
+For single-view examples, we pair Echo-4o-
+Image [48] with camera trajectories sampled randomly from
+WildRGB-D [43]. In the final stage, we draw posed se-
+quences and single-view images at a 2:1 ratio.
+To train
+for both generation and reconstruction, the first chunk of
+a multi-view rollout receives one to eight posed reference
+images from the same sequence.
+We train on eight GPUs at 480×704, sampling two to
+five chunks of eight views per rollout. We weight the three
+DMD branches equally for both data sources. We evaluate
+the checkpoint at 4,200 global steps. Appendix Appendix A
+gives the full training configuration. Appendix Appendix C
+shows additional qualitative results for reconstruction, gen-
+eration, and extrapolation.
+4.1. Multi-view Reconstruction
+DL3DV-200 comprises 200 scenes from DL3DV-10K [21].
+For each scene, we use 25 consecutive posed frames, pro-
+vide four or eight as references, and render the remain-
+ing views at their ground-truth poses. We compare against
+Table 1. Multi-view reconstruction on DL3DV-200. Cell colors
+mark the best , second-best , and third-best scores in each met-
+ric column throughout the experiments.
+4 views
+8 views
+Method
+PSNR↑SSIM↑LPIPS↓PSNR↑SSIM↑LPIPS↓
+ZipSplat [31]
+15.58
+0.372
+0.247
+16.51
+0.404
+0.193
+MVSplat [4]
+20.25
+0.659
+0.167
+19.18
+0.640
+0.187
+AnySplat [16]
+15.10
+0.350
+0.218
+15.32
+0.362
+0.213
+QuerySplat [20]
+18.61
+0.503
+0.163
+19.27
+0.534
+0.159
+PixWorld [8]
+19.85
+0.610
+0.151
+22.53
+0.708
+0.121
+ArgsWorld
+20.68
+0.657
+0.121
+21.31
+0.694
+0.117
+Table 2.
+Quantitative comparison of single-image 3D scene
+generation on DL3DV-200.
+Method
+PSNR↑SSIM↑LPIPS↓Time (s)↓
+Geometry Forcing [42]
+8.4218
+0.1363
+0.6206
+19.28
+Gen3C [28]
+10.5259 0.2968
+0.7110
+65.22
+Gen3R [14]
+10.5046 0.3036
+0.6561
+26.21
+FlashWorld [19]
+11.3820 0.3041
+0.5834
+2.55
+PixWorld [8]
+11.4295 0.2957
+0.6504
+1.37
+ArgsWorld
+11.6104 0.3054
+0.5939
+2.28
+ZipSplat, MVSplat, AnySplat, QuerySplat, and PixWorld.
+Inference runs at native resolution. We center-crop each
+prediction and ground-truth image to a square and resize
+both to 256×256 before computing PSNR, SSIM [38], and
+LPIPS [55]. We average scores over target views and then
+over scenes.
+ArgsWorld achieves the lowest LPIPS with both four and
+eight references (0.121 and 0.117). With four references, it
+also attains the highest PSNR (20.68 dB) and the second-
+highest SSIM (0.657) (Tab. 1). Figure 4 shows examples
+with two and four reference views.
+4.2. Single-view Scene Generation
+Experimental setup.
+For each DL3DV-200 scene, we
+provide one reference image and a trajectory of eight cam-
+era poses. ArgsWorld generates eight views in one chunk,
+and all baselines generate the 8 requested views in one
+rollout except Gen3C and Gen3R, which generate 9 views
+in one rollout.
+We compare Gaussian renderings from
+ArgsWorld, FlashWorld, and PixWorld and RGB predic-
+tions from Geometry Forcing, Gen3C, and Gen3R with the
+corresponding ground-truth frames using PSNR, SSIM, and
+LPIPS. We evaluate inference speed on a single NVIDIA
+RTX 6000D, including Gaussian rendering where applica-
+ble, while excluding model loading and output writes.
+ArgsWorld achieves the highest PSNR (11.6104 dB) and
+SSIM (0.3054), and the second-lowest LPIPS (0.5939) in
+Tab. 2. Figure 5 shows qualitative comparisons on separate
+16-view runs.
+5
+
+
+Reference view (input)
+Generated view (ArgsWorld)
+Camera trajectory
+2 views
+2 views
+4 views
+4 views
+Figure 4. Qualitative multi-view reconstruction. ArgsWorld reconstructs scenes from two or four posed reference images. Blue borders
+mark inputs and red borders mark synthesized views. The diagrams at left show the camera trajectories.
+PixWorld                            Geometry Forcing                               Gen3C                                    FlashWorld                                     Gen3R
+Baselines
+Ours
+Figure 5. Qualitative single-view scene generation. Each column compares ArgsWorld with the named baseline using the same reference
+image. The smaller panels show views 8 and 16 from direct 16-view generation.
+4.3. Autoregressive Scene Extrapolation
+Experimental setup.
+For each DL3DV-200 scene, we
+provide one reference image and a trajectory of 16 camera
+poses. ArgsWorld splits the trajectory into two consecutive
+eight-view chunks. It uses the generated history from the
+first chunk to synthesize the second and update the Gaus-
+sian scene. All baselines generate the 16 requested views
+in one rollout except Gen3C and Gen3R, which generate 17
+views in one rollout. We score Gaussian renderings from
+ArgsWorld, FlashWorld, and PixWorld and RGB predic-
+tions from Geometry Forcing, Gen3C, and Gen3R against
+the corresponding ground-truth frames using PSNR, SSIM,
+and LPIPS.
+ArgsWorld achieves the highest PSNR (11.8344 dB) and
+SSIM (0.3140), and the second-lowest LPIPS (0.5910) in
+Tab. 3.
+Continuation
+across
+disconnected
+endpoints.
+Fig-
+ure 6(a) illustrates a longer rollout over three consecutive
+eight-view chunks. In the cross-orbit example in Fig. 6(b),
+6
+
+
+(a) Continuous
+Chunk 1 ( Views 1-8 )
+Chunk 2 ( Views 9-16 )
+Chunk 3 ( Views 17-24 )
+RGB input
+Camera poses
+4
+8
+12
+16
+20
+24
+(b) Cross orbit
+Chunk 1 ( Horizontal orbit )
+Chunk 2 ( Vertical orbit )
+RGB input
+Camera poses
+1
+4
+8
+1
+4
+8
+Shared pose
+Figure 6. Autoregressive extrapolation from one image. We show RGB and depth for selected views. (a) Three eight-view chunks
+follow a continuous trajectory. (b) A second chunk switches from a horizontal to a vertical orbit. The first orbit’s endpoint and the second
+orbit’s start are separated, with a shared interior camera pose marked on both paths.
+Table 3. Quantitative comparison of single-image autoregres-
+sive 3D scene extrapolation on DL3DV-200.
+Method
+PSNR↑SSIM↑LPIPS↓Time (s)↓
+Geometry Forcing [42]
+8.9931
+0.1703
+0.6042
+57.47
+Gen3C [28]
+10.5526 0.3132
+0.7042
+107.54
+Gen3R [14]
+10.8525 0.3137
+0.6381
+56.12
+FlashWorld [19]
+11.7511 0.3077
+0.5620
+4.96
+PixWorld [8]
+11.7496 0.3095
+0.6428
+3.04
+ArgsWorld
+11.8344 0.3140
+0.5910
+6.91
+Table 4. Text-conditioned generation on T3Bench-200.
+Q-Align
+CLIP
+Method
+IQA↑IAA↑IQA+↑Aesthetic↑Score↑
+FlashWorld [19]
+4.42
+2.46
+0.65
+4.94
+32.53
+PixWorld [8]
+2.91
+2.48
+0.48
+4.61
+26.76
+ArgsWorld (Generation) 4.44
+2.51
+0.67
+4.93
+33.10
+the next chunk switches from a horizontal orbit to a vertical
+orbit whose starting camera differs from the previous end-
+point. The two orbits share their fourth pose. ArgsWorld
+carries its generated history into the vertical orbit and
+updates the same Gaussian scene without generating
+bridging views.
+4.4. Text-conditioned Generation on T3Bench-200
+Experimental setup.
+T3Bench-200 contains 200 text
+prompts sampled from T3Bench [10], covering single ob-
+jects, objects with surroundings, and multi-object scenes.
+For each prompt, ArgsWorld generates 16 views in one
+chunk. FlashWorld and PixWorld also generate 16 views
+in a single rollout. We assess image quality and aesthetics
+with Q-Align IQA and IAA [41], perceptual quality with
+CLIP-IQA+ [33], and aesthetic appeal with the CLIP aes-
+thetic predictor. We use CLIPScore to measure alignment
+with the input prompt [11].
+ArgsWorld ranks first on four of five metrics in Tab. 4, in-
+cluding prompt alignment with a CLIPScore of 33.10. Fig-
+ure 7 shows qualitative comparisons for two prompts.
+4.5. Evaluation on WorldScore Benchmark
+Experimental setup.
+We evaluate ArgsWorld on the
+2,000 cases in the static split of WorldScore [6].
+Each
+case provides a reference image, scene descriptions, and
+a target camera trajectory. We use the published baseline
+scores [6, 8]. Camera Control measures trajectory adher-
+ence, Object Control checks for requested objects, and Con-
+tent Alignment measures agreement with the prompt. We
+also report 3D Consistency for cross-view geometry, Photo-
+metric Consistency for cross-view appearance, and Subjec-
+tive Quality for perceptual quality. We compute the reported
+7
+
+
+Table 5. Static world generation on WorldScore. Average is the unweighted mean of the six metrics.
+Method
+Camera
+Control
+Object
+Control
+Content
+Alignment
+3D
+Consistency
+Photometric
+Consistency
+Subjective
+Quality
+Average
+DynamiCrafter [45]
+25.15
+47.36
+25.00
+72.90
+60.95
+54.40
+47.63
+VideoCrafter1-I2V [3]
+25.46
+24.25
+35.27
+74.42
+73.89
+54.85
+48.02
+Wan-2.1 [32]
+23.53
+40.32
+45.44
+78.74
+78.36
+59.38
+54.30
+WonderJourney [52]
+84.60
+37.10
+35.54
+80.60
+79.03
+66.56
+63.91
+FlashWorld [19]
+84.43
+50.28
+56.54
+85.87
+86.72
+52.75
+69.43
+PixWorld [8]
+91.08
+46.25
+55.27
+91.39
+93.84
+52.36
+71.70
+ArgsWorld
+91.08
+50.60
+65.86
+84.70
+82.40
+57.83
+72.08
+Input
+ArgsWorld (Generation)
+Baselines
+A black grand piano
+in a concert hall
+PixWorld
+A red barn
+in a green field
+FlashWorld
+Figure 7. Qualitative text-conditioned generation. The piano
+example compares ArgsWorld with PixWorld, and the barn exam-
+ple compares it with FlashWorld.
+Average as the unweighted mean of these six metrics.
+ArgsWorld achieves the highest six-metric average
+(72.08) in Tab. 5.
+It shares the highest camera control
+score (91.08) with PixWorld and ranks first in object control
+(50.60) and content alignment (65.86).
+4.6. Ablation Study
+We evaluate both variants with the single-view DL3DV-200
+protocols in Secs. 4.2 and 4.3. Starting from one reference
+image, the model generates one eight-view chunk for gener-
+ation or two successive eight-view chunks for extrapolation.
+Table 6. Ablations on DL3DV-200. Both settings start from one
+reference image.
+Method
+PSNR↑
+SSIM↑
+LPIPS↓
+Generation (8 views, one chunk)
+ArgsWorld
+11.6104
+0.3054
+0.5939
+Direct RGB DMD only
+10.8163
+0.3152
+0.6383
+Causal attention
+8.0975
+0.1377
+0.6538
+Extrapolation (16 views, two chunks)
+ArgsWorld
+11.8344
+0.3140
+0.5910
+Direct RGB DMD only
+10.6788
+0.3121
+0.6484
+Causal attention
+8.8900
+0.1773
+0.6485
+We score Gaussian renderings at the target cameras.
+Direct RGB DMD only.
+This variant applies DMD only
+to the direct RGB latents zrgb in Eq. (4). In the full model,
+the zin and znov branches supervise the Gaussian decoder
+through input-view and novel-view renderings. In Tab. 6,
+adding them improves PSNR by 0.79 dB in generation and
+1.16 dB in extrapolation, and reduces LPIPS by 0.0444 and
+0.0574, respectively. The full model improves all three met-
+rics in extrapolation.
+Causal attention.
+The causal variant lets current views
+attend to earlier views and freezes the historical features
+used for Gaussian decoding. In the full model, bidirectional
+attention refreshes the historical features in Fb,j used for
+scene decoding in Eq. (2) and keeps the clean RGB history
+fixed. With causal attention, PSNR falls by 3.51 dB in gen-
+eration and 2.94 dB in extrapolation, with lower SSIM in
+both settings. In extrapolation, the comparison reflects the
+effect of causal masking and frozen first-chunk features.
+5. Conclusion
+We present ArgsWorld, a unified autoregressive diffu-
+sion transformer for explicit 3D Gaussian scene model-
+ing. Our framework integrates multi-view reconstruction,
+image- and text-conditioned scene generation, and camera-
+controlled extrapolation within a single generative architec-
+8
+
+
+ture. Bidirectional attention refreshes scene features while
+retaining clean RGB history, and 3D Self-Forcing Distilla-
+tion supervises RGB predictions and Gaussian renderings
+on self-generated rollouts. This strategy improves visual fi-
+delity and cross-view consistency while enabling efficient
+four-step inference.
+Extensive experiments demonstrate
+state-of-the-art performance across multiple 3D scene mod-
+eling benchmarks, validating the effectiveness of our uni-
+fied approach. These results establish autoregressive diffu-
+sion as a promising paradigm for constructing, generating,
+and continuously expanding explicit 3D worlds.
+References
+[1] Jake Bruce, Michael D Dennis, Ashley Edwards, Jack
+Parker-Holder, Yuge Shi, Edward Hughes, Matthew Lai,
+Aditi Mavalankar, Richie Steigerwald, Chris Apps, et al. Ge-
+nie: Generative interactive environments. In Forty-first inter-
+national conference on machine learning, 2024. 3
+[2] David Charatan, Sizhe Lester Li, Andrea Tagliasacchi, and
+Vincent Sitzmann. pixelsplat: 3d gaussian splats from im-
+age pairs for scalable generalizable 3d reconstruction.
+In
+2024 IEEE/CVF Conference on Computer Vision and Pat-
+tern Recognition (CVPR), pages 19457–19467. IEEE, 2024.
+1, 3
+[3] Haoxin Chen, Menghan Xia, Yingqing He, Yong Zhang,
+Xiaodong Cun, Shaoshu Yang, Jinbo Xing, Yaofang Liu,
+Qifeng Chen, Xintao Wang, et al.
+Videocrafter1: Open
+diffusion models for high-quality video generation. arXiv
+preprint arXiv:2310.19512, 2023. 8
+[4] Yuedong Chen, Haofei Xu, Chuanxia Zheng, Bohan Zhuang,
+Marc Pollefeys, Andreas Geiger, Tat-Jen Cham, and Jianfei
+Cai. Mvsplat: Efficient 3d gaussian splatting from sparse
+multi-view images.
+In European conference on computer
+vision, pages 370–386. Springer, 2024. 1, 3, 5
+[5] Jaeyoung Chung, Suyoung Lee, Hyeongjin Nam, Jaerin Lee,
+and Kyoung Mu Lee.
+Luciddreamer: Domain-free gen-
+eration of 3d gaussian splatting scenes.
+arXiv preprint
+arXiv:2311.13384, 2023. 3
+[6] Haoyi Duan, Hong-Xing Yu, Sirui Chen, Li Fei-Fei, and Ji-
+ajun Wu. Worldscore: A unified evaluation benchmark for
+world generation. In Proceedings of the IEEE/CVF interna-
+tional conference on computer vision, pages 27713–27724,
+2025. 7
+[7] Ruiqi Gao, Aleksander Holynski, Philipp Henzler, Arthur
+Brussee,
+Ricardo
+Martin-Brualla,
+Pratul
+Srinivasan,
+Jonathan T Barron, and Ben Poole. Cat3d: Create anything
+in 3d with multi-view diffusion models.
+arXiv preprint
+arXiv:2405.10314, 2024. 3
+[8] Sensen Gao, Zhaoqing Wang, Qihang Cao, Dongdong Yu,
+Changhu Wang, and Jia-Wang Bian. Pixworld: Unifying 3d
+scene generation and reconstruction in pixel space. arXiv
+preprint arXiv:2607.05373, 2026. 1, 5, 7, 8
+[9] Hao He, Yinghao Xu, Yuwei Guo, Gordon Wetzstein, Bo
+Dai, Hongsheng Li, and Ceyuan Yang.
+Cameractrl: En-
+abling camera control for video diffusion models.
+In In-
+ternational Conference on Learning Representations, pages
+100433–100464, 2025. 3
+[10] Yuze He, Yushi Bai, Matthieu Lin, Wang Zhao, Yubin Hu,
+Jenny Sheng, Ran Yi, Juanzi Li, and Yong-Jin Liu.
+T 3
+bench: Benchmarking current progress in text-to-3d gener-
+ation. arXiv preprint arXiv:2310.02977, 2023. 7
+[11] Jack Hessel, Ari Holtzman, Maxwell Forbes, Ronan Le Bras,
+and Yejin Choi. Clipscore: A reference-free evaluation met-
+ric for image captioning. In Proceedings of the 2021 confer-
+ence on empirical methods in natural language processing,
+pages 7514–7528, 2021. 7
+[12] Lukas H¨ollein, Ang Cao, Andrew Owens, Justin Johnson,
+and Matthias Nießner. Text2room: Extracting textured 3d
+meshes from 2d text-to-image models. In 2023 IEEE/CVF
+International Conference on Computer Vision (ICCV), pages
+7875–7886. IEEE, 2023. 3
+[13] Junchao Huang, Guian Fang, Shengju Qian, Xianghao Kong,
+Zhuoran Zhao, Wei Huang, Yihua Du, Zixin Zhang, Justin
+Cui, Yuchao Gu, et al. Solarwm: Open data and scalable
+training for long-horizon video world models. arXiv preprint
+arXiv:2609.02886, 2026. 3
+[14] Jiaxin Huang, Yuanbo Yang, Bangbang Yang, Lin Ma,
+Yuewen Ma, and Yiyi Liao.
+Gen3r:
+3d scene genera-
+tion meets feed-forward reconstruction. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 25358–25369, 2026. 5, 7
+[15] Xun Huang, Zhengqi Li, Guande He, Mingyuan Zhou, and
+Eli Shechtman. Self forcing: Bridging the train-test gap in
+autoregressive video diffusion. In Advances in Neural Infor-
+mation Processing Systems, pages 167283–167308. Curran
+Associates, Inc., 2025. 1, 2, 3, 4
+[16] Lihan Jiang, Yucheng Mao, Linning Xu, Tao Lu, Kerui Ren,
+Yichen Jin, Xudong Xu, Mulin Yu, Jiangmiao Pang, Feng
+Zhao, et al. Anysplat: Feed-forward 3d gaussian splatting
+from unconstrained views. ACM Transactions on Graphics
+(TOG), 44(6):1–16, 2025. 1, 3, 5
+[17] Haian Jin, Hanwen Jiang, Hao Tan, Kai Zhang, Sai Bi,
+Tianyuan Zhang, Fujun Luan, Noah Snavely, and Zexiang
+Xu. Lvsm: A large view synthesis model with minimal 3d
+inductive bias. arXiv preprint arXiv:2410.17242, 2024. 3
+[18] Bernhard Kerbl, Georgios Kopanas, Thomas Leimkuehler,
+and George Drettakis.
+3d gaussian splatting for real-time
+radiance field rendering. ACM Trans. Graph., 42(4), 2023.
+1, 3
+[19] Xinyang Li, Tengfei Wang, Zixiao Gu, Shengchuan Zhang,
+Chunchao Guo, and Liujuan Cao. Flashworld: High-quality
+3d scene generation within seconds. In International Confer-
+ence on Learning Representations, pages 3775–3797, 2026.
+1, 2, 3, 5, 7, 8
+[20] Yinglong Li, Donghui Shen, Xiaoyu Zhang, Zhichao Ye,
+Hongyu Wu, Aimin Hao, Guofeng Zhang, and Haomin Liu.
+Querysplat: Decoupling geometry and appearance represen-
+tations in 3dgs prediction. arXiv preprint arXiv:2608.01186,
+2026. 5
+[21] Lu Ling, Yichen Sheng, Zhi Tu, Wentian Zhao, Cheng Xin,
+Kun Wan, Lantao Yu, Qianyu Guo, Zixun Yu, Yawen Lu,
+et al.
+Dl3dv-10k: A large-scale scene dataset for deep
+9
+
+
+learning-based 3d vision.
+In 2024 IEEE/CVF Conference
+on Computer Vision and Pattern Recognition (CVPR), pages
+22160–22169. IEEE, 2024. 5
+[22] Yaron Lipman, Ricky TQ Chen, Heli Ben-Hamu, Maximil-
+ian Nickel, and Matt Le. Flow matching for generative mod-
+eling. arXiv preprint arXiv:2210.02747, 2022. 3
+[23] Andrew Liu, Richard Tucker, Varun Jampani, Ameesh
+Makadia, Noah Snavely, and Angjoo Kanazawa.
+Infinite
+nature: Perpetual view generation of natural scenes from a
+single image. In Proceedings of the ieee/cvf international
+conference on computer vision, pages 14458–14467, 2021.
+5
+[24] Ruoshi Liu, Rundi Wu, Basile Van Hoorick, Pavel Tok-
+makov, Sergey Zakharov, and Carl Vondrick. Zero-1-to-3:
+Zero-shot one image to 3d object. In 2023 IEEE/CVF In-
+ternational Conference on Computer Vision (ICCV), pages
+9264–9275. IEEE, 2023. 3
+[25] Ben Mildenhall, Pratul P. Srinivasan, Matthew Tancik,
+Jonathan T. Barron, Ravi Ramamoorthi, and Ren Ng. Nerf:
+representing scenes as neural radiance fields for view synthe-
+sis. Commun. ACM, 65(1):99–106, 2021. 3
+[26] Chaojun Ni, Xiaofeng Wang, Zheng Zhu, Weijie Wang,
+Haoyun Li, Guosheng Zhao, Jie Li, Wenkang Qin, Guan
+Huang, and Wenjun Mei. Wonderturbo: Generating inter-
+active 3d world in 0.72 seconds.
+In 2025 IEEE/CVF In-
+ternational Conference on Computer Vision (ICCV), pages
+27423–27434. IEEE, 2025. 3
+[27] Ben Poole, Ajay Jain, Jonathan T Barron, and Ben Milden-
+hall.
+Dreamfusion: Text-to-3d using 2d diffusion.
+arXiv
+preprint arXiv:2209.14988, 2022. 3
+[28] Xuanchi Ren, Tianchang Shen, Jiahui Huang, Huan Ling,
+Yifan Lu, Merlin Nimier-David, Thomas M¨uller, Alexan-
+der Keller, Sanja Fidler, and Jun Gao. Gen3c: 3d-informed
+world-consistent video generation with precise camera con-
+trol. In 2025 IEEE/CVF Conference on Computer Vision and
+Pattern Recognition (CVPR), pages 6121–6132. IEEE, 2025.
+5, 7
+[29] Shaohao Rui, Xiaofeng Mao, Zhanyu Zhang, Peijia Lin,
+Yansong Zhu, Yibo Zhang, Haibin Wan, Zhangrui Zhao,
+and Weijie Ma. Biwm: Advancing open-source interactive
+video world models with bidirectional autoregression. arXiv
+preprint arXiv:2606.10135, 2026. 1, 3, 4
+[30] InSpatio Team, Donghui Shen, Guofeng Zhang, Haomin Liu,
+Haoyu Ji, Hujun Bao, Hongjia Zhai, Jialin Liu, Jing Guo,
+Nan Wang, et al. Inspatio-world: A real-time 4d world sim-
+ulator via spatiotemporal autoregressive modeling.
+arXiv
+preprint arXiv:2604.07209, 2026. 3
+[31] Alexander Veicht, Sunghwan Hong, D´aniel Bar´ath, and
+Marc Pollefeys.
+Zipsplat: Fewer gaussians, better splats.
+arXiv preprint arXiv:2606.05102, 2026. 5
+[32] Team Wan, Ang Wang, Baole Ai, Bin Wen, Chaojie Mao,
+Chen-Wei Xie, Di Chen, Feiwu Yu, Haiming Zhao, Jianx-
+iao Yang, Jianyuan Zeng, Jiayu Wang, Jingfeng Zhang, Jin-
+gren Zhou, Jinkai Wang, Jixuan Chen, Kai Zhu, Kang Zhao,
+Keyu Yan, Lianghua Huang, Mengyang Feng, Ningyi Zhang,
+Pandeng Li, Pingyu Wu, Ruihang Chu, Ruili Feng, Shiwei
+Zhang, Siyang Sun, Tao Fang, Tianxing Wang, Tianyi Gui,
+Tingyu Weng, Tong Shen, Wei Lin, Wei Wang, Wei Wang,
+Wenmeng Zhou, Wente Wang, Wenting Shen, Wenyuan Yu,
+Xianzhong Shi, Xiaoming Huang, Xin Xu, Yan Kou, Yangyu
+Lv, Yifei Li, Yijing Liu, Yiming Wang, Yingya Zhang, Yi-
+tong Huang, Yong Li, You Wu, Yu Liu, Yulin Pan, Yun
+Zheng, Yuntao Hong, Yupeng Shi, Yutong Feng, Zeyinzi
+Jiang, Zhen Han, Zhi-Fan Wu, and Ziyu Liu. Wan: Open
+and advanced large-scale video generative models.
+arXiv
+preprint arXiv:2503.20314, 2025. 1, 2, 3, 8
+[33] Jianyi Wang, Kelvin CK Chan, and Chen Change Loy. Ex-
+ploring clip for assessing the look and feel of images. In Pro-
+ceedings of the AAAI conference on artificial intelligence,
+pages 2555–2563, 2023. 7
+[34] Jianyuan Wang, Minghao Chen, Nikita Karaev, Andrea
+Vedaldi, Christian Rupprecht, and David Novotny.
+Vggt:
+Visual geometry grounded transformer. In 2025 IEEE/CVF
+Conference on Computer Vision and Pattern Recognition
+(CVPR), pages 5294–5306. IEEE, 2025. 3
+[35] Jiahao Wang, Yufeng Yuan, Rujie Zheng, Youtian Lin,
+Jian Gao, Lin-Zhuo Chen, Yajie Bao, Chang Zeng, Yanxi
+Zhou, Xiao-Xiao Long, et al.
+Spatialvid: A large-scale
+video dataset with spatial annotations.
+In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 42592–42603, 2026. 5
+[36] Qianqian Wang, Zhicheng Wang, Kyle Genova, Pratul P
+Srinivasan, Howard Zhou, Jonathan T Barron, Ricardo
+Martin-Brualla, Noah Snavely, and Thomas Funkhouser. Ibr-
+net: Learning multi-view image-based rendering. In Pro-
+ceedings of the IEEE/CVF conference on computer vision
+and pattern recognition, pages 4690–4699, 2021. 3
+[37] Shuzhe Wang,
+Vincent Leroy,
+Yohann Cabon,
+Boris
+Chidlovskii, and Jerome Revaud. Dust3r: Geometric 3d vi-
+sion made easy. In 2024 IEEE/CVF Conference on Com-
+puter Vision and Pattern Recognition (CVPR), pages 20697–
+20709. IEEE, 2024. 3
+[38] Zhou Wang, Alan C Bovik, Hamid R Sheikh, and Eero P Si-
+moncelli. Image quality assessment: from error visibility to
+structural similarity. IEEE transactions on image processing,
+13(4):600–612, 2004. 5
+[39] Zhouxia Wang, Ziyang Yuan, Xintao Wang, Yaowei Li,
+Tianshui Chen, Menghan Xia, Ping Luo, and Ying Shan.
+Motionctrl: A unified and flexible motion controller for
+video generation. In ACM SIGGRAPH 2024 Conference Pa-
+pers, pages 1–11, 2024. 3
+[40] Zhaoqing Wang, Xiaobo Xia, Zhuolin Bie, Jinlin Liu, Dong-
+dong Yu, Jia-Wang Bian, and Changhu Wang.
+Taming
+camera-controlled video generation with verifiable geometry
+reward. In European Conference on Computer Vision, pages
+625–642. Springer, 2026. 3
+[41] Haoning Wu, Zicheng Zhang, Weixia Zhang, Chaofeng
+Chen, Liang Liao, Chunyi Li, Yixuan Gao, Annan Wang,
+Erli Zhang, Wenxiu Sun, et al. Q-align: Teaching lmms for
+visual scoring via discrete text-defined levels. arXiv preprint
+arXiv:2312.17090, 2023. 7
+[42] Haoyu Wu, Diankun Wu, Tianyu He, Junliang Guo, Yang
+Ye, Yueqi Duan, and Jiang Bian. Geometry forcing: Mar-
+rying video diffusion and 3d representation for consistent
+10
+
+
+world modeling. In International Conference on Learning
+Representations, pages 119186–119209, 2026. 5, 7
+[43] Hongchi Xia, Yang Fu, Sifei Liu, and Xiaolong Wang. Rgbd
+objects in the wild: Scaling real-world 3d object learning
+from rgb-d videos. In 2024 IEEE/CVF Conference on Com-
+puter Vision and Pattern Recognition (CVPR), pages 22378–
+22389. IEEE, 2024. 5
+[44] Zeqi Xiao, Yushi LAN, Yifan Zhou, Wenqi Ouyang, Shuai
+Yang, Yanhong Zeng, and Xingang Pan. Worldmem: Long-
+term consistent world simulation with memory. In Advances
+in Neural Information Processing Systems, pages 49632–
+49652. Curran Associates, Inc., 2025. 3
+[45] Jinbo Xing, Menghan Xia, Yong Zhang, Haoxin Chen,
+Wangbo Yu, Hanyuan Liu, Gongye Liu, Xintao Wang, Ying
+Shan, and Tien-Tsin Wong.
+Dynamicrafter:
+Animating
+open-domain images with video diffusion priors.
+In Eu-
+ropean Conference on Computer Vision, pages 399–417.
+Springer, 2024. 8
+[46] Haofei Xu, Songyou Peng, Fangjinhua Wang, Hermann
+Blum, Daniel Barath, Andreas Geiger, and Marc Pollefeys.
+Depthsplat: Connecting gaussian splatting and depth.
+In
+2025 IEEE/CVF Conference on Computer Vision and Pat-
+tern Recognition (CVPR), pages 16453–16463. IEEE, 2025.
+3
+[47] Shuai Yang, Wei Huang, Ruihang Chu, Yicheng Xiao,
+Yuyang Zhao, Xianbang Wang, Muyang Li, Enze Xie, Ying-
+cong Chen, Yao Lu, et al. Longlive: Real-time interactive
+long video generation.
+arXiv preprint arXiv:2509.22622,
+2025. 3
+[48] Junyan Ye, Dongzhi Jiang, Zihao Wang, Leqi Zhu, Zheng-
+hao Hu, Zilong Huang, Jun He, Zhiyuan Yan, Jinghua Yu,
+Hongsheng Li, et al. Echo-4o: Harnessing the power of gpt-
+4o synthetic images for improved image generation. arXiv
+preprint arXiv:2508.09987, 2025. 5
+[49] Tianwei Yin, Micha¨el Gharbi, Taesung Park, Richard Zhang,
+Eli Shechtman, Fredo Durand, and William T Freeman. Im-
+proved distribution matching distillation for fast image syn-
+thesis. Advances in neural information processing systems,
+37:47455–47487, 2024. 2, 3, 5
+[50] Tianwei Yin, Micha¨el Gharbi, Richard Zhang, Eli Shecht-
+man, Fredo Durand, William T Freeman, and Taesung Park.
+One-step diffusion with distribution matching distillation. In
+2024 IEEE/CVF Conference on Computer Vision and Pat-
+tern Recognition (CVPR), pages 6613–6623. IEEE, 2024. 2,
+3, 5
+[51] Tianwei Yin, Qiang Zhang, Richard Zhang, William T Free-
+man, Fredo Durand, Eli Shechtman, and Xun Huang. From
+slow bidirectional to fast autoregressive video diffusion mod-
+els. In 2025 IEEE/CVF Conference on Computer Vision and
+Pattern Recognition (CVPR), pages 22963–22974. IEEE,
+2025. 3
+[52] Hong-Xing Yu, Haoyi Duan, Junhwa Hur, Kyle Sargent,
+Michael Rubinstein, William T Freeman, Forrester Cole, De-
+qing Sun, Noah Snavely, Jiajun Wu, et al. Wonderjourney:
+Going from anywhere to everywhere. In 2024 IEEE/CVF
+Conference on Computer Vision and Pattern Recognition
+(CVPR), pages 6658–6667. IEEE, 2024. 8
+[53] Hong-Xing Yu, Haoyi Duan, Charles Herrmann, William T
+Freeman, and Jiajun Wu. Wonderworld: Interactive 3d scene
+generation from a single image. In 2025 IEEE/CVF Confer-
+ence on Computer Vision and Pattern Recognition (CVPR),
+pages 5916–5926. IEEE, 2025. 3
+[54] Wangbo Yu, Jinbo Xing, Li Yuan, Wenbo Hu, Xiaoyu Li,
+Zhipeng Huang, Xiangjun Gao, Tien-Tsin Wong, Ying Shan,
+and Yonghong Tian. Viewcrafter: Taming video diffusion
+models for high-fidelity novel view synthesis. arXiv preprint
+arXiv:2409.02048, 2024. 3
+[55] Richard Zhang, Phillip Isola, Alexei A Efros, Eli Shechtman,
+and Oliver Wang. The unreasonable effectiveness of deep
+features as a perceptual metric. In 2018 IEEE/CVF confer-
+ence on computer vision and pattern recognition, pages 586–
+595. IEEE, 2018. 5
+[56] Tinghui Zhou, Richard Tucker, John Flynn, Graham Fyffe,
+and Noah Snavely.
+Stereo magnification:
+Learning
+view synthesis using multiplane images.
+arXiv preprint
+arXiv:1805.09817, 2018. 5
+11
+
+
+ArgsWorld: Unifying 3DGS Scene Reconstruction, Generation and
+Extrapolation with Autoregressive Diffusion Transformer
+Appendix
+A. IMPLEMENTATION DETAILS
+Architecture.
+The Wan2.2-TI2V-5B backbone has 30
+transformer blocks and 24 attention heads of dimension
+128. We remove temporal padding from the frozen VAE
+and sample a normalized 48-channel posterior latent inde-
+pendently for each view. The encoder downsamples by a
+factor of 16 along each image axis. At 480×704, the 30×44
+latent grid becomes 330 tokens per view after 2×2 patchi-
+fication. The student concatenates 48 noisy latent channels,
+six ray channels, 48 reference channels, 1024 feedback fea-
+ture channels, and 48 feedback latent channels, for 1174
+input channels. The teacher sees the first three groups, and
+the critic adds one channel carrying the branch identifier.
+We encode text with the frozen UMT5 encoder at a maxi-
+mum length of 512 tokens.
+Gaussian decoding and rendering.
+The reconstruction
+decoder adds a convolutional projection of the DiT features
+to the first decoder activation of the unnormalized clean la-
+tent. Its prediction head produces two Gaussians per spa-
+tial output location. A truncated exponential gives posi-
+tive depth, and a sigmoid bounds opacity and the pixel-
+size-scaled anisotropic scales. Each Gaussian uses a unit
+quaternion and degree-two spherical harmonics. We raster-
+ize RGB and depth in FP32. Multiscale depth regularization
+uses average pooling with kernel sizes 4, 2, and 1, weighted
+by 4/7, 2/7, and 1/7, respectively.
+Data and conditioning.
+We sample posed sequences and
+single-view images at a 2:1 ratio. Each rollout uses a uni-
+formly sampled length of two to five eight-view chunks.
+Within the multi-view stream, the sampling weights for
+DL3DV-10K, RealEstate10K, ACID, and SpatialVID are
+4:2:1:1.
+The nominal input frame strides are 3–4 for
+DL3DV-10K and ACID, 5–12 for RealEstate10K, 3–5 for
+SpatialVID, and 5–7 for WildRGB-D. Each posed clip
+shares a center crop with a crop-scale factor drawn uni-
+formly from [0.8, 1.0]. We update the intrinsics for the crop
+and resize. For the novel-view branch, we sample a second
+trajectory of equal length at a smaller frame stride within the
+span of the rollout. Its camera slots carry no reference la-
+tents. Image conditioning is enabled with probability 0.7,
+with prompt dropout of 0.1 on image-conditioned exam-
+ples. We sample the number of posed references uniformly
+from one to eight and select distinct slots uniformly in the
+first chunk. A single-view example uses the first slot for its
+reference image when image conditioning is enabled.
+Distillation and optimization.
+The online critic starts
+from the same adapted FlashWorld checkpoint as the frozen
+teacher. The teacher uses text classifier-free guidance with
+scale 3. We sample one of the four denoising steps uni-
+formly for replay and share it across chunks. We average the
+three DMD losses and set the normalizer floor in Eq. (5) to
+10−6. We sample DMD noise from scheduler entries within
+the nominal range σ ∈[0.02, 0.98], with bounds tied to
+the replayed denoising step. The adversarial head projects
+the 1024-channel critic features to 128 channels and applies
+three stride-two residual blocks of widths 128, 256, and 512
+to obtain per-view patch logits. For multi-view samples, we
+regularize these logits with an MSE between real predic-
+tions before and after adding Gaussian noise of standard
+deviation 0.05 to the noisy real latents. The penalty has
+weight 10 in the critic objective. The logistic adversarial
+terms for the student and critic each have weight 0.005 per
+branch. The depth and opacity penalties each have weight
+0.01. The latent consistency term has weight 0.1 through
+step 2,200, 0.4 through step 3,000, 0.6 through step 3,350,
+1.0 through step 4,000, and 0.4 for the final 200 steps.
+We use AdamW with peak learning rates of 10−6 for
+the student and Gaussian decoder and 5×10−7 for the critic
+and adversarial head, with (β1, β2) = (0.9, 0.95), weight
+decay 10−6, and gradient clipping at 1. Learning rates warm
+up over 1,000 global steps. After 100 critic-only steps, we
+update the student and decoder once every four global steps
+and the critic at every step. The global batch contains eight
+examples, one per GPU, with no gradient accumulation. We
+use BF16 autocasting, fully shard the DiTs, and checkpoint
+activations in the trainable networks and rendering pipeline.
+Inference.
+Each
+chunk
+uses
+noise
+levels
+(1, 0.9, 0.75, 0.5), corresponding to zero-based indices
+(0, 250, 500, 750) in the flow-matching scheduler with shift
+3. The first camera and the spatial extent of the first chunk
+define the fixed session frame. At each denoising step, the
+local normalization divides camera offsets from the first
+camera by the largest offset norm in the prefix plus 10−2.
+We map centers and scales back to the session frame after
+decoding, and render RGB against white for feedback to
+the next denoising step. The final clean direct latents and
+refreshed features form the history for the next chunk.
+12
+
+
+B. TRAINING ALGORITHM
+3D Self-Forcing Distillation
+1. Initialize the student and Gaussian decoder from the few-step FlashWorld checkpoint.
+2. Initialize the frozen teacher and trainable critic from the 3D-adapted diffusion checkpoint.
+3. for global step m = 1, . . . , M do
+4.
+Draw a training example following Appendix A. Sample B ∼Unif{2, . . . , 5} and a shared replay step
+k ∼Unif{1, . . . , 4}.
+5.
+Prepare B eight-view chunks, the denser trajectory Cnov, text conditioning, and any first-chunk references.
+6.
+u ←(m > 100) ∧(m mod 4 = 0)
+Student update flag
+7.
+Initialize the RGB and feature histories to empty.
+8.
+for chunk b = 1, . . . , B do
+9.
+Initialize the chunk from Gaussian noise and zero feedback.
+10.
+for denoising step j = 1, . . . , 4 do
+No gradients
+11.
+Predict ˆzb,j and refresh Fb,j using the clean prefix history and current inputs.
+12.
+Decode Gb,j using Fb,j and sg([Hb−1; ˆzb,j]) (Eq. (2)).
+13.
+At j = k, retain the outputs. If u is true, also cache the step inputs for replay.
+14.
+If j < 4, render and encode the current views, then re-noise them and pass the feedback to the next step
+(Eq. (3)).
+15.
+end for
+16.
+Hb, Fb ←sg([Hb−1; ˆzb,4]), sg(Fb,4)
+17.
+If u is true, replay step k from its cached inputs with gradients to obtain ˆzb,k and Gb,k. Otherwise use the outputs
+recorded at step k.
+18.
+end for
+19.
+zrgb ←[ˆz1,k; . . . ; ˆzB,k]
+20.
+zin, znov ←¯z(GB,k, C≤B), ¯z(GB,k, Cnov)
+21.
+if u then
+22.
+Hold the critic and adversarial head fixed for this update. Sample a score noise level conditioned on k.
+23.
+For each branch, score the same re-noised latent with the teacher and branch-conditioned critic. Compute the
+DMD update using Eq. (5) and the reference-view anchors.
+24.
+Compute Lcons = MSE(zin, [HB−1; ˆzB,k]).
+25.
+Update the student and Gaussian decoder using mean branch DMD, consistency, depth and opacity regularization,
+and the sum of logistic adversarial losses for multi-view examples.
+26.
+end if
+27.
+Sample a fresh score noise level conditioned on k and re-noise the detached branch latents from the same rollout.
+28.
+Update the critic by flow matching to ϵ −sg(z) in each branch. For multi-view examples, also update the critic and
+adversarial head with the per-branch logistic losses on camera-matched data and the real-logit perturbation penalty.
+29. end for
+13
+
+
+C. ADDITIONAL QUALITATIVE RESULTS
+C.1. Multi-view Reconstruction
+Reference view (input)
+Generated view (ArgsWorld)
+Camera trajectory
+2 views
+2 views
+2 views
+2 views
+2 views
+2 views
+2 views
+2 views
+4 views
+4 views
+4 views
+4 views
+4 views
+4 views
+4 views
+4 views
+14
+
+
+C.2. Text-conditioned Generation
+Input
+ArgsWorld (Generation)
+ArgsWorld (Extrapolation)
+Baselines
+Input
+ArgsWorld (Generation)
+ArgsWorld (Extrapolation)
+Baselines
+A stack of pancakes
+on a breakfast table
+PixWorld
+A white swan
+on a tranquil lake
+FlashWorld
+A vintage typewriter
+on a desk
+PixWorld
+A snowman wearing a scarf
+in a winter landscape
+FlashWorld
+Text-to-3D scene generation results of different methods.
+15
+
+
+C.3. Autoregressive Extrapolation
+C.3.1. Continuous Camera Trajectories
+20  
+16  
+16  
+20  
+12  
+12  
+20  
+16  
+24  
+24  
+12  
+08  
+08  
+04  
+04  
+24  
+20  
+16  
+08  
+04  
+12  
+24  
+08  
+04  
+→   Chunk 2                        Views 9-16
+→   Chunk 3                      Views 17-24
+Reference RGB
+Views 1-8
+Camera poses
+Camera poses
+Camera poses
+Camera poses
+Chunk 1
+Reference RGB
+Chunk 1 ( Views 1-8 )
+Chunk 2 ( Views 9-16 )
+Chunk 3 ( Views 17-24 )
+16
+
+
+Reference RGB
+Chunk 1
+Views 1-8
+Chunk 2
+Views 9-16
+Chunk 3
+Views 17-24
+04
+08
+12
+16
+20
+24
+Camera poses
+04
+08
+12
+16
+20
+24
+Camera poses
+04
+08
+12
+16
+20
+24
+Camera poses
+04
+08
+12
+16
+20
+24
+Camera poses
+Reference RGB
+Chunk 1 ( Views 1-8 )
+Chunk 2 ( Views 9-16 )
+Chunk 3 ( Views 17-24 )
+17
+
+
+C.3.2. Horizontal-to-Vertical Camera Orbits
+  Same camera at frame 4 of both chunks
+Chunk 1  /  Horizontal orbit                      
+Chunk 2  /  Vertical orbit                            
+4    
+4    
+4    
+4    
+4    
+4    
+4    
+4    
+Reference RGB
+Camera poses
+Camera poses
+Camera poses
+Camera poses
+8
+8
+8
+8
+1
+1
+1
+1
+1
+8
+8
+8
+1
+1
+8
+1
+Reference RGB
+Chunk 1 ( Horizontal orbit )
+Chunk 2 ( Vertical orbit )
+18
+
+
+Reference RGB
+Chunk 1  /  Horizontal orbit
+Chunk 2  /  Vertical orbit
+Same camera at frame 4 of both chunks
+1
+4
+8
+1
+4
+8
+Camera poses
+1
+4
+8
+1
+4
+8
+Camera poses
+1
+4
+8
+1
+4
+8
+Camera poses
+1
+4
+8
+1
+4
+8
+Camera poses
+Reference RGB
+Chunk 1 ( Horizontal orbit )
+Chunk 2 ( Vertical orbit )
+19

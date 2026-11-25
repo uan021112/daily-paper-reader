@@ -1,0 +1,1245 @@
+Where Demand Meets Supply: Spatial Elastic Consensus for Low-Bandwidth
+Collaborative Perception
+Linshan Yan
+School of Software, Northwestern Polytechnical University
+127 Youyi Xilu, Xi’an, 710072, Shaanxi, China
+yls nwpu@mail.nwpu.edu.cn
+Abstract
+Occlusions and limited sensor range make ego-only 3D per-
+ception insufficient for safe driving. Collaborative percep-
+tion addresses this by enabling connected vehicles to share
+complementary observations, yet it remains constrained by
+tight vehicular communication budgets. While spatial se-
+lection is more flexible than fixed-rate feature compression,
+existing selectors remain largely sender-driven and waste
+scarce bandwidth on ego-visible targets. Furthermore, ap-
+plying convolutions after masking spreads isolated tokens
+into their neighborhoods, silently violating low-bandwidth
+constraints. To address this, we propose Spatial Elastic Con-
+sensus (SEC), a bandwidth-adaptive framework centered
+on bilateral demand-supply consensus. Instead of unilateral
+token selection, the ego vehicle formulates a content-aware
+demand prior while each collaborator evaluates its local
+supply. This single-round consensus allocates the token bud-
+get to critical ego-missed evidence rather than ego-visible
+redundancy, without transmitting dense maps. To guarantee
+exact budget compliance, an anti-dilation refine-before-mask
+pipeline refines features prior to discrete token selection,
+preventing receptive-field leakage. A lightweight deformable
+sampler then aggregates these sparse messages with learned
+local offsets, compensating for the spatial context lost to to-
+ken selection and mitigating inter-agent pose drift. Evaluated
+at a stringent 64 KiB budget, SEC consistently achieves the
+best AP@0.7 on the simulated OPV2V and V2XSet datasets
+and the real-world DAIR-V2X dataset. These results demon-
+strate that combining bilateral consensus with budget-exact
+transmission is key to efficient low-bandwidth collaborative
+perception.
+1. Introduction
+Accurate 3D perception is a cornerstone of autonomous
+driving. While recent LiDAR and BEV detectors have sub-
+stantially advanced single-agent 3D perception [10, 23, 25,
+Figure 1. Concept of SEC. Top: pre-communication scene and
+available information. Bottom: ego demand and collaborator supply
+jointly select specific regions for transmission, with all other areas
+untransmitted.
+26, 39, 43, 47], ego-only sensing remains constrained by
+physical limitations such as severe occlusions and limited
+sensor ranges. These limitations create extensive blind spots
+that hide safety-critical objects, as illustrated in Fig. 1(a–b).
+Collaborative perception (CP) [3, 11, 16] addresses this bot-
+tleneck by allowing connected agents to share intermediate
+bird’s-eye-view (BEV) features over vehicle-to-everything
+(V2X) networks [30, 34–36]. However, broadcasting high-
+dimensional BEV tensors incurs prohibitive wireless band-
+width overhead. A critical challenge for real-world CP is
+achieving high performance under strict per-agent commu-
+nication budgets of only tens of kilobytes, which demands
+highly precise token selection. Unlike fixed-rate compres-
+sion, token selection must decide which spatial cells carry
+the evidence the ego lacks; a small error in this decision
+wastes the entire budget. At 64 KiB per collaborator, only
+0.76% of the 8,448 BEV cells fit in the budget.
+1
+arXiv:2611.22439v1  [cs.CV]  17 Nov 2026
+
+
+To reduce payloads, feature compression methods en-
+code BEV maps into compact representations [8, 30], but
+static encoders struggle with dynamic traffic and fluctuating
+channel capacities. Alternatively, spatial selection methods
+transmit only salient spatial tokens [7, 19–21]. While of-
+fering greater flexibility, existing sparse selection pipelines
+suffer from two coupled structural limitations. First, most se-
+lectors evaluate feature confidence unilaterally [7] or via de-
+coupled scores. This sender-driven design inevitably wastes
+scarce bandwidth on transmitting targets the ego vehicle
+has already perceived, leaving critical occluded blind zones
+unassisted (Fig. 1c). Second, a pervasive architectural flaw
+undermines strict budget control: applying spatial convolu-
+tions after discrete token masking dilates isolated tokens into
+neighboring cells. This “mask-before-refine” process silently
+inflates the transmitted payload and corrupts downstream
+fusion, severely limiting the efficacy of ultra-low bandwidth
+transmission.
+Reducing the payload alone does not resolve these issues:
+supply–demand-aware fusion [33], multi-scale deformable
+communication [41], and channel-wise selection [2] still
+rely on largely sender-driven or separately computed spa-
+tial selection, and none enforces an exact k-token support
+after feature refinement. To overcome these structural limi-
+tations, effective low-bandwidth collaboration requires two
+coupled mechanisms: a bilateral supply–demand consensus
+that precisely isolates ego-missed targets, and a refine-before-
+mask pipeline that prevents budget inflation. Controlled diag-
+nostics support both choices: a multiplicative demand prior
+shifts tokens toward ego-missed targets, and refine-before-
+mask keeps the support at exactly k cells under identical
+weights.
+We propose Spatial Elastic Consensus (SEC), a
+communication-efficient and budget-exact collaborative per-
+ception framework. As illustrated in Fig. 2, SEC relies on
+two core designs: (1) Bilateral Consensus and Anti-Dilation
+Selection (Engine B). The ego agent constructs a content-
+aware demand map while each collaborator purifies its lo-
+cal features. Their single-step Hadamard product (Fig. 1d)
+isolates complementary regions and enforces exact token
+sparsity via a straight-through estimator with zero dilation
+leakage. (2) Stable Sparse Training and Aggregation (En-
+gines C & D). We introduce foreground warm-up and gate
+supervision during training to stabilize discrete selection,
+and employ a lightweight 8-point deformable sampler to
+aggregate the retained sparse tokens, effectively mitigating
+inter-agent pose drift.
+Our main contributions are:
+• We propose SEC, a novel bandwidth-adaptive frame-
+work that introduces a single-round bilateral supply-
+demand consensus mechanism. It effectively suppresses
+ego-visible redundancy and prioritizes occluded blind
+spots without transmitting dense demand or supply maps.
+• We design an anti-dilation refine-before-mask pipeline
+that strictly locks the transmitted payload to target token
+counts, eliminating post-mask receptive-field leakage and
+ensuring exact budget compliance at inference.
+• Extensive experiments demonstrate that SEC achieves su-
+perior accuracy under stringent communication constraints.
+Notably, at a 64 KiB operating knee, SEC retains near-
+saturated unconstrained accuracy with only a tiny fraction
+of the payload.
+2. Related Work
+Collaborative Perception and Ego-Side Demand Priors.
+Multi-agent collaborative perception (CP) overcomes single-
+vehicle line-of-sight limits via intermediate bird’s-eye-view
+(BEV) feature sharing, optimally balancing representation
+richness and bandwidth [30, 35–37, 44, 45]. To address se-
+vere occlusions, prior studies quantify spatial ambiguity via
+Bayesian deep learning [13], scene completion [1], or con-
+fidence maps [7]. However, these uncertainty metrics are
+predominantly exploited retrospectively at the receiver for
+feature re-weighting [24, 32], failing to prevent the upstream
+transmission of ego-visible redundancy. In contrast, we for-
+mulate a proactive ego-side saliency map (demand) to gate
+transmission, explicitly focusing scarce bandwidth on ego-
+missed regions.
+Communication-Efficient Collaboration. To satisfy strict
+bandwidth constraints, early CP methods use coarse link-
+level handshakes [20, 21]. Fine-grained methods instead
+prune spatial content via sender-side top-k selection [7],
+receiver-guided queries [5, 32], channel filtering [2], robust
+aggregation [46], codebook-based filling [8], pragmatic com-
+munication [9], or demand-supply fusion [33]. Despite this
+progress, two conventions persist. Selection is usually scored
+by one party, either the sender’s own confidence or a receiver-
+side query, so cells the ego already observes can still con-
+sume budget and the decision never becomes joint. Refine-
+ment, in turn, typically follows masking, so the transmitted
+support exceeds the selected cells and no longer matches
+the nominal budget. SEC reverses both, forming a single
+agreement between demand and supply before any token
+is committed and moving refinement ahead of masking, so
+the support is exactly k cells by construction. Recent work
+explores temporal and spatial awareness [42], cooperative re-
+construction [29], and contrastive view learning [28]. These
+methods also differ in scope. Collaborator selection chooses
+whom to communicate with [19–21], whereas token selec-
+tion chooses what to send. They are complementary, and
+SEC addresses the latter.
+Sparse Deformable Alignment and Discrete Optimiza-
+tion. Aggregating multi-agent features requires efficiency
+and resilience to pose drift. Dense Transformers capture
+global dependencies [4, 17, 18, 22, 35, 38, 40] but incur
+severe complexity, while rigid grids fail under localization
+2
+
+
+Figure 2. Overall framework. Engine A extracts BEV features; Engine B selects exactly k tokens (k: per-collaborator token budget) via
+bilateral consensus and refine-before-mask; Engine C aggregates them with a deformable sampler; Engine D decodes 3D boxes.
+and asynchronous noise [24, 27, 31]. We adapt an 8-point
+deformable sampler from deformable attention [48] to sparse
+tokens, using projections without bias terms to absorb mis-
+alignments while rejecting padding artifacts. Finally, discrete
+top-k truncation injects gradient oscillations; a short fore-
+ground warm-up stabilizes training without changing the
+inference architecture.
+3. Method
+3.1. Overview
+Problem Formulation. Consider N agents: one ego and
+N−1 collaborators. Each agent j encodes its local LiDAR
+point cloud P(j) into a BEV feature map via a weight-shared
+PointPillars backbone [14],
+Fj = Φenc(P(j)) ∈RC×H×W ,
+(1)
+and transmits a message Xj under a per-frame budget of
+B=k tokens. The per-collaborator budget is
+k = min
+2Vcomm
+4C
+
+, HW
+
+,
+(2)
+where Vcomm is the bandwidth exponent and k is the per-
+collaborator feature-token budget. The corresponding total
+cost for Nc = N −1 collaborators is
+Btotal = Bfeat + Bidx + Bmeta,
+Bfeat = 4kNcC,
+Bidx = 4kNc,
+(3)
+where 4 is the float32 byte width and Bidx uses two 2-byte
+coordinates per token; a packed ⌈log2(HW)⌉-bit index is
+smaller. For k=64, C=256, and Nc=4, the feature payload
+is 64 KiB per collaborator; indices add 0.39%, and k=1024
+is the unconstrained broadcast. Hence k is a direct bandwidth
+knob: each token costs about 1 KiB, and 64 tokens sit 16×
+below the broadcast, with < 0.5% overhead.
+Let C be the communication policy and Ψ the fusion-and-
+detection network. We optimize
+max
+C
+E
+
+AP
+ Ψ({Xj}N−1
+j=0 )
+
+s.t.
+∥Xj∥0 ≤k, ∀j,
+(4)
+where AP is the detection AP and j=0 is the ego. The chal-
+lenge is to learn C end-to-end while keeping the payload
+exactly k tokens.
+Framework Overview. Our pipeline comprises four engines,
+illustrated in Fig. 2. (1) Engine A, BEV encoding: It encodes
+each agent’s LiDAR into a BEV feature Fj with a weight-
+shared backbone and regroups the shared features into a
+multi-agent tensor together with an agent-validity mask. (2)
+Engine B, SEC: It identifies critical information via supply–
+demand interaction and packages it for low-bandwidth trans-
+mission. (3) Engine C, lightweight deformable aggregation:
+It aggregates the retained tokens with an ego-conditioned de-
+formable sampler. (4) Engine D, detection and optimization:
+It decodes 3D boxes.
+Design Rationale. The two bottlenecks are coupled: a
+sender-side selector does not know what the ego already
+3
+
+
+Figure 3. Anti-dilation principle. Refine-before-mask keeps exactly
+k active cells; mask-before-refine dilates each token to its neighbors
+and inflates the payload.
+observes, and post-mask convolution destroys the sparsity
+that makes token transmission affordable. SEC therefore
+treats selection as a joint demand-supply decision and re-
+fines features before masking, so the support stays at exactly
+k cells: the budget is a structural property, and each kept
+token marks evidence the ego lacks.
+3.2. Bilateral Consensus and Anti-Dilation Selec-
+tion
+Notation. We write ∗for convolution, ⊙for the Hadamard
+product, σ for the sigmoid, δ for ReLU, BN for batch nor-
+malization, I(·) for the indicator function, Top-k(·) for the
+k largest entries, detach(·) for the stop-gradient operator,
+and ∥· ∥0 for the number of non-zeros; M is the number of
+attention heads and P the number of sampling points.
+The role of Engine B is to decide, for every collaborator,
+which cells are worth transmitting under the budget. Our
+SEC selects what to transmit by a bilateral demand-supply
+agreement: the ego’s demand and the collaborator’s supply
+are combined by a Hadamard product, so a token is promoted
+only when both sides respond.
+Ego Demand. A prediction head produces an ego-side
+saliency map
+Mdemand = σ
+
+W(2)
+d
+∗δ
+ BN(W(1)
+d
+∗Fego)
+
+∈(0, 1)H×W ,
+(5)
+The map scores each BEV location by the ego’s own un-
+certainty and provides a content-aware prior for gating the
+collaborator supply. The head is shallow, so the prior is com-
+puted online without side information.
+Anti-Dilation Supply. A critical flaw of sparse pipelines is
+that a 3×3 convolution applied after masking dilates each
+transmitted token to its neighbours, inflating the payload by
+up to 9×. We therefore refine before selection:
+eF (i)
+collab = LeakyReLU0.1
+ BN(Wr ∗F (i)
+collab)
+
+,
+(6)
+and evaluate the collaborator supply map
+M (i)
+supply = σ
+
+W(2)
+s
+∗δ
+ BN(W(1)
+s
+∗eF (i)
+collab)
+
+,
+(7)
+which measures the complementary evidence available at
+each BEV cell. The supply head follows the same 3×3–
+1×1 design as the demand head, but operates on the refined
+collaborator feature. Reversing the order lets the 3×3 field
+dilate each seed (Fig. 3).
+Consensus Gating. Transmission priority is the element-
+wise Hadamard product of the two maps:
+G(i) = Mdemand ⊙M (i)
+supply ∈(0, 1)H×W .
+(8)
+The two maps need not agree: high supply with low de-
+mand means a collaborator sees what the ego already sees
+clearly, whereas high demand with low supply means the ego
+is uncertain but no collaborator holds evidence. Sender-side
+ranking cannot separate these two cases, because it scores
+cells by collaborator salience alone.
+Since G(i) vanishes whenever either map does, a cell sur-
+vives only if both sides respond; this single-round agreement
+is what we call consensus. The product has no learned mix-
+ing weight, and either side can remove a cell as unimportant.
+Because G(i) is computed independently per collaborator,
+the selector is permutation-invariant, its cost grows linearly
+with Nc, and no joint optimization across collaborators is
+required.
+Differentiable Elastic Selection. With the flattened gain
+g(i), we define the hard top-k mask as
+θ(i)
+k
+= min(Top-k(g(i))),
+M(i)
+hard = I(G(i) ≥θ(i)
+k ).
+(9)
+Because I(·) is non-differentiable, we use a straight-through
+estimator:
+M(i)
+comm = M(i)
+hard + G(i) −detach(G(i)),
+(10)
+so the forward pass transmits exactly k vectors while gra-
+dients flow into both heads. The transmitted feature is
+bF (i)
+collab = eF (i)
+collab ⊙M(i)
+comm.
+Budget-Exact Transmission. The forward mask M(i)
+comm
+has exactly k non-zero entries, so the collaborator sends k
+feature vectors and their coordinates; no dense map crosses
+the channel and refinement precedes masking, so the count
+cannot grow. At the receiver, selected features are regrouped
+with their indices and passed to Engine C, which makes the
+budget an architectural invariant. The bound applies to trans-
+mitted support; the receiver may apply convolutions after
+4
+
+
+transmission without increasing the number of transmitted
+bytes. Methods that send k indices but reconstruct a dense
+map therefore have a different communication cost. The
+demand and supply heads comprise two 3×3 and two 1×1
+convolutions, and the gate and mask are element-wise. At
+HW=8448 and C=256, the consensus engine has 0.74M
+parameters and takes 0.6 ms, about 7% of the 9.1 ms total,
+while top-k costs O(HW log k). Selection therefore scales
+linearly with the number of BEV cells and introduces no
+pairwise interaction tensor.
+3.3. Lightweight Deformable Aggregation
+We aggregate the retained sparse tokens across agents with
+an 8-point deformable sampler adapted from Deformable
+DETR. Dense grid attention is O((HW)2) and rigid grids
+do not absorb rotations and misalignments. Conditioned
+on the ego feature, we predict P=8 sampling offsets
+{∆pm,s(p)}P
+s=1 and softmax weights {Am,s(p)}P
+s=1 per
+head, with ∥∆pm,s∥bounded by γscale=0.1 for local con-
+text. With value projection Wv (no bias, to avoid activations
+from padded tokens), the collaborator aggregate is
+Fagg(p) = PN−1
+i=1 v(i) PM
+m=1 Wv
+PP
+s=1 Am,s(p) B
+
+V (i)
+m , p + ∆pm,s(p)
+
+(11)
+where V (i)
+m
+is the m-th head of Wv eF (i)
+collab, v(i) a sample-
+level validity mask, and B bilinear grid sampling. Predicted
+from the ego query, the offsets target informative ego loca-
+tions; the bound on ∆p rules out long-range matches, and
+the validity mask removes empty collaborators before resid-
+ual fusion. Residual fusion gives Ffused = Φout(Fego + Fagg),
+with Φout a 3×3 conv + BN + ReLU. Across heads the
+eight points specialize on different local correspondences
+instead of collapsing to one offset, so the sampler repre-
+sents several plausible alignments at once. Reading only P
+locations per head, its memory cost is O(HWMP) rather
+than the O((HW)2) of dense cross-attention, allowing full-
+resolution BEV operation.
+3.4. Detection and Optimization Dynamics
+The role of Engine D is to decode detections and stabilize
+the discrete selector during training. Ffused feeds dual heads
+for classification and 7-DoF box regression, trained with
+focal/regression detection loss Ldet. Because the consensus
+heads are randomly initialized, they require supervision: we
+boot-strap them with an auxiliary foreground loss that super-
+vises supply maps with ground-truth heatmaps,
+Ltotal = Ldet + λaux(τ) Laux,
+λaux(τ) = max
+ 0, λ0(1 −τ/τtrans)
+
+,
+(12)
+where the linear decay stabilizes early training. Detection
+and gate-supervision losses are optimized jointly until τtrans;
+afterwards the auxiliary term is dropped and the selector is
+trained only through the straight-through path. This warm-up
+stabilizes the randomly initialized gate before the detection
+heads produce meaningful foreground evidence, and leaves
+the inference graph unchanged.
+4. Experiments
+4.1. Experimental Settings
+Datasets and Evaluation Metrics. We evaluate on
+OPV2V [36], V2XSet [35], and DAIR-V2X [44] for LiDAR-
+based 3D object detection, covering simulated and real-world
+scenarios. We use the official test splits for OPV2V and
+V2XSet and the validation split for DAIR-V2X, for which
+test annotations are not publicly released. Detection perfor-
+mance is measured by per-frame Average Precision (AP) at
+IoU thresholds 0.3, 0.5, and 0.7, without global re-sorting
+across frames. Communication cost is counted from the
+transmitted feature values and token coordinates. The main
+comparison fixes the feature payload at 64 KiB per collabo-
+rator. OPV2V and V2XSet scenes contain one ego vehicle
+and up to four collaborators within a 70 m communication
+range; DAIR-V2X contains one vehicle and one roadside
+unit.
+Implementation Details. We implement SEC on the Open-
+COOD framework with a PointPillars backbone, a 0.4 m
+BEV voxel size, at most 32 points per voxel, and C=256
+feature channels. The BEV feature grid is 48 × 176 for
+OPV2V and V2XSet. SEC is trained end-to-end with Adam
+(learning rate 5 × 10−4, weight decay 10−4), four warm-up
+epochs, and a cosine schedule. Random flip, yaw rotation,
+and scaling are applied consistently to all agents. All ex-
+periments run on NVIDIA RTX 4080 GPUs. At 64 KiB,
+SEC retains up to 99.4% of the best observed AP using only
+6.25% of the maximum payload (Fig. 6a); we use Vcomm=16
+as the Pareto-optimal knee for all main results.
+4.2. Quantitative Evaluation
+Benchmark Comparison. Table 1 compares SEC with
+prior methods at 64 KiB per collaborator; SEC attains
+the highest AP@0.7 on OPV2V, V2XSet, and DAIR-
+V2X (0.8081/0.7461/0.4463), beating the strongest prior
+method by 2.37/3.82 points on OPV2V/V2XSet and 0.90
+on DAIR-V2X, and leading at AP@0.3/0.5 on OPV2V.
+On V2XSet, How2comm is competitive at loose thresh-
+olds (0.8999/0.8693) but falls to 0.6754 at AP@0.7 (SEC
+0.7461), so the gap widens as IoU tightens. Over the
+ego-only model, SEC adds 19.5/24.2 AP@0.7 points on
+OPV2V/V2XSet and still leads on DAIR-V2X, where mar-
+gins are smaller. Table 1 also shows deformable token fusion
+attaining the highest AP among late, early, and intermediate
+fusion at every threshold and dataset.
+Accuracy–Bandwidth Trade-off. Fig. 6(e) sweeps 16–
+256 KiB per collaborator. SEC gains 3.2 AP@0.7 from 16 to
+64 KiB but only 0.6 for a further fourfold budget, so 64 KiB
+5
+
+
+Table 1. Performance comparison (AP@0.3 / 0.5 / 0.7) of mainstream methods.
+OPV2V
+V2XSet
+DAIR-V2X
+Method
+Comm. (KiB)
+0.3
+0.5
+0.7
+0.3
+0.5
+0.7
+0.3
+0.5
+0.7
+No Fusion
+0
+0.7185
+0.7118
+0.6136
+0.6407
+0.6328
+0.5041
+0.5669
+0.5402
+0.4365
+Late Fusion
+64
+0.8638
+0.8458
+0.6885
+0.8131
+0.7888
+0.6069
+0.5267
+0.4591
+0.2932
+Early Fusion
+64
+0.8246
+0.8136
+0.6818
+0.7835
+0.7573
+0.5514
+0.5806
+0.5280
+0.3843
+DiscoNet [15]
+64
+0.8279
+0.7818
+0.5669
+0.7942
+0.7211
+0.4850
+0.6087
+0.5084
+0.3062
+V2X-ViT [35]
+64
+0.7669
+0.7457
+0.5540
+0.7078
+0.6806
+0.4706
+0.5515
+0.4966
+0.3225
+CoAlign [24]
+64
+0.7408
+0.7133
+0.5507
+0.6963
+0.6458
+0.4390
+0.5353
+0.4730
+0.3591
+How2comm [41]
+64
+0.8583
+0.8422
+0.7312
+0.8999
+0.8693
+0.6754
+0.5394
+0.4711
+0.3150
+ERMVP [46]
+64
+0.8768
+0.8630
+0.7536
+0.8387
+0.8133
+0.6685
+0.6016
+0.5529
+0.3856
+MRCNet [6]
+64
+0.8395
+0.8220
+0.6756
+0.7722
+0.7464
+0.5388
+0.5380
+0.4905
+0.3652
+CoSDH [33]
+64
+0.8420
+0.8265
+0.6726
+0.7684
+0.7447
+0.6138
+0.6316
+0.5700
+0.3737
+MDD [12]
+64
+0.7145
+0.6976
+0.5781
+0.6490
+0.6110
+0.4443
+0.5074
+0.4540
+0.3395
+WhisperNet [2]
+64
+0.8723
+0.8671
+0.7844
+0.8133
+0.8075
+0.7079
+0.5889
+0.5558
+0.4373
+Ours
+64
+0.9089
+0.9034
+0.8081
+0.8680
+0.8614
+0.7461
+0.6303
+0.5873
+0.4463
+Table 2. Component-wise ablation on V2XSet at 64 KiB. ∆is
+relative to the full model; MBR: mask-before-refine.
+Configuration
+AP@0.7
+∆
+Full model (ours)
+0.7461
+–
+w/o anti-dilation (MBR, retrained)
+0.7105
+−0.0356
+w/o 8-pt deformable (rigid grid)
+0.6423
+−0.1038
+w/o gate supervision (none)
+0.6594
+−0.0867
+w/ constant λaux (no decay)
+0.7385
+−0.0076
+w/o bilateral gate (supply-only)
+0.7435
+−0.0026
+w/o collaboration (ego-only)
+0.5041
+−0.2420
+Random selection (reference)
+0.5087
+−0.2374
+lies on the flat part of the curve. Both ablated variants rise
+more slowly; SEC’s margin over the weaker one peaks at
+16 KiB (9.7 points) and narrows with bandwidth.
+Robustness to Pose Noise and Communication Latency.
+Fig. 6(f) isolates the deformable sampler under pose drift:
+the rigid-grid variant shares the backbone and budget but
+uses zero offsets, and its AP@0.7 is lower at every noise
+level, with the gap widening at 0.6 m/3◦. No Fusion stays
+flat, while WhisperNet and CoSDH degrade faster. Fig. 6(g)
+delays one collaborator by up to five 100 ms frames. SEC
+has the highest no-delay AP@0.5 (0.898) and stays above
+How2comm, WhisperNet, and CoSDH throughout; CoSDH
+degrades fastest and falls below no fusion at 500 ms.
+4.3. Ablation Studies
+Ablation Studies on Core Components. Table 2 isolates
+each design choice at 64 KiB and reports AP@0.7. (1) Re-
+training mask-before-refine gives 0.7105 with dense support;
+the inference-only swap drops to 0.5198. (2) Replacing the
+8-point deformable sampler with a rigid grid gives 0.6423,
+Table 3. Selection-policy ablation at 64 KiB on OPV2V and
+V2XSet (AP@0.7). Multiplicative is our full gate.
+Selection policy
+OPV2V
+V2XSet
+Random
+0.6136
+0.5087
+Demand-only
+0.6133
+0.5488
+Supply-only
+0.8068
+0.7435
+Multiplicative (ours)
+0.8081
+0.7461
+Table 4. Comparison of consensus designs on OPV2V. Entries
+are AP@0.5/AP@0.7; comm vol is the bandwidth exponent and
+Winner is decided by AP@0.7.
+comm vol
+k
+Multiplicative
+Residual
+Winner
+14
+16
+0.8641 / 0.7534 0.8591 / 0.7575 Residual
+15
+32
+0.8911 / 0.7886 0.8881 / 0.7919 Residual
+16
+64
+0.9034 / 0.8081 0.9009 / 0.8081 Tie
+17
+128
+0.9072 / 0.8123 0.9030 / 0.8117 Mult.
+18
+256
+0.9088 / 0.8145 0.9046 / 0.8135 Mult.
+19
+512
+0.9106 / 0.8165 0.9060 / 0.8131 Mult.
+20
+1024 0.9109 / 0.8171 0.9074 / 0.8126 Mult.
+and removing gate supervision gives 0.6594. (3) Removing
+the bilateral gate gives 0.7435, while removing collaboration
+falls to 0.5041, close to random selection (0.5087). (4) The
+retrained row measures accuracy; the swap isolates dilation
+under identical weights.
+Ablation Studies on Selection Policy. Fig. 6(b) splits the
+transmitted tokens into cells on targets the ego-only model
+misses, cells on targets it already sees, and background
+cells, with solid bars for supply-only selection and hatched
+bars for multiplicative gating, where more ego-missed and
+fewer ego-visible or background cells are better. (1) As the
+6
+
+
+−10
+0
+10
+y (m)
+(a) LiDAR + GT
+(b) Demand
+−10
+0
+10
+y (m)
+(c) Supply
+(d) Consensus
+−40
+0
+40
+80
+x (m)
+−10
+0
+10
+y (m)
+raw token Jaccard = 0.28
+(e) Tokens
+CAV 1 (64)
+CAV 2 (64)
+CAV 3 (64)
+CAV 4 (64)
+−40
+0
+40
+80
+x (m)
+(f) Detection
+GT
+64 KiB
+1024 KiB
+Figure 4. Qualitative walk-through at k=64: (a) LiDAR/GT; (b) ego demand (where the ego needs help); (c) collaborator supply (where
+collaborators have evidence); (d) Hadamard (element-wise) gain; (e) selected tokens; (f) detection.
+L2 norm
+non-zero: 8448/8448
+3×3 support: 339
+AP@0.7: 0.5198
+Mask-before-Refine
+non-zero: 64/8448
+AP@0.7: 0.7461
+Refine-before-Mask (Ours)
+support
+8448 non-zero (BN/bias)
+339 in 3×3 support
+64 non-zero
+10−2
+10−1
+100
+L2 (log)
+Figure 5. Anti-dilation mechanism on a V2XSet frame with iden-
+tical weights. Top: per-cell feature L2 norm (feature magnitude);
+bottom: non-zero support (active cells). Refine-before-mask keeps
+exactly k cells; mask-before-refine becomes dense.
+budget shrinks, multiplicative gating moves the token mix
+away from ego-visible cells and toward ego-missed ones. (2)
+Fig. 6(c) asks how the same 64 tokens are spent: how many
+fall on targets the ego misses (PrecegM ↑), how many fall
+on targets it already sees (PrecegV ↓), and how many of the
+missed targets are covered (RecegM ↑). The full gate spends
+more of them where the ego is blind and fewer where it
+already sees: PrecegM rises from 0.197 to 0.222 on OPV2V
+and from 0.229 to 0.257 on V2XSet, PrecegV falls from
+0.591 to 0.501 and from 0.518 to 0.447, and RecegM stays
+at 0.890/0.892. Nothing the ego already had is lost, and what
+it was missing is recovered. (3) Table 3 confirms the accuracy
+effect at 64 KiB: 0.8081/0.7461 on OPV2V/V2XSet versus
+0.8068/0.7435 for supply-only, with the margin widening as
+the budget shrinks (Fig. 6d).
+Ablation Studies on Consensus Design. Table 4 compares
+our multiplicative gate with a residual alternative, G(i)
+res =
+M (i)
+supply ⊙(1 + Mdemand). The two differ in what the ego can
+express. In the residual, demand only scales a collaborator
+token between 1× and 2×, so a cell the ego already observes
+stays in the candidate set. The residual also sums the two
+signals, so a strong supply can outweigh a weak demand
+without either side agreeing. Multiplication is a conjunction:
+a cell survives only if the ego needs it and the collaborator
+supplies it, so ego-visible evidence is removed before top-k
+runs and every transmitted token adds what the ego lacks.
+The two designs therefore agree at the operating point but
+diverge as the budget grows, since the residual spends a
+rising share on redundancy it cannot veto.
+Ablation Studies on Anti-Dilation Refinement. The order
+of refinement and masking decides whether the budget is
+enforceable. Refinement is not pointwise: a 3×3 convolution
+spreads each active cell into its neighbourhood. Applied after
+masking, it replaces the discrete support with that receptive
+field, so the network rather than k sets the active count, and
+later layers make the map dense. Refinement before masking
+makes the budget an invariant, since the mask is the last
+operation and exactly k cells leave the collaborator at any
+depth or width. The reversed order is not a bandwidth cost
+but a loss of what makes the budget binding, which is why
+it stays dense after retraining and loses accuracy at every
+budget (Fig. 5, Fig. 6(e)).
+Analysis on Accuracy–Latency Trade-off. Fig. 6(h) places
+all Table 1 methods at 64 KiB in the GPU-stage accuracy–
+7
+
+
+0
+25
+50
+75
+100
+Fraction of upper bound (%)
+Active BEV cells
+Payload
+GT coverage
+AP retention
+0.76%  (64 / 8,448 cells)
+6.25%  (64 / 1,024 KiB)
+87.7 ± 8.9%
+OPV2V 98.9%
+V2XSet 99.4%
+DAIR-V2X 99.3%
+0
+0.5
+1.0
+Fraction
+OPV2V
+missed visible bg mult. supply
+k=8
+k=16
+k=32
+k=64
+Token budget
+0
+0.5
+1.0
+V2XSet
+Rand.Dem. Sup. OursRand.Dem. Sup. Ours
+Selection policy
+0
+0.25
+0.50
+0.75
+1.0
+Score
+OPV2V
+V2XSet
+PrecegM
+PrecegV
+RecegM
+8
+16
+32
+64
+Tokens per collaborator k
+0.20
+0.25
+0.30
+0.35
+0.40
+0.45
+Ego-missed precision
++9.9
++15.7
+k = 8
+Supply-only (OPV2V)
+Multiplicative (OPV2V)
+Supply-only (V2XSet)
+Multiplicative (V2XSet)
+16
+32
+64
+128
+256
+Payload (KiB/collaborator)
+0.55
+0.60
+0.65
+0.70
+0.75
+AP@0.7
++6.4 AP pts
+(e) Accuracy-bandwidth
+No Fusion
+w/o anti-dilation
++anti-dilation
+Full SEC
+0
+0.2
+0.4
+0.6
+Pose error (m)
+0.3
+0.4
+0.5
+0.6
+0.7
+AP@0.7
+(f) Pose robustness
+SEC
+Rigid
+WhisperNet
+CoSDH
+How2comm
+No Fusion
+0
+100
+200
+300
+400
+500
+Delay (ms)
+0.35
+0.45
+0.55
+0.65
+0.75
+AP@0.7
+(g) Delay robustness
+SEC
+How2comm
+WhisperNet
+CoSDH
+DiscoNet
+No Fusion
+10
+25
+50
+100
+250
+GPU-stage latency (ms, log)
+0.40
+0.50
+0.60
+0.70
+0.75
+AP@0.7
+CoAlign
+DiscoNet
+CoSDH
+WhisperNet
+Ours
+No Fusion
+MDD
+MRCNet
+Early
+ERMVP
+Late
+How2comm
+V2X-ViT
+(h) Accuracy-latency
+(a) Token efficiency
+(b) Token placement
+(c) Selection quality
+(d) Low-budget precision
+Figure 6. Diagnostic analyses at 64 KiB: (a) efficiency; (b) token placement (solid: supply-only, hatched: multiplicative); (c) selection
+quality; (d) low-budget precision; (e)–(g) performance under bandwidth, pose, and delay; (h) accuracy–latency trade-off.
+Ground Truth
+Single
+ERMVP
+CoSDH
+WhisperNet
+Ours
+Figure 7. Qualitative comparison with prior methods on dense and compact scenes. Green: GT; red/orange: predictions.
+latency plane. SEC attains the highest AP@0.7 at the lowest
+latency: against ERMVP and How2comm it gains 7.8 and
+7.1 AP@0.7 points (0.7461 vs. 0.6685/0.6754) at far lower
+latency (9.1 vs. 76.3/225.8 ms), and no other entry exceeds
+0.7079 AP@0.7 or runs faster than 9.3 ms. The remaining
+baselines, including CoSDH, WhisperNet, DiscoNet, and
+CoAlign, are therefore both less accurate and slower.
+4.4. Qualitative Results
+Visualization of Token Selection. Fig. 4 traces a V2XSet
+frame with 30 GT objects and four collaborators at k=64.
+Multiplication makes transmission a conjunction: a cell sur-
+vives only if the ego needs it (b) and a collaborator can
+supply it (c), so the product (d) drops ego-visible cells before
+top-k selection and the 64 tokens (e) land on the ego-missed
+targets. In this frame, detection (f) recovers 10 of the 13
+objects that the ego-only model misses, and matches the
+unconstrained 1024 KiB output at 1/16 the payload.
+Visualization of Sparsity and Method Comparison. Fig. 5
+isolates the ordering under fixed weights. Since the mask
+comes last, the support stays at exactly 64 cells after every
+layer; refinement first lets the convolution widen it to 8,448,
+so the budget no longer bounds the payload. Fig. 7 shows
+the same effect at 64 KiB on two scenes. Tokens spent on
+cells the ego already sees or on background leave distant
+vehicles undetected, whereas SEC places its tokens on the
+right targets.
+5. Conclusion
+This paper has introduced SEC, a novel bandwidth-adaptive
+framework that replaces sender-driven pruning with bilat-
+8
+
+
+eral demand-supply consensus. By systematically coupling
+a single-round multiplicative gate with an anti-dilation se-
+lection pipeline, SEC strictly enforces exact token budgets
+while precisely isolating critical ego-missed information.
+Comprehensive evaluations demonstrate that SEC substan-
+tially outperforms existing methods under stringent commu-
+nication constraints.
+References
+[1] Anh-Quan Cao and Raoul de Charette. Monoscene: Monocu-
+lar 3d semantic scene completion. In CVPR, 2022. 2
+[2] Gong Chen, Chaokun Zhang, and Xinyan Zhao. Whispernet:
+A scalable solution for bandwidth-efficient collaboration. In
+CVPR, 2026. 2, 6
+[3] Qi Chen, Sihai Tang, Qing Yang, and Song Fu. F-cooper:
+Feature based cooperative perception for autonomous vehicle
+edge computing system using 3d point clouds. In ACM/IEEE
+Symposium on Edge Computing, 2019. 1
+[4] Alexey Dosovitskiy, Lucas Beyer, Alexander Kolesnikov,
+Dirk Weissenborn, Xiaohua Zhai, Thomas Unterthiner, et al.
+An image is worth 16x16 words: Transformers for image
+recognition at scale. In ICLR, 2021. 2
+[5] Siqi Fan, Haibao Yu, Wenxian Yang, Jirui Yuan, and Zaiqing
+Nie. QUEST: Query stream for practical cooperative percep-
+tion. In ICRA, 2024. arXiv:2308.01804. 2
+[6] Shixin Hong, Yu Liu, Zhi Li, Shaohui Li, and You He. Multi-
+agent collaborative perception via motion-aware robust com-
+munication network. In CVPR, 2024. 6
+[7] Yue Hu, Shaoheng Fang, Zixing Lei, Yiqi Zhong, and Siheng
+Chen. Where2comm: Communication-efficient collaborative
+perception via spatial confidence maps. In NeurIPS, 2022. 2
+[8] Yue Hu, Juntong Peng, Sifei Liu, Junhao Ge, Si Liu, and
+Siheng Chen. Communication-efficient collaborative percep-
+tion via information filling with codebook. In CVPR, pages
+15481–15490, 2024. 2
+[9] Yue Hu, Xianghe Pang, Xiaoqi Qin, Yonina C. Eldar, Siheng
+Chen, Ping Zhang, and Wenjun Zhang. Pragmatic communi-
+cation in multi-agent collaborative perception. IEEE Trans-
+actions on Pattern Analysis and Machine Intelligence, 48(8):
+9279–9296, 2026. 2
+[10] Junjie Huang, Guan Huang, Zheng Zhu, Yun Ye, and Dalong
+Du. Bevdet: High-performance multi-camera 3d object de-
+tection in bird-eye-view. arXiv preprint arXiv:2112.11790,
+2021. 1
+[11] Tao Huang, Jianan Liu, Xi Zhou, Dinh C. Nguyen, Mostafa
+Rahimi Azghadi, Yuxuan Xia, Qing-Long Han, and Sumei
+Sun. Vehicle-to-everything cooperative perception for au-
+tonomous driving. Proceedings of the IEEE, 113(5):443–477,
+2025. 1
+[12] Xun Huang, Jinlong Wang, Qiming Xia, Siheng Chen,
+Bisheng Yang, Xin Li, Cheng Wang, and Chenglu Wen. V2X-
+R: Cooperative LiDAR-4D radar fusion with denoising diffu-
+sion for 3D object detection. In CVPR, 2025. 6
+[13] Alex Kendall and Yarin Gal. What uncertainties do we need
+in bayesian deep learning for computer vision? In NeurIPS,
+2017. 2
+[14] Alex H Lang, Sourabh Vora, Holger Caesar, Lubing Zhou,
+Jiong Yang, and Oscar Beijbom. Pointpillars: Fast encoders
+for object detection from point clouds. In CVPR, 2019. 3
+[15] Yiming Li, Shunli Ren, Pengxiang Wu, Siheng Chen, Chen
+Feng, and Wenjun Li. Learning distilled collaboration graph
+for multi-agent perception. In NeurIPS, 2021. 6
+[16] Yiming Li, Dekun Ma, Ziyan An, Zixun Wang, Yiqi Zhong,
+Siheng Chen, and Chen Feng. V2x-sim: Multi-agent collab-
+orative perception dataset and benchmark for autonomous
+driving. IEEE Robotics and Automation Letters, 7(4):10914–
+10921, 2022. 1
+[17] Zhiqi Li, Wenhai Wang, Hongyang Li, Enze Xie, Chonghao
+Sima, Tong Lu, Yu Qiao, and Jifeng Dai. Bevformer: Learning
+bird’s-eye-view representation from multi-camera images via
+spatiotemporal transformers. In ECCV, 2022. 2
+[18] Zhenxin Li, Shiyi Lan, Jose M. Alvarez, and Zuxuan Wu.
+BEVNeXt: Reviving dense BEV frameworks for 3d object
+detection. In CVPR, 2024. 2
+[19] Yuntao Liu, Qian Huang, Rongpeng Li, Xianfu Chen, Zhifeng
+Zhao, Shuyuan Zhao, Yongdong Zhu, and Honggang Zhang.
+Select2Col: Leveraging spatial-temporal importance of se-
+mantic information for efficient collaborative perception.
+IEEE Transactions on Vehicular Technology, 73(9):12556–
+12569, 2024. 2
+[20] Yen-Cheng Liu, Junjiao Tian, Nathaniel Glaser, and Zsolt
+Kira. When2com: Multi-agent perception via communication
+graph grouping. In CVPR, 2020. 2
+[21] Yen-Cheng Liu, Junjiao Tian, Chih-Yao Ma, Nathaniel Glaser,
+Chia-Wen Kuo, and Zsolt Kira. Who2com: Collaborative
+perception via learnable handshake communication. In ICRA,
+2021. 2
+[22] Ze Liu, Yutong Lin, Yue Cao, Han Hu, Yixuan Wei, Zheng
+Zhang, Stephen Lin, and Baining Guo. Swin transformer:
+Hierarchical vision transformer using shifted windows. In
+ICCV, 2021. 2
+[23] Zhijian Liu, Haotian Tang, Alexander Amini, Xinyu Yang,
+Huizi Mao, Daniela Rus, and Song Han. Bevfusion: Multi-
+task multi-sensor fusion with unified bird’s-eye view repre-
+sentation. In ICRA, 2023. 1
+[24] Yifan Lu, Quanhao Li, Baoan Liu, Mahdi Dianat, Chen Feng,
+Siheng Chen, and Yanfeng Wang. Robust collaborative 3d
+object detection in presence of pose errors. In ICRA, 2023. 2,
+3, 6
+[25] Shaoshuai Shi, Xiaogang Wang, and Hongsheng Li. Pointr-
+cnn: 3d object proposal generation and detection from point
+cloud. In CVPR, 2019. 1
+[26] Shaoshuai Shi, Chaoxu Guo, Lei Jiang, Zhe Wang, Jianping
+Shi, Xiaogang Wang, and Hongsheng Li. Pv-rcnn: Point-
+voxel feature set abstraction for 3d object detection. In CVPR,
+2020. 1
+[27] Zhiying Song, Lei Yang, Fuxi Wen, and Jun Li. TraF-Align:
+Trajectory-aware feature alignment for asynchronous multi-
+agent perception. In CVPR, 2025. 3
+[28] Wanfang Su, Lixing Chen, Yang Bai, Xi Lin, Gaolei Li, Zhe
+Qu, and Pan Zhou. What makes good collaborative views?
+contrastive mutual information maximization for multi-agent
+perception. In AAAI, pages 17550–17558, 2024. 2
+9
+
+
+[29] Binglu Wang, Lei Zhang, Zhaozhong Wang, Yongqiang Zhao,
+and Tianfei Zhou. CORE: Cooperative reconstruction for
+multi-agent perception. In ICCV, pages 8676–8686, 2023. 2
+[30] Tsun-Hsuan Wang, Sivabalan Manivasagam, Ming Liang, Bin
+Yang, Wenyuan Zeng, and Raquel Urtasun. V2vnet: Vehicle-
+to-vehicle communication for joint perception and prediction.
+In ECCV, 2020. 1, 2
+[31] Sizhe Wei, Yuxi Wei, Yue Hu, Yifan Lu, Yiqi Zhong, and
+Siheng Chen. Asynchrony-robust collaborative perception
+via bird’s eye view flow. In NeurIPS, pages 28462–28477,
+2023. 3
+[32] Hao Xiang, Runsheng Xu, and Jiaqi Ma. Hm-vit: Hetero-
+modal vehicle-to-vehicle cooperative perception with vision
+transformer. In ICCV, 2023. 2
+[33] Junhao Xu, Yanan Zhang, Zhi Cai, and Di Huang. Cosdh:
+Communication-efficient collaborative perception via supply-
+demand awareness and intermediate-late hybridization. In
+CVPR, 2025. 2, 6
+[34] Runsheng Xu, Zhengzhong Tu, Hao Xiang, Weilong Shao,
+Bolei Zhou, and Jiaqi Ma. Cobevt: Cooperative bird’s eye
+view semantic segmentation with sparse transformers. In
+CoRL, 2022. 1
+[35] Runsheng Xu, Hao Xiang, Zhengzhong Tu, Xin Xia, Ming-
+Hsuan Yang, and Jiaqi Ma. V2x-vit: Vehicle-to-everything
+cooperative perception with vision transformer. In ECCV,
+2022. 2, 5, 6
+[36] Runsheng Xu, Hao Xiang, Xin Xia, Xu Han, Jinlong Li, and
+Jiaqi Ma. Opv2v: An open benchmark dataset and fusion
+pipeline for perception with vehicle-to-vehicle communica-
+tion. In ICRA, 2022. 1, 5
+[37] Runsheng Xu, Xin Xia, Jinlong Li, Hanzhao Li, Shuo Zhang,
+Zhengzhong Tu, Zonglin Meng, Hao Xiang, Xiaoyu Dong,
+Rui Song, Hongkai Yu, Bolei Zhou, and Jiaqi Ma. V2v4real:
+A real-world large-scale dataset for vehicle-to-vehicle cooper-
+ative perception. In CVPR, 2023. 2
+[38] Runsheng Xu, Chia-Ju Chen, Zhengzhong Tu, and Ming-
+Hsuan Yang. V2X-ViTv2: Improved vision transformers for
+vehicle-to-everything cooperative perception. IEEE Trans-
+actions on Pattern Analysis and Machine Intelligence, 47(1):
+650–662, 2025. 2
+[39] Yan Yan, Yuxing Mao, and Bo Li. Second: Sparsely em-
+bedded convolutional detection. Sensors, 18(10):3337, 2018.
+1
+[40] Chenyu Yang, Yuntao Chen, Hao Tian, Chenxin Tao, Xizhou
+Zhu, Zhaoxiang Zhang, Gao Huang, Hongyang Li, Yu Qiao,
+Lewei Lu, Jie Zhou, and Jifeng Dai. BEVFormer v2: Adapting
+modern image backbones to bird’s-eye-view recognition via
+perspective supervision. In CVPR, 2023. 2
+[41] Dingkang Yang, Kun Yang, Yuzheng Wang, Jing Liu, Zhi
+Xu, Rongbin Yin, Peng Zhai, and Lihua Zhang. How2comm:
+Communication-efficient and collaboration-pragmatic multi-
+agent perception. In NeurIPS, 2023. 2, 6
+[42] Kun Yang, Dingkang Yang, Jingyu Zhang, Mingcheng Li,
+Yang Liu, Jing Liu, Hanqi Wang, Peng Sun, and Liang Song.
+Spatio-temporal domain awareness for multi-agent collabora-
+tive perception. In ICCV, pages 23383–23392, 2023. 2
+[43] Tianwei Yin, Xingyi Zhou, and Philipp Kr¨ahenb¨uhl. Center-
+based 3d object detection and tracking. In CVPR, 2021. 1
+[44] Haibao Yu, Yizhou Luo, Mao Shu, Yiyi Huo, Zebang Yang,
+Yifeng Shi, Zhenglong Guo, Hanyu Li, Xing Hu, Jirui Yuan,
+and Zaiqing Nie. Dair-v2x: A large-scale dataset for vehicle-
+infrastructure cooperative 3d object detection. In CVPR, 2022.
+2, 5
+[45] Haibao Yu, Wenxian Yang, Hongzhi Ruan, Zhenwei Yang,
+Yingjuan Tang, Xu Gao, Xin Hao, Yifeng Shi, Yifeng Pan,
+Ning Sun, Juan Song, Jirui Yuan, Ping Luo, and Zaiqing
+Nie. V2x-seq: A large-scale sequential dataset for vehicle-
+infrastructure cooperative perception and forecasting.
+In
+CVPR, 2023. 2
+[46] Jingyu Zhang, Kun Yang, Yilei Wang, Hanqi Wang, Peng
+Sun, and Liang Song. Ermvp: Communication-efficient and
+collaboration-robust multi-vehicle perception in challenging
+environments. In CVPR, 2024. 2, 6
+[47] Yin Zhou and Oncel Tuzel. Voxelnet: End-to-end learning for
+point cloud based 3d object detection. In CVPR, 2018. 1
+[48] Xizhou Zhu, Weijie Su, Lewei Lu, Bin Li, Xiaogang Wang,
+and Jifeng Dai. Deformable detr: Deformable transformers
+for end-to-end object detection. In ICLR, 2021. 3
+10
