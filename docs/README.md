@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-11-25</span>
+      <span class="dpr-home-dashboard-kicker">2026-11-26</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 28 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 25 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>13</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>10</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>15</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-11-25 03:44:59 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-11-26 02:12:43 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,9 +69,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日共生成 28 篇推荐（精读 13 篇，速读 15 篇）</p>
-<p>精读：《From Vision to Interaction: Evaluating Dynamic Social Intelligence of VLM Agents in ALIVE-World》（9.0/10）, 《Point Dynamics as Proxy for Robotic World Models》（9.0/10）</p>
-<p>速读：《CarlHOI: Counterfactual Predictive Imagination for Generalizable Multi-Humanoid Object Interaction under Constrained Environments》（8.5/10）, 《Beyond Episodic Recall: Experience-to-Knowledge Evolution for Lifelong Embodied Navigation》（8.0/10）, 《SpatialMind: Adaptive Multi-Level Geometric Fusion for Spatial Reasoning in Multimodal Large Language Models》（8.0/10）</p>
+<p>今日共生成 25 篇推荐（精读 10 篇，速读 15 篇）</p>
+<p>精读：《Continuous-time 4D Reconstruction via Event-guided Latent Feature Interpolation》（9.0/10）, 《Seeing Together, Acting Apart: Shared Environmental Understanding for Multi-Robot Navigation》（9.0/10）</p>
+<p>速读：《SuperFine3D: Efficient Global-Local Recursive Refinement for Extremely Detailed 3D Geometry Generation》（8.5/10）, 《BridgeMVS: Bridging Multi-View Stereo and Monodepth via Bidirectional Dynamic Fusion》（8.5/10）, 《InteractVLA: Turning VLAs into Interactive Tools for Agentic Robotic Manipulation》（8.0/10）</p>
 <p>这些结果覆盖了当下较热的方向，建议先看精读区论文的关键问题与方法。</p>
   </div>
 </section>
@@ -81,12 +81,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">13 篇</strong>
+    <strong class="dpr-home-dashboard-count">10 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="From Vision to Interaction: Evaluating Dynamic Social Intelligence of VLM Agents in ALIVE-World">From Vision to Interaction: Evaluating Dynamic Social Intelligence of VLM Agents in ALIVE-World</span></li><li><span class="dpr-home-dashboard-paper-title" title="Point Dynamics as Proxy for Robotic World Models">Point Dynamics as Proxy for Robotic World Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="Learning What Actions Change: Action Effect Matching for Dynamics-Faithful World Models">Learning What Actions Change: Action Effect Matching for Dynamics-Faithful World Models</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Continuous-time 4D Reconstruction via Event-guided Latent Feature Interpolation">Continuous-time 4D Reconstruction via Event-guided Latent Feature Interpolation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Seeing Together, Acting Apart: Shared Environmental Understanding for Multi-Robot Navigation">Seeing Together, Acting Apart: Shared Environmental Understanding for Multi-Robot Navigation</span></li><li><span class="dpr-home-dashboard-paper-title" title="MoGe-4D: Efficient, Flexible, and Unified Dense 4D Reconstruction and Tracking">MoGe-4D: Efficient, Flexible, and Unified Dense 4D Reconstruction and Tracking</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>9</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>4</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -97,9 +97,9 @@
     <strong class="dpr-home-dashboard-count">15 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="CarlHOI: Counterfactual Predictive Imagination for Generalizable Multi-Humanoid Object Interaction under Constrained Environments">CarlHOI: Counterfactual Predictive Imagination for Generalizable Multi-Humanoid Object Interaction under Constrained Environments</span></li><li><span class="dpr-home-dashboard-paper-title" title="Beyond Episodic Recall: Experience-to-Knowledge Evolution for Lifelong Embodied Navigation">Beyond Episodic Recall: Experience-to-Knowledge Evolution for Lifelong Embodied Navigation</span></li><li><span class="dpr-home-dashboard-paper-title" title="SpatialMind: Adaptive Multi-Level Geometric Fusion for Spatial Reasoning in Multimodal Large Language Models">SpatialMind: Adaptive Multi-Level Geometric Fusion for Spatial Reasoning in Multimodal Large Language Models</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="SuperFine3D: Efficient Global-Local Recursive Refinement for Extremely Detailed 3D Geometry Generation">SuperFine3D: Efficient Global-Local Recursive Refinement for Extremely Detailed 3D Geometry Generation</span></li><li><span class="dpr-home-dashboard-paper-title" title="BridgeMVS: Bridging Multi-View Stereo and Monodepth via Bidirectional Dynamic Fusion">BridgeMVS: Bridging Multi-View Stereo and Monodepth via Bidirectional Dynamic Fusion</span></li><li><span class="dpr-home-dashboard-paper-title" title="InteractVLA: Turning VLAs into Interactive Tools for Agentic Robotic Manipulation">InteractVLA: Turning VLAs into Interactive Tools for Agentic Robotic Manipulation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>8</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>3</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>4</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>1</strong></span></div>
 </section>
 </div>
 

@@ -1,0 +1,1358 @@
+: Turning VLAs into Interactive Tools for Agentic
+Robotic Manipulation
+Chen Zhao1,2,3∗, Zipeng Ye3∗, Shifeng Bao1,2, Yihan Lin1,2, Haitao Shen1,2,
+Yining Luo1, Yuchen Xie3, Jing Zhang1,2†
+1 Renmin University of China, Beijing 100872, China
+2 Key Laboratory of Data Engineering and KnowledgeEngineering, MOE, China
+3 Meituan, Beijing 100102, China
+<zhaochen100, zhang-jing>@ruc.edu.cn
+Code
+|
+Project Page
+Abstract
+Existing agentic manipulation systems treat pretrained
+vision-language-action
+(VLA)
+policies
+as
+opaque,
+language-only primitives:
+when a policy call fails un-
+der unfamiliar instructions or scene perturbations, the
+agent cannot steer its behavior and is forced into futile
+retries or costly manual takeover. We present InteractVLA,
+a framework that turns pretrained flow-based VLAs into
+geometrically steerable and inspectable tools through a
+bidirectional geometric interface with vision-language
+agents.
+In the forward direction, test-time geometric
+guidance translates an agent-specified end-effector target
+into input gradients through the action expert via a differ-
+entiable command-to-pose mapping, while soft-time target
+alignment treats arrival time as a latent execution index
+to match the target pose without distorting the policy’s
+approach motion. In the reverse direction, action-informed
+agentic refinement exposes generated action chunks and
+calibrated camera reprojections back to the agent, allowing
+it to diagnose spatial discrepancies, revise targets for
+subsequent VLA calls, or locally adjust motion segments on
+top of the guided trajectory. Making the VLA controllable
+not only boosts online agentic tool use, but also unlocks
+effective
+recursive
+self-improvement
+(RSI),
+achieving
+state-of-the-art performance of 99.4% on LIBERO-Plus,
+48.62% on RoboDojo, and 89.4% on RoboCasa365.
+1. Introduction
+Combining vision-language agents with pretrained vision-
+language-action (VLA) policies promises an appealing di-
+∗Equal contribution.
+†Corresponding author.
+Pick up the block
+Pick up the block
+Pick up the block
+Pick up the green block
+Pick up the block
++Keypoint Pose
+Keypoint Pose
+Training Data
+Figure 1. Geometric guidance enables task-target generaliza-
+tion. Changing the language instruction to specify a new target
+sharply reduces VLA success. Incorporating the target pose into
+action generation enables task transfer while maintaining high suc-
+cess rates.
+vision of labor for robotic manipulation: the agent handles
+long-horizon reasoning and task decomposition, while the
+VLA provides temporally coherent motor execution [2, 40].
+Yet in practice, existing VLAs hardly function as true in-
+teractive tools. Because standard VLAs only accept high-
+level language instructions and operate as opaque black
+boxes, the agent cannot steer how the policy executes a
+skill [19, 42]. When a VLA call fails, simply commanding
+a retry is largely futile because it produces nearly identi-
+cal motions under similar observations, whereas rephrasing
+the language instruction often pushes the VLA out of dis-
+tribution and sharply degrades success (Figure 1, middle).
+Across scenarios requiring generalization, the agent cannot
+rely on the VLA and must take over low-level control en-
+tirely, acting as a fallback supervisor that cleans up after an
+1
+arXiv:2611.22584v1  [cs.RO]  17 Nov 2026
+
+
+93.1
+98.3
+90
+95
+100
+LIBERO-Plus
+18.0
+26.0
+10
+20
+30
+RoboDojo
+(a) Early match disrupts approach
+Empty retreat
+Close early
+Turn early
+Timely match preserves motion
+Keep approaching
+Match at contact
+Lift continues
+(b) InteractVLA
+Agent
+G = (p, R, w)
+Frozen VLA
+h₁: approach
+h₂: match G
+h₃: lift
+Action feedback
+(c) Online tool-use success (%)
+Agent + VLA
+Agent + InteractVLA
+Figure 2. InteractVLA turns VLAs into interactive tools for agents. (a) Matching a sparse target too early disrupts the approach motion,
+causing premature gripper closure and rotation; timely alignment preserves the approach, contact, and lift sequence. (b) InteractVLA
+combines test-time geometric guidance with soft-time target alignment to steer a frozen VLA toward agent-specified targets, while returning
+action feedback for target revision and local motion refinement. (c) This interactive interface improves online tool-use success on both
+LIBERO-Plus and RoboDojo.
+uncontrollable policy rather than a planner wielding a reli-
+able tool [8, 26, 34, 41].
+This limitation stems from an inadequate interface be-
+tween high-level reasoning and low-level control.
+Even
+when unfamiliar instructions or scene layouts prevent a
+VLA from grounding the right target, its pretrained spatial
+perception and motor priors, such as smooth approach tra-
+jectories, coordinated rotations, and grasp timing, remain
+highly capable [1, 16]. As shown in Figure 1 (right), explic-
+itly steering the end effector toward the intended interaction
+target allows the exact same policy to redirect its manipu-
+lation behavior and complete the task while preserving ex-
+ecution precision. Turning a VLA into a genuinely usable
+tool therefore requires moving beyond language-only invo-
+cation to a bidirectional geometric interface: the agent must
+be able to specify explicit spatial targets to guide the VLA’s
+action generation, and conversely inspect the resulting mo-
+tion proposals to refine subsequent execution [4, 25, 33].
+Building such a bidirectional interface at test time poses
+two coupled challenges. In the forward direction (Agent →
+VLA), the agent supplies a sparse target configuration to ap-
+proach rather than a dense trajectory or exact arrival time.
+While the VLA should synthesize the intervening motion,
+naively applying a fixed-time penalty pulls the wrong exe-
+cution step toward the target, whereas penalizing every step
+uniformly collapses the approach trajectory altogether. In
+the reverse direction (VLA →Agent), a binary success or
+failure signal is insufficient for recovery. Once guided by
+an agent-specified target, the VLA’s generated action chunk
+already reflects the agent’s spatial intent. By comparing
+the executed prefix and unexecuted continuation against vi-
+sual observations, the agent can determine whether a fail-
+ure requires calling the VLA again with a revised target or
+merely applying a lightweight local adjustment to the pol-
+icy’s well-structured trajectory, making recovery far more
+tractable than full manual takeover.
+To address these challenges, we introduce InteractVLA,
+a framework that turns pretrained flow-based VLAs into
+geometrically steerable and inspectable tools for agentic
+manipulation (Figure 2).
+Drawing on VLM-based pol-
+icy steering [20] and visual geometric constraints [12, 13],
+InteractVLA bridges agent reasoning and action genera-
+tion through three components. First, test-time geometric
+guidance uses a differentiable command-to-pose mapping
+to translate an agent-specified end-effector target (position,
+orientation, and gripper state) into input gradients through
+the action expert within a single denoising trajectory, re-
+shaping motion toward the agent’s intent while returning
+control early if low confidence indicates an incompatible
+target. Second, soft-time target alignment formulates arrival
+time as a latent execution index, jointly matching complete
+target poses at a shared arrival step that emerges naturally
+as the trajectory takes shape. Third, action-informed agen-
+tic refinement exposes generated action chunks alongside
+calibrated camera reprojections and execution history to the
+agent, enabling it to diagnose spatial discrepancies, revise
+subsequent targets, or locally edit motion segments.
+Because InteractVLA makes the VLA steerable rather
+than rigidly repeating a single action mode, it also pro-
+vides a strong foundation for recursive self-improvement
+(RSI): across attempts, the agent iteratively sharpens how
+it specifies geometric targets and refines policy-generated
+2
+
+
+Move 𝒂𝟏
+∗ about 6% of the way from 
+𝒂𝟏 to 𝒂𝟏
+# past their midpoint, to the 
+right. 𝒂𝟐
+∗is too far from the target 
+pose. Move it slightly lower, about 0.02 
+in Z axis……
+Pose 𝒂𝟏
+∗
+Pose 𝒂𝟐
+∗
+Agent-specified 
+target 1
+VLA action chunk
+A%
+Pose 𝒂𝟎
+Pose 𝒂𝟏
+Pose 𝒂𝟐
+Agent
+Recovery
+Agent-specified 
+target 2
+Pose 𝒂𝟐
+#
+Pose 𝒂𝟏
+#
+Pose 𝒂𝟎
+Agent
+Recovery
+Instruction: Pick up the block.
+Chunk length: 32
+Target arm: Left
+Agent-specified target :
+  position: [-0.24, 0.34, 0.14]
+  orientation (RPY): [0.91, 0.84, 0.13]
+  gripper: 1
+VLA Tool Call 0
+VLA action
+chunk A'
+Pose 𝒂𝟎
+Agent
+Recovery
+Agent-specified 
+target
+？
+Low Confidence 𝑪𝒕
+Denoise Step t
+Target
+𝒂𝟏
+Target
+𝒂𝟐
+Target
+𝒂𝟑
+Chunk step k
+Similarity
+Denoise Step t+1
+VLM Backbone
+Flow-matching
+Head
+Denoise Direction
+……
+……
+Target 𝒂𝟏+∆𝒂𝟏Target 𝒂𝟐+∆𝒂𝟐Target 𝒂𝟑+∆𝒂𝟑
+VLM Backbone
+Similarity
+Chunk step k
+……
+……
+Noise 𝑥*
+Noise 𝑥*+%
+Noise 𝑥𝑡+2
+Add guidance to denoise
+step by similarity
+Calculate similarity of agent-
+specified target and each action step
+Instruction: Pick up the block.
+Chunk length: 32
+Target arm: Left
+Agent-specified target :
+  position: [0.17, 0.45, 0.10]
+  orientation (RPY): [0.14, -0.22, 0.09]
+  gripper: 1
+VLA Tool Call 1
+Instruction: Pick up the block.
+Chunk length: 32
+Target arm: Left
+Agent-specified target :
+  position: [0.65, 0.56, 0.13]
+  orientation (RPY): [0.20, -0.21, -0.02]
+  gripper: 1
+VLA Tool Call 2
+Pose 𝒂𝟎
+Agent Adjustment
+Agent-specified target
+confidence score 𝑪𝒕< 𝒆%𝟏
+Follow Agent-specified
+target 1, grasp failed.
+Continue…
+Follow Agent-specified
+target 2, grasp failed.
+Continue…
+Use reprojection to integrate and 
+refine A& and A', then take control.
+Success！
+Reject！
+A)  InteractVLA : Soft-time Test-time Guidance
+B）Action-Informed Agentic Refinement
+Calculate similarity of agent-
+specified target and each action step
+Add guidance to denoise
+step by similarity
+Figure 3. InteractVLA combines geometric guidance with action-informed refinement. Left: At each denoising step, target similarity
+determines the guidance weights across the action chunk, progressively steering the generated motion toward the agent-specified target.
+Right: Different targets elicit diverse motion proposals that the agent can reproject, compare, and locally refine to complete the task, while
+low-confidence targets trigger rejection and replanning.
+motions. Across LIBERO-Plus [9], RoboDojo [6], Robo-
+Casa365 [23], and real-world manipulation, InteractVLA
+substantially outperforms standalone VLAs, language-only
+agent-VLA baselines, while reducing token consumption
+by over an order of magnitude compared with step-by-step
+agent-only control.
+Our contributions are threefold:
+• We introduce InteractVLA, a framework that turns pre-
+trained VLAs into interactive, controllable tools for
+agents via test-time geometric guidance, soft-time target
+alignment, and action-informed agentic refinement.
+• We show that making VLAs geometrically steerable and
+inspectable unlocks effective recursive self-improvement
+(RSI), allowing agents to progressively refine target spec-
+ification and motion correction.
+• We achieve state-of-the-art performance across LIBERO-
+Plus (99.4%), RoboDojo (48.62%), and RoboCasa365
+(89.4%), with real-world evaluations confirming consis-
+tent gains in manipulation success and efficiency.
+2. Method
+InteractVLA connects a vision-language agent and a pre-
+trained flow-based VLA at test time through explicit geo-
+metric targets and motion feedback (Figure 3). Given ob-
+servation ok and instruction ℓ, the policy generates an ac-
+tion chunk Ak ∈RH×D guided toward an agent-specified
+target Gk = (p∗, R∗, w∗) comprising end-effector position,
+orientation, and gripper state. The agent then inspects the
+generated motion proposal to refine subsequent decisions.
+2.1. Test-Time Geometric Guidance
+To steer a pretrained VLA toward the agent’s geometric in-
+tent, we differentiate a pose objective through its action ex-
+pert during denoising. Let vθ(xt, t; ck) denote the flow ve-
+locity field conditioned on ck = (ok, ℓ), with generative
+time t ∈[0, 1] running from noise to clean actions. From
+the one-step clean-action estimate
+mt = xt + (1 −t)vθ(xt, t; ck),
+(1)
+a differentiable forward mapping Cok converts native pol-
+icy actions into command poses. At each execution step h,
+the complete-pose error Eh aggregates normalized position,
+rotation, and gripper discrepancies relative to Gk (summed
+across effectors at a shared index for bimanual control), di-
+rectly linking the spatial target to native action commands.
+Given a temporal objective Lt over step-wise pose er-
+rors, we steer the denoising trajectory via
+gt = ∇xtLt(Cok(mt), Gk),
+(2)
+xt+∆t = sg
+
+xt + ∆t
+ vθ −Bt(gt)
+
+,
+(3)
+where Bt scales the gradient, caps its magnitude relative
+to the native velocity vθ, and restricts guidance to an inte-
+rior active window so endpoints retain the native flow field.
+The stop-gradient operator sg[·] detaches successive inte-
+gration states so each update differentiates solely through
+the current expert, whose input Jacobian couples correc-
+tions across the chunk.
+3
+
+
+Similarity
+Similarity
+Step 𝒉𝟏
+Baseline Denoise Path 𝒙𝒕
+Soft-time Guidance 𝒈𝒕
+InteractVLA Denoise Path 𝒙𝒕#∆𝒕
+Step 𝒉𝟐
+Step 𝒉𝟑
+Figure 4. Soft-time alignment progressively concentrates guid-
+ance on the best-matching action step. As denoising proceeds,
+guidance increasingly focuses on the step most compatible with
+the agent-specified target, while the remaining steps retain their
+original motion structure so arrival time emerges naturally.
+To prevent incompatible targets from distorting genera-
+tion, we monitor a target compatibility confidence Ct com-
+paring the minimum pose error rt = minh Eh and relative
+correction demand dt against tolerances r0 and d0:
+Ct = exp
+
+−max
+ rt
+r0
+, dt
+d0
+
+.
+(4)
+If Ct < e−1 after the first guided step, generation termi-
+nates early and returns control to the agent for replanning.
+2.2. Soft-Time Target Alignment
+While the agent specifies a desired interaction pose, its
+appropriate arrival step within the horizon H depends on
+task progress and the policy’s speed. Imposing a fixed-step
+penalty forces an arbitrary timing assumption, whereas pe-
+nalizing all steps uniformly collapses the approach motion
+toward the target. We instead treat arrival time as a latent
+execution index and softly align the target to the trajectory
+(Figure 4).
+Let τ = 1 −t and βt = t2/τ 2. We aggregate the step-
+wise pose errors via a log-sum-exp objective:
+Lsoft(t) = −τ 2 log
+ 
+1
+H
+H
+X
+h=1
+exp[−βtEh]
+!
+.
+(5)
+Taking the gradient yields a temporal assignment qh(t) =
+softmaxh(−βtEh) that distributes guidance across compat-
+ible arrival steps:
+Lguide(t) = τ
+t Lsoft(t),
+gt = tτ
+X
+h
+qh(t)∇xtEh.
+(6)
+Because position, orientation, and gripper discrepancies en-
+ter Eh jointly, they share the same temporal weight qh(t),
+ensuring the policy matches a complete interaction pose at
+a unified arrival step. As flow time t advances and βt in-
+creases, qh(t) sharpens around the most compatible step
+while the multiplier tτ modulates overall guidance ampli-
+tude. This entropy-regularized temporal assignment lets the
+VLA jointly resolve the intervening approach trajectory and
+the target’s exact arrival index.
+2.3. Action-Informed Agentic Refinement
+In the reverse direction, the guided action chunk serves as
+both an executable motion and an interpretable proposal
+whose approach vector, orientation profile, and grasp tim-
+ing help diagnose spatial errors. Rather than returning a bi-
+nary signal [7, 15], InteractVLA exposes the full chunk, its
+executed prefix, and the remaining actions with observation
+history.
+To ground this motion proposal in visual evidence,
+we map predicted command poses into the camera frame
+via calibrated reprojection, comparing them against ob-
+served object locations, historical pixel motion, and RGB-D
+back-projections. Combined with proprioceptive state, this
+visual-geometric correspondence allows the agent to distin-
+guish a displaced approach target from a low-level execu-
+tion slip or premature grasp.
+Based on this diagnosis, the agent selects between two
+lightweight recovery routes. When the interaction target
+itself is inaccurate, the agent revises Gk and invokes the
+guided VLA again to synthesize a new globally coherent
+chunk. When the generated trajectory already captures the
+right maneuver structure, the agent reuses the proposal and
+applies local adjustments via robot-control tools, such as
+shifting an approach offset, lift height, or gripper release
+timing. Together with early rejection of low-confidence tar-
+gets (Ct < e−1), this closes the bidirectional loop: agent-
+specified geometry steers VLA generation, and the VLA’s
+motion proposal guides the agent’s next correction.
+3. Experiments
+We evaluate InteractVLA across four parts: (1) how our
+bidirectional geometric interface transforms online VLA
+tool use by agents, (2) how controllable VLA execution un-
+locks recursive self-improvement (RSI), (3) real-world bi-
+manual manipulation, and (4) ablations on inference effi-
+ciency, temporal alignment, and feedback design.
+Setup.
+We use MR-0 [32] as the pretrained VLA back-
+bone on LIBERO-Plus [9], RoboDojo [6], and Robo-
+Casa365 [23]. Because GPT-6 Astra offers stronger rea-
+soning at a higher API cost than GPT-6.1 Sol (abbreviated
+as Sol), we use Astra for RSI on RoboDojo and Robo-
+Casa365 while adopting the more cost-efficient Sol for
+online tool-use and LIBERO-Plus evaluations to balance
+rollout budgets [17, 27]; substituting Astra in those Sol-
+based settings would theoretically yield even stronger per-
+formance. We compare three guidance modes: GT guid-
+ance using training-data reference poses, offline guidance
+reusing fixed agent-predicted targets, and online guidance
+4
+
+
+Table 1. VLA tool use by agents on LIBERO-Plus (%). We compare standalone MR-0 (with training-data GT or offline Sol targets)
+and online Sol + MR-0 systems. Shaded rows use InteractVLA. Bold and underline denote best and second-best results. ∗Retains base
+behavior under robot-init perturbations.
+Method
+Background
+Light
+Language
+Noise
+Layout
+Camera
+Robot Init.
+Overall
+MR-0
+99.8
+95.8
+90.4
+90.3
+96.9
+85.1
+64.0
+88.5
++ InteractVLA (Train-data)
+99.8
+99.8
+97.2
+95.2
+97.9
+93.2
+64.0∗
+91.3
++ InteractVLA (Offline Sol)
+99.9
+100.0
+94.3
+94.4
+98.2
+95.9
+81.0
+94.5
+GPT-6.1 Sol + MR-0
+100.0
+94.7
+91.6
+96.3
+89.5
+87.6
+94.3
+93.1
++ InteractVLA
+99.9
+100.0
+100.0
+95.9
+98.4
+98.4
+96.2
+98.3
+Table 2. VLA tool use by agents on RoboDojo. Success rates
+(%). Train-Data Guidance uses reference poses from training data;
+InteractVLA adds our online test-time guidance. Sol denotes GPT-
+6.1 Sol.
+VLA
+Sol + VLA
+Dimension
+Baseline
+InteractVLA
+Baseline
+InteractVLA
+Generalization
+8.2
+28.0
+21.6
+26.0
+Precision
+7.8
+4.0
+9.7
+8.3
+Long-Horizon
+18.6
+15.3
+8.9
+12.5
+Memory
+8.9
+24.0
+16.5
+22.2
+Open
+2.4
+3.2
+31.2
+39.6
+Overall
+9.2
+12.17
+18.0
+26.0
+where the agent iteratively updates targets and refines mo-
+tions from execution feedback.
+3.1. VLA Tool Use by Agents
+We first examine whether upgrading a VLA from a
+language-only black box to a geometrically steerable tool
+improves online agentic manipulation across perturbations.
+LIBERO-Plus.
+As shown in Table 1, steering standalone
+VLA with explicit pose targets immediately unlocks latent
+execution capability even without online replanning, rais-
+ing overall success from 88.5% to 91.3% with GT targets
+and 94.5% with offline Sol targets. In the online agent-
+VLA loop, replacing language-only invocation (Sol + VLA,
+93.1%) with InteractVLA boosts overall success to 98.3%.
+The gains are most pronounced under spatial shifts where
+language alone cannot ground the shifted geometry, jump-
+ing from 89.5% to 98.4% under layout perturbations and
+from 87.6% to 98.4% under camera viewpoint shifts. Ex-
+plicit pose targets let the agent anchor the target location in
+the current scene while relying on the VLA to synthesize
+the intervening motion.
+RoboDojo.
+Table 2 extends this analysis to challenging
+bimanual manipulation. While static GT pose targets lift
+standalone VLA from 9.2% to 12.17% overall through
+gains in generalization (28.0%) and memory (24.0%), they
+slightly degrade precision and long-horizon tasks, indicat-
+ing that a static spatial constraint alone cannot resolve com-
+plex multi-step sequencing or contact dynamics.
+Clos-
+ing the online loop with InteractVLA overcomes this bot-
+tleneck, lifting Sol + VLA from 18.0% to 26.0% over-
+all and yielding consistent improvements across general-
+ization (26.0%), long-horizon (12.5%), memory (22.2%),
+and open-ended manipulation (39.6%). By inspecting mo-
+tion proposals and updating targets as execution unfolds, the
+agent dynamically adapts its geometric intent rather than
+committing to a fixed target stream. Geometric guidance
+and online refinement make pretrained VLAs more effec-
+tive tools for agentic manipulation, which is also useful for
+Recursive Self-Improvement (RSI).
+3.2. Performance on Recursive Self-Improvement
+During RSI, the agent explores in practice environments
+sharing the target task semantics but initialized with distinct
+random seeds and scene layouts, while the actual evaluation
+scenes remain strictly unexposed.
+Because InteractVLA
+provides explicit target inputs and interpretable trajectory
+outputs, the agent can diagnose failures across practice roll-
+outs, consolidate reusable strategies (Figure 5), and transfer
+them to held-out evaluation instances.
+LIBERO-Plus.
+In Table 3, InteractVLA + RSI achieves a
+state-of-the-art 99.4% overall success rate, reaching 100%
+on background and lighting perturbations and at least 98.4%
+across all seven categories.
+It substantially outperforms
+standalone finetuned VLAs (OpenVLA-OFT at 69.6%,
+RIPT-VLA at 68.4%) and prior agentic VLA systems in-
+cluding HarnessVLA (86.7%) and RV-ICL (95.8%) [2].
+RoboDojo.
+As shown in Table 4, InteractVLA + RSI with
+Astra reaches 48.62% overall success, outperforming the
+closest Agent+VLA baseline PhysicalRSI (31.38%) [24],
+the Agent+WAM method WorldScape-R2SI (39.35%) [22],
+and pure agent controllers EmbodiedEvo (38.95%) and
+5
+
+
+Table 3. RSI comparison on LIBERO-Plus (%). Standalone VLA results are from [9]; agent baselines marked † are from RV-ICL [2] on
+the stratified 120-variant subset using GPT-6 Astra. All methods follow their official evaluation protocols.
+Method
+Planner
+Background
+Light
+Language
+Noise
+Layout
+Camera
+Robot Init.
+Overall
+OpenVLA-OFT
+–
+93.3
+88.7
+79.5
+75.8
+74.2
+56.4
+31.9
+69.6
+π0
+–
+81.4
+85.0
+58.8
+79.0
+68.9
+13.8
+6.0
+53.6
+π0-FAST
+–
+73.2
+73.2
+61.0
+74.4
+68.8
+65.1
+21.6
+61.6
+RIPT-VLA
+–
+91.6
+88.4
+77.6
+73.5
+74.2
+55.2
+31.2
+68.4
+HarnessVLA†
+GPT-6 Astra
+88.2
+76.5
+100.0
+94.1
+82.4
+83.3
+82.4
+86.7
+RV-ICL†
+GPT-6 Astra
+100.0
+94.1
+100.0
+100.0
+88.2
+94.4
+94.1
+95.8
+InteractVLA + RSI
+GPT-6.1 Sol
+100.0
+100.0
+99.9
+98.4
+99.2
+99.5
+98.9
+99.4
+Table 4. RSI comparison on RoboDojo (%). We compare published robot agents [30] with our Astra-based InteractVLA + RSI system
+under official leaderboard protocols.
+Method
+Type
+Generalization
+Precision
+Long-Horizon
+Memory
+Open
+Overall
+PhysicalRSI
+Agent+VLA
+15.62
+32.50
+37.33
+46.56
+24.92
+31.38
+WorldScape-R2SI
+Agent+WAM
+35.83
+15.50
+34.25
+63.67
+47.50
+39.35
+EmbodiedEvo
+Agent
+30.83
+16.25
+21.75
+76.67
+49.25
+38.95
+HexaShell-Preview
+Agent
+34.50
+32.00
+31.50
+81.00
+55.25
+46.85
+GPT-6 Astra
+Agent
+30.50
+4.00
+8.25
+38.67
+31.00
+22.48
+InteractVLA + RSI
+Agent+VLA
+52.78
+39.58
+45.83
+63.89
+41.67
+48.62
+Table 5. RSI comparison on RoboCasa365 (%). Published VLA
+and agent baselines are from [29, 40].
+†HexaShell 1.5 uses the
+pretrain50-kitchen protocol with task memory [10].
+Method
+Atomic-Seen
+Composite-Seen
+Composite-Unseen
+Overall
+Meituan-Robotics-0
+77.3
+57.8
+27.1
+55.0
+HarnessVLA [40]
+87.8
+43.8
+42.5
+59.2
+HexaShell 1.5†
+91.1
+85.0
+80.0
+85.6
+InteractVLA + RSI
+93.6
+89.2
+84.8
+89.4
+Table 6. Real-world manipulation on Dexmal. Task score and
+execution time (s) across four tasks.
+VLA
+Agent + VLA
+Agent + InteractVLA
+Task
+Score
+Time (s)
+Score
+Time (s)
+Score
+Time (s)
+Tabletop Tidying
+31.2
+97.4
+65.5
+372.0
+92.5
+295.8
+Upright Bottle
+16.9
+63.8
+37.9
+226.8
+74.6
+217.1
+Water Pouring
+41.6
+27.4
+38.5
+97.0
+79.2
+71.2
+Move Cube
+51.5
+22.9
+86.7
+165.2
+97.6
+67.5
+HexaShell-Preview (46.85%) [30]. Notably, InteractVLA
+leads across generalization (52.78%), precision (39.58%),
+and long-horizon execution (45.83%), confirming that steer-
+ing a motor policy with learned geometric strategies handles
+fine-grained contact and multi-stage tasks far better than
+raw agent control or unsteered VLA calls [39].
+RoboCasa365.
+On large-scale household manipulation
+(Table 5), InteractVLA + RSI achieves 89.4% overall suc-
+cess (93.6% Atomic-Seen, 89.2% Composite-Seen, and
+84.8% Composite-Unseen), outperforming the base MR-
+0 policy (55.0%), HarnessVLA (59.2%), and HexaShell
+1.5 (85.6%) [10, 29, 40].
+The 84.8% success rate on
+Composite-Unseen highlights how geometric steering and
+action-informed refinement generalize atomic skills to un-
+seen multi-stage task compositions.
+3.3. Real-World Experiments
+Setup.
+We deploy InteractVLA on a physical Dexmal
+platform across four tasks (Tabletop Tidying, Upright Bot-
+tle, Water Pouring, and Move Cube; Figure 6). We col-
+lect 50 demonstrations per task to train an identical MR-0
+backbone and evaluate each method over 30 trials per task,
+comparing standalone VLA, language-only Agent + VLA,
+and Agent + InteractVLA across mean task score, execution
+time, and agent API calls.
+Results.
+Across all four real-world tasks (Table 6), Agent
++ InteractVLA simultaneously achieves the highest task
+success and the lowest latency and API overhead compared
+to language-only Agent + VLA. On Tabletop Tidying and
+Upright Bottle, InteractVLA boosts score from 65.5 to 92.5
+and from 37.9 to 74.6 while cutting API calls by over half on
+6
+
+
+Table 7. Ablation on target-time alignment (%). All variants
+share the same VLA backbone, pose target, and RSI budget.
+Alignment
+LIBERO-Plus
+RoboDojo
+RoboCasa365
+Fixed final step
+96.8
+39.1
+83.0
+Uniform over steps
+95.6
+34.7
+79.8
+Hard minimum
+98.4
+44.2
+86.1
+Soft-time (InteractVLA)
+99.4
+48.6
+89.4
+Table 8. Ablation on action-informed feedback (%). All variants
+use soft-time guidance under an identical RSI budget.
+Feedback
+LIBERO-Plus
+RoboDojo
+RoboCasa365
+Observations only
+97.9
+40.3
+84.1
++ Generated actions
+98.7
+44.8
+87.0
++ Reprojection (InteractVLA)
+99.4
+48.6
+89.4
+0
+200
+400
+600
+800
+1,000
+1,200
+1,400
+RSI attempts
+25
+30
+35
+40
+45
+50
+Cumulative success rate (%)
+RSI progress
+0
+300
+600
+900
+1,200
+1,500
+RSI attempts
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+1.2
+Cumulative steps (M)
+Executed steps
+Tokens
+0
+2
+4
+6
+8
+Cumulative tokens (B)
+Figure 5. RSI improves task success through exploration and
+experience consolidation on RoboDojo. Top: Cumulative suc-
+cess rate on RoboDojo over successive RSI attempts. Bottom: Cu-
+mulative simulation steps and token consumption. Initial VLA
+attempts incur no agent-token cost. The agent then specifies ge-
+ometric targets to explore alternative motions and discover new
+solutions through InteractVLA. As experience accumulates, the
+agent shifts toward consolidating existing strategies for task com-
+pletion, slowing the growth of both execution steps and token con-
+sumption and increasing success rate substantially.
+tidying (23.5 to 9.9). The advantage of geometric guidance
+is particularly striking on precision-critical tasks: on Wa-
+ter Pouring, language-only retries stagnate at 38.5, whereas
+InteractVLA more than doubles performance to 79.2; on
+Move Cube, InteractVLA reaches 97.6 points while reduc-
+ing execution time by 59% (165.2s to 67.5s) and API calls
+by 67% (14.4 to 4.7). Rather than repeatedly resetting the
+scene after blind retries, the agent steers the policy to the
+exact interaction pose in a few calls.
+3.4. Ablation Studies
+Inference efficiency.
+Figure 7 compares Agent + VLA,
+which invokes the policy through language instructions;
+Agent + InteractVLA, which adds geometric guidance and
+action-informed refinement; and Agent only, which directly
+generates low-level commands. Costs accumulate all RSI
+attempts, including failures and retries, for each case and
+are then averaged across cases. End-to-end time includes
+agent API latency, VLA inference and guidance computa-
+tion, and environment execution. Across all three bench-
+marks, Agent + InteractVLA achieves higher success with
+lower token consumption and total execution time than both
+alternatives.
+Target-time alignment.
+Table 7 isolates the impact of
+our temporal alignment objective under an identical VLA
+backbone, pose target, and RSI budget.
+Averaging pose
+error uniformly across all steps performs worst (34.7% on
+RoboDojo) because it pulls the entire approach trajectory
+toward the endpoint, while constraining only the fixed fi-
+nal step (39.1%) imposes rigid timing. Selecting the hard
+minimum-error step improves flexibility (44.2%), and our
+soft-time alignment achieves the best performance across
+all benchmarks (99.4%, 48.6%, and 89.4%), confirming the
+benefit of smoothly sharpening temporal assignment during
+denoising at test time.
+Action-informed feedback.
+Table 8 evaluates the reverse
+interface by progressively enriching the feedback returned
+to the agent. Starting from visual execution observations
+alone (40.3% on RoboDojo, 84.1% on RoboCasa365), ex-
+posing the VLA’s generated action chunks raises success to
+44.8% and 87.0% by revealing the policy’s intended con-
+tinuation.
+Adding calibrated camera reprojection further
+boosts performance to 48.6% and 89.4%, proving that align-
+ing 3D action proposals with 2D visual evidence is crucial
+for accurate spatial diagnosis and local motion refinement.
+7
+
+
+Tabletop Tidying: pick up all the 
+things into the basket.
+Upright Bottle: Set all the bottles 
+upright.
+Water Pouring: Pour water into 
+the cup.
+Move Cube: Put the Magic Cube 
+into the cup. （aerial view）
+Figure 6. InteractVLA enables diverse real-world manipulation through interactive VLA control. From top to bottom, the sequences
+show Tabletop Tidying, Upright Bottle, Water Pouring, and Move Cube on the Dexmal platform. Each row presents successive stages of
+task execution from left to right, demonstrating coordinated grasping, reorientation, and placement under agent guidance. For Move Cube,
+we show the robot’s overhead camera view to highlight the tight clearance between the cube and the cup, illustrating the precision required
+for placement. Full video demonstrations are available at https://lingwupro.github.io/InteractVLA/.
+Figure 7. InteractVLA improves task success with lower cumulative RSI cost. We compare Agent + VLA, Agent + InteractVLA, and
+Agent Only on three benchmarks. Bars show agent API tokens and end-to-end time, and the dashed line shows environment control steps,
+all accumulated over every RSI attempt per case and averaged across cases. Costs are normalized to Agent + VLA on the logarithmic left
+axis, while the solid line reports the corresponding final success rates on the right.
+4. Related Work
+Classifier-free and geometric guidance.
+Classifier-free
+guidance (CFG) steers generative sampling by contrasting
+conditional and unconditional score estimates [3, 11, 36],
+as adapted to goal-conditioned robot policies in BESO [28].
+Manipulation objectives can also be specified via 3D value
+maps [12], relational keypoints [13], 3D trajectories [14,
+18], or VLM-written reward functions in VLS [20]. How-
+ever, VLS relies on heuristic VLM-synthesized trajectory
+rewards with costly multi-particle resampling and does not
+resolve latent arrival timing for complete 6-DoF poses. In
+contrast, InteractVLA differentiates sparse agent-specified
+poses through the action expert within a single flow trajec-
+tory via soft-time target alignment, jointly resolving the ap-
+proach motion and arrival step.
+Agentic manipulation and runtime correction.
+Recent
+frameworks pair high-level agents with pretrained VLAs
+via retry mechanisms [40], recursive video in-context learn-
+ing [2], spatial affordance intervention [35], or phase-
+specific runtime action offsets [5]. Meanwhile, recent test-
+time flow steering methods adapt frozen policies using hu-
+man interventions [31] or execution traces [38], yet lack
+a closed-loop interface for autonomous agentic reasoning.
+While these works motivate inspecting and correcting pol-
+icy behavior rather than treating VLA calls as atomic, they
+either rely on external primitives for recovery or apply
+black-box residual offsets without steering internal gener-
+ation [21, 37]. InteractVLA establishes a closed-loop bidi-
+rectional geometric interface: it steers native flow genera-
+tion toward explicit 6-DoF targets in the forward pass and
+reprojects generated action chunks into the camera frame
+in the reverse pass, enabling the agent to choose between
+guided regeneration and local trajectory refinement.
+5. Conclusion
+We presented InteractVLA, a test-time framework that
+transforms pretrained flow-based VLAs from opaque
+language-only primitives into geometrically steerable and
+8
+
+
+inspectable tools for vision-language agents.
+By cou-
+pling differentiable test-time geometric guidance and soft-
+time target alignment in the forward direction with action-
+informed agentic refinement in the reverse direction, In-
+teractVLA enables agents to precisely steer policy gener-
+ation, diagnose spatial errors via calibrated reprojections,
+and iteratively consolidate manipulation strategies through
+recursive self-improvement. Extensive benchmark and real-
+world evaluations demonstrate that this bidirectional geo-
+metric interface unlocks substantial gains in both manipula-
+tion success and inference efficiency.
+Acknowledgements
+This
+work
+is
+supported
+by
+the
+National
+Key
+Re-
+search & Development Plan (2023YFF0725100) and
+the
+National
+Natural
+Science
+Foundation
+of
+China
+(92570121, 62322214, U23A20299, U24B20144).
+We
+thank Xiaofu Chen, Han Pan and Jinghong Liu for
+real-world experiments and Dongting Li for discus-
+sion.
+References
+[1] Zechen Bai, Chen Gao, and Mike Zheng Shou. Evolve-vla:
+Test-time training from environment feedback for vision-
+language-action models. arXiv preprint arXiv:2512.14666,
+2025. 2
+[2] Wenrui Bao, Xinxin Liu, Bingxin Xu, and Yuzhang Shang.
+Recursive video in-context learning for agentic robot. arXiv
+preprint arXiv:2610.06843, 2026. 1, 5, 6, 8
+[3] Xiaowei Cai, Yunuo Cai, Bingao Chen, Jingxiao Chen, Zhi
+Chen, Siyuan Feng, Tengyu Hou, Jingshun Huang, Han
+Jiang, Runkun Ju, et al. τ0-vla: a hierarchical robot founda-
+tion model with world-model-guided test-time computation.
+arXiv preprint arXiv:2608.16885, 2026. 8
+[4] Marvin Chanc´an, Alex Wong, and Ian Abraham.
+3d
+reprojection-driven robot navigation improves depth sensing.
+In 2025 International Conference on Advanced Robotics and
+Mechatronics (ICARM), pages 383–390. IEEE, 2025. 2
+[5] Namai Chandra, Madhur Thareja, Shriram Damodaran, and
+Addison Lin Wang.
+ActionGround:
+Training-free run-
+time refinement of frozen VLA policies.
+arXiv preprint
+arXiv:2609.33256, 2026. 8
+[6] Tianxing Chen, Yue Chen, Zixuan Li, Junyuan Tang, Kailun
+Su, Weijie Wan, Baijun Chen, Haoran Lu, Haowen Yan,
+Honghao Su, et al. RoboDojo: A unified sim-and-real bench-
+mark for comprehensive evaluation of generalist robot ma-
+nipulation policies. arXiv preprint arXiv:2607.04434, 2026.
+3, 4
+[7] Yanzhe
+Chen,
+Zechen
+Bai,
+Zhijun
+Cao,
+Wenzheng
+Zeng, Kevin Qinghong Lin, Yiqi Lin, Guoqiang Liang,
+Kevin Yuchen Ma, Qiming Huang, and Mike Zheng Shou.
+Show-harness: Just a vlm agent can play robots.
+arXiv
+preprint arXiv:2609.10522, 2026. 4
+[8] Suhwan Choi, Yunsung Lee, Yubeen Park, Chris Dongjoo
+Kim, Ranjay Krishna, Dieter Fox, and Youngjae Yu. vla-
+eval: A unified evaluation harness for vision-language-action
+models. arXiv preprint arXiv:2603.13966, 2026. 2
+[9] Senyu Fei, Siyin Wang, Junhao Shi, Zihao Dai, Jikun Cai,
+Pengfang Qian, Li Ji, Xinzhe He, Shiduo Zhang, Zhaoye Fei,
+Jinlan Fu, Jingjing Gong, and Xipeng Qiu. LIBERO-Plus:
+A progressive robustness benchmark for visual-language-
+action models. In Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition, 2026. 3, 4, 6
+[10] HexaFuture.
+HexaShell 1.5:
+RoboCasa365 submis-
+sion details.
+https://github.com/robocasa-
+benchmark / leaderboard / blob / main /
+submissions_md/HexaShell-1.5_2026_10_31.
+md, 2026.
+Evaluation dated October 31, 2026; accessed
+November 4, 2026. 6
+[11] Jonathan Ho and Tim Salimans.
+Classifier-free diffusion
+guidance. arXiv preprint arXiv:2207.12598, 2022. 8
+[12] Wenlong Huang, Chen Wang, Ruohan Zhang, Yunzhu Li,
+Jiajun Wu, and Li Fei-Fei. VoxPoser: Composable 3D value
+maps for robotic manipulation with language models. arXiv
+preprint arXiv:2307.05973, 2023. 2, 8
+[13] Wenlong Huang, Chen Wang, Yunzhu Li, Ruohan Zhang,
+and Li Fei-Fei. ReKep: Spatio-temporal reasoning of rela-
+tional keypoint constraints for robotic manipulation. arXiv
+preprint arXiv:2409.01652, 2024. 2, 8
+[14] Dongyoon Hwang, Byungkun Lee, Dongjin Kim, Hyojin
+Jang, Hoiyeong Jin, Jueun Mun, Minho Park, Hojoon Lee,
+Hyunseung Kim, and Jaegul Choo. 3D HAMSTER: Bridg-
+ing planning and control in hierarchical vision language ac-
+tion models through 3D trajectory guidance. arXiv preprint
+arXiv:2606.31329, 2026. 8
+[15] Mengzhao Jia, Yang Lin, Xixin Zhang, Zhihan Zhang, Xi-
+aobai Liu, and Meng Jiang. Agent as policy for robotic ma-
+nipulation. arXiv preprint arXiv:2609.12541, 2026. 4
+[16] Haozhan Li, Yuxin Zuo, Jiale Yu, Yuhao Zhang, Yang Zhao-
+hui, Kaiyan Zhang, Xuekai Zhu, Yuchen Zhang, Tianxing
+Chen, Ganqu Cui, et al. Simplevla-rl: Scaling vla training
+via reinforcement learning. In International Conference on
+Learning Representations, pages 125846–125869, 2026. 2
+[17] Xuebing Li, Yibo He, Sitong Liu, Ran Ji, and Jiayuan Gu.
+Agentic robot creation through generation, verification, and
+revision. arXiv preprint arXiv:2610.17881, 2026. 4
+[18] Yi Li, Yuquan Deng, Jesse Zhang, Joel Jang, Marius Mem-
+mel, Raymond Yu, Caelan Reed Garrett, Fabio Ramos, Di-
+eter Fox, Anqi Li, Abhishek Gupta, and Ankit Goyal. HAM-
+STER: Hierarchical action models for open-world robot ma-
+nipulation. arXiv preprint arXiv:2502.05485, 2025. 8
+[19] Yang Li, Chen Zhao, Zhuoran Wang, Jiankang Wang, Chao
+Shao, Yihan Lin, Haitao Shen, and Jing Zhang.
+Robore-
+cover: Benchmarking robot policy recovery under execution
+deviations. arXiv preprint arXiv:2609.28952, 2026. 1
+[20] Shuo Liu, Ishneet Sukhvinder Singh, Yiqing Xu, Jiafei
+Duan, and Ranjay Krishna.
+VLS: Steering pretrained
+robot policies via vision-language models. arXiv preprint
+arXiv:2602.03973, 2026. 2, 8
+[21] Weijia Liufu, Xiaoyu Guo, Ruiyi Chen, Jingzhi Liu, Kaidong
+Zhang, Xiwen Liang, Jianqi Lin, Dawei Sun, Yuze Wang,
+Rongtao Xu, et al. Repo-vla: Recovery-driven policy opti-
+9
+
+
+mization for vision-language-action models. arXiv preprint
+arXiv:2605.09410, 2026. 8
+[22] Manifold AI. R2SI: Trial and error, distilled into capability.
+https://r2si.worldscape.io/, 2026. 5
+[23] Soroush Nasiriany, Sepehr Nasiriany, Abhiram Maddukuri,
+and Yuke Zhu.
+RoboCasa365: A large-scale simulation
+framework for training and benchmarking generalist robots.
+In International Conference on Learning Representations,
+2026. 3, 4
+[24] PhysicalRSI Team. PhysicalRSI 1.0: Recursive self-harness
+for scaling embodied skills.
+https://github.com/
+PhysicalRSI/PhysicalRSI, 2026. 5
+[25] Fanqi Pu, Lei Jiang, and Wenming Yang. Tgm-vla: Task-
+guided mixup for sampling-efficient and robust robotic ma-
+nipulation. arXiv preprint arXiv:2603.00615, 2026. 2
+[26] Bince Qu, Wei Chen, and Bo Zhang. Roboharness: A simple
+harness outperforms vla and world actions models. arXiv
+preprint arXiv:2610.14018, 2026. 2
+[27] Hanoona Rasheed, Mohammed Irfan Kurpath, Bin Ren,
+Hisham Cholakkal, Fahad Shahbaz Khan, and Salman Khan.
+Hard vision, easy vision: What gpt-6 astra reveals across
+computer vision.
+arXiv preprint arXiv:2609.35718, 2026.
+4
+[28] Moritz Reuss, Maximilian Li, Xiaogang Jia, and Rudolf Li-
+outikov.
+Goal-conditioned imitation learning using score-
+based diffusion policies. In Robotics: Science and Systems,
+2023. 8
+[29] RoboCasa Team. RoboCasa365 leaderboard. https://
+robocasa.ai/leaderboard, 2026. Snapshot accessed
+November 4, 2026. 6
+[30] RoboDojo
+Team.
+RoboDojo
+simulation
+leader-
+board.
+https://robodojo- benchmark.com/
+leaderboard?bench=sim, 2026.
+Snapshot accessed
+November 4, 2026; success-rate entries. 6
+[31] Yiqi Tang, Diyuan Shi, Runze Li, and Donglin Wang.
+Preferenceflow:
+Test-time guidance
+of flow-matching
+robot policies from human interventions.
+arXiv preprint
+arXiv:2609.36872, 2026. 8
+[32] Meituan Robotics Team, Caicheng Wang, Chen Zhao,
+Chengpeng Jin, Duo Xu, Fengjiao Chen, Guanglu Wan,
+Heqing Yang, Jia Wang, Jiacong Zhou, et al.
+Meituan-
+robotics-0: A vision-language-action foundation model for
+desktop manipulation.
+arXiv preprint arXiv:2611.08577,
+2026. 4
+[33] Haoyang Weng. Beyond motion tracking: Steerable physical
+interaction competence. haoyangweng.pages.dev, 2026. 2
+[34] Borui Xu, Han Chen, Bingsheng He, Ming Wu, Jason Zeng,
+and Michael Heinrich.
+Vla-retain: Benchmarking cross-
+dimension effects of vision tuning in vlas. arXiv preprint
+arXiv:2610.27698, 2026. 2
+[35] Siyu Xu, Zijian Wang, Yunke Wang, Chenghao Xia, Tao
+Huang, and Chang Xu. Affordance field intervention: En-
+abling VLAs to escape memory traps in robotic manipula-
+tion. In Proceedings of the IEEE/CVF Conference on Com-
+puter Vision and Pattern Recognition, 2026. 8
+[36] Yanchen Xu, Sida Huang, Zhenyu Gu, Ruishu Zhu, Yilan
+Gao, and Hongyuan Zhang. Representation learning in dif-
+fusion and flow-based model: an application aspect. Vici-
+nagearth, 3(1):13, 2026. 8
+[37] Bowen Yan, Jiahao Xiao, Kehui Liu, Jianbo Zhang, Zicheng
+Zhang, Qi Jia, Zhongjie Jia, Haoming Song, Chunyi Li, Bin
+Zhao, et al. Can vlms diagnose and recover from vla manip-
+ulation faults?
+In Forty-third International Conference on
+Machine Learning, 2026. 8
+[38] Jiaxuan Zhang, Ruizhe Liu, Yu Zhang, and Yanchao
+Yang.
+Traceflow:
+Guiding frozen flow-matching robot
+policies with success and failure traces.
+arXiv preprint
+arXiv:2609.20646, 2026. 8
+[39] Wenbo Zhang, Kaixuan Wang, Yutao Ouyang, Xiaoyu
+Huang, Liyang Li, Kailun Su, Weiyang Jin, Wenhao Chai,
+Haotian Liang, Zhiyang Dou, et al. An unexpected robot
+policy: Early evaluations of gpt-6 astra on robodojo and be-
+yond. arXiv preprint arXiv:2609.24170, 2026. 6
+[40] Yixian Zhang, Huanming Zhang, Feng Gao, Xiao Li, Zhihao
+Liu, Yi Nie, et al. Harness VLA: Steering frozen VLAs into
+reliable manipulation primitives via memory-guided agents.
+arXiv preprint arXiv:2607.08448, 2026. 1, 6, 8
+[41] Hai Zhou, Fan Yang, Zeyi Chen, Lejun Zhang, Chenyang Fu,
+Jianping Li, Jiayi Zhu, Xianyang Liu, Yingxuan Yang, Lili
+Meng, et al. Who improves the robot? toward physical re-
+cursive self-improvement. arXiv preprint arXiv:2610.18842,
+2026. 2
+[42] Xueyang Zhou, Yangming Xu, Guiyao Tie, Yongchao Chen,
+Guowen Zhang, Duanfeng Chu, Pan Zhou, and Lichao
+Sun.
+Libero-pro: Towards robust and fair evaluation of
+vision-language-action models beyond memorization. arXiv
+preprint arXiv:2510.03827, 2025. 1
+10
