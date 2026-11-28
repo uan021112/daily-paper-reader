@@ -1,0 +1,1567 @@
+SplatTok: Data-Driven Compression of 3D Gaussian
+Splats with Scene-Level Tokens
+Sai Karthikey Pentapati1, Shashank Nelamangala Sridhara2, Birendra Kathariya2,
+Peng Yin2, Guandao Yang1, Alan C. Bovik3
+1The University of Texas at Austin
+2Dolby Laboratories Inc.
+3University of Colorado Boulder
+Correspondence: karthikey97@gmail.com
+|
+Project page: https://karthikey97.github.io/splattok/
+Abstract
+3D Gaussian splats enable real-time rendering but require substantial storage. Existing compression methods
+either encode the primitives of a given splat or optimize a compact representation independently for each scene.
+Yet a Gaussian splat is only one realization of a scene: different arrangements of primitives can produce nearly
+identical rendered views. We exploit this freedom on the decoding side with SplatTok, a learned scene-resynthesis
+codec. Trained across thousands of real-world scenes, a transformer encodes an existing splat into compact,
+spatially anchored latent tokens, and a shared decoder synthesizes a new set of standard Gaussian primitives
+without preserving correspondence to the input. The representation is learned through rendering supervision
+rather than primitive reconstruction. At compression time, a quantization-aware latent search refines only
+the scene code, keeping the networks frozen, and closes most of the encoder’s remaining error. On standard
+benchmarks, using only renders of the input splat for the latent search, without the original training images,
+SplatTok matches the PSNR of the feed-forward codec FCGS with 4 to 6.5 times smaller files, compressing input
+splats about 75 to 110 times. With the training images, it exceeds the PSNR of the per-scene method HAC++
+with 13 to 41% smaller files. A single model trained on DL3DV generalizes to unseen scenes with millions of
+Gaussians and supports multiple target rates without retraining.
+SplatTok
+SplatTok w/o images
+HAC++
+KISS-GS
+Figure 1. Compressing an existing Gaussian splat. PSNR (dB) against size per scene (MB, log scale). With the training images as
+the target of its latent search, SplatTok outperforms HAC++ [10] and KISS-GS [31] in PSNR on all three datasets. With only renders
+of the input splat as the target, it still lies above HAC++, which is trained on the training images. All SplatTok points compress the
+3DGS-MCMC splats of Tab. 2.
+1 Introduction
+3D Gaussian Splatting [21] has quickly become a standard way to capture and share photorealistic 3D scenes. A scene
+is reconstructed once from multi-view images captured from many camera poses and is then rendered in real time on
+ordinary hardware. Rendering is fast because the scene is stored directly as millions of Gaussian primitives, each with
+dozens of attributes, and that is also what makes it large: a typical scene occupies hundreds of megabytes to over a
+gigabyte. That is too large to stream to a headset or phone, to store by the thousands in an asset library, or to send as
+easily as an image or a video. In this work we compress existing splats. We want a file one to two orders of magnitude
+1
+arXiv:2611.32202v1  [cs.CV]  24 Nov 2026
+
+
+SplatTok
+2
+smaller that renders nearly as well as the original, produced quickly, without the images the splat was built from, and
+that decodes back to a standard splat any 3DGS renderer can display. The last two conditions matter in practice: splats
+are increasingly distributed as standalone files, long after their training images have been discarded, and they are viewed
+in renderers built for the standard format.
+Existing compression methods each meet some of these goals but not all of them. The most compact results come from
+per-scene methods, which build a new, structured representation for every scene and optimize it against the scene’s
+training images, often with learned context models for entropy coding [8, 10, 28, 42]; see [2] for a survey. The strongest
+of these reach compression ratios near 100-fold, but they need the training images, take tens of minutes per scene, and
+usually must be retrained for every target size. Their output is also not a standard splat: anchor-based methods store
+learned features from which small networks generate the Gaussians for each view at render time, so they need their own
+renderer. Post-training methods prune and quantize a splat without building a new representation [15, 24, 33, 38, 43]
+and keep the standard format, but reach more modest ratios or need minutes of fine-tuning to recover quality. The
+feed-forward codec FCGS [9] removes per-scene optimization altogether: a network trained on many scenes compresses
+a splat in seconds, without images, and decodes to a standard splat. It does so primitive by primitive, coding each
+Gaussian’s attributes with limited context from its neighbors and keeping the original set of Gaussians, and reaches
+about 10 to 30-fold compression. No existing method reaches per-scene compression ratios without the training images
+and without per-scene representation training, while decoding to a standard splat.
+We take a different view: rather than learning a new representation for each scene, or a codec for individual Gaussians,
+we learn a model of whole scenes and compress within it. Our method, SplatTok, encodes an entire splat into a compact
+set of latent tokens anchored at 3D locations across the scene, and decodes them into a new set of Gaussians placed
+around those anchors. The encoder attends across the whole scene, so each token summarizes its region in the context
+of everything else; the decoder never sees the input Gaussians and is free to synthesize whatever arrangement renders
+the scene best. We train the model on a large dataset of real-world scenes, supervised only by rendering, and quantize
+and entropy code the tokens to form the bitstream. This differs from FCGS in what is learned and what is stored:
+FCGS learns to code the attributes of given primitives, whereas SplatTok learns how scenes are structured and stores a
+description from which primitives are regenerated.
+Because the decoder maps any code in its latent space to a renderable splat, compressing a new scene reduces to
+finding its code. The encoder’s output is already a good latent code, and a short search over the tokens alone, with the
+network frozen and quantization applied during the search, brings it close to the best code the decoder can express.
+The search needs only renders of the input splat from its cameras as its target, so it works without the training images;
+when they are available, they can serve as the target instead. This mirrors encode-time refinement in learned image
+compression [7, 46], here applied to whole 3D scenes. Our analysis shows why it is effective: the search changes the
+code by only 4 to 10% yet improves fidelity to the input splat by about 8 dB, indicating that refinement closes at least
+84% of the initial optimality gap within the fixed decoder and admissible code space. The rate is set by the precision of
+the tokens and by the density of the anchors, so a single trained model serves many target sizes, and the same weights
+are used for every dataset in our experiments.
+The resulting codec outperforms the best published per-scene methods in PSNR at smaller sizes. On Mip-NeRF 360 [5],
+SplatTok reaches 27.93 dB at 7.46 MB per scene, 0.46 dB above HAC++ [10] at 8.61 MB, and 28.09 dB at 10.89 MB,
+0.49 dB above HAC++ at 18.48 MB, with similar gains on Tanks and Temples [23] and Deep Blending [18], using one
+model for all sizes instead of one training run per size. With coarser anchors, the same model still exceeds HAC++ in
+PSNR with files 53 to 60% smaller. Without the training images, SplatTok matches the PSNR of FCGS on the same
+input splats with 4 to 6.5 times smaller files on DL3DV, Mip-NeRF 360, Tanks and Temples and Deep Blending. The
+same model, trained only on DL3DV splats, compresses scenes of several million Gaussians from these other datasets
+without retraining.
+In summary, our contributions are:
+• A scene-resynthesis codec for Gaussian splats that encodes a whole scene into a compact set of 3D-anchored
+tokens and synthesizes a new set of standard 3DGS primitives from them, trained across thousands of real scenes
+with rendering supervision alone.
+• Compression as a short search in the decoder’s latent space, which reaches per-scene compression quality without
+the training images, without per-scene representation training, and with one model for all target sizes. We show
+that it works because most of the encoder’s remaining error is an amortization gap rather than a limit of the
+
+
+SplatTok
+3
+decoder.
+• Results on DL3DV, Mip-NeRF 360, Tanks and Temples and Deep Blending: higher PSNR than HAC++ with 13
+to 41% smaller files at the default anchor density and 53 to 60% smaller files with coarser anchors, the PSNR
+of FCGS with 4 to 6.5 times smaller files without training images, and generalization from 350,000 to several
+million Gaussians per scene.
+The rest of this report is organized as follows. Sec. 2 reviews related work, Sec. 3 fixes notation, and Sec. 4 describes
+SplatTok. Sec. 5 evaluates it against feed-forward, post-training and per-scene methods, studies its rate controls, the
+latent search and its design choices, and reports its timing. Sec. 6 discusses limitations and future directions.
+2 Related Work
+Compact Gaussian splats trained per scene. A first line of work makes the splat itself smaller while it is fit
+to the training images. These methods learn masks that prune redundant Gaussians [24, 34], replace attributes with
+codebook indices or quantized latents [17, 24, 32], arrange attributes into smooth 2D grids that standard image codecs
+compress well [30], or add an explicit rate term to the training objective [40]. SpeedyGS [52] compresses ordinary
+3DGS primitives with a content-aware two-stage optimization. These methods keep the output close to a standard splat
+and reach roughly 15 to 45-fold compression on Mip-NeRF 360, but each scene still needs a full optimization from its
+training images, and changing the target size means optimizing again.
+Anchor-based methods with learned entropy models. The smallest files come from methods that replace
+the unstructured splat with a structured one. Scaffold-GS [28] stores sparse anchors with learned features, from
+which small networks generate nearby Gaussians for each view. HAC [8] and HAC++ [10] model the distribution
+of these anchor features with a hash-grid context and, in HAC++, context within each anchor, while ContextGS [42]
+decodes anchors coarse to fine with each level conditioned on the previous ones, and CompGS [26] predicts primitives
+as residuals from anchors. Recent methods refine the context model further, with context-adaptive triplanes [50],
+hierarchical sparse transform coding [44], local geometry-aware hierarchical context [12], or anchor-wise causal context
+with integer-only inference [48]. Together they reach close to 100-fold compression, the best reported. The price is a
+per-scene optimization of tens of minutes against the training images, repeated for every target rate except in progressive
+coding [11], which trains one representation whose bitstream can be decoded at several rates, and an output that is not a
+standard splat but needs the method’s own networks at render time. SplatTok instead learns the structure of scenes once,
+across thousands of them, so that a new scene needs no representation of its own, and its latents decode to ordinary
+Gaussians.
+Post-training compression. Another family compresses an already trained splat. LightGaussian [15] prunes
+Gaussians by their contribution to the training views, distills spherical harmonics to a lower degree and vector-quantizes
+the rest; Compressed3D [33] clusters attributes by their sensitivity to rendering error; MesonGS [43] combines
+importance-based pruning with octree coding of positions and a transform coder for attributes. Each then fine-tunes
+the compressed splat against the training images for several minutes. FlexGaussian [38] removes the fine-tuning and
+chooses pruning and mixed-precision quantization without training. KISS-GS [31] combines strong compaction with an
+image-based attribute codec and encoding-aware fine-tuning, and reaches the highest ratios of this family while keeping
+a standard splat. These methods keep the standard format, but reach more modest ratios, especially without fine-tuning.
+SplatTok’s latent search instead optimizes the latent code itself, with quantization in the loop, while the frozen decoder,
+trained across thousands of scenes, keeps the code within the space of plausible scenes. This reaches several times
+higher compression ratios than pruning and quantizing primitives, and since SplatTok accepts any standard splat, it is
+complementary to these methods and can further compress a splat they have already compacted (Sec. 5.5).
+Feed-forward compression. FCGS [9] is, to our knowledge, the first codec that compresses a splat in a single
+forward pass of a network trained on many scenes. It needs no images and no per-scene optimization, decodes to a
+standard splat, and runs in seconds. It codes the given Gaussians themselves: each primitive’s attributes are entropy
+coded with context from already decoded neighbors, and the decoded splat has the same set of Gaussians as the input,
+which limits compression to about 10 to 30-fold. LocoMoco [27] extends FCGS with long-context entropy modeling
+over Morton-ordered windows of Gaussians, and still codes the given primitives; without public code or models, we do
+not include it in our comparisons. Feed-forward reconstruction methods have also been combined with compression of
+their predicted Gaussians [19, 49]; these compress the output of reconstruction from images rather than an existing
+
+
+SplatTok
+4
+splat. SplatTok is also trained across scenes, but it learns a model of whole scenes rather than of individual Gaussians
+and stores a compact description from which a new set of Gaussians is generated.
+Learned compression and encode-time refinement. Learned image codecs pair analysis and synthesis
+transforms with an entropy model [3, 4, 29]. Since an amortized encoder does not find the best code for every input,
+refining each latent at encode time with the decoder fixed recovers part of this gap [7, 46]. Implicit neural representations
+take the opposite extreme and overfit a network to each instance [14], which is also what per-scene splat compression
+methods do. SplatTok sits between the two: a codec amortized over thousands of scenes and refined per scene at encode
+time with the network frozen, and we show that this refinement closes most of the gap to the best code the decoder can
+express.
+Set latents and latent models of Gaussian splats. Our architecture builds on set latents for 3D shapes, which
+encode a point cloud into a fixed-size set of latent vectors through cross-attention [51] and now underlie many 3D
+generative models [53]. Latent models of Gaussian splats [36, 45] are built to support a generative prior, mostly at
+object level, rather than to reconstruct a given scene faithfully, and are not evaluated in terms of size and rendering
+quality. At scene level, Can3Tok [16] is a variational autoencoder for 3D Gaussians, designed to provide a latent space
+for diffusion-based scene generation. A fixed set of learned queries cross-attends to the input Gaussians, so every scene,
+whatever its extent or complexity, is mapped to a latent of the same size, and the decoder always outputs the same
+number of Gaussians. To fit this budget, each input splat is first filtered and subsampled to a fixed number of primitives
+(40K in their experiments), which discards most of a real capture. The model is trained with an L2 loss on the attributes
+of these input Gaussians rather than on renderings. Since many different sets of Gaussians render the same scene, this
+loss asks the decoder to reproduce one particular arrangement of primitives rather than the scene’s appearance, and
+reconstructions are measured by attribute error rather than rendering fidelity. Its checkpoints are not publicly available,
+which prevents a direct comparison. GaussianGPT [39] generates scenes autoregressively over the discrete tokens of a
+sparse 3D convolutional autoencoder with lookup-free quantization. Its encoder takes a voxel grid with at most one
+Gaussian per voxel, stored as an offset from the voxel center; when a voxel contains several Gaussians, all but one
+are randomly dropped. Its training scenes are therefore built to match this structure, by fitting Scaffold-GS with one
+Gaussian per anchor aligned to the voxel centers, and view-dependent color is not modeled for scenes. A splat trained
+with standard 3DGS, with many overlapping primitives of different sizes per voxel, falls outside this input domain.
+SplatTok instead grows the number of anchors, and hence the code and the output, with the input splat, accepts any
+standard splat, and is supervised only through rendering.
+Scene tokens from images. TokenGS [35] and SceneTok [1] also describe a scene with a set of learned tokens,
+but are built for feed-forward reconstruction from posed images rather than for compressing a splat. In TokenGS,
+learnable 3DGS tokens cross-attend to features of a few input views and each regresses a fixed number of Gaussians,
+trained with a rendering loss. SceneTok encodes many context views into a small set of unstructured tokens, from
+which a rectified-flow decoder generates novel views as images rather than an explicit 3D representation. Neither takes
+an existing splat as input or produces a bitstream evaluated in size and rendering fidelity; their architectures, losses and
+pipelines target the fast construction of renderable scenes from images. SplatTok instead starts from a finished splat,
+anchors its tokens in 3D across the whole scene, and is trained and evaluated as a codec.
+3 Background and Notation
+A Gaussian splat [21] represents a scene as a set of N anisotropic 3D Gaussians G = {gi}N
+i=1. Each Gaussian
+gi = (µ i,si,qi,oi,fi) has a position µ i ∈R3, a log-scale si ∈R3, a rotation given by a quaternion qi ∈R4, an opacity
+logit oi ∈R, and spherical-harmonic (SH) color coefficients fi ∈R(ℓ+1)2×3 up to degree ℓ. Its covariance is Σi =
+R(qi)diag(esi)2 R(qi)⊤and its opacity is sigmoid(oi). We write R(G ,P) for the image of a splat rendered from a
+camera P, and treat the renderer as a fixed, differentiable operator. A splat is fit to multi-view images {Iv}v∈V , the
+training images, taken from cameras {Pv}v∈V , where V = {1,...,V} indexes the views.
+
+
+SplatTok
+5
+Scene with 
+N Gaussians
+A ≈ N/K clusters
+~K Gaussians per
+cluster
+Encoder with 
+alternating 
+Local+Global 
+Self Attention
+T Tokens
+per cluster
+Decoder 
+spawns M 
+Gaussians per 
+cluster
+Reconstruc-
+tion with AxM
+gaussians
+Render with 
+Random 
+Camera C
+Original
+Reconstruction
+Image 
+Losses
+Decoder with 
+frozen 
+weights
+Render with 
+Random 
+Camera C
+Quantize
+Quantization-aware optimization of the 
+latent code
+Arithmetic 
+coding
+Stage-II: 
+Latent Search
+Compressed 
+Bitstream
+Stage-III: 
+Lossless Coding
+Stage-I: Encoder Forward-Pass
+Quantized + finetuned 
+tokens
+Figure 2. Overview of SplatTok. The input splat is partitioned into anchors. The encoder summarizes the Gaussians of each anchor
+into a fixed number of latent tokens. The decoder regenerates a fixed number of new Gaussians around each anchor from its tokens.
+At encode time, latent search refines the quantized tokens with both networks frozen.
+4 SplatTok
+4.1 Overview
+SplatTok compresses a splat G into a set of latent tokens anchored at 3D locations and regenerates a new splat ˆ
+G from
+them (Fig. 2). We first partition the scene into A anchors, each with a position and a size (Sec. 4.2). An encoder E
+turns the Gaussians around each anchor into T tokens of C channels, attending across the whole scene, which gives the
+encoder’s code Z0 = E(G ) ∈RA×T×C (Sec. 4.3). A decoder D maps the tokens of each anchor of a code Z ∈RA×T×C
+to M new Gaussians placed around it, so that ˆ
+G = D(Z) is a standard splat of AM Gaussians that any 3DGS renderer
+can display (Sec. 4.4). Here, hats mark reconstructed quantities. Both networks are trained jointly across many scenes
+through rendering alone (Sec. 4.5). To store a scene, the tokens are quantized to b bits and entropy coded (Sec. 4.6).
+Finally, a latent search refines the quantized code at encode time with both networks frozen, using renders of the input
+splat or, when available, the training images as the target (Sec. 4.7).
+Input and normalization. SplatTok takes a splat exactly as it is stored: an unordered set of Gaussians in the
+parametrization of Sec. 3, of any size N, without the training images. Before encoding, the splat and its cameras are
+brought to a normalized frame by a similarity transform computed from the cameras, consistent with the normalization
+of the gsplat library [47], so that splats of different scenes share a common position and scale. The decoded splat lives
+in the same frame and is rendered with the transformed cameras.
+4.2 Scene partition into anchors
+We partition the scene into A anchors, chosen proportional to N for a fixed target number of Gaussians per anchor, so
+that the number of anchors follows the size of the scene. The anchor positions {ak}A
+k=1 are the centers of a k-means
+clustering of all Gaussian positions {µ i}. Clusters with more than K members are split. Each Gaussian joins its nearest
+anchor and, as long as that anchor has fewer than K members, also its second-nearest one. The resulting member sets
+Nk, with |Nk| ≤K, overlap near cluster boundaries, so that neighboring anchors see the Gaussians between them.
+Each anchor also stores a size σk, the median distance of its members from ak, capped at a multiple of the scene’s
+median anchor size so that isolated anchors on sparse outliers do not span large regions. Positions inside an anchor are
+expressed as normalized offsets (µ i −ak)/σk, so that every anchor is processed at a common scale, whether it covers a
+dense surface or a sparse background region. The anchor positions and sizes are the only geometric side information of
+the code.
+
+
+SplatTok
+6
+4.3 Encoder
+Although anchors may contain different numbers of Gaussians, the encoder summarizes every anchor into the same
+number T of tokens. Each Gaussian is first embedded from its non-positional attributes, ei = φ(si, ¯qi,oi,fi), where φ is
+an MLP and ¯qi is the unit quaternion. Within anchor k, the embedding is combined with the member’s normalized
+offset into a key–value token
+hk,i = ψ
+ ei, γ
+ (µ i −ak)/σk
+
+,
+i ∈Nk,
+(1)
+where γ is a Fourier embedding and ψ an MLP. A set of T learned queries {we
+t }T
+t=1, shared by all anchors and shifted
+by an embedding of the anchor size, we
+t + We logσk, cross-attends to {hk,i}i∈Nk, followed by a feed-forward layer.
+Because attention normalizes over however many members an anchor has, the output is always T tokens per anchor.
+This is the central structural choice of SplatTok. The code length of an anchor is fixed, independent of how many
+Gaussians fall into it, how they are arranged, and what their individual attributes are. The bitstream therefore grows
+with the number of anchors and the token precision, and the decoder is free to represent an anchor with a different set of
+Gaussians than the input had. FCGS [9], by contrast, codes each given Gaussian, so its code length is tied to the input
+primitives. It also makes the anchor density a rate control: placing fewer anchors per scene shortens the code without
+retraining (Sec. 5.5).
+The tokens of all anchors are then processed jointly by a transformer, so that each token summarizes its region in the
+context of the rest of the scene. Before the transformer, a learned embedding of the token index t is added to each token.
+The first few layers apply self-attention among the T tokens of each anchor, and the remaining layers alternate between
+this local attention and global self-attention over all AT tokens of the scene, similar to VGGT [41]. In the global layers,
+queries and keys carry a 3D rotary position encoding [37] of their anchor position ak, shared by the T tokens of the
+anchor, so that attention between tokens depends on the relative position of their anchors. Global attention gives each
+token context beyond its own anchor, which a per-anchor or per-primitive encoder cannot use; restricting the encoder to
+attention within anchors lowers the quality of the reconstructed scene (Sec. 5.7). A final layer normalization and linear
+projection reduce each token to C channels, giving the tokens z0
+k,t ∈RC of the encoder’s code Z0.
+4.4 Decoder
+The decoder generates the Gaussians of each anchor from that anchor’s tokens alone. A set of M learned queries
+{wd
+m}M
+m=1, shared by all anchors and shifted by a size embedding Wd logσk, cross-attends to the anchor’s tokens
+{zk,t}T
+t=1 of a code Z, and a residual MLP maps each attended query to the parameters (δ k,m,ˆsk,m, ˆqk,m, ˆok,m,ˆfk,m) of
+one Gaussian. The Gaussian is placed relative to its anchor,
+ˆµ k,m = ak +σk δ k,m,
+(2)
+and its log-scale, rotation and opacity logit are used directly in the parametrization of Sec. 3. Color is encoded and
+predicted in a luma–chroma (BT.709 YCbCr) SH basis in which only luma carries view-dependent terms and the two
+chroma channels keep only the DC term. This removes most color coefficients at a cost of less than 0.1 dB on the
+input splats, and the predicted colors are converted back to RGB SH. The decoded splat ˆ
+G = D(Z) = { ˆgk,m} has AM
+Gaussians in the standard format. The decoder never sees the input Gaussians, so it is not constrained to reproduce
+them: it may place, size and weight its primitives differently from the input wherever that renders the scene better. Each
+anchor is decoded independently, which keeps decoding parallel and its memory proportional to the number of anchors.
+4.5 Training
+The encoder and decoder are trained jointly across many scenes, supervised only by rendering. For a training scene, we
+encode and decode its splat and render the result from a random subset V ′ ⊂V of its cameras, drawn anew at every
+step. Each render is compared with a target image Yv; for a rendered image ˆI and a target Y, the loss is
+L (ˆI,Y) = (1−λ)MSE(ˆI,Y)+λ
+ 1−SSIM(ˆI,Y)
+
+,
+(3)
+where MSE is the mean squared error over pixels. The training objective is
+EG ,V ′
+h 1
+|V ′| ∑
+v∈V ′
+L
+ R(D(E(G )),Pv), Yv
+i
+,
+(4)
+
+
+SplatTok
+7
+with the expectation over training scenes and view subsets. During training the targets are the training images, Yv = Iv.
+There is no loss on the attributes of individual Gaussians, and no correspondence between input and output primitives is
+needed, since the decoder generates a different set. The networks are trained on continuous tokens; quantization is
+applied only when a scene is stored (Sec. 4.6).
+4.6 Quantization and entropy coding
+To store a scene, the tokens are quantized channel-wise with a symmetric uniform quantizer of b bits. With umax =
+2b−1 −1 and a per-channel step ∆c = maxk,t |z0
+k,t,c|/umax set from the encoder’s code Z0, each value of a code Z is
+mapped to an integer symbol and back,
+uk,t,c = round
+ clip(zk,t,c/∆c, −umax, umax)
+
+,
+ˆzk,t,c = ∆c uk,t,c,
+(5)
+and we write ˆZ = Qb(Z) for the dequantized code.
+The symbols are coded losslessly with rANS [13]. Anchors are coded in the Morton order of their positions. The
+probability table of each symbol uk,t,c is selected by its position (t,c) within the anchor and by a coarse bin of the
+symbol at the same (t,c) in π(k), the nearest anchor coded before k. The tables are integer frequency counts, collected
+once for each bit depth from encoder codes of training scenes, and are fixed and shared by encoder and decoder: like
+the network weights, they are part of the codec rather than of any bitstream, and there is no learned entropy model.
+Besides the coded symbols, the bitstream holds the anchor positions ak, the anchor sizes σk and the per-channel steps
+∆c. Without the latent search, the stored code is ˆZ0 = Qb(Z0); the search of Sec. 4.7 replaces it with a refined code at
+the same bit depth. The bit depth b sets the rate, so a single trained model serves different target sizes.
+4.7 Latent search
+The encoder is amortized over many scenes and does not find the best code for each one. At encode time, we
+therefore refine the code with both encoder and decoder frozen, as in encode-time refinement for learned image
+compression [7, 46]. Starting from Z0, we solve
+Z⋆= argmin
+Z
+1
+|V | ∑
+v∈V
+L
+ R(D( ˆZ),Pv), Yv
+
+,
+ˆZ = Qb(Z),
+(6)
+by stochastic gradient descent, with a random subset V ′ ⊂V of the cameras at each step, and store ˆZ⋆= Qb(Z⋆).
+The network weights, the anchors ak, the sizes σk and the steps ∆c stay fixed, so only the coded symbols change.
+Quantization is applied inside the loop, with gradients passed through the rounding by the straight-through estimator [6].
+Quantizing only after a search on continuous tokens instead lowers PSNR on Mip-NeRF 360 by 0.33 dB at 8 bits
+and 0.67 dB at 6 bits (Sec. 5.7). The search runs at the target bit depth, so the code can be refined for any required
+quantization level. The target images are renders of the input splat, Yv = R(G ,Pv), which require only the splat and its
+cameras; when the training images are available, they can serve as targets instead, Yv = Iv. The search changes the
+code only slightly yet improves fidelity substantially (Sec. 5.6), which indicates that most of the encoder’s remaining
+error is an amortization gap rather than a limit of what the decoder can express.
+5 Experiments
+5.1 Experimental setup
+Evaluation datasets. On DL3DV [25], we evaluate on 173 held-out test scenes, which do not overlap with our
+training scenes. All methods, including FCGS, compress the same input splats. Some test scenes may appear in the
+training set of FCGS, which can only favor FCGS, although our input splats are retrained and differ from those it saw.
+To measure generalization to other capture setups and scene sizes, we further evaluate on Mip-NeRF 360 [5], Tanks and
+Temples [23] and Deep Blending [18], whose splats contain up to 10× more primitives than the DL3DV training splats.
+For these datasets we follow the evaluation protocol of 3DGS [21] as specified in [2, 31]. The held-out views are used
+neither to fit the input splat nor as targets of the latent search, so all reported metrics are on views that SplatTok’s search
+has never seen.
+
+
+SplatTok
+8
+Input splats. The two main comparisons compress different input splats, so their numbers are not directly comparable.
+Tab. 1 uses vanilla 3DGS splats trained with gsplat [47], whose quality matches the base results reported by FCGS [9],
+and every method in that table compresses exactly these splats. Tab. 2 uses stronger splats trained with 3DGS-
+MCMC [22], capped at 3.5 million Gaussians for Mip-NeRF 360, 1.75 million for Tanks and Temples and 1 million
+for Deep Blending; only SplatTok compresses these splats, while the per-scene methods in that table fit their own
+representation to the training images. Tab. 2 is thus an end-to-end comparison in which each method’s reconstruction is
+part of its pipeline; KISS-GS likewise starts from 3DGS-MCMC splats.
+Baselines. Without training images (Tab. 1), we compare with the feed-forward codec FCGS [9] at its low and high
+rates, the training-free FlexGaussian [38], and LightGaussian [15] and HAC++ [10], which we fine-tune or retrain
+on renders of the input splat instead of the training images. All of them except FCGS use the cameras of the input
+splat, as SplatTok’s latent search does: FlexGaussian to score the importance of Gaussians, and LightGaussian and
+HAC++ to render their targets. With training images (Tab. 2), we compare with the strongest per-scene methods,
+ContextGS [42] and HAC++ [10], which we rerun three times per scene because of its run-to-run variance; with
+KISS-GS [31], the strongest post-training method, which also decodes to a standard splat; and with representative
+compact and post-training methods [34, 43]. SplatTok, the methods in Tab. 1 and our HAC++ reruns use the same
+metric implementation and resolution; the remaining numbers in Tab. 2 are taken from the respective papers.
+Metrics. We report PSNR, SSIM and LPIPS (VGG) against the GT images of the held-out test views, the size of the
+compressed file in MB (220 bytes), and the compression time per scene. Unless stated otherwise, times exclude fitting
+the input splat and are measured on a single GH200 GPU. SplatTok’s low and high rates are b=6 and b=8 bits at one
+anchor per 128 input Gaussians. All SplatTok results in this report come from one trained model with the same weights,
+for every dataset, bit depth, anchor density and search target; the network is never retrained or fine-tuned per dataset,
+rate or scene.
+Training data. We train on 9,101 DL3DV scenes and hold out 173 for testing, every 50th scene of the sorted list,
+after excluding scenes whose splats fit their training images poorly or whose images have a non-standard resolution.
+Each scene’s input splat is fit for 10k steps on images at 480×270 with gsplat. Each training step renders 32 random
+views of a scene.
+Architecture and training. Each anchor holds T=16 tokens of C=32 channels, the anchors are placed at one per
+128 input Gaussians, each anchor takes at most K=640 members, and the decoder generates M=160 Gaussians per
+anchor. The encoder has width 512 and 12 layers with 8 heads of dimension 64; the first four layers attend within
+anchors, and the remaining eight alternate between scene-level and within-anchor attention. The decoder uses one
+cross-attention layer at the token width, followed by six residual feed-forward layers of width 128 and a linear output
+head. Colors use spherical harmonics up to degree ℓ=3 for luma and the DC term only for the two chroma channels.
+The model has 57.3M parameters: 56.0M in the encoder (50.4M in its 12 transformer layers, 5.0M in the cross-attention
+from the learned anchor queries to the Gaussians, and 0.6M in the input projection, query and position embeddings, and
+the output projection to the tokens) and 1.25M in the decoder. We train with Muon [20] for the 86 weight matrices
+(56.6M parameters, learning rate scaled by 3 and matched to the AdamW update size) and AdamW for the remaining
+parameters, with weight decay 10−4, gradient clipping at 1.0, λ=0.2 in Eq. (3), bf16 mixed precision, and a batch of
+16 scenes (including gradient accumulation of 4). Training runs for 300 epochs at a learning rate of 5×10−5 after a
+10-epoch linear warm-up, with gradient checkpointing and FlashAttention-2, and takes about 6 days on 4 NVIDIA
+A100 40GB GPUs.
+Latent search. We first search the 8-bit code and then derive the 6-bit code from it. The 8-bit search starts from
+the encoder’s code and runs 500 steps of Adam on 32 random training views per step, with a peak learning rate of 0.2
+decayed to 0.02 with a cosine schedule (on DL3DV, 300 steps with a peak learning rate of 0.1). The stored code is an
+exponential moving average of the iterates with a time constant of 5% of the steps. For the 6-bit code, the 8-bit result is
+rounded to 6 bits and refined for 100 further steps at a peak learning rate of 0.03, again with a moving average. This is
+faster than a separate 6-bit search and also gives a better code (Sec. 5.6).
+Quantization and entropy coding. The per-channel steps ∆c are set from the encoder’s code at each bit depth
+and stay fixed during the search. The rANS coder uses 16-bit probabilities and byte-wise renormalization. Anchor
+positions are quantized to 10 bits per axis for the Morton order, and the context neighbor π(k) is the nearest of the 32
+nearest anchors that precedes k in this order. The neighbor’s symbol is binned into at most 64 bins, with one extra
+
+
+SplatTok
+9
+Table 1. Compression without training images, on vanilla 3DGS splats (not the 3DGS-MCMC splats of Tab. 2). All methods
+compress the same input splats, trained with gsplat [47]; fine-tuned methods use renders of the input splat as their target, and all
+methods except FCGS use its cameras. Metrics are against the GT images of the held-out views. Size in MB (220 bytes), time in
+seconds per scene excluding splat fitting. Per-scene optimization methods are not run on DL3DV because of their cost over 173
+scenes.
+Dataset
+DL3DV [25]
+Mip-NeRF 360 [5]
+Tanks and Temples [23] + Deep Blending [18]
+Method
+PSNR↑SSIM↑LPIPS↓Size↓Time↓PSNR↑SSIM↑LPIPS↓Size↓Time↓PSNR↑SSIM↑LPIPS↓
+Size↓
+Time↓
+Uncompressed
+Input splats (vanilla 3DGS)
+30.86
+0.905
+0.094
+82.96
+–
+27.49
+0.813
+0.223
+749.1
+–
+26.55
+0.872
+0.212
+551.23
+–
+Training-free compression
+FlexGaussian [38]
+29.31
+0.857
+0.146
+4.14
+6
+26.78
+0.787
+0.268
+38.42
+19
+25.66
+0.833
+0.241
+20.21
+15
+Feed-forward compression
+FCGS (low rate) [9]
+29.21
+0.854
+0.148
+3.28
+7
+27.05
+0.798
+0.237
+36.24
+33
+26.27
+0.844
+0.230
+23.20
+18
+FCGS (high rate) [9]
+29.94
+0.875
+0.132
+4.69
+9
+27.39
+0.805
+0.226
+64.05
+44
+26.44
+0.859
+0.219
+41.99
+22
+SplatTok, encoder only (low rate)
+26.59
+0.837
+0.181
+0.73
+2.7
+22.97
+0.707
+0.377
+6.94
+82
+24.01
+0.804
+0.355
+5.01
+28
+SplatTok, encoder only (high rate)
+26.81
+0.842
+0.194
+1.08
+2.7
+23.05
+0.714
+0.371
+9.85
+82
+24.18
+0.810
+0.350
+7.35
+28
+Fine-tuned on or trained using renders of the input splat
+LightGaussian [15]
+–
+–
+–
+–
+–
+27.33
+0.802
+0.239
+45.30
+855
+26.15
+0.844
+0.240
+36.82
+578
+HAC++ (low rate) [10]
+–
+–
+–
+–
+–
+26.76
+0.783
+0.274
+7.01
+1980
+25.89
+0.830
+0.256
+4.11
+1214
+HAC++ (high rate) [10]
+–
+–
+–
+–
+–
+26.96
+0.794
+0.266
+15.02
+1989
+26.01
+0.839
+0.248
+5.76
+1221
+SplatTok (low rate)
+29.87
+0.877
+0.136
+0.74
+45
+27.21
+0.801
+0.237
+6.99
+757
+26.34
+0.849
+0.228
+5.04
+391
+SplatTok (high rate)
+30.08
+0.889
+0.128
+1.09
+39
+27.35
+0.805
+0.229
+9.93
+631
+26.42
+0.858
+0.220
+7.42
+326
+bin for anchors without an earlier neighbor, and the frequency tables are counted once, for each bit depth, from the
+encoder codes of DL3DV training scenes. They hold one 16-bit entry per symbol for each (token, channel, neighbor
+bin) context: 16.2 MB at 8 bits (16×32×65 contexts of 255 symbols) and 3.9 MB at 6 bits (16×32×64 contexts of 63
+symbols). The side information stores the anchor positions and sizes and the per-channel steps in 32-bit floats, 16 bytes
+per anchor and 4 bytes per channel.
+5.2 Compression without training images
+Tab. 1 compares methods that compress a splat without its training images; all are evaluated against the GT images of
+the held-out views, not against renders of the input splat. Without the latent search, the SplatTok encoder is far below
+FCGS in quality, by 2.3 to 4.3 dB at high rate, although its files are already 4 to 6.5 times smaller. The latent search
+closes this gap: SplatTok matches the PSNR of FCGS at its high rate (within 0.05 dB on Mip-NeRF 360 and on Tanks
+and Temples with Deep Blending, and 0.14 dB higher on DL3DV) with 4 to 6.5 times smaller files, and exceeds FCGS
+at its low rate by 0.07 to 0.66 dB with files 4.4 to 5.2 times smaller. Relative to the input splats, SplatTok compresses
+Mip-NeRF 360 and Tanks and Temples with Deep Blending about 75 and 110 times at its two rates while losing 0.1
+to 0.3 dB. FlexGaussian and LightGaussian keep the standard format but produce files about 3 to 5 times larger than
+SplatTok at its high rate, at equal or lower PSNR, and LightGaussian needs 10 to 14 minutes per scene. HAC++,
+retrained on renders of the input splat, reaches sizes below 10 MB per scene like SplatTok, but with markedly lower
+quality.
+5.3 Comparison with per-scene methods
+With the training images available, Tab. 2 compares SplatTok, searching towards them, with per-scene methods, which
+all require the training images. With the training images as target, SplatTok outperforms HAC++, the strongest of them,
+at both rates and on all three datasets, with higher PSNR at smaller sizes. On Tanks and Temples, it is 0.51 and 0.44 dB
+better at 25% and 34% smaller sizes, on Deep Blending 0.18 and 0.15 dB better at 29% and 40% smaller sizes, and on
+Mip-NeRF 360 0.46 and 0.49 dB better at 13% and 41% smaller sizes, with visibly sharper foliage and thin structures
+(Sec. 5.4). SSIM and LPIPS are comparable to those of HAC++, while KISS-GS has higher SSIM and lower LPIPS at
+its high rate on Mip-NeRF 360 and Tanks and Temples, with 17 and 27% larger files. Even with renders of the input
+splat as target, and hence without the training images, SplatTok stays within 0.04 dB of HAC++ or exceeds it by up to
+0.08 dB at the same rate, with 17 to 42% smaller files. SplatTok can even exceed the quality of its own input splat, as on
+Tanks and Temples, for two reasons: with the training images as the target, the latent search can correct errors of the
+input splat, and the decoder generates about 1.25 times as many Gaussians as the input contains. SplatTok compresses
+whatever splat it is given, here splats trained with 3DGS-MCMC [22], so it directly inherits any improvement in splat
+
+
+SplatTok
+10
+Table 2. Comparison with per-scene methods, on 3DGS-MCMC splats (not the vanilla 3DGS splats of Tab. 1). All methods start
+from the same training images and are evaluated on the same held-out views; how each method reconstructs the scene is part of its
+pipeline. HAC++ and ContextGS fit their own representation; KISS-GS and SplatTok compress 3DGS-MCMC splats. SplatTok’s
+latent search targets the training images, or, for SplatTok ⋄, renders of the input splat, using no training images. HAC++ is the mean
+of three reruns, matching the re-evaluation by KISS-GS. †Reported by the authors. Size in MB (220 bytes).
+Dataset
+Mip-NeRF 360 [5]
+Tanks and Temples [23]
+Deep Blending [18]
+Method
+PSNR↑SSIM↑LPIPS↓Size↓PSNR↑SSIM↑LPIPS↓Size↓PSNR↑SSIM↑LPIPS↓Size↓
+3DGS† [21]
+27.46
+0.812
+0.222
+750.9
+23.69
+0.844
+0.178
+431.0
+29.42
+0.899
+0.247
+663.9
+Input splats (3DGS-MCMC)
+28.17
+0.834
+0.189
+787.7
+24.58
+0.872
+0.139
+393.9
+30.12
+0.913
+0.246
+225.1
+Reduced3DGS† [34]
+27.19
+0.807
+0.230
+29.54
+23.57
+0.840
+0.188
+14.00
+29.63
+0.902
+0.249
+18.00
+MesonGS-FT† [43]
+26.99
+0.796
+0.247
+27.16
+23.32
+0.837
+0.193
+16.99
+29.51
+0.901
+0.251
+24.76
+ContextGS (low rate)† [42]
+27.62
+0.808
+0.237
+12.68
+24.20
+0.852
+0.184
+7.05
+30.11
+0.907
+0.265
+3.45
+ContextGS (high rate)† [42]
+27.75
+0.811
+0.231
+18.41
+24.29
+0.855
+0.176
+11.80
+30.39
+0.909
+0.258
+6.60
+HAC++ (low rate) [10]
+27.47
+0.802
+0.255
+8.61
+24.16
+0.848
+0.190
+5.26
+30.00
+0.900
+0.269
+2.94
+HAC++ (high rate) [10]
+27.60
+0.806
+0.233
+18.48
+24.33
+0.853
+0.178
+8.62
+30.19
+0.905
+0.259
+5.31
+KISS-GS† (low rate) [31]
+27.75
+0.809
+0.239
+7.17
+24.48
+0.853
+0.183
+3.62
+29.45
+0.896
+0.288
+1.87
+KISS-GS† (high rate) [31]
+27.94
+0.823
+0.208
+12.76
+24.73
+0.868
+0.151
+7.16
+29.75
+0.901
+0.268
+3.73
+SplatTok ⋄(low rate)
+27.53
+0.801
+0.223
+7.13
+24.24
+0.835
+0.196
+3.71
+30.04
+0.903
+0.273
+2.06
+SplatTok ⋄(high rate)
+27.68
+0.808
+0.216
+10.64
+24.32
+0.840
+0.189
+5.47
+30.15
+0.906
+0.269
+3.06
+SplatTok (low rate)
+27.93
+0.813
+0.222
+7.46
+24.67
+0.847
+0.183
+3.94
+30.18
+0.903
+0.271
+2.08
+SplatTok (high rate)
+28.09
+0.820
+0.215
+10.89
+24.77
+0.854
+0.177
+5.65
+30.34
+0.911
+0.258
+3.20
+reconstruction, whereas per-scene methods build their own representation and must be redesigned to benefit from one.
+Among the other methods, ContextGS needs 1.7 to 2.1 times larger files for comparable PSNR, KISS-GS reaches
+similar sizes at up to 0.7 dB lower PSNR, and the methods that prune and quantize primitives are 3.5 to 12 times larger.
+At coarser anchor densities, the margin over HAC++ widens further (Sec. 5.5).
+5.4 Qualitative results
+Fig. 3 compares SplatTok with HAC++ on Mip-NeRF 360 at both rates. SplatTok preserves fine, high-frequency content
+that HAC++ smooths out, such as foliage, thin structures and surfaces at grazing angles. Figs. 5 to 8 show further results
+at both rates on all four datasets: on DL3DV with the latent search towards renders of the input splat, and on Mip-NeRF
+360, Tanks and Temples and Deep Blending with the latent search towards the training images. Going from 8 to 6 bits
+reduces the file size by about a third with little visible change.
+5.5 Rate control
+Since every anchor is coded with the same number of tokens, the size of a code is set by two quantities: the bit depth of
+the tokens and the number of anchors. The same trained model serves every setting of both, and since the number of
+anchors follows the number of input Gaussians, compacting the input splat beforehand acts as a third control.
+Bit depth. Tab. 3 varies the precision of the tokens on Truck. Lowering the precision from 8 to 6 and 5 bits costs only
+0.15 and 0.35 dB, while 4 bits costs 1.1 dB; the same trained model and latent search cover this whole range.
+Anchor density. Tab. 4 uses the model trained with one anchor per 128 input Gaussians, without retraining, at half
+the anchor density, so that each anchor summarizes about twice as many Gaussians and the decoder emits about 0.6
+times as many Gaussians as the input. The model handles the coarser anchors well: at 8 bits, one anchor per 256
+Gaussians matches or nearly matches the PSNR of one anchor per 128 Gaussians at 6 bits (within 0.02 dB, and 0.08 dB
+higher on Tanks and Temples) with 19 to 23% smaller files. At low rates, fewer anchors at a higher precision are
+therefore a better use of the bits than more anchors at a lower precision. At 6 bits, the coarser anchors reach 1.2 to
+4.0 MB per scene and still exceed HAC++ at its low rate (Tab. 2) in PSNR, by 0.29 dB on Mip-NeRF 360, 0.41 dB
+on Tanks and Temples and 0.07 dB on Deep Blending, with 53 to 60% smaller files. With half as many anchors, each
+step of the latent search decodes half as many Gaussians, which roughly halves the search time. Fine detail suffers
+
+
+SplatTok
+11
+Figure 3. Qualitative comparison on Mip-NeRF 360. Left (flowers and bicycle): high rate. Right (room and counter): low rate.
+For each set, the leftmost image is the GT image, followed by zoomed-in crops of the GT image, SplatTok and HAC++. SplatTok’s
+latent search targets the training images, as in Tab. 2. SplatTok preserves details in foliage, oblique surfaces and thin structures better
+than HAC++ at both rates.
+Table 3. Bit depth on Truck (Tanks and Temples),
+with the latent search towards the training images.
+Bits per value refers to the coded tokens only.
+Bit depth
+PSNR↑Size↓Bits/value↓
+b = 4
+25.46
+2.24
+2.40
+b = 5
+26.21
+3.01
+3.31
+b = 6 (low rate)
+26.38
+3.71
+4.14
+b = 7
+26.49
+4.59
+5.18
+b = 8 (high rate)
+26.51
+5.47
+6.23
+Table 4. Anchor density: one anchor per 128 input Gaussians (as in training)
+or per 256, on the 3DGS-MCMC splats of Tab. 2, with the latent search towards
+the training images. Time in seconds per scene.
+Dataset
+G./anchor Bits PSNR↑SSIM↑LPIPS↓Size↓Time↓
+Mip-NeRF 360
+128
+8
+28.09
+0.820
+0.215
+10.89
+890
+128
+6
+27.93
+0.813
+0.222
+7.46
+810
+256
+8
+27.93
+0.810
+0.236
+5.85
+531
+256
+6
+27.76
+0.802
+0.243
+4.04
+559
+Tanks and
+128
+8
+24.77
+0.854
+0.177
+5.65
+347
+Temples
+128
+6
+24.67
+0.847
+0.183
+3.94
+385
+256
+8
+24.75
+0.843
+0.200
+3.03
+188
+256
+6
+24.57
+0.836
+0.206
+2.14
+202
+Deep Blending
+128
+8
+30.34
+0.911
+0.258
+3.20
+198
+128
+6
+30.18
+0.903
+0.271
+2.08
+220
+256
+8
+30.16
+0.903
+0.278
+1.68
+106
+256
+6
+30.07
+0.901
+0.281
+1.19
+116
+more than overall fidelity, however: with fewer decoded Gaussians per region, SSIM and LPIPS fall further behind
+the default density at 6 bits than PSNR does. This suggests varying the anchor density within a scene, so that intricate
+regions receive more tokens than simple ones (Sec. 6).
+Compacted inputs. SplatTok accepts any standard splat, including splats already reduced by compaction methods,
+and compacting the input shrinks its bitstream in proportion. Tab. 5 applies SplatTok to the 512k-Gaussian POPSpa
+splats that KISS-GS [31] produces before its own encoding. At 8 bits, SplatTok compresses them to 1.74 MB at
+26.72 dB, on par with KISS-GS at its 128k operating point (26.69 dB at 1.84 MB), and 4.1 times smaller than KISS-GS’s
+own encoding of the same 512k splats. At 6 bits, it reaches 26.50 dB at 1.25 MB, above the KISS-GS curve, which
+interpolates to 26.19 dB at this size, with higher SSIM and lower LPIPS as well. SplatTok thus matches or exceeds the
+trade-off of KISS-GS from a less compacted splat, and can serve as the final encoding stage of a compaction pipeline.
+5.6 Latent search and the amortization gap
+Fig. 4 shows how quality and the code evolve during the latent search. The search improves the encoder’s code quickly:
+on Mip-NeRF 360, the 8-bit code gains 3.7 dB within the first 100 steps and levels off at 28.09 dB after 500 steps, while
+the code moves by less than 10% from the encoder’s output. Rounding the searched 8-bit code to 6 bits and refining it
+for 100 more steps gives 27.93 dB, above a 6-bit search from scratch (27.85 dB) at a fraction of its cost, and the derived
+6-bit code stays within the same range of change. The search barely affects the rate: the size of the entropy-coded
+
+
+SplatTok
+12
+Table 5. Compressing compacted splats on Mip-NeRF 360. The input splats are compacted to 512k Gaussians per scene with
+POPSpa, the compaction stage of KISS-GS [31], and were shared with us by its authors. SplatTok compresses them at 8 and 6 bits
+with the latent search towards the training images, as KISS-GS’s fine-tuning does. †Read from the rate-distortion plot of KISS-GS
+(SOG-XT encoding with encoding-aware fine-tuning). ‡Interpolated linearly in log size between its 64k and 128k operating points,
+at the sizes of SplatTok. Size in MB (220 bytes).
+Method
+#Gaussians
+PSNR↑
+SSIM↑
+LPIPS↓
+Size↓
+POPSpa splats (uncompressed input)
+512 k
+27.79
+0.813
+0.239
+–
+KISS-GS†, 512k budget
+512 k
+27.75
+0.809
+0.239
+7.17
+KISS-GS†, 128k budget
+128 k
+26.69
+0.754
+0.322
+1.84
+KISS-GS‡, interpolated
+–
+26.62
+0.750
+0.327
+1.74
+KISS-GS‡, interpolated
+–
+26.19
+0.725
+0.355
+1.25
+POPSpa splats + SplatTok (8 bits)
+–
+26.72
+0.751
+0.325
+1.74
+POPSpa splats + SplatTok (6 bits)
+–
+26.50
+0.730
+0.332
+1.25
+bitstream changes by less than 1%.
+27
+28
+PSNR (dB)
+round to 6 bit
+28.09
+27.85
+27.93
+8-bit
+6-bit
+6-bit from 8-bit
+23.5
+0
+100
+200
+300
+400
+500
+600
+Latent-search steps
+0
+5
+10
+Change (%)
+Figure 4. Latent search on Mip-NeRF 360, averaged over
+its scenes, towards the training images. Top: PSNR on the
+held-out views. Bottom: relative root-mean-square change of
+the latent code from the encoder’s output.
+Measured against renders of the input splat on the held-out
+test views, which the search never uses, the gain is approxi-
+mately 8 dB, yet the code changes by only 7 to 8% in relative
+root-mean-square terms; across datasets the change ranges
+from about 4% on DL3DV to 10% on Tanks and Temples.
+Using the same frozen decoder, the search thus removes 84%
+of the encoder’s squared error with respect to the input splat.
+The best code the decoder admits is at least as good as the
+searched one, so at least this fraction of the encoder’s error is
+an amortization gap, and at most 16% can be attributed to the
+decoder. Moreover, the better code lies close to the encoder’s:
+the encoder, which must serve all scenes at once, is nearly
+right for each of them, which explains why a short search
+with the network frozen suffices. The two search targets
+behave similarly, and searching towards the training images
+adds a further 0.4 dB, since the GT images also contain detail
+that the input splat itself does not reproduce.
+Table 6. Entropy coding on Truck at high rate. The variants
+are lossless and differ only in size.
+Probability tables
+Size↓
+Bits/value↓
+Single histogram
+6.17
+7.06
+Per position
+5.49
+6.26
+Per position + neighbor context
+5.47
+6.23
+Does the search need the encoder?. To test this, we
+initialize the tokens of Truck randomly, from the per-channel
+mean and variance of the tokens of 50 random DL3DV train-
+ing scenes, keep the anchors, anchor sizes and quantization
+steps of the input splat, and run the latent search with the
+same protocol. The code starts at 7.25 dB and reaches only
+21.44 dB after the same number of steps, against 26.51 dB
+when starting from the encoder’s output. The frozen decoder
+alone is thus not enough: the encoder places the search near a good code, and the search closes the remaining gap.
+5.7 Ablations
+Global attention. To measure the encoder itself, we compare codes without the latent search, which could com-
+pensate for a weaker encoder. Replacing the global attention layers with attention within each anchor lowers the
+encoder-only PSNR on the DL3DV test scenes by 0.82 dB at the same size, confirming that scene-level context improves
+the code beyond what each anchor’s own Gaussians provide. The latent search narrows this gap, but 0.26 dB remain
+after the same number of search steps. A local-only encoder has a cheaper forward pass, but it does not speed up the
+latent search, the slowest stage, which uses only the frozen decoder.
+
+
+SplatTok
+13
+Figure 5. DL3DV test scenes. Left: render of the input splat; middle: SplatTok at 8 bits; right: SplatTok at 6 bits. The latent search
+targets renders of the input splat.
+
+
+SplatTok
+14
+Figure 6. Mip-NeRF 360. Left: GT image; middle: SplatTok at 8 bits; right: SplatTok at 6 bits. The latent search targets the training
+images.
+
+
+SplatTok
+15
+Figure 7. Tanks and Temples. Left: GT image; middle: SplatTok at 8 bits; right: SplatTok at 6 bits. The latent search targets the
+training images.
+Figure 8. Deep Blending. Left: GT image; middle: SplatTok at 8 bits; right: SplatTok at 6 bits. The latent search targets the training
+images.
+
+
+SplatTok
+16
+Quantization in the loop. Running the latent search on continuous tokens and quantizing only at the end lowers
+PSNR on Mip-NeRF 360 by 0.33 dB at 8 bits and 0.67 dB at 6 bits, because the continuous code that the search finds
+does not survive rounding, whereas with quantization in the loop the search finds a code that is good after quantization.
+Entropy coding. Selecting tables by position within the anchor saves 11% of the bits over a single histogram, and
+the neighbor-anchor context saves only a further 0.5%, at no change in quality since the coding is lossless (Tab. 6).
+Counted histograms thus capture little of the dependence between anchors, which leaves room for learned entropy
+models (Sec. 6).
+5.8 Timing and rendering speed
+Tab. 7 breaks down the time of each stage for scenes of increasing size. The latent search and decoding scale roughly
+linearly with the number of anchors, and hence with the number of input Gaussians, while clustering and encoding grow
+faster, the encoding quadratically because of the global attention; on the largest scenes the latent search still accounts
+for about 80% of the time, and GPU-accelerated clustering could shorten the remainder further. Decoding a stored code
+takes well under a second even for the largest scenes. The decoder emits 160 Gaussians per anchor, and anchors are
+placed at one per 128 input Gaussians, so the decoded splat holds about 1.25 times as many Gaussians as the input; its
+rendering cost is therefore comparable to that of the input splat, at 171 against 184 frames per second on the Garden
+scene of Mip-NeRF 360 (4.4 against 3.5 million Gaussians, one 1600-pixel-wide frame at a time).
+Table 7. Timing per stage for scenes of different sizes, in seconds on a single GH200 GPU. Clustering partitions the scene into
+anchors; encoding and decoding are single network passes; the latent search runs for the default number of steps.
+Gaussians
+Anchors
+Clustering
+Encoding
+Latent search
+Entropy decoding
+Decoding
+350 k
+2736
+3.1
+0.10
+48
+0.05
+0.04
+1 M
+7813
+16.6
+0.51
+179
+0.13
+0.11
+3.5 M
+27559
+143
+5.1
+672
+0.48
+0.44
+Among methods that reach comparable compression ratios, SplatTok’s compression time is similar or lower. On
+the same input splats and GPU, HAC++ retrained on renders of the input splat takes about 33 minutes per scene on
+Mip-NeRF 360, against 10 to 13 minutes for SplatTok (Tab. 1). KISS-GS [31] reports timings for a single scene, Bicycle
+from Mip-NeRF 360, on one A100 GPU: at its higher rate, compaction, encoding and encoding-aware fine-tuning take
+about 950 seconds, excluding the reconstruction of the input splat, against roughly 820 seconds for SplatTok on a splat
+of 3.5 million Gaussians (Tab. 7). Since the KISS-GS number is read from the runtime plot in their paper and measured
+on different hardware, this comparison is approximate. Feed-forward and training-free methods such as FCGS and
+FlexGaussian compress a scene in seconds (Tab. 1), but produce files 3 to 6.5 times larger.
+6 Discussion
+Limitations. The latent search is the slowest stage: it takes close to three minutes on scenes of one million Gaussians,
+far longer than a single forward pass of the encoder. The encoder also needs substantial GPU memory on large
+scenes, about 30 GB for four million Gaussians, because its global attention spans all tokens of the scene; a chunked
+implementation could reduce this.
+Accelerating the latent search. Decoding all anchors is by far the most expensive part of each search step on
+scenes with many Gaussians. Since each step renders only a few cameras, decoding only the anchors visible from these
+cameras would reduce this cost. Fewer anchors also shorten the search, as Sec. 5.5 shows.
+Adaptive anchor density. The anchor-density experiment (Sec. 5.5) shows that the same model handles coarser
+anchors well, but that fine detail suffers more than overall fidelity when every region receives fewer tokens. Allocating
+anchors according to local complexity, rather than uniformly per input Gaussian, would spend the bits where they matter
+most.
+Learned entropy models. The counted probability tables capture little of the dependence between neighboring
+anchors (Sec. 5.7). A learned entropy model conditioned on already decoded tokens, as in learned image compression [4,
+29], could reduce the rate further, and a rate term in the latent search would let it trade size and quality per scene.
+
+
+SplatTok
+17
+Scaling with data. As a learned codec, SplatTok should further benefit from more training data: without the latent
+search, the encoder scores 1.8 dB higher on training scenes than on unseen ones, a sign that 9,101 scenes do not yet
+cover the diversity of real captures, while the latent search closes this gap on unseen scenes. Better data augmentation
+for training the autoencoder, for example over scene scale, density and capture style, is a complementary way to reduce
+this gap. Since the latent search primarily compensates for errors in the amortized code, a better encoder trained on
+larger and more diverse data may also reduce the number of search steps needed to reach a given quality.
+Scene tokens beyond compression. Beyond compression, the tokens form a compact, 3D-anchored description
+of a whole scene, a few thousand anchors instead of millions of primitives, which makes them a natural interface for
+downstream tasks such as scene generation, editing, retrieval and semantic understanding.
+7 Conclusion
+Instead of coding the primitives of a given splat or optimizing a new representation per scene from scratch, SplatTok
+resynthesizes the scene: it learns a latent space of spatially anchored tokens from thousands of splats and compresses a
+splat by searching for its code in this space with the networks frozen. A single model compresses splats from different
+datasets at a wide range of rates without their training images, exceeds per-scene methods in PSNR at smaller sizes
+when these images are available, and decodes to a standard splat. Because it compresses whatever splat it is given, it
+also inherits future improvements in splat reconstruction.
+Acknowledgments
+This work began when Sai Karthikey Pentapati interned at Dolby Labs. We also thank Texas Advanced Computing
+Center (TACC) For granting us access to the Vista server. We thank the authors of KISS-GS for sharing their
+POPSpa-compacted splats.
+References
+[1] Mohammad Asim, Christopher Wewer, and Jan Eric Lenssen. SceneTok: A Compressed, Diffusable Token Space for 3D
+Scenes. In CVPR, 2026.
+[2] Milena T. Bagdasarian, Paul Knoll, Yi-Hsin Li, Florian Barthel, Anna Hilsmann, Peter Eisert, and Wieland Morgenstern.
+3DGS.zip: A Survey on 3D Gaussian Splatting Compression Methods. Comput. Graph. Forum, 2025.
+[3] Johannes Ballé, Valero Laparra, and Eero P. Simoncelli. End-to-End Optimized Image Compression. In ICLR, 2017.
+[4] Johannes Ballé, David Minnen, Saurabh Singh, Sung Jin Hwang, and Nick Johnston. Variational Image Compression with a
+Scale Hyperprior. In ICLR, 2018.
+[5] Jonathan T. Barron, Ben Mildenhall, Dor Verbin, Pratul P. Srinivasan, and Peter Hedman. Mip-NeRF 360: Unbounded
+Anti-Aliased Neural Radiance Fields. In CVPR, 2022.
+[6] Yoshua Bengio, Nicholas Léonard, and Aaron Courville. Estimating or Propagating Gradients Through Stochastic Neurons for
+Conditional Computation. arXiv preprint arXiv:1308.3432, 2013.
+[7] Joaquim Campos, Simon Meierhans, Abdelaziz Djelouah, and Christopher Schroers. Content Adaptive Optimization for Neural
+Image Compression. In CVPRW, 2019.
+[8] Yihang Chen, Qianyi Wu, Weiyao Lin, Mehrtash Harandi, and Jianfei Cai. HAC: Hash-Grid Assisted Context for 3D Gaussian
+Splatting Compression. In ECCV, 2024.
+[9] Yihang Chen, Qianyi Wu, Mengyao Li, Weiyao Lin, Mehrtash Harandi, and Jianfei Cai. Fast Feedforward 3D Gaussian
+Splatting Compression. In ICLR, 2025.
+[10] Yihang Chen, Qianyi Wu, Weiyao Lin, Mehrtash Harandi, and Jianfei Cai. HAC++: Towards 100X Compression of 3D
+Gaussian Splatting. IEEE TPAMI, 47(11):10210–10226, 2025.
+[11] Yihang Chen, Mengyao Li, Qianyi Wu, Weiyao Lin, Mehrtash Harandi, and Jianfei Cai. PCGS: Progressive Compression of
+3D Gaussian Splatting. In AAAI, 2026.
+
+
+SplatTok
+18
+[12] Xuan Deng, Xiandong Meng, Hengyu Man, Qiang Zhu, Tiange Zhang, Debin Zhao, and Xiaopeng Fan. LG-HCC: Local
+Geometry-Aware Hierarchical Context Compression for 3D Gaussian Splatting. arXiv preprint arXiv:2603.28431, 2026.
+[13] Jarek Duda. Asymmetric Numeral Systems: Entropy Coding Combining Speed of Huffman Coding with Compression Rate of
+Arithmetic Coding. arXiv preprint arXiv:1311.2540, 2013.
+[14] Emilien Dupont, Adam Goli´nski, Milad Alizadeh, Yee Whye Teh, and Arnaud Doucet. COIN: COmpression with Implicit
+Neural Representations. In ICLR Workshop on Neural Compression, 2021.
+[15] Zhiwen Fan, Kevin Wang, Kairun Wen, Zehao Zhu, Dejia Xu, and Zhangyang Wang. LightGaussian: Unbounded 3D Gaussian
+Compression with 15x Reduction and 200+ FPS. In NeurIPS, 2024.
+[16] Quankai Gao, Iliyan Georgiev, Tuanfeng Y. Wang, Krishna Kumar Singh, Ulrich Neumann, and Jae Shin Yoon. Can3Tok:
+Canonical 3D Tokenization and Latent Modeling of Scene-Level 3D Gaussians. In ICCV, 2025.
+[17] Sharath Girish, Kamal Gupta, and Abhinav Shrivastava. EAGLES: Efficient Accelerated 3D Gaussians with Lightweight
+EncodingS. In ECCV, 2024.
+[18] Peter Hedman, Julien Philip, True Price, Jan-Michael Frahm, George Drettakis, and Gabriel Brostow. Deep Blending for
+Free-Viewpoint Image-Based Rendering. ACM TOG, 37(6), 2018.
+[19] Qiang Hu, Zhenlong Wu, Lei Huang, Zihan Zheng, Xiaoyun Zhang, and Wenjun Zhang. GenSplatCodec: Feed-Forward
+Gaussian Splatting Compression via One-Step Diffusion. arXiv preprint arXiv:2607.24403, 2026.
+[20] Keller Jordan, Yuchen Jin, Vlado Boza, Jiacheng You, Franz Cesista, Laker Newhouse, and Jeremy Bernstein. Muon: An
+Optimizer for Hidden Layers in Neural Networks. https://kellerjordan.github.io/posts/muon/, 2024.
+[21] Bernhard Kerbl, Georgios Kopanas, Thomas Leimkuehler, and George Drettakis. 3D Gaussian Splatting for Real-Time
+Radiance Field Rendering. ACM TOG, 42(4), 2023.
+[22] Shakiba Kheradmand, Daniel Rebain, Gopal Sharma, Weiwei Sun, Yang-Che Tseng, Hossam Isack, Abhishek Kar, Andrea
+Tagliasacchi, and Kwang Moo Yi. 3D Gaussian Splatting as Markov Chain Monte Carlo. In NeurIPS, 2024.
+[23] Arno Knapitsch, Jaesik Park, Qian-Yi Zhou, and Vladlen Koltun. Tanks and Temples: Benchmarking Large-Scale Scene
+Reconstruction. ACM TOG, 36(4), 2017.
+[24] Joo Chan Lee, Daniel Rho, Xiangyu Sun, Jong Hwan Ko, and Eunbyung Park. Compact 3D Gaussian Representation for
+Radiance Field. In CVPR, 2024.
+[25] Lu Ling, Yichen Sheng, Zhi Tu, Wentian Zhao, Cheng Xin, Kun Wan, Lantao Yu, Qianyu Guo, Zixun Yu, Yawen Lu, Xuanmao
+Li, Xingpeng Sun, Rohan Ashok, Aniruddha Mukherjee, Hao Kang, Xiangrui Kong, Gang Hua, Tianyi Zhang, Bedrich Benes,
+and Aniket Bera. DL3DV-10K: A Large-Scale Scene Dataset for Deep Learning-Based 3D Vision. In CVPR, 2024.
+[26] Xiangrui Liu, Xinju Wu, Pingping Zhang, Shiqi Wang, Zhu Li, and Sam Kwong. CompGS: Efficient 3D Scene Representation
+via Compressed Gaussian Splatting. In ACM MM, 2024.
+[27] Zhening Liu, Rui Song, Yushi Huang, Yingdong Hu, Xinjie Zhang, Jiawei Shao, Zehong Lin, and Jun Zhang. Feed-Forward
+3D Gaussian Splatting Compression with Long-Context Modeling. arXiv preprint arXiv:2512.00877, 2025.
+[28] Tao Lu, Mulin Yu, Linning Xu, Yuanbo Xiangli, Limin Wang, Dahua Lin, and Bo Dai. Scaffold-GS: Structured 3D Gaussians
+for View-Adaptive Rendering. In CVPR, 2024.
+[29] David Minnen, Johannes Ballé, and George D. Toderici. Joint Autoregressive and Hierarchical Priors for Learned Image
+Compression. In NeurIPS, 2018.
+[30] Wieland Morgenstern, Florian Barthel, Anna Hilsmann, and Peter Eisert. Compact 3D Scene Representation via Self-Organizing
+Gaussian Grids. In ECCV, 2024.
+[31] Wieland Morgenstern, Friedrich Elias Branschke, Florian Fleischmann, Adrian Szatmari, Paul Schlack, Florian Barthel, Peter
+Eisert, and Anna Hilsmann. KISS-GS: 3D Gaussian Splatting Compression Kept Simple. In ECCV, 2026.
+[32] K. L. Navaneet, Kossar Pourahmadi Meibodi, Soroush Abbasi Koohpayegani, and Hamed Pirsiavash. CompGS: Smaller and
+Faster Gaussian Splatting with Vector Quantization. In ECCV, 2024.
+
+
+SplatTok
+19
+[33] Simon Niedermayr, Josef Stumpfegger, and Rüdiger Westermann. Compressed 3D Gaussian Splatting for Accelerated Novel
+View Synthesis. In CVPR, 2024.
+[34] Panagiotis Papantonakis, Georgios Kopanas, Bernhard Kerbl, Alexandre Lanvin, and George Drettakis. Reducing the Memory
+Footprint of 3D Gaussian Splatting. Proceedings of the ACM on Computer Graphics and Interactive Techniques, 7(1), 2024.
+[35] Jiawei Ren, Michal Jan Tyszkiewicz, Jiahui Huang, and Zan Gojcic. TokenGS: Decoupling 3D Gaussian Prediction from Pixels
+with Learnable Tokens. In CVPR, 2026.
+[36] Barbara Roessle, Norman Müller, Lorenzo Porzi, Samuel Rota Bulò, Peter Kontschieder, Angela Dai, and Matthias Nießner.
+L3DG: Latent 3D Gaussian Diffusion. In SIGGRAPH Asia 2024 Conference Papers, 2024.
+[37] Jianlin Su, Murtadha Ahmed, Yu Lu, Shengfeng Pan, Wen Bo, and Yunfeng Liu. RoFormer: Enhanced Transformer with
+Rotary Position Embedding. Neurocomputing, 568:127063, 2024.
+[38] Boyuan Tian, Qizhe Gao, Siran Xianyu, Xiaotong Cui, and Minjia Zhang. FlexGaussian: Flexible and Cost-Effective
+Training-Free Compression for 3D Gaussian Splatting. In ACM MM, 2025.
+[39] Nicolas von Lützow, Barbara Rössle, Katharina Schmid, and Matthias Nießner. GaussianGPT: Towards Autoregressive 3D
+Gaussian Scene Generation. In ECCV, 2026.
+[40] Henan Wang, Hanxin Zhu, Tianyu He, Runsen Feng, Jiajun Deng, Jiang Bian, and Zhibo Chen. End-to-End Rate-Distortion
+Optimized 3D Gaussian Representation. In ECCV, 2024.
+[41] Jianyuan Wang, Minghao Chen, Nikita Karaev, Andrea Vedaldi, Christian Rupprecht, and David Novotny. VGGT: Visual
+Geometry Grounded Transformer. In CVPR, 2025.
+[42] Yufei Wang, Zhihao Li, Lanqing Guo, Wenhan Yang, Alex C. Kot, and Bihan Wen. ContextGS: Compact 3D Gaussian Splatting
+with Anchor Level Context Model. In NeurIPS, 2024.
+[43] Shuzhao Xie, Weixiang Zhang, Chen Tang, Yunpeng Bai, Rongwei Lu, Shijia Ge, and Zhi Wang. MesonGS: Post-Training
+Compression of 3D Gaussians via Efficient Attribute Transformation. In ECCV, 2024.
+[44] Hao Xu, Xiaolin Wu, and Xi Zhang. Learning Hierarchical Sparse Transform Coding for 3DGS Compression. arXiv preprint
+arXiv:2505.22908, 2025.
+[45] Runjie Yan, Yan-Pei Cao, Peng Wang, Ding Liang, and Yuan-Chen Guo. Generative 3D Gaussians with Learned Density
+Control. In ACM SIGGRAPH, 2026.
+[46] Yibo Yang, Robert Bamler, and Stephan Mandt. Improving Inference for Neural Image Compression. In NeurIPS, 2020.
+[47] Vickie Ye, Ruilong Li, Justin Kerr, Matias Turkulainen, Brent Yi, Zhuoyang Pan, Otto Seiskari, Jianbo Ye, Jeffrey Hu, Matthew
+Tancik, and Angjoo Kanazawa. gsplat: An Open-Source Library for Gaussian Splatting. Journal of Machine Learning Research,
+26(34):1–17, 2025.
+[48] Pengpeng Yu, Yueru Chen, Fei Song, Tai Qin, Qi Zhang, Jing Wang, and Yulan Guo. Towards Practical Compression of 3D
+Gaussian Splatting. arXiv preprint arXiv:2609.30245, 2026.
+[49] Pengpeng Yu, Runqing Jiang, Qi Zhang, Dingquan Li, Jing Wang, and Yulan Guo. CodecSplat: Ultra-Compact Latent Coding
+for Feed-Forward 3D Gaussian Splatting. In NeurIPS, 2026.
+[50] Yu-Ting Zhan, Cheng-Yuan Ho, Hebi Yang, Yi-Hsin Chen, Jui Chiu Chiang, Yu-Lun Liu, and Wen-Hsiao Peng. CAT-3DGS: A
+Context-Adaptive Triplane Approach to Rate-Distortion-Optimized 3DGS Compression. In ICLR, 2025.
+[51] Biao Zhang, Jiapeng Tang, Matthias Nießner, and Peter Wonka. 3DShape2VecSet: A 3D Shape Representation for Neural
+Fields and Generative Diffusion Models. ACM TOG, 42(4), 2023.
+[52] Jun-Teng Zhang, Tong Chen, Yu-Xin Zhao, Yi-Bo Shi, Jing Wang, and Zhan Ma. Speedygs: Content-aware 3d gaussian
+splatting compression via two-stage optimization. Proceedings of the 34th ACM International Conference on Multimedia,
+2026.
+[53] Longwen Zhang, Ziyu Wang, Qixuan Zhang, Qiwei Qiu, Anqi Pang, Haoran Jiang, Wei Yang, Lan Xu, and Jingyi Yu. CLAY:
+A Controllable Large-scale Generative Model for Creating High-quality 3D Assets. ACM TOG, 43(4), 2024.
+
+
+SplatTok
+20
+A Per-scene results
+Tabs. 8 to 10 list the per-scene results of SplatTok on Mip-NeRF 360, Tanks and Temples and Deep Blending, for the
+3DGS-MCMC input splats with the latent search towards the training images, as in Tab. 2. For each scene we report
+PSNR, SSIM and LPIPS on the held-out test views at the low and the high rate; the last row of each table gives the
+mean over the scenes.
+Table 8. Per-scene results on Mip-NeRF 360 with 3DGS-MCMC input splats and the latent search towards the training images.
+Low rate
+High rate
+Scene
+PSNR↑
+SSIM↑
+LPIPS↓
+PSNR↑
+SSIM↑
+LPIPS↓
+Bicycle
+25.18
+0.734
+0.264
+25.35
+0.747
+0.256
+Flowers
+21.88
+0.598
+0.351
+21.95
+0.605
+0.346
+Garden
+27.01
+0.824
+0.175
+27.22
+0.835
+0.165
+Stump
+26.98
+0.783
+0.238
+27.15
+0.792
+0.229
+Treehill
+23.32
+0.653
+0.327
+23.34
+0.659
+0.319
+Bonsai
+32.85
+0.948
+0.171
+33.08
+0.952
+0.166
+Counter
+29.61
+0.914
+0.174
+29.73
+0.920
+0.168
+Kitchen
+31.64
+0.928
+0.121
+31.90
+0.933
+0.115
+Room
+32.95
+0.936
+0.176
+33.10
+0.940
+0.171
+Mean
+27.93
+0.813
+0.222
+28.09
+0.820
+0.215
+Table 9. Per-scene results on Tanks and Temples, as in Tab. 8.
+Low rate
+High rate
+Scene PSNR SSIM LPIPS PSNR SSIM LPIPS
+Train
+22.97
+0.814
+0.214
+23.02
+0.820
+0.208
+Truck
+26.38
+0.881
+0.152
+26.51
+0.887
+0.145
+Mean
+24.67
+0.847
+0.183
+24.76
+0.854
+0.177
+Table 10. Per-scene results on Deep Blending, as in Tab. 8.
+Low rate
+High rate
+Scene
+PSNR SSIM LPIPS PSNR SSIM LPIPS
+Dr Johnson 29.78
+0.897
+0.275
+29.82
+0.906
+0.263
+Playroom
+30.59
+0.909
+0.267
+30.85
+0.917
+0.254
+Mean
+30.18
+0.903
+0.271
+30.33
+0.911
+0.258

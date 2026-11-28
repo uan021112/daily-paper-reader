@@ -1,0 +1,2905 @@
+HiGS: A Hierarchical Architecture for Fast Differentiable 3D Gaussian Splatting
+Dawid Paj ˛ak
+Martin Bisson
+Rodolfo Lima
+François Trudel
+NVIDIA
+Abstract
+3D Gaussian Splatting (3DGS) makes one screen tile the
+cell of partitioning, the cell of rasterization, and the unit of
+parallel work. Partitioning favors large tiles and rasteriza-
+tion small ones, and with one unit per tile the densest tiles
+set the frame time. We present Hierarchically Tiled Gaus-
+sian Splatting (HiGS), a unified architecture for rendering
+and reconstruction that gives each role its own granularity:
+Gaussians are partitioned over coarse macro-tiles, raster-
+ized over the fine render tiles within them, and processed
+in bounded depth-sorted batches. A dense region issues
+more batches instead of one longer unit, so frame time fol-
+lows the work in a view rather than its densest tile. The
+same batches carry reconstruction: compositing supplies
+the transmittance and color needed to differentiate each one
+independently, leaving optimizer memory traffic as the domi-
+nant training cost. We fuse the optimizer into the backward
+pass, halve the parameters and moments it stores and up-
+dates directly, and defer appearance updates outside the view.
+HiGS renders scenes faster than every published method we
+evaluate, by the widest margin on views with uneven load,
+and reconstructs them faster and in less memory, at equal im-
+age quality and with exact front-to-back alpha compositing.
+1. Introduction
+3D Gaussian Splatting (3DGS) [21] has become the leading
+approach to real-time photorealistic rendering of captured
+scenes, combining the fidelity of neural radiance fields [36]
+with an explicit, differentiable representation that commodity
+GPUs rasterize at high throughput. Reconstruction runs its
+rasterizer forward and backward tens of thousands of times,
+so rasterization cost governs both reconstruction and display.
+Most variants of 3DGS share one pipeline: Gaussians
+are projected to the screen, assigned to the tiles they over-
+lap, sorted globally by tile and depth into one Gaussian list
+per tile, and rasterized with one thread block per tile. The
+tile serves three conflicting roles: partition cell, rasteriza-
+tion cell, and unit of parallel work. Partitioning favors large
+tiles, which reduce the number of (tile, Gaussian) pairs to
+Unbalanced view
+gsplat:
+HiGS:
+130 FPS
+2809 FPS
+Gaussians per tile
+Median:
+Maximum:
+46
+49128
+100
+102
+104
+gsplat:
+HiGS:
+657 FPS
+3096 FPS
+Gaussians per tile
+Median:
+Maximum:
+235
+2589
+Figure 1. Per-tile load imbalance on two driving views (1080p,
+16 × 16 tiles), with the throughput of gsplat [52] and of HiGS
+(Sec. 3.1) on each. The median is over occupied tiles. The densest
+tiles gate the frame time of gsplat.
+bin and sort. Rasterization favors small tiles, which reduce
+pixel–Gaussian evaluations outside the Gaussian’s effective
+support. At any size, a few dense tiles hold far more Gaus-
+sians than the rest and, with one thread block each, produce
+a tail effect that dominates frame time (Fig. 1). A single tile
+size cannot serve all three, and 3DGS pays with a global
+radix sort over tens of millions of pairs per frame at 4K and
+with a frame time set by the densest tile rather than by the
+work in the view.
+Prior work lowers these costs without separating all three
+roles. Pairs are reduced, models compressed, and single
+stages accelerated [6, 7, 9, 15, 16, 31, 33, 44, 46, 48], and
+methods that leave the pipeline pay with approximate com-
+positing [18, 23] or custom hardware [29, 51]. Sorting at
+a coarser granularity than rasterization [3, 19, 27] shrinks
+the sort but leaves each tile one unbounded Gaussian list,
+as does rescheduling tiles [12], and dividing the lists of the
+densest ones among thread blocks [56] shortens the tail but
+keeps the global sort. Each of these remedies changes one
+or two roles of the tile, and none carries the change into the
+backward pass of training.
+We present HiGS, a unified architecture for commod-
+ity GPUs that gives each role its own granularity, with one
+unit of work for rendering and reconstruction. Gaussians
+are binned and depth-sorted over coarse macro-tiles, each a
+1
+arXiv:2611.31918v1  [cs.CV]  24 Nov 2026
+
+
+group of the fine render tiles over which they are rasterized,
+and the unit of work is a (macro-tile, Gaussian-batch) pair:
+a depth-sorted batch of bounded size, rasterized indepen-
+dently and then composited with the others in depth order.
+Three consequences follow from this single decomposition.
+Sorting splits into independent macro-tile segments. Every
+batch, of a dense tile or not, fits in fast local storage, where
+it is loaded once and shared across its render tiles. Dense
+macro-tiles issue proportionally more units, so no unit pro-
+cesses a dense tile’s entire Gaussian list, which removes the
+cause of the tail effect.
+The same units carry reconstruction, so both passes of a
+training step inherit this schedule. Compositing leaves every
+batch with the transmittance in front of it and the color from
+it onward, and batches are differentiated as independently
+as they are rendered. The optimizer then dominates training,
+and we reduce its memory traffic until it, too, scales with
+what a view sees: fused into the backward pass, it updates
+low-precision parameters and moments directly and defers
+the appearance updates of the Gaussians a view culls. HiGS
+renders 1.5× to 5.6× faster than recent optimized rasterizers
+on standard benchmark scenes, and 6.8× to 20.0× faster on
+driving views with a strongly uneven load. It reconstructs
+scenes 2.3× to 3.0× faster than the fastest published method
+we evaluate, with 1.9× less memory than the most memory-
+efficient one, at equal image quality.
+Our contributions are the architecture and its three parts:
+• a unified architecture for rendering and reconstruction
+that separates partitioning, rasterization, and parallel work
+around one unit, a bounded depth batch of a macro-tile;
+• a renderer on these units, with a segmented depth sort,
+load-balanced batch rasterization with inline visibility, and
+a stable half-precision (FP16) data path;
+• a backward pass over the same batches, which differ-
+entiates each independently from boundary state left by
+compositing;
+• a bandwidth-lean optimizer fused with backward pro-
+jection, which updates stochastically rounded 16-bit state
+directly and defers appearance updates a view does not
+need.
+2. Related Work
+Kerbl et al. [21] established the tile-based pipeline of 3D
+Gaussian Splatting, and gsplat [52] popularized it in a widely
+adopted open-source library. Most of the work that fol-
+lowed keeps the rendering model and lowers the cost of this
+pipeline.
+Pair reduction. Many pairs are false positives: a Gaus-
+sian’s bounding box overlaps a tile the Gaussian does not
+visibly reach. StopThePop [44] introduced opacity-aware
+bounds and an exact test of which tiles an ellipse reaches.
+FlashGS [9], AdR-Gaussian [48], and Speedy-Splat [16]
+derive similar bounds, the first and the last with exact tests
+of their own, and Faster-GS [15] adopts them. HiGS tests
+ellipse overlap during binning and rasterization, but most of
+its pair reduction comes from binning over macro-tiles.
+Model-side reduction. Fewer Gaussians also mean fewer
+pairs, and work complementary to ours shrinks the model:
+by pruning in Speedy-Splat and RadSplat [39], by bud-
+geted densification in Taming 3DGS [33], by importance-
+weighted sampling in Mini-Splatting [8], by multi-view
+consistent densification and pruning in FastGS [45], and
+by the quantization and codebook schemes of LightGaus-
+sian [7], EAGLES [10], Compact-3DGS [28], and Com-
+pressed 3DGS [38]. Kerbl et al. [22] build a level-of-detail
+hierarchy over the scene, rather than over the work of ren-
+dering it, for very large captures.
+Training acceleration. Several of these methods act during
+training, whose time is dominated by the backward pass and
+the optimizer. The backward pass of 3DGS accumulates
+gradients per pixel and contends on atomic updates, which
+Taming 3DGS avoids by parallelizing over splats and DIST-
+WAR [6] reduces by aggregating a warp’s updates to the
+same Gaussian in registers before issuing one atomic per
+parameter. LiteGS [30] reduces gradients within the one
+warp that owns a tile, and culls and updates Morton-ordered
+Gaussians in clusters. On the optimizer side, Faster-GS pairs
+the per-splat backward pass with its own Adam implemen-
+tation, which it can fuse into that pass, and reports up to
+5× faster training end to end. GS-Scale [26] keeps only
+geometry on the GPU and defers the Adam updates of the
+other parameters, held in host memory, while a Gaussian is
+outside the view frustum. Other methods lower the work
+of a run rather than the cost of a step: DashGaussian [2]
+schedules the rendering resolution and the Gaussian count,
+SAD-GS [32] shortens convergence by guiding densification
+with multiscale image structure, and Grendel [57] distributes
+training over many GPUs. These complement HiGS, which
+redesigns the training step itself.
+Rendering acceleration. In the forward pass, GPU im-
+plementations have tuned the pipeline stage by stage, most
+keeping its global sort and the screen tile as the unit of work.
+FlashGS fuses the preprocessing kernels and pipelines the
+dependent Gaussian fetches in software, and TC-GS [31]
+reformulates the alpha-blending exponent as a Tensor-Core
+matrix multiplication, reporting up to 2.2× speedup when in-
+tegrated into 3DGS. Splatshop [46] narrows the sort keys by
+ordering visible splats by 32-bit depth before tile-fragment
+creation. TileGS [47] replaces the global sort by depth bins
+inside each tile and sorts only selected bins exactly. Against
+uneven load, StopThePop balances the per-Gaussian stages,
+and AdR-Gaussian trains with a loss that evens the number of
+Gaussians per pixel. In the rasterizer, Balanced 3DGS [12]
+counters load imbalance by letting thread blocks claim tiles
+at run time, shrinking the tile to four pixels, and spread-
+ing the Gaussians of a pixel across the threads of a warp.
+2
+
+
+Gaussians
+Forward projection
+Binning
+Segmented sort
+Compositing
+Loss
+Backward projection with fused Adam
+geometry
+position
+3×FP32
+rotation
+4×FP16
+scale
+3×FP16
+opacity
+1×FP16
+SH coefficients 48×FP16
+Adam moments
+2×BF16 per parameter
+stored along a
+Morton curve, in
+groups of 32
+fused with SH evaluation
+culled
+μ
+Σ
+2D position μ, depth,
+Cholesky factors of Σ−1​,
+opacity, color
+thread blocks of 8,192 Gaussians
+macro-tile counts in on-chip memory
+one list of (depth, id) pairs
+per macro-tile
+1,024
+Gaussians
+depth
+each list in depth
+order, cut into batches
+Forward rasterization
+Backward rasterization
+one processing unit = 1 thread block
+for 1 batch of 1 macro-tile = 8 × 4 render tiles
+Phase 1: load and inline visibility
+batch in on-chip memory
+1,024 × 32 visibility bits
+Phase 2: per-tile rasterization
+1 worker group per 8 × 8 px tile
+1 thread per 2 px
+Ci​, Ti​
+Backward: same batch, masks and order
+Σ
+gradient
+per Gaussian
+sum over the
+pixels of a tile
+Fi​, Si​
+∂L/∂C
+batch i
+Fi​
+Si​
+depth
+macro-tile
+image
+training image
+visible
+geometry
+SH
+32 stored neighbors = 1 worker group
+updated
+deferred
+Figure 2. The HiGS pipeline: the stages of every frame (green), those a training step adds (orange), and the Gaussians (grey). The
+rasterization panel shows one processing unit, shared by both passes: per pixel, it blends batch i alone into color Ci and transmittance Ti.
+Compositing gives each batch the transmittance Fi of the batches in front and the color Si that it and those behind it contribute.
+CaT-GS [56] divides the depth-ordered list of a tile above
+twice the mean load into slices that separate thread blocks
+rasterize and that are then composited in order, within the
+per-tile pipeline and its global sort. For ultra-high resolu-
+tions, SHARP-GS [3] bins at a tile size that grows with
+resolution, culls against the finer tiles it rasterizes through a
+bitmask per batch of 32 Gaussians, and stores Gaussians in
+Morton order. GS-TG [19], an accelerator design that is also
+evaluated on a GPU, sorts over groups of tiles and rasterizes
+the original tiles through per-Gaussian bitmasks, and other
+hardware proposals [27, 29, 51] leave the commodity GPU.
+In HiGS one bounded batch is the unit of work for every list,
+in rendering and in both passes of reconstruction.
+Alternative formulations. The remaining work changes the
+rendering model itself, which HiGS keeps. Exact front-to-
+back compositing is given up for a commutative weighted
+sum in Sort-free Gaussian Splatting [18] and for stochastic
+transparency in StochasticSplats [23]. Others raise fidelity
+through per-ray ordering in StopThePop, band-limited prim-
+itives [53], and perspective-correct evaluation with hybrid
+transparency [14], or extend the model to secondary rays [37]
+and distorted cameras [50].
+3. Rendering Architecture
+The HiGS pipeline (Fig. 2, see Sec. B for implementation
+details) is a hierarchy of work units, fed by fused projection
+and spherical-harmonics (SH) evaluation as in recent rasteriz-
+ers [9, 15], which emits each Gaussian’s screen-space center,
+depth, inverse-covariance factors, color, and visibility.
+3.1. Macro-tile hierarchy and work decomposition
+The hierarchy is built over the standard rasterization primi-
+tive, the render tile, here 8 × 8 pixels. HiGS groups M=32
+adjacent render tiles into a macro-tile, arranged as 8 × 4 tiles
+spanning 64 × 32 pixels. Binning and sorting produce one
+depth-ordered Gaussian list per macro-tile (Sec. 3.2), while
+visibility and blending operate per render tile (Sec. 3.3).
+Within each macro-tile, Gaussian data is loaded into local
+storage once and reused across all M member render tiles,
+amortizing the fetch over fine-grained output.
+Each list is split into Gaussian batches of at most
+Br=1,024 Gaussians, each (macro-tile, batch) pair form-
+ing an independent processing unit. The bound holds for
+every list, dense or not, because it is what lets a batch re-
+side in local storage. A macro-tile with n Gaussians thus
+spawns ⌈n/Br⌉units. Within each processing unit, ren-
+der tiles are claimed dynamically by worker groups from
+a shared tile work queue Q, and a per-worker scheduling
+buffer R absorbs the per-tile variability in visible-Gaussian
+count so the blending pipeline runs at a fixed rate. The
+schedule is therefore density-proportional rather than screen-
+area-proportional: compute scales with Gaussian count, and
+no single render tile can gate the frame the way the slowest
+tile gates a one-thread-group-per-tile assignment (Fig. 3).
+Every level of this hierarchy maps onto a level of the GPU
+(Fig. 2). A processing unit is one thread block whose batch
+resides in on-chip memory, our local storage; a worker group
+is P=32 threads that execute in lockstep; and each thread
+keeps its pixel accumulators in registers. Preallocated macro-
+tile lists and batch partial buffers let units run independently,
+with storage growing with the batch count.
+3
+
+
+3.2. Partitioning and segmented depth sort
+Binning constructs a depth-keyed Gaussian list per macro-
+tile. List lengths are data-dependent, so building the lists in
+parallel requires reconciling write positions without serial-
+izing through global atomics. Kerbl et al. [21] leave this to
+the sort, whose composite (tile, depth) key groups unordered
+records by tile and orders them by depth, which makes it
+global.
+Our binning produces the per-macro-tile lists during bin-
+ning, leaving only in-segment ordering for the sort. Gaus-
+sians are processed in partitioning batches of Bp=8,192,
+each handled cooperatively by one group of threads that
+keeps a private histogram in local storage, one counter per
+macro-tile of the frame, and accumulates overlap counts with
+local rather than global atomics. The histogram fits because
+the frame’s macro-tile count is modest, roughly 1,000 entries
+at 1080p and 4,000 at 4K; a render-tile histogram would
+carry 30,000 to 130,000 entries, exceed local storage by an
+order of magnitude, and force a global-atomic path. A hier-
+archical prefix scan turns the batch-local counts into write
+offsets, and a fill pass repeats the batches and writes (depth,
+Gaussian-id) pairs directly into each macro-tile’s range.
+Gaussians are paired with macro-tiles by a conservative
+per-row scan of the opacity-threshold ellipse, following Ac-
+cuTile [16] one level coarser. HiGS thus rasterizes over 8×8
+tiles yet averages only 1.51M pairs at 1080p and 2.21M at
+4K on Mip-NeRF 360, 2.7× and 4.3× fewer than gsplat’s
+opacity-aware bounding boxes at 16×16 tiles, which already
+form 2.5× and 3.1× fewer than at 8 × 8. Macro-tile binning
+gives over half of our reduction, the ellipse test the rest.
+Each macro-tile is then one segment of a segmented sort,
+and segments are independent by construction. A segment
+already identifies its macro-tile, so its key is the 32-bit depth
+alone, rather than gsplat’s 64-bit composite key. Removing
+tile bits shortens the radix sort and shrinks its records from
+12 to 8 bytes. Splatshop [46] narrows the key within the
+global sort, whereas here the tile dimension disappears from
+it. As resolution grows, the render-tile pair count grows
+but segments stay bounded, because more macro-tiles dis-
+tribute the Gaussians into more, smaller segments. A general-
+purpose segmented sort still slows down as the segments
+multiply. We therefore sort with a pipeline of six stages that
+run without host synchronization: a cascade of four block
+radix sorts [35], one per class of segment size, and, for the
+segments above the largest class, a sort of fixed-size runs
+followed by their merge with merge path [11]. The sort then
+stays in the same time range from 1080p to 4K (Sec. 5.3).
+3.3. Batch rasterization and compositing
+3DGS materializes explicit per-tile Gaussian lists before ras-
+terization can begin. Our rasterizer replaces that stage with
+visibility determination inline with the Gaussian load, at low
+marginal cost. Each processing unit consists of W worker
+groups of P threads and handles its (macro-tile, batch) pair
+in two phases, followed by a compositing pass shared by all
+units (Fig. 2).
+Phase 1: load and inline visibility. The unit cooperatively
+loads its batch into local storage in mini-batches of P Gaus-
+sians, one per thread. During the load, each Gaussian’s
+opacity-threshold ellipse is tested for overlap with all M ren-
+der tiles, producing a per-Gaussian tile mask. GS-TG [19]
+materializes these masks before rasterization, which on a
+GPU serializes their generation with the sort, and SHARP-
+GS [3] likewise builds one per batch of 32 Gaussians; com-
+puting them during the cooperative load avoids that memory
+round trip. The load identifies which tiles each Gaussian
+overlaps, but blending needs the reverse, which Gaussians
+each tile sees. A transpose of each mini-batch’s P×M bit
+matrix converts one into the other: every render tile then
+holds a P-bit mask per mini-batch, and their concatenation
+is its visibility over the batch.
+Phase 2: per-tile rasterization. Worker groups claim active
+render tiles from Q, so no group idles while tiles remain.
+For a claimed tile, the group walks its masks and extracts
+only the visible Gaussians from local storage. The schedul-
+ing buffer R accumulates their indices and drains them in
+batches of Bd=64 through an unrolled blending core, which
+decouples variable-rate mask iteration from fixed-rate blend-
+ing arithmetic. After each drain, a unanimous vote tests
+whether every pixel of the tile has reached transmittance
+saturation; if so, the group claims the next tile.
+Compositing. A macro-tile’s list may span several batches
+processed by independent units, so per-tile results are partial:
+batch i produces, per pixel, a local color Ci and a local
+transmittance Ti, blended over its own Gaussians only. Front-
+to-back alpha blending is associative over contiguous depth
+ranges [43], as Balanced 3DGS and CaT-GS also use, so
+with Fi = Q
+h<i Th the transmittance in front of batch i, the
+pixel color is
+C =
+X
+i
+Fi Ci,
+(1)
+plus the background weighted by the final transmittance.
+Each unit writes its partials only for tiles that received Gaus-
+sians, flagged in a per-batch active-tile mask, and a com-
+positing pass walks each render tile’s batches in depth order,
+accumulating Eq. (1). The pass is sequential across the
+batches of a tile but not a bottleneck: it reads a compact
+stream of partials, skips the remaining batches once the tile
+saturates, and takes 0.01 to 0.03 ms at 1080p. Every pixel is
+thus composited front to back in the depth order of 3DGS
+and by its alpha-blending recurrence, which is the sense in
+which we call HiGS’s compositing exact.
+3.4. Numerical representation and storage order
+The rasterizer stores and evaluates projected attributes in
+FP16. The motivation is memory rather than arithmetic:
+4
+
+
+packed FP16 and single-precision (FP32) share the same
+math throughput on the GPUs we target, but 16-bit attributes
+halve the footprint in memory and in local storage, so a
+processing unit loads twice as fast, keeps twice as many
+Gaussians resident, and carries half the accumulator state per
+thread. Two hazards arise in the per-pixel Mahalanobis dis-
+tance q = (p−µ)⊤Σ−1(p−µ), for pixel p, projected center
+µ, and screen-space covariance Σ, and HiGS addresses both
+in the data representation rather than per pixel.
+Cancellation arises when Σ−1 is stored as conic coeffi-
+cients, whose quadratic form has a mixed-sign cross term.
+HiGS stores the Cholesky factor of Σ−1 = LL⊤instead, a
+lower-triangular L with entries l0, l1, and l2, so that with the
+offset (dx, dy) = µ −p
+q = (l0 dx + l1 dy)2 + (l2 dy)2,
+(2)
+a sum of squares that is non-negative regardless of round-
+ing. Overflow arises when coordinates carry their absolute
+screen-space magnitudes into these products; a unit narrows
+positions to FP16 only relative to its macro-tile center, in
+render-tile units. TC-GS [31] identifies the same hazard and
+shifts coordinates per tile; here one shift at load serves all
+render tiles of the macro-tile. For rendering, SH coefficients
+can additionally be packed into 32 bytes per Gaussian, a
+sixth of their FP32 size, through YCoCg decorrelation [34]
+and non-uniform quantization decoded inline [42].
+Storage order also affects memory traffic. Projection
+reads SH coefficients, and binning reads projected attributes,
+only for the Gaussians that a view does not cull. Morton
+ordering of Gaussian means, also used by SHARP-GS and
+LiteGS, groups culled Gaussians into contiguous runs. Their
+data is skipped in whole memory sectors rather than fetched
+alongside visible neighbors, shortening the frame (Sec. 5.3).
+The order is independent of the per-frame depth sort, and the
+same coherence carries the optimizer (Sec. 4.4).
+4. Reconstruction
+A training step renders one view with the pipeline of Sec. 3,
+differentiates the image loss through it, and updates the pa-
+rameters. We retain the objective and densification policy
+of 3DGS as implemented in gsplat. The independent pro-
+cessing units carry the backward pass, after which optimizer
+memory traffic dominates the step, and we reduce it until
+appearance updates scale with what a view sees, not with the
+scene size.
+4.1. Differentiating independent batches
+The gradient of a Gaussian’s opacity α at a pixel depends
+on the transmittance in front of it and the color composited
+behind it. 3DGS recovers them by walking each tile’s list
+back to front and dividing transmittance by 1 −α, StopThe-
+Pop [44] walks front to back and subtracts from the final
+color, and Taming 3DGS [33] and Faster-GS walk front to
+back from per-pixel state stored every 32 Gaussians. None
+fits HiGS directly, because a tile’s list spans independently
+rendered batches, and state stored per tile at that density
+would forfeit the memory economy of shared loading.
+We store this state once per batch. The training forward
+accumulates color in FP32, keeping blend weights and trans-
+mittance in FP16, and the compositing pass of Sec. 3.3 com-
+pletes the boundary state of every batch. Its front-to-back
+walk already forms the transmittance Fi in front of batch i;
+a second walk, back to front, replaces each color partial by
+the suffix
+Si =
+X
+h≥i
+Fh Ch,
+(3)
+the color composited from batch i onward. Both overwrite
+the partials in place, so the boundary state costs no storage
+beyond the 14-byte partial buffer per pixel and batch. A
+backward processing unit then needs no other batch: it dif-
+ferentiates its (macro-tile, batch) pair from Fi, Si, and the
+batch.
+Inside the unit, the forward pass is evaluated again rather
+than inverted. The unit loads the same batch into local stor-
+age, reuses the visibility masks saved by the forward, and
+each worker group blends its tile front to back with the
+forward’s arithmetic, drain boundaries, and saturation test,
+starting from a local transmittance of one. This reproduces
+the rounded blend weight bwj = αjtj of every Gaussian j
+exactly, where αj is its opacity at the pixel and tj the local
+transmittance in front of it, which a division of FP16 transmit-
+tances cannot do near saturation. With cj the color of Gaus-
+sian j, g = ∂L/∂C the gradient of the loss L at the pixel,
+gi = Fi g, background b, and final transmittance Tend, the
+group initializes a scalar residual r = g⊤(Si + Tendb), the
+loss-weighted color at and behind the batch, and for each
+Gaussian in turn computes
+r ←r −bwj g⊤
+i cj,
+(4)
+∂L
+∂αj
+= tj g⊤
+i cj −
+r
+1 −αj
+,
+∂L
+∂cj
+= bwj gi,
+(5)
+so that r always holds the contribution behind the current
+Gaussian.
+The remaining chain rule, from αj to the projected center,
+the Cholesky factors, and the opacity, is evaluated per pixel
+and reduced within the worker group, so that five two-word
+atomic additions per Gaussian and tile update the nine accu-
+mulators of its geometry and color gradients and no per-pixel
+gradient buffer exists.
+4.2. Optimizer fused with projection
+Accelerating rasterization exposes Adam’s bandwidth cost:
+every step reads and writes all parameters and their two mo-
+ments, a state of 708 bytes per Gaussian in FP32 with degree-
+3 SH. Behind our rasterizer, PyTorch’s Adam takes longer
+5
+
+
+than the forward and backward passes together (Sec. 5.4),
+and the three measures discussed below reduce its traffic.
+The first measure removes the gradients from memory. As
+in Faster-GS, the update is applied inside the backward pass:
+backward projection assigns one thread per Gaussian, which
+differentiates projection and SH evaluation and therefore
+holds the gradient of the Gaussian’s geometry in registers,
+together with both factors of every SH gradient. It applies
+Adam there, the threads of a worker group updating their SH
+coefficients cooperatively, and writes each parameter and
+moment once. The only gradients that ever reach memory are
+the rasterizer’s accumulators, 40 bytes per Gaussian, which
+are needed because many tiles contribute to one Gaussian.
+4.3. Low-precision parameters and moments
+Fusion removes the gradient traffic but not the state. The
+second measure halves it: positions stay in FP32, all other
+parameters (rotation, log-scale, opacity logit, and SH co-
+efficients) are stored in FP16, and both Adam moments in
+bfloat16 (BF16) [20], for 360 bytes per Gaussian instead
+of 708. These arrays are the optimizer’s own state, not a
+rounded copy of FP32 parameters, so the renderer reads ex-
+actly what the optimizer wrote. Projection, its derivative,
+and Adam arithmetic remain in FP32; only the stores are
+narrowed.
+Narrowing a store by rounding to nearest discards every
+update below half a unit in the last place, which the small
+learning rates of splatting optimization make common. We
+round stochastically [13], as Zamirai et al. [54] do for the
+weights of BF16 training, and round the moments as well:
+the stored value is one of the two representable neighbors
+of the exact result, chosen with probability proportional
+to proximity, so the stored value equals the exact one in
+expectation. With rounding to nearest, reconstruction quality
+degrades measurably; with stochastic rounding it matches
+FP32 storage (Sec. 5.4).
+4.4. Visibility-proportional appearance updates
+What remains is mostly appearance: SH coefficients are
+48 of a Gaussian’s 59 scalars, yet a training view of the
+garden scene of Mip-NeRF 360 culls 66% of the Gaussians
+on average, and their gradients are zero. Skipping them, as
+Taming 3DGS suggests, Faster-GS evaluates, and LiteGS
+does for whole clusters, is not equivalent to updating them,
+since Adam’s first moment keeps moving a parameter after
+its gradient vanishes, which Ding et al. [4] analyze as the
+implicit update. A zero-gradient step depends only on the
+stored moments and the step index, however. As sparse
+online learning does for regularization [5, 25], we apply
+such steps lazily: a culled coefficient stays untouched until a
+view needs it and then takes all the steps it missed in closed
+form.
+Let (m, v) be the moments of such a coefficient θ after
+its last update at step a. Over k zero-gradient steps Adam,
+with decay rates β1 and β2, decays them to (βk
+1m, βk
+2v),
+and with learning rate η and ρ = β1/√β2 we move θ by
+∆θ = −
+η m Φ
+√v + εA Φ/Ψ,
+(6)
+Φ =
+k
+X
+j=1
+ρ j
+q
+1 −β a+j
+2
+1 −β a+j
+1
+,
+Ψ =
+k
+X
+j=1
+β j
+1
+1 −β a+j
+1
+,
+where Φ and Ψ are the sums of the bias-corrected step fac-
+tors in the regimes where Adam’s εA is negligible against
+√v and where it dominates. For the constant learning rate
+of SH coefficients, Eq. (6) equals Adam’s displacement in
+both regimes and for k=1, and between them exceeds it by
+less than 0.05% from step 100 on. Each sum comes from
+two entries of a table built once per run, so the lag needs no
+bound: only the step of the last update is kept, and a coeffi-
+cient that no view needs is neither read, written, nor counted.
+The forward pass applies Eq. (6) in registers when it reads
+lagging coefficients, and the fused optimizer applies it with
+the current step and stores the result once. GS-Scale [26]
+also defers the Adam updates of its host-side parameters,
+with a restoration exact for εA=0 and a four-bit counter that
+forces an update at least every 16 steps, whereas lags on
+garden have a median of 2 steps and a 99th percentile of 38.
+We record the last update once per group of P=32 con-
+secutive Gaussians, which one worker group of our opti-
+mizer updates. A group with no visible Gaussian skips its
+SH update, a worker group uniform decision that leaves
+its 288 bytes per Gaussian of coefficients and moments un-
+touched, and any other group updates all of its members.
+Geometry is updated at every step, since it decides visibility.
+A record per Gaussian would skip little more, because stor-
+age is in the Morton order that already shortens rendering
+(Sec. 3.4): on garden, 98% of culled Gaussians lie in fully
+culled groups, even after densification ends. In the order
+that gsplat’s densification leaves, with new Gaussians ap-
+pended, 11% do. Faster-GS reorders Gaussians every 5,000
+iterations to reduce cache misses and divergent control flow,
+and LiteGS after densification steps. Here the order decides
+how much appearance work is deferred, and every densi-
+fication step restores it in one gather of all per-Gaussian
+arrays, with each copy or pair of split children written in
+its parent’s place. The optimizer then moves 375 bytes per
+Gaussian and step, against 1,416 for a dense FP32 update,
+which reads and writes the whole state once (see Sec. C for
+detailed derivations).
+5. Experiments
+5.1. Setup
+We evaluate our method using a PC with NVIDIA RTX PRO
+6000 Blackwell GPU and AMD Ryzen 7 7800X3D CPU.
+6
+
+
+Dataset
+Method
+Time (s) Mem. (GiB) PSNR SSIM LPIPS
+Mip-NeRF 3DGS
+650.9
+3.76
+27.81
+.8245
+.1693
+360
+gsplat
+309.4
+3.87
+27.82
+.8254
+.1671
+Faster-GS
+130.5
+5.73
+27.81
+.8253
+.1676
+HiGS
+49.3
+2.02
+27.81
+.8254
+.1666
+Tanks and
+3DGS
+399.8
+2.23
+23.39
+.8386
+.1409
+Temples
+gsplat
+213.8
+2.30
+23.41
+.8389
+.1402
+Faster-GS
+85.4
+3.41
+23.41
+.8389
+.1405
+HiGS
+36.5
+1.19
+23.40
+.8387
+.1398
+Deep
+3DGS
+765.2
+3.73
+29.83
+.9076
+.1650
+Blending
+gsplat
+293.8
+3.86
+29.82
+.9075
+.1644
+Faster-GS
+118.6
+5.74
+29.84
+.9076
+.1645
+HiGS
+40.1
+2.01
+29.80
+.9072
+.1632
+Table 1. Reconstruction, mean over the scenes of each dataset and
+over ten runs (three for time and memory).
+We compare against methods with a public implementation.
+Reconstruction. One training harness gives every method
+the same initialization procedure, training-view sequence,
+loss, schedules, and 3DGS densification policy. The ren-
+derer, backward pass, optimizer, and storage order differ. We
+compare against 3DGS, gsplat, and Faster-GS with its fused
+optimizer. All methods use an opacity learning rate of 0.025.
+Each trains for 30,000 steps on the 13 scenes commonly
+used to evaluate 3DGS, at the standard resolution of each
+dataset: the nine of Mip-NeRF 360 [1], two of Tanks and
+Temples [24], and two of Deep Blending [17]. We report the
+time of the training loop, without the startup that decodes the
+training images and caches them in GPU memory, peak GPU
+memory without that cache, and PSNR (in dB), SSIM [49],
+and LPIPS [55] with AlexNet features on the test set.
+Rendering. We render the publicly released 3DGS pre-
+trained models of seven Mip-NeRF 360 scenes (SH degree 3,
+1.2M to 6.1M Gaussians) from every test camera at 1080p
+and 4K, and report each scene’s median over all cameras’
+timed frames, using 100 frames per camera after 10 warm-up
+frames. CUDA events time all GPU kernels that render a
+frame. For uneven load we add 120 driving views at 1080p,
+one per second of six clips of the PhysicalAI Autonomous
+Vehicles dataset reconstructed by NuRec [40], each a model
+of 2.5M Gaussians. HiGS runs in its default configuration:
+8 × 8 render tiles, Morton-ordered storage, and 32-byte SH.
+Each prior rasterizer runs the default configuration of its
+public release at 16 × 16 tiles (16 × 12 for Faster-GS), with
+the same tile-level depth ordering as ours and no antialiasing.
+5.2. Reconstruction
+Across the three datasets HiGS completes a reconstruction
+2.3× to 3.0× faster than the next fastest method and 5.9× to
+7.3× faster than gsplat (Tab. 1). It also uses 1.9× less mem-
+ory than the most memory-efficient alternative, a ratio close
+to that of the optimizer state, which the optimizer updates
+directly, with no FP32 copy (Sec. 4.3). Dataset-average qual-
+Throughput (FPS)
+HiGS speedup
+Method
+1080p
+4K
+1080p
+4K
+HiGS
+2756
+1533
+—
+—
+SHARP-GS
+1250
+1055
+2.2×
+1.5×
+Faster-GS
+949
+578
+2.9×
+2.7×
+FlashGS
+893
+670
+3.1×
+2.3×
+TC-GS
+765
+499
+3.6×
+3.1×
+Speedy-Splat
+643
+385
+4.3×
+4.0×
+StopThePop
+573
+293
+4.8×
+5.2×
+gsplat
+541
+275
+5.1×
+5.6×
+3DGS
+286
+102
+9.6×
+15.0×
+Table 2. Rendering throughput, 1000 over the mean of the per-
+scene median frame times in milliseconds.
+ity is equivalent: the PSNR spread across methods is smaller
+than HiGS’s variation across repeated runs. HiGS is the only
+method of Tab. 1 whose rasterizer issues work in propor-
+tion to Gaussian density in both passes of a training step, so
+reconstruction inherits the renderer’s gains. The rest of its
+advantage follows from Sec. 4: the other methods update
+the appearance state of every Gaussian at every step, and
+those without a fused optimizer also move a full parameter
+gradient. Faster-GS, the one baseline with a fused optimizer,
+is accordingly the next fastest, and Sec. 5.4 measures both
+parts on garden (see Sec. D for per stage breakdown).
+5.3. Rendering
+HiGS is the fastest rasterizer on every scene at both reso-
+lutions (Tab. 2). Its lead narrows with how much of the
+per-tile pipeline a method changes: 4.0× to 5.6× over
+gsplat, Speedy-Splat, and StopThePop, which tighten the tile
+bounds of 3DGS, 2.3× to 3.6× over FlashGS, Faster-GS,
+and TC-GS, which rework its stages, and least over SHARP-
+GS, the one baseline that bins coarser than it rasterizes. That
+proximity does not hold as the load grows: on garden at a
+budget of 90M Gaussians, SHARP-GS falls behind FlashGS,
+and HiGS leads it by 3.4× at 1080p and 3.3× at 4K.
+On Mip-NeRF 360 a HiGS frame averages 0.36 ms at
+1080p, of which rasterization and compositing take 38% to
+52%, binning with sort 25% to 43%, and projection with
+SH evaluation 9% to 32%, growing with the Gaussian count.
+The depth sort itself takes 0.03 to 0.06 ms at either resolution,
+against 0.44 to 1.10 ms at 4K for gsplat’s global radix sort,
+and it is 4.6× to 6.0× faster at 4K than a general-purpose
+segmented sort over the same segments. Morton ordering,
+a one-time permutation of a model, lowers the frame time
+by 24% at 1080p and 18% at 4K, and in the stored order
+of the pretrained models HiGS is still 3.9× and 4.6× faster
+than gsplat. SH packing lowers it by 11% and 7%, and
+without packing HiGS still leads every rasterizer of Tab. 2,
+SHARP-GS by 2.0× and 1.4×.
+Fig. 3 shows what one unit per tile costs on uneven loads.
+From the most balanced driving views to the most unbal-
+7
+
+
+HiGS
+TC-GS
+Faster-GS SHARP-GS gsplat
+Speedy-
+Splat
+StopThePop 3DGS
+0
+2
+4
+6
+8
+10
+Frame time (ms)
+0.32 ms
+0.43 ms
+0.51 ms
+3.6×
+4.9×
+6.8×
+3.2×
+5.6×
+8.3×
+2.7×
+6.0×
+10.1×
+5.8×
+11.2×
+16.2×
+5.3×
+12.0×
+19.5×
+5.8×
+12.5×
+20.0×
+15.7×
+24.0×
+16.89 ms
+33.4×
+balanced
+average
+unbalanced
+Figure 3. Frame time under load imbalance on the 120 driving
+views: the mean over the 30 most balanced views, all views, and
+the 30 most unbalanced, ranked by the ratio of the densest tile to the
+median occupied one (Fig. 1). Labels give HiGS’s frame time and
+its speedup over each rasterizer; the bar cut short carries its time.
+FlashGS, which does not complete the benchmark, is omitted.
+anced, the tile–Gaussian pairs grow by 1.5×, the frame time
+of HiGS by 1.6×, and that of the seven baselines by 3.0× to
+5.9×. Over all views, the frame time of HiGS follows the
+work in the view: a linear fit to the pair count explains 90%
+of its variance, and one to the Gaussian count of the densest
+tile 53%. The frame time of the baselines follows the single
+densest tile, whose Gaussian count explains 87% to 98%
+of their variance and the pair count 30% to 40%. Coarser
+binning does not change this: SHARP-GS, the closest in
+Tab. 2, is the one most tied to the densest tile, as each of its
+tiles remains one unit. Reconstruction inherits this balance
+by construction, as the same units carry both passes of a
+training step (Sec. 4.1).
+With the models fixed, HiGS agrees with gsplat to 67.2 dB
+PSNR, and to 55.6 dB with packed SH. Compositing is exact,
+so the differences come from FP16 arithmetic, a saturation
+test every Bd Gaussians, and an opacity limit of one instead
+of 0.99. Against the test set, HiGS and six baselines lie
+within 0.03 dB in PSNR and 0.001 in SSIM and LPIPS of
+one another (see Sec. D for additional details).
+5.4. Ablations
+The first row of Tab. 3 differs from gsplat in the rasterizer
+alone: it trains garden in 194.4 s, against 404.8 s for gsplat,
+and the optimizer takes 59% of its loop. Five elements then
+shorten training to 61.5 s, and two restore quality. Relative
+to the row above, our densification, which keeps storage spa-
+tially ordered (Sec. 4.4), removes 9% of training time, our
+separate Adam with BF16 moments 23%, fusing the opti-
+mizer 27% at 0.20 GiB more peak memory, FP16 parameters
+18%, and deferring the appearance updates of culled groups
+the last 26%. In all, training is 3.2× faster in 34% less mem-
+ory, at a PSNR 0.01 dB from that of the first row. Rounded
+to nearest, the moments lose 0.14 dB and the parameters
+0.06 dB, which stochastic rounding recovers to within the
+Configuration
+Time (s)
+Mem. (GiB)
+PSNR (dB)
+separate optimizer, FP32
+194.4
+4.14 ± .02
+27.83 ± .03
++ spatially ordered storage
+176.8
+3.99 ± .01
+27.82 ± .04
++ BF16 moments, to nearest
+136.7
+3.20 ± .01
+27.68 ± .02
++ stochastic moment rounding
+137.0
+3.18 ± .01
+27.82 ± .05
++ fused optimizer
+100.6
+3.38 ± .01
+27.83 ± .03
++ FP16 parameters, to nearest
+82.0
+2.69 ± .01
+27.77 ± .06
++ stochastic parameter rounding
+82.9
+2.72 ± .01
+27.81 ± .04
++ deferred appearance (HiGS)
+61.5
+2.72 ± .01
+27.82 ± .05
+HiGS, no stochastic rounding
+60.1
+2.65 ± .01
+27.45 ± .03
+HiGS, storage not ordered
+91.2
+2.72 ± .01
+27.84 ± .05
+Table 3. Ablation of the reconstruction pipeline on the garden
+scene, mean and standard deviation over ten runs. Each row adds
+one element of Sec. 4 to the row above, starting from the HiGS
+rasterizer with a separate FP32 Adam and gsplat’s densification.
+The last two remove one element from HiGS.
+variation between runs, and HiGS without it loses 0.37 dB,
+more than the two losses combined. Without spatially or-
+dered storage HiGS takes 48% longer, where Faster-GS
+reports 2% to 6% for training without its periodic reordering.
+The order does more here than improve memory locality:
+90% of the added time is in the backward pass, where the
+fused optimizer loses the gain of deferral once few groups
+are fully culled (Sec. 4.4), and the rest is in the forward pass
+(see Sec. D for additional results).
+6. Conclusion
+HiGS starts from one observation: partitioning, rasterization,
+and parallel work need not share a tile. With a granularity
+for each, sorting shrinks to small independent segments, data
+is loaded once and shared, and no single dense tile gates the
+frame, all as consequences of one decomposition and not
+as separate optimizations. Reconstruction inherits the same
+units and the rule behind them, to spend work only where a
+view needs it, down to the optimizer’s memory traffic. The
+result renders and reconstructs faster than every published
+method we evaluate, and reconstructs in less memory, with
+exact compositing and equal image quality.
+This parallelism is bought with memory and bandwidth.
+Every batch reserves and writes its own output and is raster-
+ized even where opaque foreground hides it, so in a degener-
+ate scene whose Gaussians all cover the whole frame, these
+costs grow with every hidden layer. Captured scenes are far
+from that extreme, and in all our tests the balanced schedule
+outweighs the work that compositing discards, most of all on
+views with a strongly uneven load (Fig. 3). Because a unit
+needs only its batch and the boundary state of its tiles, and
+appearance parameters rest untouched while out of view, we
+see scenes beyond one GPU’s memory, spread over several
+GPUs or held partly out of core, as the natural next step.
+8
+
+
+References
+[1] Jonathan T. Barron, Ben Mildenhall, Dor Verbin, Pratul P.
+Srinivasan, and Peter Hedman. Mip-NeRF 360: Unbounded
+anti-aliased neural radiance fields. In Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), 2022. 7
+[2] Youyu Chen, Junjun Jiang, Kui Jiang, Xiao Tang, Zhihao Li,
+Xianming Liu, and Yinyu Nie. DashGaussian: Optimizing
+3D Gaussian splatting in 200 seconds. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), pages 11146–11155, 2025. 2
+[3] JunRan Ding, WeiHang Liu, YuKe Li, YiZhou Wang, An-
+Tong Li, QiHan Ding, Xin Lou, and JingYi Yu. SHARP-GS:
+Scalable high-fidelity accelerated rendering pipeline for ultra-
+high resolution 3D Gaussian splatting. In SIGGRAPH 2026
+Conference Papers, New York, NY, USA, 2026. Association
+for Computing Machinery. 1, 3, 4
+[4] Renjie Ding, Yaonan Wang, Min Liu, Jialin Zhu, Jiazheng
+Wang, Jiahao Zhao, Wenting Shen, Feixiang He, and Xiang
+Chen. A step to decouple optimization in 3DGS. In Inter-
+national Conference on Learning Representations (ICLR),
+pages 6858–6892, 2026. 6
+[5] John Duchi and Yoram Singer. Efficient online and batch
+learning using forward backward splitting. Journal of Ma-
+chine Learning Research, 10(99):2899–2934, 2009. 6
+[6] Sankeerth Durvasula, Adrian Zhao, Fan Chen, Ruofan Liang,
+Pawan Kumar Sanjaya, and Nandita Vijaykumar.
+DIST-
+WAR: Fast differentiable rendering on raster-based rendering
+pipelines. arXiv preprint arXiv:2401.05345, 2024. 1, 2
+[7] Zhiwen Fan, Kevin Wang, Kairun Wen, Zehao Zhu, Dejia Xu,
+and Zhangyang Wang. LightGaussian: Unbounded 3D Gaus-
+sian compression with 15x reduction and 200+ FPS. In Ad-
+vances in Neural Information Processing Systems (NeurIPS),
+2024. 1, 2
+[8] Guangchi Fang and Bing Wang. Mini-splatting: Representing
+scenes with a constrained number of Gaussians. In European
+Conference on Computer Vision (ECCV), 2024. 2
+[9] Guofeng Feng, Siyan Chen, Rong Fu, Zimu Liao, Yi Wang,
+Tao Liu, Boni Hu, Linning Xu, Zhilin Pei, Hengjie Li, Xi-
+uhong Li, Ninghui Sun, Xingcheng Zhang, and Bo Dai.
+FlashGS: Efficient 3D Gaussian splatting for large-scale and
+high-resolution rendering. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition
+(CVPR), pages 26652–26662, 2025. 1, 2, 3
+[10] Sharath Girish, Kamal Gupta, and Abhinav Shrivastava. EA-
+GLES: Efficient accelerated 3D Gaussians with lightweight
+encodings. In European Conference on Computer Vision
+(ECCV), 2024. 2
+[11] Oded Green, Robert McColl, and David A. Bader. GPU
+merge path: A GPU merging algorithm. In Proceedings of
+the 26th ACM International Conference on Supercomputing,
+pages 331–340. ACM, 2012. 4, 12
+[12] Hao Gui, Lin Hu, Rui Chen, Mingxiao Huang, Yuxin Yin,
+Jin Yang, Yong Wu, Chen Liu, Zhongxu Sun, Xueyang
+Zhang, and Kun Zhan. Balanced 3DGS: Gaussian-wise par-
+allelism rendering with fine-grained tiling. arXiv preprint
+arXiv:2412.17378, 2024. 1, 2
+[13] Suyog Gupta, Ankur Agrawal, Kailash Gopalakrishnan, and
+Pritish Narayanan. Deep learning with limited numerical pre-
+cision. In Proceedings of the 32nd International Conference
+on Machine Learning, pages 1737–1746. PMLR, 2015. 6
+[14] Florian Hahlbohm, Fabian Friederichs, Tim Weyrich, Linus
+Franke, Moritz Kappel, Susana Castillo, Marc Stamminger,
+Martin Eisemann, and Marcus Magnor. Efficient perspective-
+correct 3D Gaussian splatting using hybrid transparency. Com-
+puter Graphics Forum, 44(2), 2025. 3
+[15] Florian Hahlbohm, Linus Franke, Martin Eisemann, and Mar-
+cus Magnor. Faster-GS: Analyzing and improving Gaussian
+splatting optimization. In Proceedings of the IEEE/CVF Con-
+ference on Computer Vision and Pattern Recognition, pages
+18946–18957, 2026. 1, 2, 3
+[16] Alex Hanson, Allen Tu, Geng Lin, Vasu Singla, Matthias
+Zwicker, and Tom Goldstein. Speedy-splat: Fast 3D Gaus-
+sian splatting with sparse pixels and sparse primitives. In
+Proceedings of the Computer Vision and Pattern Recognition
+Conference (CVPR), pages 21537–21546, 2025. 1, 2, 4, 16
+[17] Peter Hedman, Julien Philip, True Price, Jan-Michael Frahm,
+George Drettakis, and Gabriel Brostow. Deep blending for
+free-viewpoint image-based rendering. ACM Transactions on
+Graphics, 37(6), 2018. 7
+[18] Qiqi Hou, Randall Rauwendaal, Zifeng Li, Hoang Le, Farzad
+Farhadzadeh, Fatih Porikli, Alexei Bourd, and Amir Said.
+Sort-free Gaussian splatting via weighted sum rendering.
+In International Conference on Learning Representations
+(ICLR), 2025. 1, 3
+[19] Joongho Jo and Jongsun Park. GS-TG: 3D Gaussian splatting
+accelerator with tile grouping for reducing redundant sort-
+ing while preserving rasterization efficiency. In 2025 62nd
+ACM/IEEE Design Automation Conference (DAC), pages 1–7,
+2025. 1, 3, 4
+[20] Dhiraj Kalamkar, Dheevatsa Mudigere, Naveen Mellem-
+pudi, Dipankar Das, Kunal Banerjee, Sasikanth Avancha,
+Dharma Teja Vooturi, Nataraj Jammalamadaka, Jianyu Huang,
+Hector Yuen, Jiyan Yang, Jongsoo Park, Alexander Heinecke,
+Evangelos Georganas, Sudarshan Srinivasan, Abhisek Kundu,
+Misha Smelyanskiy, Bharat Kaul, and Pradeep Dubey. A
+study of BFLOAT16 for deep learning training. arXiv preprint
+arXiv:1905.12322, 2019. 6
+[21] Bernhard Kerbl, Georgios Kopanas, Thomas Leimkühler, and
+George Drettakis. 3d gaussian splatting for real-time radiance
+field rendering. ACM Transactions on Graphics, 42(4), 2023.
+1, 2, 4
+[22] Bernhard Kerbl, Andreas Meuleman, Georgios Kopanas,
+Michael Wimmer, Alexandre Lanvin, and George Drettakis.
+A hierarchical 3D Gaussian representation for real-time ren-
+dering of very large datasets. ACM Transactions on Graphics,
+43(4), 2024. 2
+[23] Shakiba Kheradmand, Delio Vicini, George Kopanas, Dmitry
+Lagun, Kwang Moo Yi, Mark Matthews, and Andrea
+Tagliasacchi. StochasticSplats: Stochastic rasterization for
+sorting-free 3D Gaussian splatting. In Proceedings of the
+IEEE/CVF International Conference on Computer Vision
+(ICCV), pages 26326–26335, 2025. 1, 3
+[24] Arno Knapitsch, Jaesik Park, Qian-Yi Zhou, and Vladlen
+Koltun. Tanks and temples: Benchmarking large-scale scene
+9
+
+
+reconstruction. ACM Transactions on Graphics, 36(4), 2017.
+7
+[25] John Langford, Lihong Li, and Tong Zhang. Sparse online
+learning via truncated gradient. Journal of Machine Learning
+Research, 10(28):777–801, 2009. 6
+[26] Donghyun Lee, Dawoon Jeong, Jae W. Lee, and Hongil Yoon.
+GS-Scale: Unlocking large-scale 3D Gaussian splatting train-
+ing via host offloading. In Proceedings of the 31st ACM Inter-
+national Conference on Architectural Support for Program-
+ming Languages and Operating Systems, Volume 2, pages
+860–875. Association for Computing Machinery, 2026. 2, 6,
+15
+[27] Junseo Lee, Seokwon Lee, Jungi Lee, Junyong Park, and Jae-
+woong Sim. GSCore: Efficient radiance field rendering via ar-
+chitectural support for 3D Gaussian splatting. In Proceedings
+of the 29th ACM International Conference on Architectural
+Support for Programming Languages and Operating Systems,
+Volume 3 (ASPLOS ’24), 2024. 1, 3
+[28] Joo Chan Lee, Daniel Rho, Xiangyu Sun, Jong Hwan Ko, and
+Eunbyung Park. Compact 3D Gaussian representation for
+radiance field. In Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition (CVPR), pages
+21719–21728, 2024. 2
+[29] Sixu Li, Ben Keller, Yingyan Lin, and Brucek Khailany.
+GauRast: Enhancing GPU triangle rasterizers to accelerate
+3D Gaussian splatting. In Proceedings of the 62nd ACM/IEEE
+Design Automation Conference (DAC), 2025. 1, 3
+[30] Kaimin Liao, Hua Wang, Zhi Chen, Luchao Wang, and Yao-
+hua Tang. LiteGS: A high-performance framework to train
+3DGS in subminutes via system and algorithm codesign. In
+European Conference on Computer Vision (ECCV), pages
+574–591, 2026. 2
+[31] Zimu Liao, Jifeng Ding, Siwei Cui, Ruixuan Gong, Boni
+Hu, Yi Wang, Hengjie Li, Hui Wang, Xingcheng Zhang,
+and Rong Fu. TC-GS: A faster Gaussian splatting module
+utilizing tensor cores. In SIGGRAPH Asia 2025 Conference
+Papers, 2025. 1, 2, 5
+[32] Linjie Lyu, Ayush Tewari, Jianchun Chen, Thomas Leimküh-
+ler, and Christian Theobalt. Faster 3D Gaussian splatting
+convergence via structure-aware densification. In SIGGRAPH
+2026 Conference Papers, New York, NY, USA, 2026. Associ-
+ation for Computing Machinery. 2, 18
+[33] Saswat Subhajyoti Mallick, Rahul Goel, Bernhard Kerbl,
+Markus Steinberger, Francisco Vicente Carrasco, and Fer-
+nando De La Torre. Taming 3dgs: High-quality radiance
+fields with limited resources. In SIGGRAPH Asia 2024 Con-
+ference Papers, New York, NY, USA, 2024. Association for
+Computing Machinery. 1, 2, 5
+[34] Henrique S. Malvar, Gary J. Sullivan, and Sridhar Srinivasan.
+Lifting-based reversible color transformations for image com-
+pression. In Proc. SPIE 7073, Applications of Digital Image
+Processing XXXI, page 707307, 2008. 5
+[35] Duane Merrill and Andrew S. Grimshaw. Revisiting sorting
+for GPGPU stream architectures. Technical Report CS2010-
+03, Department of Computer Science, University of Virginia,
+2010. 4, 12
+[36] Ben Mildenhall, Pratul P. Srinivasan, Matthew Tancik,
+Jonathan T. Barron, Ravi Ramamoorthi, and Ren Ng. NeRF:
+Representing scenes as neural radiance fields for view syn-
+thesis. In Computer Vision – ECCV 2020, pages 405–421.
+Springer, 2020. 1
+[37] Nicolas Moenne-Loccoz, Ashkan Mirzaei, Or Perel, Riccardo
+de Lutio, Janick Martinez Esturo, Gavriel State, Sanja Fidler,
+Nicholas Sharp, and Zan Gojcic. 3D Gaussian ray tracing:
+Fast tracing of particle scenes. ACM Transactions on Graph-
+ics, 43(6), 2024. 3
+[38] Simon Niedermayr, Josef Stumpfegger, and Rüdiger West-
+ermann. Compressed 3D Gaussian splatting for accelerated
+novel view synthesis. In Proceedings of the IEEE/CVF Con-
+ference on Computer Vision and Pattern Recognition (CVPR),
+pages 10349–10358, 2024. 2
+[39] Michael Niemeyer, Fabian Manhardt, Marie-Julie Rakoto-
+saona, Michael Oechsle, Daniel Duckworth, Rama Gosula,
+Keisuke Tateno, John Bates, Dominik Kaeser, and Federico
+Tombari. RadSplat: Radiance field-informed Gaussian splat-
+ting for robust real-time rendering with 900+ FPS. In 2025
+International Conference on 3D Vision (3DV), pages 134–144,
+2025. 2
+[40] NVIDIA Corporation.
+PhysicalAI-Autonomous-Vehicles-
+NuRec.
+https://huggingface.co/datasets/
+nvidia / PhysicalAI - Autonomous - Vehicles -
+NuRec, 2025. Dataset, release 26.02. 7
+[41] NVIDIA Corporation.
+CUDA programming guide: Pro-
+grammatic dependent launch and synchronization. https:
+//docs.nvidia.com/cuda/cuda-programming-
+guide/, 2025. Section 4.5. 12
+[42] NVIDIA Corporation. Parallel thread execution ISA ver-
+sion 9.3.
+https://docs.nvidia.com/cuda/
+parallel-thread-execution/, 2025. 5
+[43] Thomas Porter and Tom Duff. Compositing digital images.
+In Proceedings of the 11th Annual Conference on Computer
+Graphics and Interactive Techniques (SIGGRAPH ’84), pages
+253–259. Association for Computing Machinery, 1984. 4
+[44] Lukas Radl, Michael Steiner, Mathias Parger, Alexan-
+der Weinrauch, Bernhard Kerbl, and Markus Steinberger.
+StopThePop: Sorted Gaussian splatting for view-consistent
+real-time rendering. ACM Transactions on Graphics, 43(4),
+2024. 1, 2, 5, 16
+[45] Shiwei Ren, Tianci Wen, Yongchun Fang, and Biao Lu.
+FastGS: Training 3D Gaussian splatting in 100 seconds. In
+Proceedings of the IEEE/CVF Conference on Computer Vi-
+sion and Pattern Recognition (CVPR), pages 26094–26103,
+2026. 2
+[46] Markus Schütz, Christoph Peters, Florian Hahlbohm, Elmar
+Eisemann, Marcus Magnor, and Michael Wimmer. Splatshop:
+Efficiently editing large Gaussian splat models. Computer
+Graphics Forum (Proc. HPG), 44(8), 2025. 1, 2, 4
+[47] Wei Tan, Matias Turkulainen, Lauri Ilola, Hamed Rezazade-
+gan Tavakoli, and Juho Kannala. TileGS: Tile-local depth
+binning for Gaussian splatting rasterization. In Pacific Graph-
+ics 2026 - Conference Papers and Posters. The Eurographics
+Association, 2026. 2
+[48] Xinzhe Wang, Ran Yi, and Lizhuang Ma. AdR-Gaussian:
+Accelerating Gaussian splatting with adaptive radius. In SIG-
+GRAPH Asia 2024 Conference Papers, 2024. 1, 2
+10
+
+
+[49] Zhou Wang, Alan C. Bovik, Hamid R. Sheikh, and Eero P.
+Simoncelli. Image quality assessment: From error visibility to
+structural similarity. IEEE Transactions on Image Processing,
+13(4):600–612, 2004. 7
+[50] Qi Wu, Janick Martinez Esturo, Ashkan Mirzaei, Nicolas
+Moenne-Loccoz, and Zan Gojcic. 3DGUT: Enabling dis-
+torted cameras and secondary rays in Gaussian splatting. In
+Proceedings of the IEEE/CVF Conference on Computer Vi-
+sion and Pattern Recognition (CVPR), 2025. 3
+[51] Mengtian Yang, Yipeng Wang, Chieh-Pu Lo, Xiuhao Zhang,
+Sirish Oruganti, and Jaydeep P. Kulkarni. GSAcc: Accelerate
+3D Gaussian splatting via depth speculation and Gaussian-
+centric rasterization. In Proceedings of the 62nd ACM/IEEE
+Design Automation Conference (DAC), 2025. 1, 3
+[52] Vickie Ye, Ruilong Li, Justin Kerr, Matias Turkulainen, Brent
+Yi, Zhuoyang Pan, Otto Seiskari, Jianbo Ye, Jeffrey Hu,
+Matthew Tancik, and Angjoo Kanazawa. gsplat: An open-
+source library for Gaussian splatting. Journal of Machine
+Learning Research, 26(34):1–17, 2025. 1, 2, 16
+[53] Zehao Yu, Anpei Chen, Binbin Huang, Torsten Sattler, and
+Andreas Geiger. Mip-splatting: Alias-free 3D Gaussian splat-
+ting. In Proceedings of the IEEE/CVF Conference on Com-
+puter Vision and Pattern Recognition (CVPR), pages 19447–
+19456, 2024. 3
+[54] Pedram Zamirai, Jian Zhang, Christopher R. Aberger, and
+Christopher De Sa.
+Revisiting BFloat16 training.
+arXiv
+preprint arXiv:2010.06192, 2021. 6
+[55] Richard Zhang, Phillip Isola, Alexei A. Efros, Eli Shechtman,
+and Oliver Wang. The unreasonable effectiveness of deep fea-
+tures as a perceptual metric. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition
+(CVPR), pages 586–595, 2018. 7
+[56] Tingjia Zhang, Bo Chen, Shengzhong Liu, Fan Wu, and Gui-
+hai Chen. CaT-GS: Efficient 3DGS rendering for large-scale
+scenes with inter-frame caching and tile scheduling. In Pro-
+ceedings of the IEEE/CVF Conference on Computer Vision
+and Pattern Recognition (CVPR), pages 37391–37400, 2026.
+1, 3
+[57] Hexu Zhao, Haoyang Weng, Daohan Lu, Ang Li, Jinyang Li,
+Aurojit Panda, and Saining Xie. On scaling up 3D Gaussian
+splatting training. In International Conference on Learning
+Representations (ICLR), pages 35642–35661, 2025. 2
+11
+
+
+HiGS: A Hierarchical Architecture for Fast Differentiable 3D Gaussian Splatting
+Supplementary Material
+Symbol
+Meaning
+M
+render tiles per macro-tile
+Bp, Br, Bd
+partitioning, rasterization, drain batch size
+P, W
+threads per worker group, groups per unit
+K
+mini-batches of a batch
+τ, w
+thread index, worker-group index
+S, Q, R
+local storage, tile queue, scheduling buffer
+Σ, L, lk
+covariance, Cholesky factor of Σ−1, entries
+µ, p
+projected center of a Gaussian, pixel
+dx, dy; u0, u1; q
+µ −p; its projections on L; u2
+0 + u2
+1
+oj, dj
+opacity of a Gaussian, ∂L/∂ln αj
+ε
+transmittance threshold
+Ci, Ti
+color, transmittance of batch i alone
+Fi, Si
+transmittance before, color from batch i on
+Tend, b
+final transmittance, background color
+tj, αj
+local transmittance, opacity at a pixel
+cj, bwj
+color, rounded blend weight
+L, g, gi, r
+loss, its gradient, Fig, residual
+θ, m, v
+a parameter and its Adam moments
+η, β1, β2, εA
+learning rate and Adam constants
+a, k, ρ
+last updated step, lag, β1/√β2
+Φ, Ψ
+sums of step factors over a lag
+Table S1. Notation.
+A. Introduction
+This appendix provides implementation details of the render-
+ing pipeline (Sec. B) and the reconstruction pipeline (Sec. C),
+including pseudocode, data layouts, and derivations. It then
+reports additional results on performance and image quality
+(Sec. D). We follow the notation of the main paper, which
+Tab. S1 summarizes. We will release the source code of our
+implementation upon publication.
+B. Rendering Pipeline
+B.1. Packed SH coefficients
+In the 32-byte SH representation of Sec. 3.4 of the main
+paper, the constant term keeps 16 bits of luma and 15 bits
+per chroma channel of the YCoCg basis. Each of the 15
+higher-order coefficients is quantized to 6 bits of luma and
+4 bits per chroma channel after square-root companding,
+with one scale per SH basis function and channel, the 99.99th
+percentile of its magnitude over Gaussians of opacity 0.005
+or more. Decoding inline from this representation shortens
+projection and SH evaluation by 35% at 1080p and 30% at
+4K relative to streaming uncompressed FP16 coefficients.
+B.2. Segmented depth sort
+Each stage of the sorting pipeline is one kernel, and the host
+launches the six back to back.
+Stage
+Threads
+Input
+Cascade
+T0
+64
+segments of 1 to 1,024 keys
+T1
+128
+segments of 1,025 to 2,048 keys
+T2
+256
+segments of 2,049 to 4,096 keys
+T3
+512
+segments of 4,097 to 8,192 keys
+Run sort
+512
+runs of 8,192 keys
+Merge
+256
+sorted runs of one segment
+Cascade. Each tier is launched with one thread block per
+segment, and a block returns immediately unless its segment
+falls in the tier’s size class. A block sorts the 32-bit depth
+keys, the bit patterns of the positive FP32 depths, with their
+Gaussian ids in four 8-bit passes, using the block radix rank-
+ing of CUB [35]. No tier reads what another writes, so the
+four overlap in execution through programmatic dependent
+launch [41].
+Larger segments. The last tier does not sort a segment
+above 8,192 keys: it divides the segment into runs of 8,192
+keys and lays out the binary tree of pairwise merges that
+joins them. The run sort then sorts every run as a tier sorts
+a segment, and the merge executes the trees. Each merge
+is partitioned by the GPU merge path [11] into balanced
+subproblems, and a parent merge is scheduled on the device
+once its children are complete. These two stages read what
+the stage before them wrote and run in sequence. Each runs
+a fixed number of thread blocks that claim their work on the
+device, runs from a counter and merges from a queue, so
+the host never reads back how many large segments a frame
+holds.
+B.3. Batch rasterization
+Algorithm S1 gives the processing unit and Algorithm S2
+its walk over one render tile, and the backward branches
+are derived in Sec. C.1. Every thread of a unit executes the
+pseudocode: thread τ ∈[0, P) of worker group w ∈[0, W)
+holds its own copy of each variable, which in Algorithm S2 is
+the value at the thread’s pixel pair. The following primitives
+act across threads:
+• BARRIER waits until all worker groups of the unit arrive.
+• VOTE(c) is the P-bit mask of the threads of a group at
+which c holds, and UNANIMOUS(c) is true if c holds at all
+of them.
+• COMPACT(mask) returns the positions of the set bits of a
+mask.
+12
+
+
+Algorithm S1. PROCESSINGUNIT(batch, pass): one pro-
+cessing unit, shared by the forward and the backward pass
+(Secs. 3.3 and 4.1 of the main paper). Phase 1 assigns
+one Gaussian per thread, which hides memory latency, and
+worker group 0 builds the tile work queue Q before Phase 2.
+Input: the n ≤Br Gaussians of the batch, in depth order;
+K = ⌈n/P⌉mini-batches of P Gaussians;
+pass = forward or backward
+// Phase 1: load and inline visibility
+1 for k ←w to K−1 step W do
+▷groups stride over mini-batches
+2
+j ←kP + τ;
+▷one Gaussian per thread
+// center, factors, color, in the macro-tile frame
+3
+if j < n then S.gauss[j] ←LOAD(batch, j);
+4
+if forward then
+// M bits: bit t set if Gaussian j overlaps tile t
+5
+b ←OVERLAPTEST(S, j), or 0 if j ≥n;
+// thread τ receives the P bits of tile τ
+6
+S.mask[k][τ] ←TRANSPOSE(b);
+7
+else
+// the mask of tile τ saved by the forward pass
+8
+S.mask[k][τ] ←SAVEDMASK(k, τ);
+9
+end
+10 end
+11 BARRIER;
+// Tile work queue: thread τ of group 0 acts for tile τ
+12 if w = 0 then
+// Gaussians of the batch at tile τ
+13
+h ←WK−1
+k=0 S.mask[k][τ];
+14
+a ←VOTE(h̸ = 0 ∧tile τ in the image);
+// backward: keep tiles whose compositing reached the batch
+15
+if backward then a ←a ∧VOTE(tile τ composited);
+16
+Q ←COMPACT(a);
+17 end
+18 BARRIER;
+// Phase 2: per-tile work
+19 while t ←CLAIM(Q) do
+▷groups claim tiles dynamically
+20
+RENDERTILE(t, pass);
+▷Algorithm S2
+21 end
+• TRANSPOSE(b) transposes the P×M bit matrix formed
+by the values b of the threads of a group, so that thread τ
+receives column τ.
+• CLAIM(Q) atomically removes one tile from the queue
+and returns it, or nothing once the queue is empty.
+• ATOMICADD adds to a value that the threads of other
+groups and of other units update at the same time.
+The loading mini-batch of P = 32 Gaussians and the M =
+32 render tiles of a macro-tile are different axes that happen
+to have equal size in this configuration, which is what lets
+the transpose run within one worker group. We use W=10
+worker groups per unit for rendering and W=8 for training.
+Numerical format. The Cholesky factors L =
+ l0 0
+l1 l2
+
+are
+prescaled to absorb the change from natural to base-2 expo-
+nent and the tile-unit coordinate scale, l′
+k = lk s
+p
+log2(e)/2
+for render tiles of s pixels, so that the opacity at a pixel is
+the Gaussian’s opacity times 2−q, evaluated with one FP16
+base-2 exponential. In the macro-tile frame of Sec. 3.4 of the
+main paper, pixel coordinates satisfy |x| ≤4 and |y| ≤2.
+Algorithm S2. RENDERTILE(t, pass): a worker group pro-
+cesses a render tile claimed in Algorithm S1, each thread at
+its pixel pair. Both passes walk the Gaussians of the tile in
+the same way, through the scheduling buffer R in drains of
+Bd, and differ in the routine applied to a drain. Saturation
+ends the walk early.
+Input: S and K of Algorithm S1;
+backward: boundary state Fi, Si, Tend of the tile
+and loss gradient g, at the pixel pair
+1 T ←1;
+▷transmittance within the batch
+2 if forward then
+3
+C ←0;
+▷color of the batch
+4 else
+5
+gi ←Fi g;
+r ←g⊤(Si + Tendb);
+▷residual
+6 end
+7 R ←∅;
+▷capacity 2Bd
+8 for k ←0 to K−1 do
+▷mini-batches, in depth order
+// Gaussians of mini-batch k that overlap tile t
+9
+R.ENQUEUE(kP + COMPACT(S.mask[k][t]));
+// full drains, and the remainder after the last mini-batch
+10
+while |R| ≥Bd or (k = K−1 and |R| > 0) do
+11
+J ←R.DEQUEUE(min(Bd, |R|));
+12
+if forward then
+13
+FRONTTOBACKBLEND(J);
+14
+else
+15
+FRONTTOBACKGRADIENT(J);
+16
+end
+// every pixel of the tile is saturated
+17
+if UNANIMOUS(T < ε) then break out of both loops;
+18
+end
+19 end
+20 if forward then store (C, T) as the partial (Ci, Ti) of tile t;
+21 procedure FRONTTOBACKBLEND(J)
+22
+foreach Gaussian j of J, in depth order do
+23
+α ←min(1, oj 2−q), set to 0 below 1/255;
+24
+bw ←α T;
+25
+C ←C + bw cj;
+T ←T −bw;
+26
+end
+27 end
+28 procedure FRONTTOBACKGRADIENT(J)
+29
+foreach Gaussian j of J, in depth order do
+30
+α ←min(1, oj 2−q), set to 0 below 1/255;
+31
+bw ←α T;
+32
+r ←r −bw g⊤
+i cj;
+// dj is zero if α = 1 or T = 0
+33
+dj ←α
+ T g⊤
+i cj −r/(1 −α)
+
+;
+T ←T −bw;
+// sums over the pixels of the tile, Eq. (10)
+34
+ATOMICADD(gradients of j, sums);
+35
+end
+36 end
+Blending and output. FRONTTOBACKBLEND is the blend-
+ing recurrence of 3DGS, with opacity limited to one and the
+transmittance threshold ε = 10−4 tested after each drain.
+Each unit writes its partials to a dense buffer indexed by
+batch and render tile, 16 KB per batch at four FP16 channels
+per pixel.
+13
+
+
+Algorithm S3. COMPOSITETRAINING(t): a worker group
+composites render tile t, each thread at its pixel pair, and
+completes the boundary state of the tile’s batches.
+Input: partials (Ci, Ti) of the tile’s active batches
+i = 0, . . . , nb−1, in depth order
+Output: Fi, Si of the composited batches 0, . . . , last;
+Tend; the pixels of the image
+1 F ←1;
+last ←nb −1;
+2 for i ←0 to nb −1 do
+▷front to back
+3
+Fi ←F;
+F ←F Ti;
+// every pixel of the tile is saturated
+4
+if UNANIMOUS(F < ε) then last ←i; break;
+5 end
+6 Tend ←F;
+S ←0;
+7 for i ←last to 0 do
+▷back to front
+8
+S ←S + Fi Ci;
+Si ←S;
+9 end
+10 image ←S0 + Tend b;
+C. Reconstruction Pipeline
+C.1. Backward rasterization
+Boundary state. The training forward accumulates color
+in FP32 because FP16 accumulation swamps small incre-
+ments and darkens the image, and because it would leave
+the backward pass a suffix that has already lost the terms
+it must subtract. Algorithm S3 gives the compositing pass
+that completes the boundary state of a tile’s batches. The
+Gaussians of the batches behind the last one it composites
+receive zero gradient.
+Derivation. Consider one pixel and the Gaussians j =
+1, . . . , n of batch i in depth order, with local transmittance
+t1 = 1, tj+1 = tj(1 −αj) and blend weight wj = αjtj.
+The pixel color is
+C =
+X
+h<i
+FhCh + Fi
+X
+j
+wjcj +
+X
+h>i
+FhCh + Tendb. (7)
+The first sum does not depend on batch i. Every term behind
+Gaussian j, including the later batches and the background,
+carries the factor (1 −αj) through its transmittance, so
+∂C
+∂αj
+= Fitjcj−
+1
+1 −αj
+
+Fi
+X
+j′>j
+wj′cj′+
+X
+h>i
+FhCh+Tendb
+
+.
+(8)
+Contracting with the loss gradient g and writing gi = Fig
+gives Eq. (5) of the main paper, in which bwj is the rounded
+value of wj, with the residual
+rj = g⊤
+Si + Tendb
+
+−
+X
+j′≤j
+wj′ g⊤
+i cj′.
+(9)
+The recurrence of Eq. (4) of the main paper maintains it. The
+derivative is that of the function the forward pass rendered,
+with rounding treated as the identity. At αj = 1 or tj = 0
+the opacity-derived gradients are set to zero, and a Gaussian
+that the forward pass skipped at a pixel receives exactly zero
+there.
+From αj the chain continues to the inputs of the rasterizer.
+Let (dx, dy) = µ −p be the offset of the center from the
+pixel and lk the prescaled factors of Sec. B.3. With u0 =
+l0 dx + l1 dy and u1 = l2 dy, q = u2
+0 + u2
+1, and αj = oj2−q
+for opacity oj, the gradient with respect to ln αj is dj =
+αj ∂L/∂αj, and the per-Gaussian gradients are sums over
+the pixels p of the tile:
+∂L
+∂oj
+= 1
+oj
+X
+p
+dj,
+∂L
+∂l0
+∝
+X
+p
+u0 dx dj,
+∂L
+∂l1
+∝
+X
+p
+u0 dy dj,
+∂L
+∂l2
+∝
+X
+p
+u1 dy dj,
+(10)
+∂L
+∂µx
+∝l0
+X
+p
+u0 dj,
+∂L
+∂µy
+∝l1
+X
+p
+u0 dj + l2
+X
+p
+u1 dj,
+each with the constant −2 ln 2, times the prescaling constant
+of Sec. B.3 for the factors and 1/s for the center, as the
+offsets are in units of render tiles. A worker group adds
+these sums, and that of bwj gi for the color, atomically to the
+gradients of the Gaussian’s center, of its factors and opacity,
+and of its color, in five additions of two words each.
+C.2. Fused optimizer and stochastic rounding
+The fused pass applies Adam with β1 = 0.9, β2 = 0.999,
+and εA = 10−15. A parameter is moved by the unrounded
+moments. The gradient of the color with respect to the view
+direction contributes to the gradient of the mean, so the
+mean is updated last, after the SH coefficients. Because
+the gradients do not persist, the densification statistics of
+3DGS, the number of views and the norm of the screen-
+space gradient of the center, are accumulated in the same
+pass.
+A store adds uniformly random bits to the bits it discards
+and then truncates, 16 bits for a BF16 moment and 13 for
+an FP16 parameter. The bits are a hash of the run seed, the
+step, and the element index, so there is no generator state to
+store or to carry through densification. The stored value is
+thus unbiased in the normal range of the format. Widening
+an FP16 parameter to FP32 is exact, so a scene trained in
+this layout renders bit for bit like an FP32 scene holding the
+same values.
+C.3. Deferred appearance updates
+Schedule. At step s, a group with a visible Gaussian first
+brings the coefficients of all its Gaussians to step s −1
+with Eq. (6) of the main paper and then takes step s, with
+zero gradient for its culled members. The forward and the
+backward pass of step s both use the coefficients restored to
+step s −1. Every lagging group is brought up to date before
+14
+
+
+Scene
+HiGS
+SHARP-GS
+Faster-GS
+FlashGS
+TC-GS
+Speedy-Splat
+StopThePop
+gsplat
+3DGS
+1080p throughput (FPS)
+bicycle
+2053
+806
+640
+582
+468
+415
+374
+357
+163
+bonsai
+4219
+2137
+1481
+1546
+1443
+1156
+1036
+979
+557
+counter
+3546
+1730
+1370
+1212
+1242
+925
+789
+725
+343
+garden
+1901
+839
+583
+591
+466
+418
+375
+361
+222
+kitchen
+2632
+1230
+1021
+852
+916
+679
+615
+554
+295
+room
+3906
+2008
+1410
+1466
+1232
+934
+809
+781
+331
+stump
+2688
+1235
+996
+912
+682
+625
+560
+535
+371
+4K throughput (FPS)
+bicycle
+1309
+756
+465
+508
+356
+296
+218
+205
+60
+bonsai
+1934
+1715
+644
+1121
+839
+608
+481
+450
+167
+counter
+1698
+1366
+720
+756
+643
+456
+317
+299
+110
+garden
+1292
+735
+441
+480
+336
+278
+225
+212
+94
+kitchen
+1443
+972
+568
+544
+488
+343
+265
+246
+106
+room
+1736
+1460
+733
+913
+708
+497
+348
+327
+104
+stump
+1534
+1087
+615
+796
+492
+407
+341
+312
+140
+Table S2. Rendering throughput per scene on the pretrained 3DGS models of seven Mip-NeRF 360 scenes, in frames per second: 1000 over
+the median frame time in milliseconds. TC-GS runs in its released integration with the Speedy-Splat rasterizer, StopThePop in its vanilla
+preset, which orders by depth per tile, and SHARP-GS with precomputed covariances and binning tiles of 32 × 32 pixels at 1080p and
+64 × 64 at 4K. FlashGS fails on one kitchen camera at 4K, which is excluded from its median.
+a densification, before a render that is not followed by an
+optimizer step, such as evaluation, and before a checkpoint,
+so that nothing outside the training step observes a lagging
+coefficient. On garden, a step’s view culls on average 65%
+of the Gaussians during densification and 66% after it.
+Derivation of the closed form. In the notation of Eq. (6) of
+the main paper, a zero-gradient Adam step a + j scales m
+by β1 and v by β2 and moves a coefficient θ by
+−
+η
+1 −βa+j
+1
+·
+β j
+1 m
+β j/2
+2
+√v
+q
+1 −β a+j
+2
++ εA
+.
+(11)
+Where εA is negligible against √v, the k steps sum to
+−η Φ m/√v, and where it dominates, to −η Ψ m/εA. Equa-
+tion (6) of the main paper reduces to each limit when the
+other term of its denominator is negligible, and to Eq. (11)
+for k = 1. Between the limits it never underestimates the
+magnitude of the move, because the move of one step is con-
+cave and homogeneous in its two terms. The overestimate
+is largest for a coefficient last updated at the first step of
+training, 4.5%, and stays below 0.003% from step 600 on.
+With εA = 0 the closed form coincides with the restoration
+of GS-Scale [26], which tabulates the factor η Φ for lags of
+up to 15 steps. Where εA dominates, that restoration differs
+from the sum of the steps by the ratio Φ/Ψ, which is 0.31 to
+0.32 at step 100 and within 0.5% of one from step 5,000 on.
+With ¯Φ(a) and ¯Ψ(a) the same sums extended to infinity,
+Φ = ¯Φ(a) −ρk ¯Φ(a + k),
+Ψ = ¯Ψ(a) −βk
+1 ¯Ψ(a + k),
+(12)
+so one table with two entries per step suffices. The sums
+converge for β2
+1 < β2. A restoration rounds the coefficients
+and moments once, instead of once per skipped step. Over
+independently seeded roundings, the variance of a restored
+coefficient is 0.16 of that of a densely updated one at a lag
+of 8 steps and 0.05 at 38.
+C.4. Densification with spatial ordering
+A densification step takes the Morton codes of the means,
+clamped to a grid of 210 cells per axis fixed at the start of
+training over the bounding box of the initial means, widened
+by 10%. Its gather drops the pruned Gaussians and carries
+the moments with the parameters, and the step recorded for
+every group is then set to the current step. From the same
+state and random stream, the resulting set of Gaussians and
+optimizer state equals that of gsplat’s densification.
+D. Additional Results
+D.1. Rendering performance
+Table S2 expands the rendering comparison of Tab. 2 of
+the main paper per scene. The margin of HiGS is largest
+on the scenes with the most Gaussians (bicycle, garden),
+where projection, binning, and sort take about half of the
+frame or more in the two baselines timed per stage, gsplat
+and FlashGS, and smallest against SHARP-GS at 4K on the
+small indoor scenes.
+The pair reduction has two sources (Tab. S3). Refining
+gsplat’s bounding boxes by ellipse intersection at its render
+tiles removes about a quarter of the pairs at 1080p and more
+than a third at 4K. Moving the same test to macro-tile gran-
+ularity removes half of what remains at 1080p and nearly
+two thirds at 4K, which makes it the larger source at both
+resolutions. It is also the one that scales: from 1080p to 4K
+15
+
+
+1×
+2×
+3×
+5×
+10×
+20×
+0.69
+1.31
+2.77
+4.24
+8.75
+12.75
+HiGS speedup at 1080p
+1.06
+1.80
+3.37
+4.93
+9.61
+13.52
+HiGS speedup at 4K
+5
+10
+20
+30
+60
+90
+Gaussians (M)
+10
+100
+Pairs (M) at 1080p
+5
+10
+20
+30
+60
+90
+Gaussians (M)
+Pairs (M) at 4K
+HiGS
+Speedy-Splat
+SHARP-GS
+StopThePop
+FlashGS
+gsplat
+Faster-GS
+3DGS
+TC-GS
+Figure S1. Scaling on the garden scene, reconstructed at six Gaus-
+sian budgets from 5M to 90M and rendered from the first camera of
+its test set. Top: the speedup of HiGS over every rasterizer, the ratio
+of their median frame times over 400 frames at the same budget
+and resolution. The numbers above the line of HiGS are its frame
+times in milliseconds at each budget. Bottom: the tile–Gaussian
+pairs that each method sorts: pairs with macro-tiles for HiGS and
+with 16 × 16 render tiles for the others (16 × 12 for Faster-GS).
+The count of SHARP-GS differs in kind: it is taken over its binning
+tiles (Tab. S2), from bounding rectangles and before the ellipse test
+that precedes its sort.
+1080p (M pairs)
+4K (M pairs)
+Scene
+gsplat Ellipse HiGS gsplat Ellipse HiGS
+bicycle
+5.16
+3.97
+2.15 11.08
+7.01
+2.95
+bonsai
+2.37
+1.73
+0.74
+6.38
+4.05
+1.21
+counter
+3.71
+2.62
+1.05 10.25
+6.21
+1.80
+garden
+5.50
+4.47
+2.60 10.82
+7.58
+3.41
+kitchen
+4.79
+3.74
+1.81 11.32
+7.72
+2.69
+room
+3.03
+2.06
+0.77
+8.83
+5.19
+1.39
+stump
+3.53
+2.72
+1.45
+7.79
+5.04
+2.03
+Mean
+4.01
+3.04
+1.51
+9.49
+6.11
+2.21
+Table S3. Tile–Gaussian pair counts in millions on the seven Mip-
+NeRF 360 scenes, averaged over the test cameras. gsplat: render-
+tile partitioning of the gsplat library [52] at the evaluated revision,
+which bounds each Gaussian by an opacity-aware box [44], with
+16 × 16 render tiles. Ellipse: the same boxes refined by per-row
+ellipse intersection [16], at the same tiles. HiGS: the ellipse-refined
+test at macro-tile granularity, with 8 × 8 render tiles.
+the macro-tile pairs grow by 1.3× to 1.8×, on every scene
+less than gsplat’s.
+The segments quadruple at the same time, and the sorts re-
+spond differently. A general-purpose segmented sort, CUB’s
+over our 32-bit keys and macro-tile segments, slows by 1.9×
+to 2.7×, on every scene more than the pairs grow. Our sort-
+ing pipeline (Sec. B.2) slows by less than the pairs grow: its
+time changes by at most 2% on five scenes and grows by up
+to 1.6× on the two with the fewest pairs. The global radix
+1080p (ms)
+4K (ms)
+8 × 8
+16 × 16
+8 × 8
+16 × 16
+Scene
+gsplat Ours gsplat Ours gsplat Ours gsplat Ours
+bicycle
+3.51
+0.49
+2.81
+0.62
+8.13
+0.76
+4.88
+0.87
+bonsai
+1.41
+0.24
+1.02
+0.29
+4.94
+0.52
+2.22
+0.50
+counter
+2.22
+0.28
+1.38
+0.35
+7.36
+0.59
+3.35
+0.63
+garden
+3.46
+0.53
+2.77
+0.68
+7.54
+0.77
+4.72
+0.93
+kitchen
+2.66
+0.38
+1.81
+0.50
+7.90
+0.69
+4.07
+0.79
+room
+1.94
+0.26
+1.28
+0.32
+6.75
+0.58
+3.05
+0.57
+stump
+2.24
+0.37
+1.87
+0.44
+5.85
+0.65
+3.20
+0.65
+Mean
+2.49
+0.36
+1.85
+0.46
+6.92
+0.65
+3.64
+0.71
+Table S4. Median frame time of gsplat and HiGS at two render-tile
+sizes on the seven Mip-NeRF 360 scenes.
+sort of gsplat slows by 2.9× to 4.6×.
+The decomposition is robust to the choice of render tile
+(Tab. S4). Tiles of 16 × 16 pixels shorten gsplat’s frame on
+every scene, by 17% to 55%. HiGS has nothing comparable
+to gain, because its partition cost is already small: the larger
+tiles slow it on every scene at 1080p and change its frame
+time by −4% to +21% at 4K. The comparison of the main
+paper therefore runs gsplat at 16 × 16, its faster setting. At
+matched 8 × 8 tiles HiGS is 6.9× faster at 1080p and 10.6×
+at 4K.
+On the garden scene of Mip-NeRF 360 (Fig. S1), HiGS
+leads every method at every budget and at both resolutions.
+From the smallest model to the largest, 18 times the Gaus-
+sians, its frame time grows 18.4× at 1080p and 12.8× at
+4K. Its lead over gsplat narrows as the model grows, be-
+cause per-Gaussian projection, which every method pays,
+takes a growing share of the frame: at 1080p, 29% of the
+HiGS frame at 5M and 38% at 90M. Among the per-tile
+pipelines, frame time orders the methods as the pair count
+does: in both rows of Fig. S1, 3DGS stands above gsplat
+and StopThePop at every budget, and these above FlashGS,
+Faster-GS, TC-GS, and Speedy-Splat, which form the fewest
+pairs. SHARP-GS is the fastest baseline for the two smallest
+models, then falls behind FlashGS, and the lead of HiGS
+over it widens with the model. Its binning and rasterization
+are the cause: from 5M to 90M they take 21.7× longer at
+4K, against 10.2× for those of HiGS, while projection grows
+alike in both.
+D.2. Training performance
+HiGS is the fastest in every stage of a steady-state training
+step on every scene (Fig. S2). Its step takes 1.64 ms on
+average, against 4.45 ms for Faster-GS, 10.20 ms for gsplat,
+and 20.44 ms for 3DGS. Binning and the two rasterization
+passes, whose work is the tile–Gaussian pairs, are 2.3×
+to 19.5× faster than in the other methods, and in 3DGS
+backward rasterization alone is more than half of the step.
+The two projections and the optimizer work per Gaussian,
+16
+
+
+Mip-NeRF 360
+Tanks and Temples
+Deep Blending
+Method
+bicycle flowers garden stump treehill bonsai counter kitchen
+room
+train
+truck drjohnson playroom
+PSNR
+3DGS
+25.62
+21.93
+27.81
+26.88
+22.97
+32.48
+29.21
+31.56 31.80 21.23
+25.54
+29.48
+30.18
+gsplat
+25.63
+21.95
+27.82
+26.93
+22.97
+32.41
+29.20
+31.66 31.81 21.29
+25.53
+29.49
+30.16
+Faster-GS
+25.62
+21.96
+27.82
+26.91
+22.99
+32.43
+29.21
+31.58 31.81 21.28
+25.55
+29.47
+30.20
+HiGS
+25.63
+21.95
+27.82
+26.93
+22.98
+32.38
+29.19
+31.65 31.75 21.25
+25.55
+29.45
+30.14
+SSIM
+3DGS
+.7725
+.6179
+.8725
+.7798
+.6509
+.9482
+.9165
+.9336 .9289 .7952
+.8820
+.9060
+.9093
+gsplat
+.7751
+.6195
+.8728
+.7815
+.6522
+.9481
+.9166
+.9340 .9291 .7957
+.8820
+.9058
+.9092
+Faster-GS
+.7742
+.6197
+.8728
+.7813
+.6518
+.9482
+.9167
+.9336 .9290 .7955
+.8823
+.9058
+.9094
+HiGS
+.7751
+.6196
+.8729
+.7817
+.6521
+.9482
+.9165
+.9337 .9288 .7954
+.8821
+.9055
+.9090
+LPIPS
+3DGS
+.1652
+.3252
+.0727
+.1480
+.3155
+.1166
+.1427
+.0854 .1525 .1862
+.0956
+.1704
+.1595
+gsplat
+.1595
+.3227
+.0722
+.1452
+.3088
+.1164
+.1421
+.0849 .1520 .1851
+.0954
+.1699
+.1588
+Faster-GS
+.1610
+.3228
+.0722
+.1455
+.3111
+.1162
+.1423
+.0851 .1524 .1856
+.0953
+.1699
+.1591
+HiGS
+.1595
+.3223
+.0721
+.1449
+.3074
+.1155
+.1418
+.0847 .1513 .1848
+.0948
+.1687
+.1576
+Gaussians 3DGS
+4.60
+2.70
+3.58
+4.12
+3.04
+1.06
+1.03
+1.57
+1.26
+1.04
+2.01
+3.14
+1.87
+(M)
+gsplat
+4.78
+2.76
+3.64
+4.15
+3.11
+1.09
+1.06
+1.60
+1.31
+1.06
+2.04
+3.27
+1.94
+Faster-GS
+4.73
+2.75
+3.62
+4.12
+3.08
+1.08
+1.05
+1.59
+1.30
+1.05
+2.04
+3.25
+1.92
+HiGS
+4.79
+2.75
+3.64
+4.13
+3.12
+1.09
+1.06
+1.60
+1.30
+1.06
+2.04
+3.27
+1.93
+Memory
+3DGS
+6.57
+3.90
+5.13
+5.90
+4.32
+1.65
+1.79
+2.55
+2.06
+1.57
+2.90
+4.72
+2.74
+(GiB)
+gsplat
+6.98
+4.06
+5.34
+6.06
+4.57
+1.69
+1.66
+2.43
+2.00
+1.60
+3.01
+4.83
+2.89
+Faster-GS
+10.34
+6.05
+7.96
+9.14
+6.76
+2.48
+2.39
+3.53
+2.93
+2.33
+4.49
+7.20
+4.28
+HiGS
+3.52
+2.07
+2.72
+3.06
+2.32
+1.04
+1.04
+1.29
+1.13
+0.84
+1.55
+2.53
+1.50
+Time
+3DGS
+759.9
+537.9
+659.9
+600.4
+571.6
+551.5
+663.2
+792.1 721.7 373.7
+425.8
+858.3
+672.1
+(s)
+gsplat
+481.0
+296.3
+404.8
+395.4
+324.6
+182.0
+205.7
+274.9 219.9 177.1
+250.6
+348.5
+239.2
+Faster-GS
+191.1
+122.7
+170.3
+160.1
+130.6
+84.1
+93.8
+126.9
+95.1
+69.6
+101.1
+139.4
+97.9
+HiGS
+60.1
+44.4
+61.2
+47.5
+46.3
+38.4
+44.9
+58.9
+41.6
+33.3
+39.7
+44.6
+35.6
+Table S5. Reconstruction per scene, mean over ten runs and, for time and memory, over three. Measures as in Tab. 1 of the main paper,
+with the final number of Gaussians in millions.
+against gsplat
+against the test set
+Method
+PSNR
+SSIM LPIPS PSNR SSIM LPIPS
+Ours
+67.16
+.9999
+.0000
+28.94 .8721
+.1285
+Ours, packed SH
+55.60
+.9995
+.0007
+28.93 .8718
+.1286
+FlashGS
+49.74
+.9983
+.0010
+28.92 .8713
+.1282
+Faster-GS
+73.86 1.0000
+.0000
+28.94 .8721
+.1287
+Speedy-Splat
+94.43 1.0000
+.0000
+28.94 .8721
+.1287
+StopThePop
+94.37 1.0000
+.0000
+28.94 .8721
+.1287
+3DGS
+75.04 1.0000
+.0000
+28.94 .8721
+.1287
+gsplat
+—
+—
+—
+28.94 .8721
+.1287
+Table S6. Image quality of rendering the pretrained 3DGS models
+of seven Mip-NeRF 360 scenes, mean over scenes. Left: against
+the FP32 gsplat renderer at 1080p, which isolates the renderer with
+the model held fixed. Right: against the test set at the standard
+resolution of each scene.
+and their time follows how a method treats its parameters.
+Faster-GS, whose fused optimizer updates every Gaussian
+at every step, spends 3.7× the time of HiGS on them. Both
+gsplat and 3DGS spend 9.8×, as they also concatenate their
+SH coefficients, write a full parameter gradient, and run
+Adam as a separate pass. Backward projection with the
+fused optimizer is 35% of a HiGS step and 54% of a Faster-
+GS step.
+Forward
+projection
+Binning
+Forward
+rasterization
+Backward
+rasterization
+Backward
+projection
+Optimizer
+0
+1
+2
+3
+Time per step (ms)
+0.14
+0.21
+2.48
+2.48
+0.11
+0.22
+0.35
+0.63
+0.16
+0.38
+0.79
+1.73
+0.40
+0.98
+1.79
+10.81
+0.58
+2.40
+1.60
+1.72
+0.00
+0.00
+2.91
+2.81
+HiGS
+Faster-GS
+gsplat
+3DGS
+Figure S2. Stages of a steady-state training step: mean time of
+each stage (in ms) over the steps after densification ends and over
+the 13 scenes of Tab. 1 of the main paper, one run per scene, timed
+with CUDA events at the stage boundaries. Forward projection in-
+cludes SH evaluation, binning the depth sort, forward rasterization
+the compositing pass of HiGS, and backward projection the SH
+gradient and, for HiGS and Faster-GS, the fused optimizer, so only
+gsplat and 3DGS have an optimizer stage. Not shown are the loss
+with its gradient, computed by the same code for every method, and
+the remainder of a step outside these stages, on average 0.25 ms
+and 0.01 ms.
+In a steady-state training step on garden, the fused op-
+timizer runs at 80% of the peak memory bandwidth of the
+17
+
+
+0
+10k
+20k
+30k
+Training step
+0.03
+0.05
+0.10
+0.15
+Training loss
+0
+10k
+20k
+30k
+Training step
+0
+5
+10
+15
+Relative to FP32 (%)
+FP32 parameters and moments
+none stochastic
+stochastic parameters
+stochastic moments
+both stochastic (HiGS)
+Figure S3. Training loss with and without stochastic rounding
+on the garden scene, for FP16 parameters and BF16 moments that
+are each rounded stochastically or to nearest. Left: the loss over
+windows of 500 steps, mean over ten runs. Right: the same loss
+relative to FP32 parameters and moments, each run against the
+FP32 run of the same seed, with the 95% interval of the mean.
+GPU, whereas forward and backward rasterization are bound
+by instruction throughput rather than memory. Each step
+restores the appearance of 13.1% of the Gaussians, those in
+groups that were not updated at the previous step, and 96.0%
+of them lag by at most 16 steps.
+Per scene (Tab. S5), HiGS uses 1.6× to 1.9× less memory
+than the most memory-efficient of the other methods and
+ends with the number of Gaussians of gsplat to within 0.02M.
+Its PSNR is within 0.10 dB of 3DGS and gsplat on every
+scene, above on some scenes and below on others.
+The training loss (Fig. S3) follows through the run what
+the image metrics of Tab. 3 of the main paper measure at its
+end. With every store rounded to nearest, the loss over the
+last 5,000 steps is 14.9% above that of FP32 parameters and
+moments, the second row of that table, and the gap is still
+widening. The drift belongs to the moments: with only the
+moments rounded to nearest the gap still widens, to 5.0%
+over the last 5,000 steps. A second moment decays by the
+factor β2 at each step, a change of 0.1% against a spacing
+of BF16 values of 0.4% to 0.8%, so the second moment of
+a parameter that is updated at every step is rounded back
+to its previous value and can only grow. It then records the
+largest squared gradient the parameter has met rather than a
+recent average, and the steps that Adam divides by it shrink
+as training proceeds. With only the parameters rounded to
+nearest the gap settles instead at a constant 1.7%, the cost of
+the updates below half the spacing of FP16 values that such
+a store discards. The two do not simply add: rounding both
+to nearest costs about twice the sum of the two. With both
+rounded stochastically the loss stays within 0.2% of FP32
+over the whole run, a remainder we attribute to the noise that
+every store adds. The excursions of the relative loss before
+step 15,000 follow the opacity resets.
+HiGS is not tied to the densification policy of 3DGS and
+combines with more recent ones. Trained for 3,000 steps
+with the structure-aware densification of SAD-GS [32], it
+Mip-NeRF
+Tanks and
+Deep
+Method
+360
+Temples
+Blending
+Time
+SAD-GS
+31.2
+19.0
+15.6
+(s)
+HiGS + SAD-GS
+7.1
+4.6
+4.1
+PSNR
+SAD-GS
+27.15
+22.50
+28.97
+(dB)
+HiGS + SAD-GS
+27.29
+22.52
+29.08
+Gaussians
+SAD-GS
+3.06
+1.35
+0.88
+(M)
+HiGS + SAD-GS
+2.90
+1.29
+0.78
+Table S7. Reconstruction with the densification of SAD-GS:
+the harness of the main paper with the densification and training
+settings of SAD-GS in place of the 3DGS policy, for 3,000 steps.
+HiGS + SAD-GS rasterizes with antialiasing. Time excludes the
+structure analysis of the training images that precedes training in
+both methods. Mean over the scenes of each dataset and three runs.
+is 3.8× to 4.4× faster than SAD-GS itself at an equivalent
+PSNR (Tab. S7). SAD-GS lowers the number of steps of a
+run and HiGS the cost of each.
+D.3. Image quality
+Against the test set, the differences between the rasterizers
+lie below the residual error of the trained model (Tab. S6).
+Against the FP32 gsplat renderer they span tens of decibels,
+and the lower levels trace to specific design choices. Speedy-
+Splat and StopThePop reproduce the reference to numerical
+precision. The fixed 3σ tile bound of 3DGS can omit con-
+tributions above the 1/255 threshold, as StopThePop notes,
+Faster-GS tests termination after compositing and does not
+clamp opacity from above, and FlashGS writes an 8-bit pixel
+buffer. At 8 bits per channel, the level of HiGS corresponds
+to a root-mean-square error of about 0.1 code values.
+18

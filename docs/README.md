@@ -48,7 +48,7 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-11-27</span>
+      <span class="dpr-home-dashboard-kicker">2026-11-28</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
     <strong class="dpr-home-dashboard-count">共 25 篇</strong>
@@ -58,7 +58,7 @@
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>10</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>15</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-11-27 02:33:13 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-11-28 02:21:27 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -70,8 +70,8 @@
   </div>
   <div class="dpr-home-dashboard-body">
 <p>今日共生成 25 篇推荐（精读 10 篇，速读 15 篇）</p>
-<p>精读：《Linear-Time Online Visual Geometry Transformer with Hybrid Architecture》（9.5/10）, 《FoundSurface: Feedforward Ray-Based 3D Scene Surface Reconstruction from Unposed Images》（9.5/10）</p>
-<p>速读：《Head Anything: Correspondence-Guided Joint Generation of 3D Heads from Few Images》（8.5/10）, 《Revisiting Monocular In-Hand Object Scanning: Dataset, Pose Estimation, and Surface Reconstruction》（8.5/10）, 《Where to Approximate: Understanding and Accelerating Looped Multi-View Reconstruction》（8.5/10）</p>
+<p>精读：《CoTacWAM: Joint Modeling of Vision and Touch for Robotic Manipulation》（9.0/10）, 《RecallFlow: Episodic Memory as the Source Distribution of Generative Robot Policies》（8.0/10）</p>
+<p>速读：《HOForce: Motion and Force Reconstruction of Hand-Object Interaction Using a Single-View RGB-D Video》（8.0/10）, 《Effects of Locomotion and Viewpoint Control on Immersive Robot Telepresence for Navigation and Inspection》（8.0/10）, 《LaST1.0: A Unified Latent World-Action Model with Control-Centric SpatioTemporal Reasoning》（8.0/10）</p>
 <p>这些结果覆盖了当下较热的方向，建议先看精读区论文的关键问题与方法。</p>
   </div>
 </section>
@@ -84,9 +84,9 @@
     <strong class="dpr-home-dashboard-count">10 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Linear-Time Online Visual Geometry Transformer with Hybrid Architecture">Linear-Time Online Visual Geometry Transformer with Hybrid Architecture</span></li><li><span class="dpr-home-dashboard-paper-title" title="FoundSurface: Feedforward Ray-Based 3D Scene Surface Reconstruction from Unposed Images">FoundSurface: Feedforward Ray-Based 3D Scene Surface Reconstruction from Unposed Images</span></li><li><span class="dpr-home-dashboard-paper-title" title="AIRIS: Benchmarking Social Embodied Intelligence in Egocentric Streaming Videos">AIRIS: Benchmarking Social Embodied Intelligence in Egocentric Streaming Videos</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="CoTacWAM: Joint Modeling of Vision and Touch for Robotic Manipulation">CoTacWAM: Joint Modeling of Vision and Touch for Robotic Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="RecallFlow: Episodic Memory as the Source Distribution of Generative Robot Policies">RecallFlow: Episodic Memory as the Source Distribution of Generative Robot Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="RePlan-VLA: Progress-Aware Replanning for Long-Horizon Vision-Language-Action Models">RePlan-VLA: Progress-Aware Replanning for Long-Horizon Vision-Language-Action Models</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>7</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>5</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>3</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -97,9 +97,9 @@
     <strong class="dpr-home-dashboard-count">15 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Head Anything: Correspondence-Guided Joint Generation of 3D Heads from Few Images">Head Anything: Correspondence-Guided Joint Generation of 3D Heads from Few Images</span></li><li><span class="dpr-home-dashboard-paper-title" title="Revisiting Monocular In-Hand Object Scanning: Dataset, Pose Estimation, and Surface Reconstruction">Revisiting Monocular In-Hand Object Scanning: Dataset, Pose Estimation, and Surface Reconstruction</span></li><li><span class="dpr-home-dashboard-paper-title" title="Where to Approximate: Understanding and Accelerating Looped Multi-View Reconstruction">Where to Approximate: Understanding and Accelerating Looped Multi-View Reconstruction</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="HOForce: Motion and Force Reconstruction of Hand-Object Interaction Using a Single-View RGB-D Video">HOForce: Motion and Force Reconstruction of Hand-Object Interaction Using a Single-View RGB-D Video</span></li><li><span class="dpr-home-dashboard-paper-title" title="Effects of Locomotion and Viewpoint Control on Immersive Robot Telepresence for Navigation and Inspection">Effects of Locomotion and Viewpoint Control on Immersive Robot Telepresence for Navigation and Inspection</span></li><li><span class="dpr-home-dashboard-paper-title" title="LaST1.0: A Unified Latent World-Action Model with Control-Centric SpatioTemporal Reasoning">LaST1.0: A Unified Latent World-Action Model with Control-Centric SpatioTemporal Reasoning</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">feed-forward <strong>4</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>4</strong></span><span class="dpr-home-dashboard-tag">embodied-ai <strong>3</strong></span><span class="dpr-home-dashboard-tag">geometry <strong>2</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">part-seg <strong>5</strong></span><span class="dpr-home-dashboard-tag">feed-forward <strong>2</strong></span><span class="dpr-home-dashboard-tag">surf-recon <strong>2</strong></span></div>
 </section>
 </div>
 

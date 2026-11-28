@@ -1,0 +1,1434 @@
+SCCV-6D: Sparse Canonical Coordinate Voting for Holistic Multi-View RGB-D
+6D Pose Estimation in Robotic Bin Picking
+Nico Leuze, Samed Do˘gan, Maximilian Hoh, Henry Schaub, Alfred Schoettl
+Institute for Applications of Machine Learning and Intelligent Systems
+University of Applied Science Munich, 80335 Munich, Germany
+nico.leuze@hm.edu, alfred.schoettl@hm.edu
+Abstract
+Industrial bin picking requires pose estimates that are ac-
+curate under clutter, partial occlusion, and the reflec-
+tive, texture-less nature of manufactured parts. Most re-
+cent approaches to 6D pose estimation follow multi-stage
+pipelines. These achieve high accuracy, but incur mem-
+ory and runtime footprints that do not cope with the op-
+erational constraints of many real-world industrial deploy-
+ments. Holistic pipelines estimate poses in a single pass,
+with cost controlled through indiscriminate subsampling
+or lowered resolution.
+Continuing this line, we present
+SCCV-6D, a fully sparse multi-view RGB-D estimator. We
+reconstruct the 3D space at millimeter precision, prune
+background via a staged heatmap mechanism, and predict
+class, translation offset and rotation at highest resolution
+for an arbitrary number of objects simultaneously. Rota-
+tion is formulated as canonical coordinate voting. Points
+vote for their canonical object coordinates with an associ-
+ated confidence, enabling closed-form pose recovery with
+a symmetry-aware weighted Procrustes solve.
+Along an
+in-cluster point recovery induced by offset votes, this re-
+moves time-consuming post-processing stages.
+We reuse
+the task-supervised attention priors from the heatmap for-
+mulation for a novel attention-gated distillation objective
+that reweights teacher–student feature alignment. On the
+IPD test split we report competitive 0.826 AP at 1.13 s per
+scene, significantly faster than the leading entries. On MV-
+YCB our approach reaches 96.1 ADD-S, and remains com-
+petitive even on the densely packed bins of ROBI.
+1. Introduction
+The 6D pose estimation problem in bin picking is sub-
+ject to the simultaneous presence of heavy occlusion, high
+inter-class similarity among industrial parts, and challeng-
+ing attributes such as specularity and symmetry. Single-
+view observations frequently capture only fragmented ev-
+Ours
+FRTPose (YOLO) [48]
+FreeZe v2.2 [5]
+SEVD [1]
+FRTPose (MV) [48]
+3PT-Pose [26]
+30× faster, 89% of the AP
++8.0 AP
+1
+2
+5
+10
+20
+30
+40.
+50.
+60.
+70.
+80.
+90.
+100.
+runtime per scene [s]
+AP on IPD (BOP protocol)
+Figure 1. Fast and accurate. SCCV-6D estimates every pose in
+a single forward pass and a batched closed-form solve. It reaches
+0.826 AP on the IPD test split in 1.13 s per scene, 30× faster
+than the leading entry at 89% of its accuracy. SCCV-6D leads the
+only competitor in the same latency band by 8.0 AP. Runtimes
+of competing entries are self-reported on heterogeneous hardware
+and indicate a trend rather than a matched comparison.
+idence, so pose estimates fall short of the sub-centimeter,
+sub-degree accuracy required by downstream tasks such as
+robotic grasping [19, 26, 44, 52].
+These challenges motivate multi-view acquisition. Surfaces
+missing in one view are regularly recovered in another, and
+fusing several calibrated views produces a more consistent
+and reliable reconstruction [10, 11, 27, 32, 52]. Yet, espe-
+cially multi-view reconstruction introduces a computational
+bottleneck. At resolutions sufficient for reliable instance
+separation, reconstructing and processing the 3D volume
+incurs substantial computational and memory costs. The
+reconstruction volume covers the entire workspace while
+discriminative geometry is localized in small areas, so the
+task-relevant occupancy is highly sparse. Two paradigms,
+multi-stage and holistic pipelines, have emerged to handle
+high-resolution reconstruction differently.
+Multi-stage pipelines obtain object hypotheses from an up-
+stream, decoupled detector or segmenter, estimate the 6D
+pose per crop, and append refinement stages [5, 14, 26–
+28, 35]. These methods currently lead the industrial track
+1
+arXiv:2611.25819v1  [cs.CV]  19 Nov 2026
+
+
+of the BOP challenge [40] and achieve the highest reported
+accuracies. However, they are ensembles of independently
+trained networks. Memory and training-data requirements
+accumulate across the sub-modules. Inference proceeds se-
+quentially over candidates and views, so runtime scales with
+the number of objects, views and with the resolution of the
+crops. Figure 1 plots accuracy against runtime for the lead-
+ing entries on IPD [25]. The two are coupled. No published
+entry above 0.80 AP runs in under 13.4 s, and the fastest en-
+try outperforms the most accurate by 18.6 AP. Runtimes are
+self-reported under differing hardware, modalities and view
+counts, so the entries can not be compared directly. The
+trend over the population is nonetheless consistent, and it
+repeats on the other BOP-industrial dataset, XYZ-IBD [23]
+and ITODD-MV [9]. We attribute the coupling to the se-
+quential structure. Accuracy in such pipelines is gained by
+appending stages, and the cost is incurred anew for every
+hypothesis. The fast and accurate regime is unoccupied.
+Holistic pipelines instead estimate all poses in a single for-
+ward pass [3, 10, 11, 16, 17, 32, 34].
+These methods
+are considerably smaller and faster, where the computa-
+tion and memory demand is controlled by indiscriminate
+scene-reduction strategies to a fixed cardinality [10, 11, 17,
+34] or coarse-resolution processing [3]. Accuracy degrades
+accordingly [40].
+The authors of [32] proposed to make this reduction step
+task-dependent via a staged heatmap formulation. A coarse
+voxelized region-of-interest stage predicts where target ob-
+jects are plausible, a finer objectness stage focuses towards
+foreground candidates.
+Only the retained candidates are
+forwarded to the 6D pose heads. Allocating computation
+on task-relevant evidence rather than indiscriminate sam-
+pling strategies appears to be a promising way out of the
+trade-off. We adopt this line of research and address one
+structural limitation. [32] consumes depth-only, and geo-
+metrically degenerate parts are reported as dominant fail-
+ure mode. We fuse color and depth directly during scene
+reconstruction. Synchronized RGB-D views are integrated
+into a sparse truncated signed distance field [56], and the
+colored surface points from the zero-crossing band are the
+input to our network. The staged heatmap strategy is ap-
+plied on the sparse voxelization of that cloud, after which
+foreground voxel candidates are lifted back to point level
+through an exact grid lookup. A shared Point Transformer
+trunk [51] feeds three heads: classification, translation and
+rotation. To the best of our knowledge, we present the first
+fully sparse holistic RGB-D framework for 6D pose estima-
+tion.
+Conventional holistic designs recover the pose in a sub-
+sequent object-wise aggregation, commonly a mean-shift
+clustering of keypoint votes followed by a least-squares fit
+[10, 11, 16, 17, 34]. Depth-based pipelines frequently ap-
+pend an ICP refinement that dominates the post-processing
+budget [14, 32]. We remove this time-consuming stage in
+three steps. First, translation offsets are voted per point,
+which naturally forms clusters [32].
+A single clustering
+pass over the scene replaces the per-object mode.
+Only
+points voting into a cluster are retained, which sharpens the
+point cloud segments beyond the heatmap accuracy. Sec-
+ond, every point of a cluster predicts its location in the class-
+conditioned canonical frame together with a learned confi-
+dence. Thus, a point and its predicted coordinate form a
+3D-3D correspondence. Third, the pose follows in closed
+form as the confidence-weighted Procrustes solution [20]
+over the correspondence set that is over-determined by or-
+ders of magnitude relative to keypoint voting, batched over
+all objects of a scene. Assignment and reliability are both
+predicted rather than inferred from the current pose esti-
+mate, so neither correspondence search nor outlier rejection
+is iterated.
+Additionally, we introduce heatmap-guided feature distilla-
+tion, a novel scheme that improves efficiency while reduc-
+ing memory consumption. The staged heatmap formulation
+provides a sparse, task-supervised measure of relevance.
+We reweight the teacher-student feature alignment by the
+attention priors assigned by the teacher. The teacher and
+student share grid construction and network components but
+differ in capacity. We summarize our contributions as fol-
+lows.
+• A holistic, fully sparse multi-view RGB-D framework for
+6D pose estimation that fuses appearance and geometry
+before the first network stage, and recovers poses scene-
+adaptively in 1.13 s, outperforming methods in the same
+latency regime by a wide margin.
+• A symmetry-aware canonical coordinate voting head that
+replaces rotation regression by per-point correspondence
+votes with learned confidences and a weighted Procrustes
+solve, yielding poses for an arbitrary number of objects in
+closed form and without iterative refinement.
+• A heatmap-guided feature distillation scheme that reuses
+the attention priors of the pipeline as transfer weights.
+2. Related Work
+Industrial 6D pose estimation.
+6D pose estimation in in-
+dustrial contexts generally falls into two categories, distin-
+guished by how objects are localized. Multi-stage pipelines
+rely on image or point cloud crops from an upstream detec-
+tor. CosyPose [27] detects per view, estimates a pose per
+detection and reconciles the candidates by bundle adjust-
+ment, while [28, 49] render and compare against normal-
+ized crops. SAM-6D [35] and FreeZe [5] pair promptable
+segmentation or frozen foundation descriptors with a regis-
+tration step. AlignPose [38] chains a detector, a segmenter,
+a single-view estimator and two refiners before multi-view
+aggregation. 3PT [26] unifies detection, segmentation and
+pose in a jointly trained transformer pair that tops eleven
+2
+
+
+BOP tracks. Yet, all of these architectures incur structural
+training and memory overheads from multiple networks.
+Sequential candidate processing makes runtime scale with
+object and view count, and refinement crop size. Holistic
+pipelines avoid the upstream dependency and estimate all
+poses in one forward pass. PVN3D [16] and FFB6D [17]
+vote for object keypoints from fused appearance and geom-
+etry and solve a least-squares fit per object. MV6D [10] and
+SyMFM6D [11] extend point-wise voting to several RGB-
+D views with learned point-to-pixel fusion and, in the latter
+case, symmetry-aware keypoint targets. SwinDePose [34]
+follows the same scheme from depth-only. The respective
+fusion modules expect an input of fixed cardinality, which
+forces a random or farthest-point reduction. Methods that
+consume cropped segments [14, 37, 45] avoid this by an
+instance-level assumption.
+We address this with an ap-
+proach that keeps the single-pass property of the second line
+while adopting a task-centric reduction strategy [32].
+Sparse encoding for 3D perception.
+Sparse processing
+is the de-facto standard in long-range perception.
+Ap-
+proaches differ mainly in how they enlarge the receptive
+field without densifying, by attending inside cubic win-
+dows [13, 29], by partitioning space along the sensor geom-
+etry [30], or by removing dense stages from detection [6].
+Point-based operators are sparse by construction. Yet, pre-
+vious models were dominated by the cost of neighborhood
+queries [43, 50]. Point Transformer V3 [51] replaces those
+queries by serializing points along space-filling curves, so
+that a patch is a contiguous slice of a sorted array rather than
+a gathered neighborhood, and its attention runs over a fixed
+token count per patch. The receptive field is therefore set
+and controllable by the grid size and grows through pool-
+ing at constant attention cost. The model takes point sets
+of varying cardinality without padding and scales with the
+retained points rather than the workspace volume, which is
+what a scene-adaptive pipeline requires and why we adopt
+PTv3 as the encoding blocks of the pose heads.
+Correspondence-based 6D pose recovery.
+A network
+can regress the parameters of SE(3) directly. Rotations have
+no smooth low-dimensional parametrization, so nearby ori-
+entations can map to distant target values, and symmetry
+leaves the target multimodal [57]. Correspondence-based
+predictors delegate pose recovery to a geometric solver,
+which keeps the learning problem local. That route has been
+developed primarily on the image lattice, where object co-
+ordinates are regressed per pixel [2, 41, 46]. NOCS normal-
+izes the object frame across a category before a closed-form
+alignment [47]. Symmetry is resolved once per class, since
+a crop is not associated with an individual object before the
+solve. We transfer the idea to the 3D domain, where our
+translation offset votes group points into object-centric seg-
+ments that approximate the canonical model up to a rigid
+transform. Predicting the canonical coordinate of each point
+makes the correspondence 3D to 3D. The residual is then a
+Euclidean distance in the metric frame of the reconstruc-
+tion. The solver is the closed-form weighted Procrustes so-
+lution [7, 20, 24], and the symmetry group is selected per
+detected object.
+Knowledge distillation for point clouds.
+Knowledge
+distillation uses a pretrained teacher to guide a smaller stu-
+dent and has proven effective for training compact models
+with minimal accuracy loss [18, 21, 53, 55]. Yet, distil-
+lation on point clouds remains structurally underexplored.
+The unordered, sparse nature prevents index-aligned feature
+matching, and background dominates the active sites, so a
+uniformly averaged feature loss is spent almost entirely on
+regions that carry no task-relevant information. The lim-
+ited local structure of a single point further weakens the
+supervision a feature-matching loss can transfer. Existing
+schemes therefore guide the transfer. Yang et al. [53] re-
+strict the loss to positions selected by the teacher’s classifi-
+cation response, PVKD [21] distills point-to-voxel relations
+for LiDAR segmentation, and PointDistiller [55] combines
+graph-based local distillation with an occupancy-weighting
+strategy. We believe that this proxy does not carry over to
+bin picking. Densely reconstructed regions, e.g. bin walls,
+produce higher occupancy weights than the small, reflective
+and frequently occluded target objects. We weight instead
+by the task-supervised, object-centric attention priors of the
+heatmap stages, available at no additional cost.
+3. Method
+3.1. Problem Setting and Notation
+Given n synchronized color and depth observations
+{(Ci, Di)}n
+i=1 with known intrinsics Ki and extrinsics Ti,
+we estimate the rigid transformations (R, t) ∈SE(3) that
+map the local frame of every object of a set of known classes
+into the world frame. The number of target objects is un-
+known and may be arbitrary. All object poses of a scene are
+produced in a single forward pass over the fused observa-
+tion, which is what we refer to as holistic processing. No
+pose is estimated per crop, and no stage is executed once
+per candidate. Figure 2 gives an overview of SCCV-6D.
+The canonical model point cloud My ⊂R3 of every class
+y ∈{1, . . . , C} is available and centered at its origin. We
+assume the per-class symmetry group Gk to be known. For
+a ground-truth object k of class yk with pose (R∗
+k, t∗
+k) let
+Ok = {R∗
+km + t∗
+k | m ∈Myk}
+(1)
+be the target object, that is the model cloud placed in the
+world frame by its ground-truth pose. All training targets
+3
+
+
+Fusion §3.2
+Voxel stages §3.3
+Pose Heads and closed-form Procrustes solve §3.4–3.5
+n RGB-D views
+block-hashed
+sparse TSDF
+one ωi(v) for depth
+and color; the zero
+crossing yields P
+color key:
+voxel stages
+translation votes
+rotation, canonical
+closed-form solve
+voxelization
+ϑ, ϑc =10ϑ
+RoI Heatmap
+Objectness
+Point Recovery
+Eq. (5), sensor res.
+P
+X ′
+I
+I′
+No. voxels:
+|X ′|
+|I|
+|I′|
+Staged, scene-adaptive Heatmap
+Pruning. Q is recovered for
+point-level pose estimation.
+shared PTv3 trunk
+Q
+shared per-point features [(pj, rj)]∈RNq×6 →[fsh
+j
+]∈RNq×32
+Translation offset
+uj = pj + ˆtj
+Classification
+C+1 logits per point
+Rotation
+canonical coordinates
+FiLM(y) →(ˆcj, ˆ
+wj)
+Closed-Form Solve
+via weighted SVD
+( ˆ
+Rk, ˆtk)
+Clustering
+class y
+[fcls
+j
+]
+U = [uj]⊤∈RNq×3
+S
+k Jk
+[(ˆcj, ¯ωj)]
+Per-point votes uj on Q in
+red, ball queries (blue) lead Ik
+Coordinate votes ˆcj on
+S
+k Jk, and ˆ
+wj on red
+color channel, target in blue
+Pose results: single pass, one
+batched solve, estimates in
+blue, ground truth in red
+Figure 2. SCCV-6D. n RGB-D views are fused into a sparse TSDF, yielding P. Two sparse, voxel-based heatmap stages focus task-
+relevant foreground regions I′, before recovering to point-level resolution Q. A shared PTv3 trunk feeds all three estimation heads. The
+translation votes uj naturally form clusters. Along class predictions, these gate a FiLM-conditioned canonical-coordinate head, and one
+single batched symmetry-aware weighted Procrustes solve returns 6D poses [( ˆRk, ˆtk)].
+derive from Equation (1). Throughout,
+κϑ(p) = ⌊(p −pmin)/ϑ⌋∈N3
+(2)
+denotes the index of a voxel with edge length ϑ containing
+the point p. The logistic function is denoted as σ.
+3.2. Multi-View RGB-D Fusion
+The views are integrated into a sparse truncated signed dis-
+tance field [8, 39] held in a block-hashed grid [56]. For a
+voxel center v inside an active block, view i contributes the
+truncated signed distance
+ϕi(v) = clamp(si(v)/τsdf, −1, 1) , si(v) = Di(ρi) −z,
+(3)
+with ρi = π(KiT −1
+i
+v) the pixel onto which v projects in
+view i and (x, y, z)⊤= T −1
+i
+v its coordinates in that cam-
+era frame. The binary visibility weight ωi(v) is one if v
+projects inside the image, carries a valid depth measurement
+and lies within the truncation band, and zero otherwise. Ge-
+ometry Φ and appearance Ψ are accumulated as
+Φ(v) =
+P
+i ωi(v)ϕi(v)
+W(v)
+,
+Ψ(v) =
+P
+i ωi(v) Ci(ρi)
+W(v)
+,
+(4)
+with W(v) = P
+i ωi(v). Sharing the weights keeps the two
+fields consistent, so a view that contributes an unreliable
+depth measurement also contributes little color.
+Extracting the zero crossings of Φ and reading Ψ at
+those positions yields the colored 3D point cloud P =
+{(pj, rj)}N
+j=1 with pj ∈R3, rj ∈[0, 1]3. Averaging over
+views suppresses much of the speckle and view-dependent
+dropout on specular parts [44, 52].
+3.3. Staged Heatmaps and Point Restoration
+The two heatmap stages follow [32] and are summarized to
+set notation. We voxelize P with voxel size ϑ, which yields
+the attributed sparse set X = {(vi, fi)} and build a coarse
+clone X ′ with ϑc = 10 ϑ. A submanifold sparse U-Net [15]
+predicts region-of-interest scores ˆhi ∈[0, 1] on X ′ under
+a Gaussian focal loss [31], with the target heatmap peak-
+ing at object centroids and boundaries. The soft attention
+prior ai = σ(βa(ˆhi −ϵa)) is thresholded at κh, and ev-
+ery fine voxel whose coarse clone is retained is kept. This
+gives the high-resolution set I in a scene-adaptive manner.
+A second sparse module predicts objectness ˆhobj,i on I un-
+der a focal loss [36]. We prune by score rank, retaining the
+highest-scoring half to form the object-centric set I′.
+A voxel of edge length ϑ holds one feature for all points it
+contains, so prediction made on I′ [32] carries an encoding
+error of order ϑ. Let V′ = {κϑ(p) | (p, ·) ∈I′} be the
+index set of the voxels. We restore to point-level with
+Q = {(pj, rj) ∈P | κϑ(pj) ∈V′},
+|Q| = Nq ,
+(5)
+with Nq being dynamic, given the scene-adaptive proper-
+ties. This containment check costs one sort and no neigh-
+borhood query. Its inverse map is stored in-line and reused
+for targeting and for transporting attention priors in Sec. 3.6.
+3.4. Shared Trunk, Per-Point Classification and
+Translation-Offset Voting
+Every restored point of Q is described by (pj, rj) ∈R6. A
+shared PTv3 encoder [51] maps Q to features f sh
+j
+∈R32.
+All three heads need the same description of the local sur-
+face and its surrounding clutter, so a shared trunk avoids
+4
+
+
+triplicating the cost. A second encoder refines these fea-
+tures for classification f cls
+j
+∈R32, and an MLP predicts
+per-point logits over C + 1 classes. Point pj is labeled with
+class yk if it lies inside the voxelized occupancy (cf. Eq. 5)
+of the target object Ok, i.e. if κϑ(pj) ∈κϑ(Ok), and with
+background class 0 otherwise, which is required because the
+objectness stage prunes conservatively and retains points on
+no target object.
+Translation
+and
+rotation
+heads
+both
+start
+from
+[(pj, rj), f sh
+j , f cls
+j
+],
+projected linearly to 32 channels.
+Each head applies two PTv3 [51] encoders of different
+depth in sequence.
+PTv3 attends over patches of fixed
+token count taken from a serialized ordering of the points,
+so the receptive field is controllable by grid density. Each
+pooling step doubles the spatial extent at constant attention
+cost. The first encoder pools twice and keeps patches close
+to the surface, encoding the fine geometric evidence. The
+second pools four times and reaches local context.
+The
+token count is decimated accordingly, so the context is
+obtained at no additional memory.
+Where [32] obtains
+fidelity and reach from a dual-branch transformer block of
+differing window sizes, we arrange the two sequentially, so
+the coarse encoder operates on features that already encode
+fine geometry, leaving the recombination of the two scales
+to the decoder skip connections.
+For every point pj, the translation head predicts its relative
+offset ˆtj to the object centroid under a smooth ℓ1 loss. The
+vote of a point is uj = pj + ˆtj ∈R3. The target tj follows
+the voxelized occupancy regime already used for classifi-
+cation, with tj = 0 for κϑ(pj) /∈κϑ(Ok). The per-point
+voting formulation sharpens the density peaks that the clus-
+tering in Sec. 3.5 relies on.
+3.5. Per-Point Canonical Coordinate Voting
+Object formation.
+Votes U = [u1, . . . , uNq]⊤∈RNq×3
+concentrate near object centroids by construction, form-
+ing clusters without any further mechanism. A single DB-
+SCAN [12] pass returns K cluster centers q1, . . . , qK,
+where K is determined by the scene and not by any fixed
+budget. A point is recovered as a member of cluster k if its
+own vote falls inside a ball of radius ρc around qk,
+ℓj =
+(
+arg mink ∥uj −qk∥2,
+mink ∥uj −qk∥2 ≤ρc
+−1,
+otherwise
+(6)
+with ℓ∈{−1, 0, . . . , K −1}Nq and Jk = {j | ℓj = k}.
+The class of an object is the mode of the point-wise class
+predictions inside Jk. Points with ℓj = −1 do not enter
+the rotation head. The sequence of voting, clustering and
+membership recovery provides a task-driven sparsification
+scheme that yields sharper point cloud segments. This is a
+substantive difference to [32], where the pose is predicted
+on the retained grid segments and inherits the uncertainty
+of the heatmap stages. We find the additional sharpening to
+benefit pose accuracy directly.
+Canonical Coordinate Voting.
+Let j ∈Jk and let y be
+the class of object k. The rotation head predicts ˆcj ∈R3
+and ˆwj ∈[0, 1]. With ˆcj the coordinate of pj in the canon-
+ical frame of My. The pair (pj, ˆcj) is therefore a 3D-3D
+correspondence between the reconstruction and the model.
+The confidence score ˆwj states how reliable the head con-
+siders that correspondence to be. A rigid transform that
+maps ˆcj to pj for all j is the pose of object k.
+Head.
+Rotation features are encoded by the cascade of
+Sec. 3.4 restricted to S
+k Jk, which reuses the shared and
+classification features already available. With fj ∈R64, an
+MLP trunk φθ is modulated by feature-wise linear modula-
+tion [42] conditioned on the predicted class y. Two linear
+maps produce coordinates and confidences,
+hj = φθ(fj),
+˜hj = γ(y) ⊙hj + β(y),
+(7)
+ˆcj = Wc˜hj + bc,
+ˆwj = σ(w⊤
+w˜hj + bw).
+(8)
+Modulation instead of per-class heads keeps the parameter
+count independent of C.
+Training Targets.
+For object k, the observed point is
+mapped into the canonical frame by the ground-truth pose
+and matched to the model,
+˜pj = R∗⊤
+k (pj −t∗
+k),
+c∗
+j = argmin
+m∈My ∥˜pj −m∥2,
+(9)
+with residual dj = ∥˜pj−c∗
+j∥2. We define a valid correspon-
+dence if dj ≤τd which removes reconstruction outliers and
+points misassigned by the clustering. The confidence target
+is the soft indicator ¯ωj = σ(−2 (dj −τd/2)), with dj in
+millimeters, so confidence expresses model-surface agree-
+ment instead of a binary inlier classification.
+Objective.
+Let the discrete symmetries for object k be de-
+fined by a finite group Gk ⊂SO(3), where Gk = [I] for
+asymmetric parts. With stop-gradient normalized weights
+¯wj = sg[ ˆwj]/ P
+i∈Jk sg[ ˆwi] and Hδ the Huber loss over
+coordinates, the coordinate loss of object k is
+Lk
+coord = min
+S∈Gk
+X
+j∈Jk
+¯wj Hδ
+ ˆcj, S c∗
+j
+
+.
+(10)
+We detach the confidence weights, to prevent the weighted
+mean from being minimized by redistributing weights
+rather than reducing residuals. Confidences are supervised
+separately by a binary cross-entropy Lconf against ¯ωj.
+The correspondence formulation allows a trivial collapse
+to the canonical origin, especially for small objects. We
+5
+
+
+add a spread term penalizing insufficient per-axis variance,
+Lk
+spread = 1
+3
+P
+d max(0, ς(y)
+min −Varj∈Jk[ˆcj,d]), with ς(y)
+min
+derived offline from the model’s smallest per-axis vari-
+ance, and a pairwise distance term Lk
+pair that compares pre-
+dicted canonical distances to observed ones. For np pairs
+(u, v) sampled inside the cluster, let the objective be de-
+fined as Lk
+pair = 1/np
+P
+uv Hδ
+ dcan
+uv , dobs
+uv
+
+, with dcan
+uv
+=
+∥ˆcu −ˆcv∥2, and dobs
+uv = ∥pu −pv∥2. The pose objective is
+defined as
+Lpose = λcLcoord+λwLconf+λsLspread+λpLpair . (11)
+Closed-form recovery.
+At inference, the votes are gated
+by threshold τw, as wj = ˆwj1[ ˆwj ≥τw]. Let ¯p and ¯c de-
+note the weighted means of the observed points pj and of
+their predicted canonical coordinates ˆcj.The pose minimiz-
+ing P
+j wj∥pj −(Rˆcj +t)∥2
+2 is obtained by the SVD of the
+cross-covariance H = P
+j ¯wj(ˆcj −¯c)(pj −¯p)⊤= UΣV⊤
+as the orthogonal Procrustes solution [20, 24]
+ˆRk = V diag
+ 1, 1, det(VU⊤)
+
+U⊤, ˆtk = ¯p−ˆRk¯c. (12)
+The solve holds gradients in {ˆcj, wj}, so a direct pose loss
+could be added without architectural change. Our imple-
+mentation costs one 3 × 3 SVD per object k, batched over
+the whole scene. Translation is re-estimated jointly with
+rotation and is therefore consistent with it.
+3.6. Heatmap-Guided Feature Distillation
+The heatmap formulation produces attention priors that are
+supervised for the pose task, which we exploit in an on-top
+distillation module. Teacher T and student S share the grid
+construction, the staged network design, and differ only in
+capacity. The student uses shallower sparse U-Nets in the
+heatmap stages, and fewer transformer blocks with reduced
+channel dimensions in the encoders.
+Both models prune adaptively, so their active sites do not
+coincide, and a feature loss cannot be indexed by position.
+Let AT
+s and AS
+s be the active sites of teacher and student at
+stage s. Further, let ηs(·) be the identity of a voxel at voxel-
+stages or point, which is the index κϑs(·) through Eq. (5).
+The matching
+ms(i) =
+(
+i′,
+∃i′ ∈AT
+s : ηs(i′) = ηs(i)
+∅,
+otherwise
+(13)
+is unique, because ηs is injective on the active sites of either
+model, and is obtained by one hash lookup per student site.
+The transfer weight is the attention prior πT the teacher as-
+signs,
+αs
+i =
+(
+πT
+s,ms(i),
+ms(i)̸ = ∅
+0,
+ms(i) = ∅
+(14)
+with πT
+s equal to a at the region-of-interest stage, to ˆhobj
+at the objectness stage (Sec. 3.3), and ˆh′
+obj lifted through
+Eq. (5) at the point stages. We hypothesize that the teacher
+separates object- centric segments more sharply than the
+student. A student site the teacher discarded is treated as
+background. With a linear projection Ps that aligns chan-
+nel widths, let the objective at stage s be
+Ls
+KD =
+P
+i∈AS
+s αs
+i
+f T
+ms(i) −Psf S
+i
+2
+2
+P
+i∈AS
+s αs
+i + εkd
+,
+(15)
+applied at the region-of-interest backbone, the objectness
+backbone, the shared trunk, and the second PTv3 encoder
+blocks for translation and rotation.
+Compared with an
+occupancy-weighting scheme [55], the weights of Eq. (14)
+are task-supervised. The complete objective combines the
+staged losses of the localization path with Eq. (11),
+L = λ1LRoI + λ2Lobj + λ3Lcls + λ4Lt + Lpose,
+(16)
+extended by P
+s µsLs
+KD when a student is trained. Memory
+and compute follow the active sites of each stage, and the
+only quantities that scale with the number of objects are the
+DBSCAN pass and the batched decomposition.
+4. Experiments
+4.1. Datasets, Metrics and Training
+We evaluate on three multi-view benchmarks covering
+complementary regimes. The Industrial Plenoptic Dataset
+(IPD) [25] holds multi-instance scenes of ten industrial
+parts.
+We use four views and the official BOP proto-
+col [40], reporting the average precision over the maximum
+symmetry-aware surface distance (MSSD) and projection
+distance (MSPD), the mean AP, and APmm
+MSSD at absolute
+millimeter thresholds. ROBI [52] provides bins of seven re-
+flective parts. We evaluate on the Ensenso test split with
+four views under the symmetry-aware ADD∗against the
+numbers reported in [54]. MV-YCB-SymMovCam [11] is a
+synthetic dataset of textured YCB objects [4]. We use three
+views for comparability with prior work [10, 11, 32] and
+report the area under the ADD-S and ADD-(S) curves.
+All experiments run on a single NVIDIA RTX 5090. The
+heatmap heads are trained for two warm-up epochs, af-
+ter which all heads are optimized jointly for 15 epochs
+in total, with color and depth augmentations applied per
+view before fusion. During the first five epochs the clus-
+ter centers of Eq. (6) are the ground-truth centroids, expos-
+ing the rotation head to well-recovered foreground while
+the translation head converges, after which the offset pre-
+dictions replace them.
+The voxel size ϑ is 1.75 mm on
+IPD and MV-YCB and 0.5 mm on ROBI, whose capture
+volume is smaller, and the clustering scales with it, using
+εdb = 8 mm and ρc = 10 mm on the former two and
+6
+
+
+AP
+AP
+APmm AP Time
+Method
+AP MSPD MSSD MSSD
+25
+[s]
+FRTPose-WAPRv2 (MV) [48]
+.932 .968
+.897
+.661
+.897 33.9
+3PT-Pose-Ind. [26]
+.923 .933
+.914
+.822
+.914 24.52
+SEVD-0504 [1]
+.873 .913
+.833
+.644
+.833 13.4
+AlignPose [38]
+.798 .852
+.743
+.582
+.743
+–
+MatchU [22]
+.520 .566
+.475
+.340
+.475
+–
+FRTPose-WAPRv2 (YOLO) [48] .746 .761
+.731
+.593
+.731 1.34
+FreeZeV2.2 [5]
+.439 .459
+.419
+.321
+.419 7.20
+SCCV-6D (ours)
+.826 .866
+.787
+.548
+.787 1.13
+Table 1. IPD test split under the BOP protocol [40]. All compet-
+ing entries are multi-stage systems relying on upstream detections
+and, in several cases, on ensembles of detectors and refiners. Com-
+peting runtimes are self-reported [40] on heterogeneous hardware
+with differing modalities and view counts.
+3 mm and 5 mm on ROBI, at a minimum of 100 samples.
+Loss weights are (λ1, . . . , λ4) = (1, 2, 2, 3) following [32]
+and (λc, λw, λs, λp) = (1.0, 0.5, 0.3, 0.15). The remaining
+constants are set empirically, with βa = 15 and ϵa = 0.5 in
+the attention prior, τd = 5 mm for a valid correspondence,
+np = 512 sampled pairs, and τw = 0.3 at recovery. Aver-
+aged over the IPD split, reconstruction accounts for 0.837 s
+of the runtime, the forward pass including clustering and
+classification for 0.217 s, and the batched solve for 0.079 s,
+summing to the reported 1.13 s. Reconstruction is a GPU
+voxel-block-grid integration [56] and follows the capture
+volume and the view count. The remaining 0.296 s cover
+the forward pass and the batched solve.
+4.2. Results
+IPD.
+SCCV-6D reaches 0.826 AP (Table 1), above Align-
+Pose [38] and the fastest competing configuration [48],
+and below the leading multi-stage entries.
+3PT-Pose-
+Industrial [26] is a pair of large transformers trained on web-
+scale object-centric data that refines its hypotheses over sev-
+eral passes in 24.52 s per scene. FRTPose [48] in the multi-
+view configuration couples a surface-coordinate network, a
+PnP solve, and a time-consuming refinement stage taking
+33.9 s. SCCV-6D produces the poses of all objects of a
+scene in 1.13 s from one forward pass and a batched decom-
+position, roughly 22× and 30× faster respectively, while re-
+taining roughly 89% of their AP. The only competing entry
+in the same latency regime, FRTPose with a YOLO front
+end, is 8.0 points of AP below us at a comparable runtime.
+AlignPose [38] reports no scene-level runtime on the leader-
+board [40], but the per-object refinement timings already
+exceed our full-scene latency.
+The remaining gap is concentrated in APmm
+MSSD, where 3PT
+leads by a wide margin. [26] applies a render-and-refine
+stage that optimizes the pose directly against the observa-
+tion and can polish an already correct hypothesis to sub-
+millimeter agreement. Our estimate is the closed-form opti-
+CosyPose CosyPose MV-3D-KP MEC-Net
+Ours
++PVNet
++LINE2D
+[33]
+[54]
+Modality
+RGB
+RGB-D
+RGB-D
+RGB
+RGB-D
+Tube Fitting
+39.4
+74.8
+94.0
+89.4
+90.9
+Chrome Screw
+17.4
+73.0
+90.8
+86.7
+83.2
+Eye Bolt
+21.6
+85.1
+93.2
+93.2
+92.7
+Gear
+50.6
+80.2
+85.2
+91.4
+88.3
+Zigzag
+89.7
+87.9
+96.6
+94.8
+95.8
+DIN Connector
+13.3
+57.8
+90.6
+69.5
+79.5
+D-Sub Connector
+11.2
+55.3
+92.5
+79.5
+89.5
+Mean
+34.7
+73.4
+91.8
+86.4
+88.6
+Table 2. ROBI (Ensenso, four views) under ADD∗. Baselines as
+reported in [54].
+Method
+ADD-S
+ADD-(S)
+CosyPose [27]
+92.3
+87.7
+MV6D [10]
+91.2
+85.6
+SyMFM6D w/o sym. [11]
+95.2
+91.5
+SyMFM6D [11]
+95.4
+91.7
+SDT-6D [32]
+90.6
+89.1
+SCCV-6D (ours)
+96.1
+92.8
+Table 3.
+MV-YCB-SymMovCam, three views, area under the
+ADD-S and ADD-(S) curves.
+mum of a fixed set of learned correspondences and inherits
+the residual noise. We rank higher at the MSPD and MSSD
+thresholds, which reward finding and disambiguating an ob-
+ject over polishing it.
+ROBI.
+The second experiment probes the performance
+in densely packed bins of small reflective parts (Table 2).
+SCCV-6D reaches 88.6 mean ADD∗, 2.2 points above the
+RGB-only MEC-Net [54] and 3.2 points below MV-3D-
+KP [33], which it leads on the Gear, the object carrying the
+highest-order rotational symmetry of the set. The deficit
+concentrates on the chrome screw and the DIN connector,
+the two smallest parts. Rotation is observable only through
+the displacement it induces, so at a comparable correspon-
+dence error in millimeters the recoverable angle scales in-
+versely with object size. MV-3D-KP crops and resizes ev-
+ery detection, normalizing resolution per object, and retains
+several pose hypotheses per detection that are individually
+refined against the depth map.
+Neither baseline reports
+scene-level runtimes. All of them are evaluated once per
+object and per view, whereas our poses follow from a single
+forward pass in 1.02 s per scene. Latency is lower than on
+IPD despite the finer ϑ, attributable to the smaller capture
+volume that reduces the dominant sparse TSDF reconstruc-
+tion cost.
+7
+
+
+Configuration
+AP
+APmm
+MSSD
+Per-voxel rotation, batched ICP
+0.712
+0.468
+w/o color (depth-only heads)
+0.769
+0.483
+w/o point recovery (per-cell)
+0.812
+0.522
+Single five-stage encoder per head
+0.814
+0.517
+unweighted Procrustes solve
+0.816
+0.542
+SCCV-6D (full)
+0.826
+0.548
+Table 4. Component study on the IPD test split. Each row replaces
+or removes a single component of the full model. Effects are mea-
+sured independently and are not additive.
+AP
+AP
+APmm
+Time
+Model
+AP
+MSPD
+MSSD
+MSSD
+[s]
+Teacher
+0.841
+0.884
+0.798
+0.552
+1.11
+−25%, w/o weighting
+0.723
+0.781
+0.665
+0.485
+1.02
+−25%, occupancy [55] 0.768
+0.829
+0.707
+0.505
+1.03
+−25%, heatmap (ours)
+0.827
+0.866
+0.789
+0.542
+1.06
+−35%, occupancy [55] 0.747
+0.821
+0.673
+0.504
+1.03
+−35%, heatmap (ours)
+0.810
+0.849
+0.771
+0.523
+1.01
+Table 5. Distillation Results on the IPD validation set. Percentages
+denote the parameter reduction with respect to the teacher. The
+teacher is the full model of Table 1.
+MV-YCB-SymMovCam.
+On the household benchmark
+(Table 3) SCCV-6D improves over SDT-6D [32] by 5.5
+points ADD-S and 3.7 points ADD-(S) under an otherwise
+identical protocol. Fusing color into the reconstruction ex-
+ploits information that depth-only pipelines discard entirely
+on textured objects. Our approach further outperforms the
+prior leading entry SyMFM6D [11], which fuses appear-
+ance and geometry throughout and uses symmetry-aware
+keypoint targets, by the narrower margin of 0.7 ADD-S and
+1.1 ADD-(S).
+4.3. Distillation Study
+We probe the student performance on the IPD valida-
+tion split.
+Teacher and students hold 126.7 M, 95.1 M
+and 82.3 M parameters.
+A student with 25% fewer pa-
+rameters trained under a uniformly averaged feature loss
+drops 11.8 AP relative to the teacher (Table 5). The loss
+arises in the heatmap stages, where foreground–background
+imbalance weakens relevance prediction.
+Downstream
+heads cannot recover foreground that was never retained.
+Voxel-occupancy reweighting following PointDistiller [55]
+closes about one third of the gap.
+Our novel weight-
+ing strategy recovers 98%, leaving the student 1.4 AP
+short and increasing the margin over [55] from 5.9
+to 6.3 AP at 35% reduction.
+Our heatmaps remove
+most background before point-level processing, so occu-
+pancy is computed on an object-enriched but still noisy
+high-resolution set.
+That noise is deliberate, carried by
+the Gaussian-smoothed heatmap targets to retain contextual
+cues for cluttered objects, and it becomes overweighted un-
+der the occupancy-based scheme and likely reduces the ef-
+fectiveness.
+4.4. Component Study
+Table 4 isolates the individual design decisions. Replac-
+ing canonical voting by the per-voxel Chamfer regression
+with batched ICP of [32], inside our otherwise unchanged
+pipeline, costs 11.4 points AP and is by a wide margin the
+largest single effect. Restricting the heads to depth reduces
+accuracy by 5.7AP, the second largest effect. The loss re-
+flects weaker separation rather than detection. The heatmap
+stages prune conservatively to retain contextual informa-
+tion.
+Appearance helps the classification and translation
+heads to distinguish retained background from clutter with
+similar geometry, producing sharper clusters and cleaner
+correspondences. Predicting on the voxel grid instead of
+the restored points reduces accuracy by 1.4 points AP and
+by 2.6 points APmm
+MSSD. This pattern is consistent with an
+encoding error that distorts the pose estimate rather than the
+detection stage, and therefore impacts millimeter-level met-
+rics more strongly. The replacement of the two encoders
+of each head by a single one costs 1.2 AP, and the removal
+of the confidence weighting a further 1.0 AP. Confidence
+weighting contributes largely at the millimeter thresholds,
+where down-weighting unreliable correspondences matters
+most.
+Limitations.
+The method assumes a CAD model per
+class and a known, finite symmetry group, which suits in-
+dustrial parts but excludes unseen objects. Continuous sym-
+metries enter only through a discretization of that group,
+and a misspecified group is not detected at inference. Re-
+covery further presumes extrinsics accurate relative to ϑ,
+since an error of that order displaces the fused surface and
+the correspondences with it. Thresholds are set per dataset
+and scale with capture volume, as none of them is learned.
+5. Conclusion
+We presented SCCV-6D, a fully sparse multi-view RGB-D
+6D pose estimator that fuses color and depth into a sparse
+TSDF. Staged heatmaps focuses high-potential foreground
+regions in a scene-adaptive manner. The attention priors
+that drive the pruning are reused as transfer weights for fea-
+ture distillation, which yields compact students that outper-
+form density-based reweighting in this domain. SCCV-6D
+predicts class, translation and rotation for an arbitrary num-
+ber of objects in a single forward pass. Rotation is cast
+as canonical coordinate voting, so every pose follows in
+closed form from a symmetry-aware weighted Procrustes
+solve. This removes the object-wise post-processing that
+otherwise scales with bin occupancy. Across complemen-
+tary regimes, we reported accuracy within reach of the lead-
+ing multi-stage ensembles at significantly lower latency.
+8
+
+
+References
+[1] BOP Challenge Participants.
+SEVD-0504.
+https://
+bop.felk.cvut.cz, 2025. BOP Challenge submission,
+accessed: 2026-08-18.
+[2] Eric Brachmann, Alexander Krull, Frank Michel, Stefan
+Gumhold, Jamie Shotton, and Carsten Rother. Learning 6D
+object pose estimation using 3D object coordinates. In Eu-
+ropean Conference on Computer Vision (ECCV), 2014.
+[3] Michel Breyer, Jen Jen Chung, Lionel Ott, Roland Siegwart,
+and Juan Nieto.
+Volumetric grasping network: Real-time
+6 DOF grasp detection in clutter. In Conference on Robot
+Learning (CoRL), 2021.
+[4] Berk Calli, Aaron Singh, Arjun Walsman, Siddhartha Srini-
+vasa, Pieter Abbeel, and Aaron M. Dollar. The YCB object
+and model set: Towards common benchmarks for manipu-
+lation research. In International Conference on Advanced
+Robotics (ICAR), 2015.
+[5] Andrea Caraffa, Davide Boscaini, Amir Hamza, and Fabio
+Poiesi. FreeZe: Training-free zero-shot 6D pose estimation
+with geometric and vision foundation models. In European
+Conference on Computer Vision (ECCV), 2024.
+[6] Yukang Chen, Jianhui Liu, Xiangyu Zhang, Xiaojuan Qi, and
+Jiaya Jia. VoxelNeXt: Fully sparse VoxelNet for 3D object
+detection and tracking.
+In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition
+(CVPR), 2023.
+[7] Christopher Choy, Wei Dong, and Vladlen Koltun.
+Deep
+global registration. In Proceedings of the IEEE/CVF Confer-
+ence on Computer Vision and Pattern Recognition (CVPR),
+2020.
+[8] Brian Curless and Marc Levoy. A volumetric method for
+building complex models from range images.
+In SIG-
+GRAPH, 1996.
+[9] Bertram Drost, Markus Ulrich, Paul Bergmann, Philipp
+Härtinger, and Carsten Steger. Introducing mvtec itodd —
+a dataset for 3d object recognition in industry.
+In 2017
+IEEE International Conference on Computer Vision Work-
+shops (ICCVW), pages 2200–2208, 2017.
+[10] Fabian Duffhauss, Tobias Demmler, and Gerhard Neumann.
+MV6D: Multi-view 6D pose estimation on RGB-D frames
+using a deep point-wise voting network. In IEEE/RSJ In-
+ternational Conference on Intelligent Robots and Systems
+(IROS), 2022.
+[11] Fabian Duffhauss, Sebastian Koch, Hanna Ziesche, Ngo Anh
+Vien, and Gerhard Neumann. SyMFM6D: Symmetry-aware
+multi-directional fusion for multi-view 6D object pose esti-
+mation. IEEE Robotics and Automation Letters, 8, 2023.
+[12] Martin Ester, Hans-Peter Kriegel, Jörg Sander, and Xiaowei
+Xu. A density-based algorithm for discovering clusters in
+large spatial databases with noise.
+In International Con-
+ference on Knowledge Discovery and Data Mining (KDD),
+1996.
+[13] Lue Fan, Ziqi Pang, Tianyuan Zhang, Yu-Xiong Wang, Hang
+Zhao, Feng Wang, Naiyan Wang, and Zhaoxiang Zhang.
+Embracing single stride 3D object detector with sparse trans-
+former.
+In Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition (CVPR), 2022.
+[14] Ge Gao, Mikko Lauri, Xiaolin Hu, Jianwei Zhang, and Si-
+mone Frintrop. CloudAAE: Learning 6D object pose regres-
+sion with on-line data synthesis on point clouds. In IEEE In-
+ternational Conference on Robotics and Automation (ICRA),
+2021.
+[15] Benjamin Graham, Martin Engelcke, and Laurens van der
+Maaten. 3D semantic segmentation with submanifold sparse
+convolutional networks. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition
+(CVPR), 2018.
+[16] Yisheng He, Wei Sun, Haibin Huang, Jianran Liu, Haoqiang
+Fan, and Jian Sun. PVN3D: A deep point-wise 3D keypoints
+voting network for 6DoF pose estimation. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), 2020.
+[17] Yisheng He, Haibin Huang, Haoqiang Fan, Qifeng Chen, and
+Jian Sun. FFB6D: A full flow bidirectional fusion network
+for 6D pose estimation. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition
+(CVPR), 2021.
+[18] Geoffrey Hinton, Oriol Vinyals, and Jeff Dean. Distilling the
+knowledge in a neural network. In NeurIPS Deep Learning
+and Representation Learning Workshop, 2015.
+[19] Tomas Hodan, Frank Michel, Eric Brachmann, Wadim Kehl,
+Anders Glent Buch, Dirk Kraft, Bertram Drost, Joel Vidal,
+Stephan Ihrke, Xenophon Zabulis, Caner Sahin, Fabian Man-
+hardt, Federico Tombari, Tae-Kyun Kim, Jiri Matas, and
+Carsten Rother. BOP: Benchmark for 6D object pose estima-
+tion. In European Conference on Computer Vision (ECCV),
+2018.
+[20] Berthold K. P. Horn. Closed-form solution of absolute orien-
+tation using unit quaternions. Journal of the Optical Society
+of America A, 4(4), 1987.
+[21] Yuenan Hou, Xinge Zhu, Yuexin Ma, Chen Change Loy, and
+Yikang Li. Point-to-voxel knowledge distillation for LiDAR
+semantic segmentation.
+In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition
+(CVPR), 2022.
+[22] Junwen Huang, Hao Yu, Kuan-Ting Yu, Nassir Navab, Slo-
+bodan Ilic, and Benjamin Busam. Matchu: Matching un-
+seen objects for 6d pose estimation from rgb-d images. In
+2024 IEEE/CVF Conference on Computer Vision and Pat-
+tern Recognition (CVPR), pages 10095–10105. IEEE, 2024.
+[23] Junwen Huang, Jiaqi Hu, Peter KT Yu, Slobodan Ilic, Mar-
+tin Sundermeyer, and Benjamin Busam. Xyz-ibd: Bench-
+marking robust 6d object pose estimation under real-world
+industrial complexity. In European Conference on Computer
+Vision, pages 376–393. Springer, 2026.
+[24] Wolfgang Kabsch. A solution for the best rotation to relate
+two sets of vectors. Acta Crystallographica Section A, 32(5),
+1976.
+[25] Agastya Kalra, Guy Stoppi, Dmitrii Marin, Vage Taamazyan,
+Aarrushi Shandilya, Rishav Agarwal, Anton Boykov, Tze
+Chong, and Michael Stark. Towards co-evaluation of cam-
+eras, HDR, and algorithms for industrial-grade 6DoF pose
+estimation. In Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition (CVPR), 2024.
+9
+
+
+[26] Agastya Kalra, Tim Salzmann, Guy Stoppi, Dmitrii Marin,
+Rishav Agarwal, Vage Taamazyan, Martin Bokeloh, Ste-
+fan Hinterstoisser, Anton Boykov, Alberto Dall’Olio, Pravin
+Dangol, Kartik Venkataraman, and Huaijin Chen.
+3d-
+object perception transformer (3pt).
+In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), pages 25777–25787, 2026.
+[27] Yann Labbé, Justin Carpentier, Mathieu Aubry, and Josef
+Sivic.
+CosyPose: Consistent multi-view multi-object 6D
+pose estimation. In European Conference on Computer Vi-
+sion (ECCV), 2020.
+[28] Yann Labbé, Lucas Manuelli, Arsalan Mousavian, Stephen
+Tyree, Stan Birchfield, Jonathan Tremblay, Justin Carpentier,
+Mathieu Aubry, Dieter Fox, and Josef Sivic. MegaPose: 6D
+pose estimation of novel objects via render & compare. In
+Conference on Robot Learning (CoRL), 2022.
+[29] Xin Lai, Jianhui Liu, Li Jiang, Liwei Wang, Hengshuang
+Zhao, Shu Liu, Xiaojuan Qi, and Jiaya Jia. Stratified trans-
+former for 3D point cloud segmentation. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), 2022.
+[30] Xin Lai, Yukang Chen, Fanbin Lu, Jianhui Liu, and Jiaya
+Jia. Spherical transformer for LiDAR-based 3D recognition.
+In Proceedings of the IEEE/CVF Conference on Computer
+Vision and Pattern Recognition (CVPR), 2023.
+[31] Hei Law and Jia Deng.
+CornerNet: Detecting objects as
+paired keypoints. In European Conference on Computer Vi-
+sion (ECCV), 2018.
+[32] Nico Leuze, Maximilian Hoh, Samed Do˘gan, Nicolas R.-
+Peña, and Alfred Schoettl.
+SDT-6D: Fully sparse depth-
+transformer for staged end-to-end 6D pose estimation in
+industrial multi-view bin picking.
+In Proceedings of the
+IEEE/CVF Winter Conference on Applications of Computer
+Vision (WACV), 2026.
+[33] Alan Li and Angela P. Schoellig. Multi-view keypoints for
+reliable 6D object pose estimation. In IEEE International
+Conference on Robotics and Automation (ICRA), 2023.
+[34] Zhujun Li and Ioannis Stamos. Depth-based 6DoF object
+pose estimation using swin transformer.
+In IEEE/RSJ In-
+ternational Conference on Intelligent Robots and Systems
+(IROS), 2023.
+[35] Jiehong Lin, Lihua Liu, Dekun Lu, and Kui Jia. SAM-6D:
+Segment anything model meets zero-shot 6D object pose es-
+timation. In Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition (CVPR), 2024.
+[36] Tsung-Yi Lin, Priya Goyal, Ross Girshick, Kaiming He,
+and Piotr Dollár. Focal loss for dense object detection. In
+Proceedings of the IEEE/CVF International Conference on
+Computer Vision (ICCV), 2017.
+[37] Xiao Lin, Deming Wang, Guangliang Zhou, Chengju Liu,
+and Qijun Chen. TransPose: 6D object pose estimation with
+geometry-aware transformer. Neurocomputing, 589, 2024.
+[38] Anna Šárová Mikeštíková, Médéric Fourmy, Martin Cífka,
+Josef Sivic, and Vladimir Petrik. Alignpose: Generalizable
+6d pose estimation via multi-view feature-metric alignment.
+In Proceedings of the IEEE/CVF Conference on Computer
+Vision and Pattern Recognition, pages 14626–14636, 2026.
+[39] Richard A. Newcombe, Shahram Izadi, Otmar Hilliges,
+David Molyneaux, David Kim, Andrew J. Davison, Push-
+meet Kohli, Jamie Shotton, Steve Hodges, and Andrew
+Fitzgibbon. KinectFusion: Real-time dense surface mapping
+and tracking. In IEEE International Symposium on Mixed
+and Augmented Reality (ISMAR), 2011.
+[40] Van Nguyen Nguyen, Stephen Tyree, Andrew Guo, Med-
+eric Fourmy, Anas Gouda, Taeyeop Lee, Sungphill Moon,
+Hyeontae Son, Lukas Ranftl, Jonathan Tremblay, Eric
+Brachmann, Bertram Drost, Vincent Lepetit, Carsten Rother,
+Stan Birchfield, Jiri Matas, Yann Labbe, Martin Sunder-
+meyer, and Tomas Hodan. BOP challenge 2024 on model-
+based and model-free 6D object pose estimation.
+In
+IEEE/CVF Conference on Computer Vision and Pattern
+Recognition Workshops (CVPRW), 2025.
+[41] Kiru Park, Timothy Patten, and Markus Vincze. Pix2Pose:
+Pixel-wise coordinate regression of objects for 6D pose esti-
+mation. In Proceedings of the IEEE/CVF International Con-
+ference on Computer Vision (ICCV), 2019.
+[42] Ethan Perez, Florian Strub, Harm de Vries, Vincent Du-
+moulin, and Aaron Courville. FiLM: Visual reasoning with a
+general conditioning layer. In AAAI Conference on Artificial
+Intelligence, 2018.
+[43] Charles R. Qi, Hao Su, Kaichun Mo, and Leonidas J. Guibas.
+PointNet: Deep learning on point sets for 3D classification
+and segmentation. In Proceedings of the IEEE/CVF Confer-
+ence on Computer Vision and Pattern Recognition (CVPR),
+2017.
+[44] Henry Schaub, Christian Wolff, Maximilian Hoh, and Al-
+fred Schöttl. Probabilistic closed-loop active grasping. In
+IEEE/RSJ International Conference on Intelligent Robots
+and Systems (IROS), 2024.
+[45] Yifei Shi, Junwen Huang, Xin Xu, Yifan Zhang, and Kai Xu.
+StablePose: Learning 6D object poses from geometrically
+stable patches. In Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition (CVPR), 2021.
+[46] Gu Wang, Fabian Manhardt, Federico Tombari, and Xi-
+angyang Ji. GDR-Net: Geometry-guided direct regression
+network for monocular 6D object pose estimation. In Pro-
+ceedings of the IEEE/CVF Conference on Computer Vision
+and Pattern Recognition (CVPR), 2021.
+[47] He Wang, Srinath Sridhar, Jingwei Huang, Julien Valentin,
+Shuran Song, and Leonidas J. Guibas. Normalized object
+coordinate space for category-level 6D object pose and size
+estimation. In Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition (CVPR), 2019.
+[48] Yulin Wang, Mengting Hu, Jianghao Zhuo, and Chen Luo.
+FRT-Pose WAPRv2 (multi-cam). https://bop.felk.
+cvut.cz/method_info/1157/, 2025.
+Accessed:
+2026-08-18.
+[49] Bowen Wen, Wei Yang, Jan Kautz, and Stan Birchfield.
+FoundationPose: Unified 6D pose estimation and tracking
+of novel objects. In Proceedings of the IEEE/CVF Confer-
+ence on Computer Vision and Pattern Recognition (CVPR),
+2024.
+[50] Xiaoyang Wu, Yixing Lao, Li Jiang, Xihui Liu, and Heng-
+shuang Zhao. Point transformer v2: Grouped vector atten-
+tion and partition-based pooling. In NeurIPS, 2022.
+10
+
+
+[51] Xiaoyang Wu, Li Jiang, Peng-Shuai Wang, Zhijian Liu, Xi-
+hui Liu, Yu Qiao, Wanli Ouyang, Tong He, and Hengshuang
+Zhao. Point transformer V3: Simpler, faster, stronger. In
+Proceedings of the IEEE/CVF Conference on Computer Vi-
+sion and Pattern Recognition (CVPR), 2024.
+[52] Jun Yang, Yizhou Gao, Dong Li, and Steven L. Waslander.
+ROBI: A multi-view dataset for reflective objects in robotic
+bin-picking. In IEEE/RSJ International Conference on Intel-
+ligent Robots and Systems (IROS), 2021.
+[53] Jihan Yang, Shaoshuai Shi, Runyu Ding, Zhe Wang, and Xi-
+aojuan Qi. Towards efficient 3D object detection with knowl-
+edge distillation. In Advances in Neural Information Pro-
+cessing Systems (NeurIPS), 2022.
+[54] Jun Yang, Wenjie Xue, Sahar Ghavidel, and Steven L.
+Waslander. Active 6D pose estimation for textureless objects
+using multi-view RGB frames. The International Journal of
+Robotics Research, 2025.
+[55] Linfeng Zhang, Runpei Dong, Hung-Shuo Tai, and Kaisheng
+Ma.
+PointDistiller: Structured knowledge distillation to-
+wards efficient and compact 3D detection. In Proceedings
+of the IEEE/CVF Conference on Computer Vision and Pat-
+tern Recognition (CVPR), 2023.
+[56] Qian-Yi Zhou, Jaesik Park, and Vladlen Koltun. Open3D: A
+modern library for 3D data processing. arXiv:1801.09847,
+2018.
+[57] Yi Zhou, Connelly Barnes, Jingwan Lu, Jimei Yang, and Hao
+Li. On the continuity of rotation representations in neural
+networks. In Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition (CVPR), 2019.
+11

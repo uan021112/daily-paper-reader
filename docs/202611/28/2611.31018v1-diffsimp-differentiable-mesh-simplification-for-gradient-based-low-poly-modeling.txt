@@ -1,0 +1,2560 @@
+DiffSimp: Differentiable Mesh Simplification for
+Gradient-Based Low-Poly Modeling
+Seonghun Oh
+Holiday Robotics
+seonghun.oh@holiday-robotics.com
+Abstract
+Differentiable mesh extraction enables gradient-based
+optimization of detailed 3D geometry across diverse
+tasks.
+However, compact meshes are commonly ob-
+tained through post-processing simplification,
+leaving
+simplification-induced errors outside upstream optimiza-
+tion. We introduce DIFFSIMP, a training-free, drop-in dif-
+ferentiable mesh simplification layer built on QEM-based
+parallel edge collapse, enabling existing geometry opti-
+mization pipelines to optimize their final simplified meshes.
+We formulate simplification under a fixed collapse history
+as a locally differentiable collapse map, enabling gradient
+propagation without relaxing discrete collapse decisions.
+We combine fast, high-quality parallel simplification with a
+factorized backward formulation that exploits differentiable
+vertex quadrics and quadric reduction forests for efficient
+gradient propagation. Experiments on low-poly mesh re-
+construction and inverse rendering demonstrate improved
+fidelity over post-processing simplification, with additional
+gains from gradient propagation that increase under tighter
+vertex budgets. DIFFSIMP supports diverse geometry op-
+timization frontends, with 1.00–1.25× the end-to-end run-
+time of unsimplified baselines in evaluated pipelines.
+1. Introduction
+Triangle meshes remain a fundamental surface represen-
+tation across computer graphics, 3D vision, and robotics.
+Recent advances in differentiable mesh extraction [1, 44,
+46, 47, 56] have enabled gradient-based geometry opti-
+mization by propagating gradients from mesh-based objec-
+tives upstream, supporting inverse rendering [24, 35, 59],
+scene reconstruction [10, 19], and generative 3D model-
+ing [2, 13, 57].
+However, these pipelines often produce
+dense meshes to capture fine geometric structures, while
+downstream applications may require compact meshes.
+A straightforward way to obtain compact meshes is to
+reduce the resolution of differentiable mesh extraction, but
+this limits the recovery of fine geometric details during
+optimization.
+Instead, a common strategy is to recon-
+struct or generate sufficiently detailed meshes, followed by
+post-processing simplification to meet downstream com-
+plexity requirements.
+Among mesh simplification meth-
+ods, quadric error metric (QEM) edge collapse [16, 17] has
+become a practical off-the-shelf choice [27, 31]. It natu-
+rally adapts mesh complexity to local geometry, enabling
+aggressive simplification while limiting geometric approx-
+imation error, without requiring separate iterative fitting as
+in variational approaches [9, 58] or pretrained simplification
+models [42]. These advantages have made QEM a common
+post-processing step in modern 3D pipelines [7, 15, 52, 55].
+However, post-processing mesh simplification decou-
+ples geometry optimization from the final simplified mesh.
+While differentiable mesh extraction enables gradient prop-
+agation from mesh-based objectives upstream, these ob-
+jectives are typically evaluated on detailed intermediate
+meshes rather than the simplified meshes ultimately de-
+ployed. This mismatch becomes particularly consequential
+under aggressive simplification, where even QEM can in-
+troduce substantial geometric distortion as fine structures
+are approximated by increasingly coarse meshes.
+These
+simplification-induced errors provide no gradient signal to
+the upstream optimizer, preventing it from directly compen-
+sating for them to improve the final deployed mesh.
+To address this optimization–deployment mismatch, we
+seek to integrate mesh simplification as a differentiable
+layer into gradient-based geometry optimization pipelines.
+For practical integration, we identify three design priorities.
+First, the layer should be training-free and mesh-native,
+independent of learned simplification priors and specific
+upstream representations, enabling its use across diverse
+pipelines and downstream objectives.
+Second, high for-
+ward simplification quality must be maintained. At less re-
+strictive budgets, simplification typically introduces smaller
+geometric errors, leaving limited room for gradient-based
+compensation and making forward quality particularly im-
+portant. Under tighter budgets, high-quality forward sim-
+plification and gradient-based compensation become com-
+1
+arXiv:2611.31018v1  [cs.GR]  23 Nov 2026
+
+
+plementary in preserving geometric fidelity. Third, efficient
+forward and backward execution is essential, as simplifica-
+tion must be performed at every optimization iteration.
+To meet these priorities, we introduce DIFFSIMP, a
+training-free, drop-in differentiable mesh simplification
+layer built on QEM-based parallel edge collapse, enabling
+existing gradient-based geometry optimization pipelines to
+optimize through their simplified meshes. Although dis-
+crete edge-collapse decisions prevent global differentiabil-
+ity, we exploit the recorded collapse history to express sim-
+plification as a locally differentiable collapse map, enabling
+gradient propagation without relaxing these decisions. To
+achieve fast, high-quality forward simplification, we extend
+the parallel edge-collapse scheme of PaMO [38], improving
+simplification quality while retaining efficient execution.
+For efficient backward propagation, we propose a factor-
+ized differentiation scheme that treats vertex quadrics as dif-
+ferentiable intermediates, enabling parallel collapse-local
+vector–Jacobian products (VJPs), and exploits the quadric
+reduction-forest structure to avoid redundant face-level dif-
+ferentiation. We implement both operations in CUDA and
+introduce a progressive vertex-budget schedule for integra-
+tion into iterative optimization.
+Experiments on low-poly mesh reconstruction and in-
+verse rendering demonstrate that optimizing through DIFF-
+SIMP improves the fidelity of final simplified meshes over
+post-processing in both tasks. We also show that gradient
+propagation provides additional gains that increase under
+tighter vertex budgets, as upstream optimization compen-
+sates for simplification-induced errors. We further demon-
+strate compatibility with diverse existing gradient-based ge-
+ometry optimization pipelines.
+These improvements are
+achieved with only 1.00–1.25× the end-to-end optimization
+time of the corresponding unsimplified pipelines.
+2. Related Work
+2.1. Gradient-Based Mesh Optimization
+Differentiable mesh extraction [1, 20, 21, 44, 46, 47, 56]
+and differentiable mesh representations [43, 49, 50] en-
+able upstream gradient propagation from mesh-based ob-
+jectives, supporting diverse downstream applications [10,
+13, 19, 35, 37, 57, 59].
+However, extracted mesh com-
+plexity remains tied to the underlying extraction structure.
+Even adaptive extraction methods [1, 47] adjust spatial sam-
+pling and extraction structures rather than performing ag-
+gressive, geometry-adaptive mesh simplification. Gradient-
+based low-poly mesh optimization has also been explored
+through geometry and appearance refinement [7, 23], joint
+base-mesh and displacement optimization [11], and adap-
+tive remeshing or topology updates [12, 14, 39]. However,
+these approaches either optimize compact meshes from
+given or reconstructed geometry without propagating gra-
+dients through simplification to upstream representations,
+or adapt mesh connectivity within dedicated optimization
+pipelines. In contrast, our reusable differentiable mesh sim-
+plification layer propagates gradients from objectives on
+aggressively simplified meshes to upstream representations
+without redesigning existing optimization pipelines.
+2.2. Mesh Simplification
+Mesh simplification has been extensively studied through
+vertex clustering [45], variational approximation [9, 58],
+remeshing [6, 53, 54], and iterative edge collapse [25, 30].
+These training-free, mesh-native methods are widely used
+as post-processing in modern 3D pipelines. Among these,
+quadric error metric (QEM) edge collapse [16, 17] has
+become a standard approach to mesh simplification.
+To
+overcome the computational cost of sequential greedy edge
+collapse, parallel methods [38, 40] accelerate simplifica-
+tion while maintaining competitive geometric quality, albeit
+with some loss relative to sequential QEM. However, these
+methods do not propagate gradients through collapse oper-
+ations, leaving simplification largely as post-processing in
+gradient-based pipelines. Building on PaMO [38], we com-
+bine the geometric adaptivity of QEM and the efficiency
+of parallel execution with fixed-history differentiation, en-
+abling their use in gradient-based optimization. We further
+improve parallel simplification quality to better preserve ge-
+ometric fidelity under aggressive simplification while re-
+taining efficient execution.
+2.3. Learning-Based Low-Poly Modeling
+Learning-based approaches to mesh reduction and low-poly
+modeling include task-driven mesh pooling [22], learned
+simplification operators [42], learned geometric representa-
+tions [33], progressive mesh representations [3, 5, 28], and
+generative mesh priors [4, 29, 32, 48, 51]. While these ap-
+proaches support mesh reduction and low-poly modeling,
+they also depend on learned parameters and training dis-
+tributions. Notably, Neural Mesh Simplification [42] en-
+ables differentiable simplification through learned vertex
+sampling and connectivity prediction, but remains depen-
+dent on a pretrained network. In contrast, our training-free
+differentiable layer retains the geometric adaptivity of QEM
+without relying on learned simplification priors.
+3. Preliminaries
+3.1. Quadric Error Metrics for Edge Collapse
+Quadric error metric (QEM) simplification [16, 17] itera-
+tively simplifies a triangle mesh through successive edge
+collapses. Let M(0) = (V (0), F (0)) denote an input tri-
+angle mesh with vertices V (0) = {v(0)
+i
+}N
+i=1, v(0)
+i
+∈R3,
+and faces F (0). The simplification proceeds as M(0)
+E1
+−→
+· · ·
+ER
+−−→M(R), where Er denotes the set of edges collapsed
+2
+
+
+DiffSimp
+selected edge e
+independent region 𝒩1(e)
+merged vertex ve
+Forward Simplification
+collapse map 𝒞σ: Vθ ↦V(R)
+round 1
+round 2
+⋯
+passes
+1…p−1
+passes
+p+1…P
+Kfτp
+recompute
+pass p
+Recorded collapse history σ
+Backward
+Factorized Parallel Differentiation
+(∂𝒞σ(Vθ) / ∂Vθ)⊤= D1⊤⋯DP⊤
+Dp⊤
+J1⊤
+J2⊤
+input
+after round 1
+after round 2
+face
+quadrics
+Kf
+⋯
+position gradients
+quadric gradients
+collapse-local VJPs
+Dense
+mesh
+ℳθ
+Simplified
+mesh
+𝒮K(ℳθ)
+Upstream
+representation
+θ
+∇θℒ(𝒮K(ℳθ))
+Objective
+Simplified
+mesh
+ℒ(𝒮K(ℳθ))
+target
+passes
+p+1…P
+passes
+1…p−1
+∇V(R)ℒ
+∂Vθ
+∂θ
+⊤
+Figure 1. Overview of DIFFSIMP. Given a dense mesh Mθ = (Vθ, Fθ), DIFFSIMP propagates gradients from objectives on the simplified
+mesh SK(Mθ) to the upstream parameters θ in a gradient-based geometry optimization pipeline. Forward (top): Parallel edge-collapse
+rounds, progressive cost thresholds (τp), and pass-wise quadric recomputation produce the simplified mesh while recording the collapse
+history σ (Sec. 4.1). Backward (bottom): With σ fixed, we differentiate the collapse map Cσ (Sec. 4.2). For each pass, D⊤
+p is computed
+through factorized parallel differentiation (Sec. 4.3). This combines parallel collapse-local VJPs within each round (forming J⊤
+r ) with
+quadric gradient propagation through the reduction forest, allowing face quadrics Kf to be differentiated only once per pass.
+in round r. In classical sequential QEM, each round greed-
+ily collapses the minimum-cost edge e = (i, j), merging its
+endpoints vi and vj into ve, updating mesh connectivity and
+neighboring edge costs.
+Before the first round, each face f ∈F (0) defines a face
+quadric Kf = wfpfp⊤
+f ∈R4×4, where pf = (n⊤
+f , df)⊤
+represents the supporting plane of face f, with unit normal
+nf and offset df, and wf is its weight. Each vertex vi is
+assigned a vertex quadric Qi = P
+f∋i Kf over its incident
+faces. To evaluate the collapse error for an edge e = (i, j),
+we first combine the vertex quadrics of its endpoints:
+Qe = Qi + Qj =
+Ae
+be
+b⊤
+e
+ce
+
+,
+(1)
+where Ae ∈R3×3, be ∈R3, and ce ∈R.
+The col-
+lapse error at position v is Ee(v) = ˜v⊤Qe˜v, where ˜v =
+(v⊤, 1)⊤. When Ae is sufficiently well-conditioned, the op-
+timal placement is ve = arg minv∈R3 Ee(v) = −A−1
+e be;
+otherwise, an edge-segment minimizer or midpoint fallback
+is used. The collapse cost is Ce = Ee(ve). Collapsing edge
+e then updates its endpoint positions and vertex quadrics as
+(vi, Qi), (vj, Qj) 7→(ve, Qe).
+3.2. Parallel Edge Collapse
+Parallel edge collapse contracts multiple non-conflicting
+edges in a single round. PaMO [38] enables this through
+independent-region selection. For each edge e = (i, j), let
+N1(e) = N1(vi) ∪N1(vj) denote its 1-ring face neigh-
+borhood, where N1(vi) contains the faces incident to vi.
+Each edge propagates its collapse cost Ce to all faces in
+N1(e), and each face selects a single minimum-cost can-
+didate.
+An edge e is selected if it is the minimum-cost
+candidate at every face in N1(e). Since collapsing e only
+modifies mesh geometry and topology within N1(e), this
+neighborhood defines its independent region. As each face
+selects a single candidate, the independent regions are face-
+disjoint, enabling conflict-free parallel collapses. In each
+round, selected edges satisfying Ce ≤τ are collapsed si-
+multaneously, where τ is the cost threshold. While improv-
+ing efficiency, parallel execution may compromise approxi-
+mation quality relative to sequential QEM simplification.
+4. Method
+We introduce DIFFSIMP (Fig. 1), a differentiable mesh sim-
+plification layer built on QEM-based parallel edge collapse.
+Given an upstream mesh generator parameterized by θ, let
+Mθ = (Vθ, Fθ) denote its output mesh. We formulate the
+optimization objective as
+min
+θ
+L (SK(Mθ)) ,
+(2)
+where SK denotes the forward simplification operator of
+DIFFSIMP with a target vertex budget K.
+4.1. Forward Simplification
+For forward simplification, we extend the parallel edge-
+collapse scheme in Sec. 3.2, using the QEM placement, col-
+lapse cost, and quadric update rules from Sec. 3.1. To im-
+prove simplification quality while retaining the efficiency
+of parallel execution, we progressively increase the cost
+threshold across simplification passes until reaching the tar-
+get vertex budget K. Each pass p performs parallel col-
+lapse rounds under a cost threshold τp until no further edges
+can be collapsed. If the target budget K is not reached,
+the threshold is increased to τp+1.
+Following memory-
+less simplification [26, 30], we recompute face and vertex
+3
+
+
+quadrics at the beginning of each pass to reflect updated
+mesh geometry. We also use area-weighted face quadrics
+Kf = wfpfp⊤
+f , with wf = af/¯a, where af is the face
+area and ¯a is the mean face area at the beginning of each
+pass.1 For numerical stability, we use the regularized QEM
+placement ve = −(Ae+λeI)−1be for well-conditioned Ae,
+where λe = η maxk |(Ae)kk| and η is a small coefficient.
+Otherwise, an edge-segment or midpoint fallback is used,
+yielding three possible placement branches.
+4.2. Fixed-History Differentiation
+Edge collapse involves discrete edge selections and connec-
+tivity updates, making the overall simplification process not
+globally differentiable. However, given a fixed collapse his-
+tory, the output connectivity is determined, while the output
+vertex positions are obtained from the input vertex positions
+through a locally differentiable map. We exploit this dis-
+tinction by preserving discrete edge selections and connec-
+tivity updates during forward simplification, while differen-
+tiating the resulting geometry in backward.
+Let M(0) = Mθ, and let σ(V (0), F (0)) denote the dis-
+crete collapse history, recording the collapsed edge sets
+{Er}R
+r=1, pass boundaries, surviving and removed endpoint
+indices, and the placement branch of each collapse. With
+σ fixed, vertex placement, quadric addition, and pass-wise
+quadric recomputation compose into a locally differentiable
+collapse map Cσ : V (0) 7→V (R). We can therefore express
+the forward simplification operator as
+SK(M(0)) = M(R) =
+
+Cσ(V (0)), F (R)
+.
+(3)
+Substituting Eq. (3) into Eq. (2), the loss becomes
+L(Cσ(Vθ), F (R)). Where σ remains unchanged, F (R) is
+fixed, and differentiating the loss through the output vertex
+positions yields
+∇θL(SK(Mθ)) =
+∂Vθ
+∂θ
+⊤∂Cσ(Vθ)
+∂Vθ
+⊤
+∇V (R)L.
+(4)
+The collapse-map Jacobian ∂Cσ(Vθ)
+∂Vθ
+captures dependencies
+across successive collapses, allowing gradients to reach in-
+put vertices removed during simplification.
+4.3. Factorized Parallel Differentiation
+Efficient evaluation of the VJP
+
+∂Cσ(Vθ)
+∂Vθ
+⊤
+∇V (R)L in
+Eq. (4) requires handling geometric dependencies in the
+collapse-map Jacobian, both within each round and across
+successive rounds. Within a round, the independent regions
+{N1(e)}e∈Er are face-disjoint but may share neighboring
+vertices, inducing overlapping dependencies through face
+quadrics. Across rounds, collapses depend on previously
+1The normalization by ¯a is omitted from differentiation, as uniform
+quadric scaling does not affect vertex placement.
+updated vertex positions and accumulated vertex quadrics.
+We address these dependencies by treating vertex quadrics
+as differentiable intermediate variables, separating each col-
+lapse from its underlying face geometry. This allows gradi-
+ents for multiple collapses within a round to be computed in
+parallel. Across rounds, vertex quadric gradients are prop-
+agated through additive quadric merges along a reduction
+forest, avoiding redundant differentiation.
+Let P denote the number of simplification passes, Vp the
+output vertex positions of pass p with V0 = V (0) = Vθ,
+and Q the collection of vertex quadrics Qi.
+At the be-
+ginning of pass p, the vertex quadrics Qp−1 are recom-
+puted from the input geometry Vp−1. For pass p with Rp
+collapse rounds, we use local round indices and omit the
+pass index. Let X(r) = (V (r), Q(r)) denote the state af-
+ter round r, initialized as X(0) = (Vp−1, Qp−1), and let
+Jr = ∂X(r)/∂X(r−1) be its round-wise Jacobian. The Ja-
+cobian of pass p factorizes as
+Dp :=
+∂Vp
+∂Vp−1
+=
+I
+0
+JRp · · · J1
+
+
+I
+∂Qp−1
+∂Vp−1
+
+,
+(5)
+where the leftmost factor selects the output vertex positions,
+and the rightmost factor differentiates the pass initialization,
+including quadric recomputation. The full collapse-map Ja-
+cobian is then ∂Cσ(Vθ)
+∂Vθ
+= DP · · · D1.
+Parallel Jacobian Structure.
+For e
+=
+(i, j)
+∈
+Er
+within pass p, let J(r)
+e
+denote the Jacobian of the collapse
+update (v(r−1)
+i
+, Q(r−1)
+i
+, v(r−1)
+j
+, Q(r−1)
+j
+) 7→(v(r)
+e , Q(r)
+e ).
+Since the face-derived geometric contributions to each col-
+lapse are accumulated in its endpoint quadrics, treating
+these quadrics as differentiable intermediate variables con-
+fines J(r)
+e
+to its two endpoint states. As the collapsed edges
+have face-disjoint regions N1(e) and hence disjoint end-
+points, the round-wise Jacobian separates into independent
+collapse-local blocks:
+Jr =
+ M
+e∈Er
+J(r)
+e
+!
+⊕I,
+(6)
+up to permutations, where ⊕denotes the matrix direct sum
+and I is the identity block for unchanged vertex states. Con-
+sequently, the round-wise VJP decomposes into indepen-
+dent collapse-local VJPs, evaluated in parallel without con-
+flicting writes to endpoint gradients.
+Quadric
+Reduction-Forest
+Backpropagation.
+While
+the round-wise Jacobians enable parallel local differen-
+tiation, accumulated vertex quadrics retain dependencies
+across successive collapses.
+Since vertex quadrics are
+4
+
+
+merged additively, the recorded merge history forms a re-
+duction forest whose leaves are the initial vertex quadrics.
+We propagate quadric gradients backward through this for-
+est, deferring face-level differentiation until its leaves are
+reached.
+This avoids repeatedly differentiating the con-
+tributing face geometry at each collapse.
+Let g(r) = ∇X(r)L denote the gradient with respect to
+the state after round r. Since the loss depends on the ter-
+minal state X(Rp) only through Vp, we initialize g(Rp) =
+(∇VpL, 0) and apply g(r−1) = J⊤
+r g(r) in reverse round or-
+der. Placement derivatives generate quadric gradients that
+are propagated through earlier merges. For e = (i, j) ∈Er,
+let g(r)
+ve and g(r)
+Qe denote the incoming gradients at its merged
+position and quadric. Since Q(r)
+e
+= Q(r−1)
+i
++ Q(r−1)
+j
+, both
+input vertex quadrics receive identical gradients:
+g(r−1)
+Qi
+= g(r−1)
+Qj
+= g(r)
+Qe +
+ 
+∂v(r)
+e
+∂Q(r)
+e
+!⊤
+g(r)
+ve .
+(7)
+The first term carries quadric gradients from subsequent
+collapses, while the second adds the contribution from the
+current vertex placement.
+Propagating gradients through the merge history yields
+g(0), the gradient with respect to Vp−1 and Qp−1 treated as
+independent state inputs. We then differentiate the quadric
+recomputation for this pass to obtain the full gradient with
+respect to the input geometry. Since Q(0)
+i
+= P
+f∋i Kf,
+gKf =
+X
+i∈f
+g(0)
+Qi ,
+∇v(0)
+i L = g(0)
+vi +
+X
+f∋i
+ 
+∂Kf
+∂v(0)
+i
+!⊤
+gKf .
+(8)
+This combines direct position gradients with deferred
+quadric-induced gradients, yielding the pass-wise VJP
+D⊤
+p ∇VpL = ∇Vp−1L.
+Applying these pass-wise VJPs
+in reverse pass order yields the full collapse-map VJP in
+Eq. (4), including differentiation through quadric recompu-
+tation at each pass boundary.
+Within each pass, each collapse requires a constant-size
+local backward update, and each initial face is differenti-
+ated only once. These backward updates therefore require
+O(PRp
+r=1 |Er| + |Fp−1|) work, where Fp−1 is the input face
+set of pass p. Even when retaining only 0.5% of the input
+vertices, simplification takes about four passes on average.
+Our CUDA implementation performs these updates with-
+out constructing per-collapse PyTorch autograd graphs [41].
+The placement derivatives used to propagate position gradi-
+ents are provided in Appendix B.
+4.4. Integration into Gradient-Based Optimization
+Applying aggressive simplification before the underlying
+geometry is sufficiently optimized, or abruptly imposing
+the target vertex budget, can cause substantial geometric
+changes and destabilize optimization. We therefore intro-
+duce a progressive vertex-budget schedule for integrating
+simplification into gradient-based geometry optimization.
+Let t index optimization iterations and Nt = |Vθ| = |V (0)|
+denote the input vertex count at iteration t. With warmup
+duration tw and budget-reduction duration tr, we define
+st =
+
+
+
+
+
+
+
+0,
+t < tw,
+t −tw
+tr
+,
+tw ≤t < tw + tr,
+1,
+t ≥tw + tr.
+(9)
+The vertex budget at iteration t is
+Kt = round
+ N 1−st
+t
+Kst
+,
+(10)
+where round(·) denotes rounding to the nearest integer. Af-
+ter warmup, the vertex budget is interpolated in log space
+from Nt to K, followed by optimization at the target bud-
+get. At each iteration, we apply SKt to the current mesh.
+Although the collapse history may change between opti-
+mization iterations, we empirically demonstrate that differ-
+entiating the collapse map under each realized history sup-
+ports effective optimization (Sec. 5.3).
+5. Experiments
+We evaluate DIFFSIMP on low-poly mesh reconstruction
+and inverse rendering. In both tasks, we follow the progres-
+sive vertex-budget schedule in Sec. 4.4, with warmup dura-
+tion tw = 0.2T and budget-reduction duration tr = 0.45T,
+where T is the total number of optimization iterations. All
+experiments are conducted on a single RTX 5090. For de-
+tailed experimental settings, see Appendix A.
+5.1. Low-Poly Mesh Reconstruction
+Experimental Setup.
+We use 79 shapes from Myles et
+al. [36], excluding non-watertight and very thin shapes [47].
+Our base reconstruction pipeline optimizes FlexiCubes [47]
+at grid resolution n = 128 for 5,000 iterations on shapes
+normalized to fit within [−0.9, 0.9]3, using multi-view sil-
+houette, depth, and normal supervision. Baselines include
+low-resolution FlexiCubes (Low-res), using the finest per-
+shape grid with at most K vertices, and representative mesh
+simplification methods applied to the base reconstructions:
+QEM [17] (MeshLab [8]), PaMO [38], and vertex cluster-
+ing [45], along with the remeshing method ACVD [53]. We
+also compare against CWF [58], which optimizes simplified
+geometry, and TriFlow [29], a learning-based method. Un-
+like post-processing, we integrate DIFFSIMP into the base
+pipeline to optimize through the simplified mesh.
+We evaluate the largest connected component to exclude
+disconnected interior geometry unseen by image-based su-
+pervision [1]. We report squared Chamfer distance (CD)
+5
+
+
+0
+5
+10
+Distance to GT (×10−3)
+0
+5
+10
+0
+5
+10
+Low-res
+QEM
+PaMO
+Vert. Clust.
+ACVD
+CWF
+TriFlow
+Ours
+Ground truth
+Figure 2. Qualitative comparison at K = 1000 corresponding to Table 1.
+and F1 (10−3 threshold) using 106 surface samples, along
+with normal consistency (NC), self-intersection rate (SI),
+and sliver-triangle rate (SR). CD is scaled by 105, and SR is
+the percentage of triangles with minimum angle below 1◦.
+Comparison with Low-Poly Modeling Methods.
+Ta-
+ble 1 and Fig. 2 compare low-poly modeling methods at
+K = 1000. Our method outperforms all baselines in CD,
+F1, and NC, while maintaining SI and SR comparable to
+those of QEM. These results demonstrate the effectiveness
+of optimizing through simplification over both direct low-
+resolution reconstruction and post-processing simplifica-
+tion. We further evaluate reconstruction across vertex bud-
+gets K ∈{2000, 1500, 1000, 500, 250} at n = 128, keep-
+ing the remaining settings unchanged. To distinguish the
+contributions of forward simplification and differentiation,
+we also evaluate our forward operator as post-processing
+(Ours, fwd. only). As shown in Table 2 and Fig. 3, differen-
+tiating through simplification consistently improves recon-
+struction fidelity over the forward-only variant. At larger
+budgets, most of the improvement over QEM comes from
+the forward simplifier, since simplification-induced errors
+are small and leave little for gradients to correct. Under
+tighter budgets, these errors grow and gradients compensate
+for more of them, so the absolute CD gain from differentia-
+tion increases from 0.05 at K = 2000 to 1.34 at K = 250.
+Integration across Geometry Optimization Pipelines.
+We evaluate DIFFSIMP beyond FlexiCubes by replacing
+FlexiCubes with DiffMC [56], integrating it into the sepa-
+rate tetrahedral reconstruction pipeline of DMTet [46], and
+applying it to Large Steps [37], which optimizes explicit
+meshes through differential coordinates without isosurface
+extraction. All three use the same multi-view supervision
+as the base reconstruction pipeline. We use K = 1000
+(n = 128 for DMTet and DiffMC) and the 42 genus-zero
+Table 1. Low-poly reconstruction with n = 128, K = 1000.
+Reference denotes the unsimplified base reconstruction. CDmean
+and CDmed denote mean and median CD (×10−5).
+Method
+CDmean ↓CDmed ↓F1↑NC↑SI(%)↓SR(%)↓
+|V |
+Reference
+0.47
+0.39 0.45 0.99
+0.70
+0.65 42,195
+Low-res [47]
+338.22
+9.02 0.20 0.93
+6.41
+0.93
+924
+QEM [17]
+1.92
+1.11 0.21 0.96
+0.56
+0.02
+989
+PaMO [38]
+4.96
+2.90 0.12 0.95
+0.00
+0.00
+988
+Vert. Clust. [45]
+42.99
+17.76 0.06 0.89
+10.02
+0.01
+995
+ACVD [53]
+4.35
+2.62 0.17 0.95
+0.64
+0.14
+1,047
+CWF [58]
+7.10
+5.15 0.11 0.94
+0.02
+0.02
+1,000
+TriFlow [29]
+2.53
+1.20 0.19 0.96
+2.67
+0.37
+989
+Ours
+1.26
+0.76 0.26 0.97
+0.62
+0.05
+1,000
+Table 2.
+Reconstruction across vertex budgets at n = 128
+(CD ×10−5). Ours (fwd. only) applies our simplifier as post-
+processing. ∆grad denotes the absolute gain over this variant, with
+positive values indicating improvement.
+K
+Metric QEM ACVD CWF TriFlow
+Ours
+(fwd. only) Ours ∆grad ↑
+2000 CD↓
+0.90
+1.96
+3.25
+0.95
+0.75
+0.70
++0.05
+F1↑
+0.30
+0.25
+0.18
+0.27
+0.31
+0.34
++0.03
+1500 CD↓
+1.18
+2.69
+4.42
+1.29
+0.95
+0.87
++0.08
+F1↑
+0.26
+0.22
+0.15
+0.23
+0.28
+0.31
++0.03
+1000 CD↓
+1.92
+4.35
+7.10
+2.53
+1.53
+1.26
++0.27
+F1↑
+0.21
+0.17
+0.11
+0.19
+0.23
+0.26
++0.03
+500 CD↓
+5.10
+10.72
+26.41
+6.78
+3.97
+2.89
++1.08
+F1↑
+0.14
+0.10
+0.06
+0.12
+0.16
+0.18
++0.03
+250 CD↓
+14.88 36.59 111.05
+22.87
+12.10
+10.76
++1.34
+F1↑
+0.09
+0.06
+0.04
+0.07
+0.10
+0.13
++0.03
+shapes for Large Steps.
+Table 3 shows that DIFFSIMP
+outperforms all baselines in both CD and F1 across the
+three pipelines. These results demonstrate that optimizing
+through simplification consistently improves low-poly re-
+6
+
+
+K = 2000
+K = 1500
+K = 1000
+K = 500
+K = 250
+Ground
+truth
+QEM
+TriFlow
+Ours
+(fwd. only)
+Ours
+Figure 3. Qualitative comparison across vertex budgets (Table 2).
+Table 3. Low-poly reconstruction across geometry optimization
+pipelines at K = 1000 (CD ×10−5). DMTet and DiffMC use
+n = 128, while Large Steps uses a fixed-topology icosphere.
+Frontend
+Metric QEM ACVD CWF TriFlow
+Ours
+(fwd. only) Ours
+DMTet [46]
+CD↓
+1.82
+4.42
+7.01
+2.85
+1.56
+1.23
+F1↑
+0.21
+0.16
+0.12
+0.19
+0.23
+0.26
+DiffMC [56]
+CD↓
+2.07
+4.27
+7.46
+1.98
+1.44
+1.03
+F1↑
+0.21
+0.17
+0.11
+0.19
+0.23
+0.29
+Large Steps [37] CD↓
+7.35
+11.05
+9.41
+7.31
+6.81
+6.47
+F1↑
+0.14
+0.10
+0.09
+0.13
+0.15
+0.21
+construction across different gradient-based geometry opti-
+mization pipelines, extending beyond isosurface extraction
+to explicit mesh optimization.
+5.2. Inverse Rendering
+Experimental Setup.
+We use nvdiffrec [35] as our base
+inverse-rendering pipeline, with FlexiCubes as the geome-
+try frontend. We evaluate eight NeRF-synthetic scenes [34].
+Stage 1 optimizes geometry, materials, and lighting, fol-
+lowed by UV parameterization and texture baking. Stage
+2 jointly refines vertex positions and UV textures with fixed
+connectivity for 5,000 iterations. We integrate DIFFSIMP
+into Stage 1 geometry optimization while retaining the same
+Stage 2. At K = 2000, we compare against low-resolution
+FlexiCubes (Low-res), QEM [17], and our forward-only
+variant. Low-res directly optimizes a coarse grid, whereas
+QEM and Ours (fwd. only) simplify the geometry after
+Stage 1 optimization but before texture baking. All three
+undergo the same Stage 2 refinement as our method. We ad-
+ditionally compare with texture-aware QEM (TQEM) [18]
+and appearance-driven simplification (ADS) [23], which
+operate on the final textured reference. ADS further refines
+the TQEM-initialized mesh to match the reference. We re-
+port PSNR, SSIM, and LPIPS on held-out views.
+TQEM*
+ADS*
+Low-res
+QEM
+Ours
+(fwd. only)
+Ours
+Ground
+truth
+Stage 1
+Full run
+Figure 4. Qualitative inverse rendering results (Table 4). Stage 1
+entries for methods marked ∗are inherited from Reference.
+Table 4. Novel-view synthesis on eight NeRF-synthetic scenes
+(K = 2000). Full run includes Stage 2 refinement. Methods
+marked ∗simplify the final textured reference; their Stage 1 results
+are inherited from Reference and omitted.
+Stage 1
+Full run
+Method
+PSNR↑SSIM↑LPIPS↓
+|V |
+PSNR↑SSIM↑LPIPS↓
+|V |
+Reference
+26.88
+0.907
+0.114
+51,512
+29.02
+0.937
+0.082
+51,512
+TQEM∗[18]
+–
+–
+–
+–
+22.47
+0.853
+0.139
+2,000
+ADS∗[23]
+–
+–
+–
+–
+25.71
+0.907
+0.110
+2,000
+Low-res
+23.73
+0.880
+0.132
+1,883
+25.56
+0.907
+0.106
+1,883
+QEM [17]
+23.73
+0.885
+0.123
+2,000
+25.43
+0.907
+0.100
+2,000
+Ours (fwd. only)
+24.18
+0.889
+0.120
+2,000
+26.03
+0.912
+0.095
+2,000
+Ours
+25.56
+0.906
+0.109
+2,000
+27.29
+0.925
+0.085
+2,000
+Rendering Fidelity after Simplification.
+As shown in
+Table 4, after Stage 1, DIFFSIMP is only 1.32 dB below the
+dense reference while retaining just 3.9% of its vertices. As
+illustrated in Fig. 4, our method better preserves fine struc-
+tures both after Stage 1 and after the full run. It outperforms
+both post-processing QEM and our forward-only variant,
+demonstrating that the gains extend beyond improvements
+in the forward simplifier alone.
+These advantages per-
+sist after the shared Stage 2 refinement. Our method also
+outperforms TQEM and ADS across all rendering met-
+rics, indicating that appearance-aware post-processing does
+not match the fidelity achieved by optimizing upstream
+geometry through differentiable simplification. These re-
+sults demonstrate that optimizing through simplification en-
+ables upstream geometry to compensate for simplification-
+induced errors, improving the final textured mesh.
+7
+
+
+Table 5. Effect of backward differentiation on 79 shapes. CD
+(×10−5) and F1 evaluate the final simplified meshes. Raw and
+Deployed denote rendering objectives evaluated on the unsimpli-
+fied and K = 500 meshes, respectively. We report mean relative
+objective changes (∆L/L, %) over budget reduction (Ramp, itera-
+tions 1000–3250), target-budget optimization (Hold, 3250–5000),
+and the entire interval (Overall, 1000–5000).
+Raw ∆L/L
+Deployed ∆L/L
+Variant
+CD↓
+F1↑
+Hold
+Ramp
+Hold
+Overall
+Forward-only
+3.971 0.156
+−3.4
++0.6
++0.4
++1.2
+Survivor grad
+3.652 0.152
++6.4
+−5.5
+−2.4
+−6.9
+Cluster grad
+3.533 0.177
++19.3
+−29.7 −2.1
+−30.2
+W/o quadric grad 3.941 0.141
++3.4
++20.6
++0.5
++21.6
+Ours
+2.891 0.182
++12.3
+−26.3
+−9.7 −33.2
+5.3. Method Analysis
+Effectiveness of Simplification Gradients.
+We evaluate
+the effect of our gradients using the base reconstruction
+pipeline in Sec. 5.1 at K = 500.
+We compare against
+Forward-only post-processing and three in-loop variants
+sharing our forward simplifier: Survivor grad propagates
+each output gradient only to its surviving input vertex,
+Cluster grad distributes it equally among all input vertices
+merged into that output vertex, and W/o quadric grad treats
+quadrics as constants while retaining direct vertex-position
+gradients. Following our progressive vertex-budget sched-
+ule, we measure optimization progress over three inter-
+vals: Ramp (iterations 1000–3250, budget reduction), Hold
+(3250–5000, fixed target budget), and Overall (1000–5000).
+At iterations 1000, 3250, and 5000, we evaluate rendering
+losses against ground-truth renderings using the unsimpli-
+fied mesh (Raw) and its simplified version at K = 500 (De-
+ployed), regardless of the current vertex budget. We report
+relative changes ∆L/L = (Lend −Lstart)/Lstart.
+Table 5 shows that all in-loop variants improve CD over
+Forward-only, while Cluster grad and Ours also improve
+F1, suggesting that optimizing through simplification can
+improve geometric fidelity. Cluster grad makes substan-
+tial progress during Ramp but largely stalls during Hold.
+Survivor grad yields limited gains, while removing quadric
+gradients worsens the deployed objective. In contrast, our
+method continues to reduce the deployed objective, achiev-
+ing the greatest overall improvement and best geometric fi-
+delity. These results highlight the importance of differen-
+tiating the geometric dependencies of simplification rather
+than relying on surrogate gradient propagation. Moreover,
+gradient-based optimization remains effective even as col-
+lapse histories are reselected at every iteration.
+The raw and deployed objectives further expose the
+optimization–deployment mismatch. Forward-only reduces
+the raw objective without improving the deployed objective,
+whereas our method reduces the deployed objective even as
+Table 6. Operator runtime on Gaussian random-field meshes at
+K = 1000, measured in ms. Speedups are relative to Ours, and
+Launch× denotes the backward CUDA kernel-launch ratio (Auto-
+grad/Ours). QEM runs on CPU, while the others run on GPU.
+Forward
+Backward
+|Vin|
+Ours
+QEM Speedup Ours Autograd Speedup Launch×
+50,145
+8.65
+530.32
+61.3× 1.99
+74.26
+37.3×
+81.5×
+502,141
+36.37
+8,198.28
+225.4× 2.34
+144.53
+61.8×
+107.0×
+5,045,762 322.21 102,830.06
+319.1× 6.75
+509.20
+75.4×
+122.5×
+its raw objective increases. This divergence shows that opti-
+mizing unsimplified geometry does not necessarily improve
+its budget-constrained output. Optimizing through simpli-
+fication instead enables upstream geometry to compensate
+for errors introduced by the final complexity reduction.
+Computational
+Efficiency.
+We
+compare
+DIFFSIMP
+against QEM and a PyTorch autograd replay on Gaussian
+random-field meshes. As shown in Table 6, our forward
+pass is 61.3–319.1× faster than QEM, demonstrating the
+efficiency of parallel GPU execution. Under identical col-
+lapse histories, the order-of-magnitude backward speedups
+and fewer CUDA kernel launches reflect our factorized
+backward, which enables parallel collapse-local VJPs and
+avoids redundant face-level differentiation across rounds
+through the quadric reduction forest. For low-poly recon-
+struction in Table 1, DIFFSIMP incurs 1.25× the runtime
+of its base pipeline (205 versus 164 seconds). For inverse
+rendering in Table 4, its runtime remains comparable to
+the base pipeline (3,262 versus 3,255 seconds). Peak GPU
+memory increases by 11 and 59 MiB, respectively.
+6. Conclusion
+We present DIFFSIMP, integrating QEM-based mesh sim-
+plification into gradient-based geometry optimization as a
+differentiable layer.
+By differentiating the collapse map
+with the recorded collapse history fixed, our method enables
+upstream optimization to compensate for simplification-
+induced errors. Combining our improved forward simplifier
+with a factorized backward scheme, DIFFSIMP outperforms
+the evaluated post-processing simplification baselines in
+low-poly reconstruction and inverse rendering, with modest
+runtime and memory overhead. We further show that gra-
+dient propagation provides increasing gains under tighter
+vertex budgets, where simplification introduces larger ge-
+ometric errors. These improvements extend across diverse
+geometry optimization frontends, demonstrating the effec-
+tiveness of optimizing through DIFFSIMP rather than apply-
+ing simplification as post-processing.
+8
+
+
+Acknowledgments
+We thank Xinyue Wei for insightful discussions and
+valuable feedback that helped shape and refine this work.
+References
+[1] Alexandre Binninger, Ruben Wiersma, Philipp Herholz, and
+Olga Sorkine-Hornung. TetWeave: Isosurface extraction us-
+ing on-the-fly Delaunay tetrahedral grids for gradient-based
+mesh optimization. ACM Transactions on Graphics, 44(4):
+146:1–146:19, 2025. 1, 2, 5
+[2] Xingyu Chen, Fu-Jen Chu, Pierre Gleize, Kevin J. Liang,
+Alexander Sax, Hao Tang, Weiyao Wang, Michelle Guo,
+Thibaut Hardin, Xiang Li, Aohan Lin, Jia-Wei Liu, Ziqi
+Ma, Anushka Sagar, Bowen Song, Xiaodong Wang, Jianing
+Yang, Bowen Zhang, Piotr Doll´ar, Georgia Gkioxari, Matt
+Feiszli, and Jitendra Malik. SAM 3D: 3Dfy anything in im-
+ages. In Proceedings of the IEEE/CVF Conference on Com-
+puter Vision and Pattern Recognition (CVPR), pages 7220–
+7232, 2026. 1
+[3] Yihua Chen. A progressive mesh simplification algorithm
+based on neural implicit representation. Computational In-
+telligence, 40(1):e12605, 2024. 2
+[4] Yiwen Chen, Tong He, Di Huang, Weicai Ye, Sijin Chen,
+Jiaxiang Tang, Zhongang Cai, Lei Yang, Gang Yu, Guosheng
+Lin, and Chi Zhang. MeshAnything: Artist-created mesh
+generation with autoregressive transformers. In International
+Conference on Learning Representations (ICLR), 2025. 2
+[5] Yun-Chun Chen, Vladimir G. Kim, Noam Aigerman, and
+Alec Jacobson. Neural progressive meshes. In ACM SIG-
+GRAPH 2023 Conference Proceedings, pages 84:1–84:9,
+2023. 2
+[6] Zhen Chen, Zherong Pan, Kui Wu, Etienne Vouga, and
+Xifeng Gao. Robust low-poly meshing for general 3D mod-
+els. ACM Transactions on Graphics, 42(4):119:1–119:20,
+2023. 2
+[7] Jaehoon Choi, Rajvi Shah, Qinbo Li, Yipeng Wang, Ayush
+Saraf, Changil Kim, Jia-Bin Huang, Dinesh Manocha, Suhib
+Alsisan, and Johannes Kopf.
+LTM: Lightweight textured
+mesh extraction and refinement of large unbounded scenes
+for efficient storage and real-time rendering. In Proceedings
+of the IEEE/CVF Conference on Computer Vision and Pat-
+tern Recognition (CVPR), pages 5053–5063, 2024. 1, 2
+[8] Paolo Cignoni, Marco Callieri, Massimiliano Corsini, Mat-
+teo Dellepiane, Fabio Ganovelli, and Guido Ranzuglia.
+MeshLab: an open-source mesh processing tool. In Euro-
+graphics Italian Chapter Conference, pages 129–136, 2008.
+5
+[9] David Cohen-Steiner, Pierre Alliez, and Mathieu Desbrun.
+Variational shape approximation.
+ACM Transactions on
+Graphics, 23(3):905–914, 2004. 1, 2
+[10] Jinkai Cui, Kaiwen Song, Chumeng Niu, and Juyong Zhang.
+Distance field rasterization for end-to-end mesh reconstruc-
+tion. In ACM SIGGRAPH 2026 Conference Papers, pages
+116:1–116:11, 2026. 1, 2
+[11] Yishun Dou, Zhong Zheng, Qiaoqiao Jin, Rui Shi, Yuhan Li,
+and Bingbing Ni. Differentiable micro-mesh construction.
+In Proceedings of the IEEE/CVF Conference on Computer
+Vision and Pattern Recognition (CVPR), pages 4294–4303,
+2024. 2
+[12] Chuanjin Fan, Lifan Wu, Wenjie Chang, Hanzhi Chang,
+Wenfei Yang, and Tianzhu Zhang. ExMesh: Explicit mesh
+reconstruction with topology adaptation. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), pages 27136–27145, 2026. 2
+[13] Jun Gao, Tianchang Shen, Zian Wang, Wenzheng Chen,
+Kangxue Yin, Daiqing Li, Or Litany, Zan Gojcic, and Sanja
+Fidler. GET3D: A generative model of high quality 3D tex-
+tured shapes learned from images. In Advances in Neural
+Information Processing Systems (NeurIPS), pages 31841–
+31854, 2022. 1, 2
+[14] Xiang Gao, Xinmu Wang, Xiaolong Wu, Jiazhi Li, Jingyu
+Shi, Yu Guo, Yuanpeng Liu, Xiyun Song, Heather Yu, Zong-
+fang Lin, and Xianfeng David Gu.
+Inverse rendering for
+high-genus surface meshes from multi-view images. In In-
+ternational Conference on 3D Vision (3DV), pages 363–373,
+2026. 2
+[15] Yaoan Gao, Jiamin Xu, James Tompkin, Qi Wang, Zheng
+Dong, Hujun Bao, Yujun Shen, Huamin Wang, Changqing
+Zou, and Weiwei Xu. Efficient object reconstruction with
+differentiable area light shading. In SIGGRAPH Asia 2025
+Conference Papers, pages 65:1–65:12, 2025. 1
+[16] Michael Garland.
+Quadric-Based Polygonal Surface Sim-
+plification. PhD thesis, Carnegie Mellon University, 1999.
+Technical Report CMU-CS-99-105. 1, 2
+[17] Michael Garland and Paul S. Heckbert. Surface simplifica-
+tion using quadric error metrics. In Proceedings of the 24th
+Annual Conference on Computer Graphics and Interactive
+Techniques (SIGGRAPH ’97), pages 209–216, 1997. 1, 2, 5,
+6, 7
+[18] Michael Garland and Paul S. Heckbert. Simplifying surfaces
+with color and texture using quadric error metrics. In Pro-
+ceedings of IEEE Visualization ’98, pages 263–269, 1998.
+7
+[19] Antoine Gu´edon, Diego Gomez, Nissim Maruani, Bingchen
+Gong, George Drettakis, and Maks Ovsjanikov.
+MILo:
+Mesh-in-the-loop Gaussian splatting for detailed and effi-
+cient surface reconstruction. ACM Transactions on Graph-
+ics, 44(6):223:1–223:15, 2025. 1, 2
+[20] Benoˆıt Guillard, Federico Stella, and Pascal Fua. MeshUDF:
+Fast and differentiable meshing of unsigned distance field
+networks.
+In European Conference on Computer Vision
+(ECCV), pages 576–592, 2022. 2
+[21] Benoˆıt Guillard, Edoardo Remelli, Artem Lukoianov, Pierre
+Yvernay, Stephan R. Richter, Timur M. Bagautdinov, Pierre
+Baqu´e, and Pascal Fua.
+DeepMesh: Differentiable iso-
+surface extraction. IEEE Transactions on Pattern Analysis
+and Machine Intelligence, 46(11):7072–7087, 2024. 2
+[22] Rana Hanocka, Amir Hertz, Noa Fish, Raja Giryes, Shachar
+Fleishman, and Daniel Cohen-Or.
+MeshCNN: A network
+with an edge. ACM Transactions on Graphics, 38(4):90:1–
+90:12, 2019. 2
+9
+
+
+[23] Jon Hasselgren, Jacob Munkberg, Jaakko Lehtinen, Miika
+Aittala, and Samuli Laine. Appearance-driven automatic 3D
+model simplification. In Eurographics Symposium on Ren-
+dering – DL-only Track, pages 85–97, 2021. 2, 7
+[24] Jon Hasselgren, Nikolai Hofmann, and Jacob Munkberg.
+Shape, light, and material decomposition from images using
+Monte Carlo rendering and denoising. In Advances in Neural
+Information Processing Systems (NeurIPS), pages 22856–
+22869, 2022. 1
+[25] Hugues Hoppe. Progressive meshes. In Proceedings of the
+23rd Annual Conference on Computer Graphics and Inter-
+active Techniques (SIGGRAPH ’96), pages 99–108, 1996. 2
+[26] Hugues Hoppe. New quadric metric for simplifying meshes
+with appearance attributes. In Proceedings of IEEE Visual-
+ization ’99, pages 59–66, 1999. 3
+[27] Julian Knodt.
+Single edge collapse quad-dominant mesh
+reduction.
+ACM Transactions on Graphics, 44(4):145:1–
+145:23, 2025. 1
+[28] Jiabao Lei, Kewei Shi, Zhihao Liang, and Kui Jia. ARMesh:
+Autoregressive mesh generation via next-level-of-detail pre-
+diction. In Advances in Neural Information Processing Sys-
+tems (NeurIPS), pages 179454–179474, 2025. 2
+[29] Haoxuan Li, Ziya Erkoc¸, Daniele Sirigatti, Vladislav Rosov,
+Lei Li, Angela Dai, and Matthias Nießner. TriFlow: Gener-
+ating artist-like 3D mesh topology via nearest-vertex vector
+fields. In European Conference on Computer Vision (ECCV),
+pages 407–425, 2026. 2, 5, 6
+[30] Peter Lindstrom and Greg Turk. Fast and memory efficient
+polygonal simplification. In Proceedings of IEEE Visualiza-
+tion ’98, pages 279–286, 1998. 2, 3
+[31] Hsueh-Ti Derek Liu, Xiaoting Zhang, and Cem Yuksel. Sim-
+plifying textured triangle meshes in the wild. ACM Transac-
+tions on Graphics, 44(6):181:1–181:16, 2025. 1
+[32] Hang Long, Tianhao Zhao, Junkai Lin, Youjia Zhang,
+Huipeng Guo, Rendong Liang, Jiale Xu, Jozef Hladk´y,
+Matthias Nießner, Yuanming Hu, and Wei Yang. LATO.2:
+Factorized 3D mesh generation with vertex and topology
+flow. arXiv preprint arXiv:2607.10623, 2026. 2
+[33] Nissim Maruani, Maks Ovsjanikov, Pierre Alliez, and Math-
+ieu Desbrun. PoNQ: A neural QEM-based mesh representa-
+tion. In Proceedings of the IEEE/CVF Conference on Com-
+puter Vision and Pattern Recognition (CVPR), pages 3647–
+3657, 2024. 2
+[34] Ben Mildenhall, Pratul P. Srinivasan, Matthew Tancik,
+Jonathan T. Barron, Ravi Ramamoorthi, and Ren Ng. NeRF:
+Representing scenes as neural radiance fields for view
+synthesis.
+In European Conference on Computer Vision
+(ECCV), pages 405–421, 2020. 7
+[35] Jacob Munkberg, Jon Hasselgren, Tianchang Shen, Jun Gao,
+Wenzheng Chen, Alex Evans, Thomas M¨uller, and Sanja Fi-
+dler. Extracting triangular 3D models, materials, and lighting
+from images. In Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition (CVPR), pages
+8280–8290, 2022. 1, 2, 7
+[36] Ashish Myles, Nico Pietroni, and Denis Zorin.
+Robust
+field-aligned global parametrization. ACM Transactions on
+Graphics, 33(4):135:1–135:14, 2014. 5
+[37] Baptiste Nicolet, Alec Jacobson, and Wenzel Jakob. Large
+steps in inverse rendering of geometry. ACM Transactions
+on Graphics, 40(6):248:1–248:13, 2021. 2, 6, 7
+[38] Seonghun Oh, Xiaodi Yuan, Xinyue Wei, Ruoxi Shi, Fanbo
+Xiang, Minghua Liu, and Hao Su.
+PaMO: Parallel mesh
+optimization for intersection-free low-poly modeling on the
+GPU. Computer Graphics Forum, 44(7):e70267, 2025. 2, 3,
+5, 6
+[39] Werner Palfinger. Continuous remeshing for inverse render-
+ing. Computer Animation and Virtual Worlds, 33(5):e2101,
+2022. 2
+[40] Alexandros Papageorgiou and Nikos Platis. Triangular mesh
+simplification on the GPU. The Visual Computer, 31(2):235–
+244, 2015. 2
+[41] Adam Paszke, Sam Gross, Francisco Massa, Adam Lerer,
+James Bradbury, Gregory Chanan, Trevor Killeen, Zem-
+ing Lin, Natalia Gimelshein, Luca Antiga, Alban Desmai-
+son, Andreas K¨opf, Edward Yang, Zachary DeVito, Mar-
+tin Raison, Alykhan Tejani, Sasank Chilamkurthy, Benoit
+Steiner, Lu Fang, Junjie Bai, and Soumith Chintala.
+Py-
+Torch: An imperative style, high-performance deep learning
+library. In Advances in Neural Information Processing Sys-
+tems (NeurIPS), pages 8024–8035, 2019. 5
+[42] Rolandos Alexandros Potamias, Stylianos Ploumpis, and
+Stefanos Zafeiriou. Neural mesh simplification. In Proceed-
+ings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition (CVPR), pages 18583–18592, 2022. 1,
+2
+[43] Marie-Julie Rakotosaona, Noam Aigerman, Niloy J. Mitra,
+Maks Ovsjanikov, and Paul Guerrero. Differentiable surface
+triangulation. ACM Transactions on Graphics, 40(6):267:1–
+267:13, 2021. 2
+[44] Edoardo Remelli, Artem Lukoianov, Stephan R. Richter,
+Benoˆıt Guillard, Timur M. Bagautdinov, Pierre Baqu´e, and
+Pascal Fua.
+MeshSDF: Differentiable iso-surface extrac-
+tion. In Advances in Neural Information Processing Systems
+(NeurIPS), pages 22468–22478, 2020. 1, 2
+[45] Jarek Rossignac and Paul Borrel. Multi-resolution 3D ap-
+proximations for rendering complex scenes. In Modeling in
+Computer Graphics: Methods and Applications, pages 455–
+465. Springer, 1993. 2, 5, 6
+[46] Tianchang Shen, Jun Gao, Kangxue Yin, Ming-Yu Liu, and
+Sanja Fidler. Deep marching tetrahedra: A hybrid represen-
+tation for high-resolution 3D shape synthesis. In Advances
+in Neural Information Processing Systems (NeurIPS), pages
+6087–6101, 2021. 1, 2, 6, 7
+[47] Tianchang Shen, Jacob Munkberg, Jon Hasselgren, Kangxue
+Yin, Zian Wang, Wenzheng Chen, Zan Gojcic, Sanja Fidler,
+Nicholas Sharp, and Jun Gao. Flexible isosurface extraction
+for gradient-based mesh optimization. ACM Transactions on
+Graphics, 42(4):37:1–37:16, 2023. 1, 2, 5, 6
+[48] Yawar Siddiqui, Antonio Alliegro, Alexey Artemov, Ta-
+tiana Tommasi, Daniele Sirigatti, Vladislav Rosov, Angela
+Dai, and Matthias Nießner. MeshGPT: Generating triangle
+meshes with decoder-only transformers. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), pages 19615–19625, 2024. 2
+10
+
+
+[49] Sanghyun Son, Matheus Gadelha, Yang Zhou, Zexiang Xu,
+Ming C. Lin, and Yi Zhou. DMesh: A differentiable mesh
+representation. In Advances in Neural Information Process-
+ing Systems (NeurIPS), pages 12035–12077, 2024. 2
+[50] Sanghyun Son, Matheus Gadelha, Yang Zhou, Matthew
+Fisher, Zexiang Xu, Yi-Ling Qiao, Ming C. Lin, and Yi
+Zhou.
+DMesh++:
+An efficient differentiable mesh for
+complex shapes.
+In Proceedings of the IEEE/CVF In-
+ternational Conference on Computer Vision (ICCV), pages
+26590–26599, 2025. 2
+[51] Kaiyu Song, Hanjiang Lai, Yaqing Zhang, Chuangjian Cai,
+Yan Pan, Kun Yue, and Jian Yin. Topology sculptor, shape
+refiner: Discrete diffusion model for high-fidelity 3D meshes
+generation. arXiv preprint arXiv:2510.21264, 2025. 2
+[52] Tencent Hunyuan3D Team. Hunyuan3D 2.1: From images to
+high-fidelity 3D assets with production-ready PBR material.
+arXiv preprint arXiv:2506.15442, 2025. 1
+[53] S´ebastien Valette and Jean-Marc Chassery. Approximated
+centroidal Voronoi diagrams for uniform polygonal mesh
+coarsening.
+Computer Graphics Forum, 23(3):381–389,
+2004. 2, 5, 6
+[54] S´ebastien Valette, Jean-Marc Chassery, and R´emy Prost.
+Generic remeshing of 3D triangular meshes with metric-
+dependent discrete Voronoi diagrams. IEEE Transactions on
+Visualization and Computer Graphics, 14(2):369–381, 2008.
+2
+[55] Dilin Wang, Xiaoyu Xiang, Kihyuk Sohn, Tom Monnier, Yu-
+Ying Yeh, Thu Nguyen-Phuoc, Jiawen Zhang, Yuchen Fan,
+Antoine Toisoul, Hyunyoung Jung, Prithviraj Dhar, Michael
+Bunnell, Nikolaos Sarafianos, Chuhang Zou, Roman Shapo-
+valov, Andrea Vedaldi, and Rakesh Ranjan. AssetGen: De-
+ployable 3D asset generation at interactive speed.
+arXiv
+preprint arXiv:2605.26137, 2026. 1
+[56] Xinyue Wei, Fanbo Xiang, Sai Bi, Anpei Chen, Kalyan
+Sunkavalli, Zexiang Xu, and Hao Su. NeuManifold: Neural
+watertight manifold reconstruction with efficient and high-
+quality rendering support. In Proceedings of the IEEE/CVF
+Winter Conference on Applications of Computer Vision
+(WACV), pages 731–741, 2025. 1, 2, 6, 7
+[57] Jianfeng Xiang, Zelong Lv, Sicheng Xu, Yu Deng, Ruicheng
+Wang, Bowen Zhang, Dong Chen, Xin Tong, and Jiaolong
+Yang. Structured 3D latents for scalable and versatile 3D
+generation.
+In Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition (CVPR), pages
+21469–21480, 2025. 1, 2
+[58] Rui Xu, Longdu Liu, Ningna Wang, Shuangmin Chen,
+Shiqing Xin, Xiaohu Guo, Zichun Zhong, Taku Komura,
+Wenping Wang, and Changhe Tu. CWF: Consolidating weak
+features in high-quality mesh simplification. ACM Transac-
+tions on Graphics, 43(4):80:1–80:14, 2024. 1, 2, 5, 6
+[59] Kai Ye, Chong Gao, Guanbin Li, Wenzheng Chen, and Bao-
+quan Chen. GeoSplatting: Towards geometry guided Gaus-
+sian splatting for physically-based inverse rendering.
+In
+Proceedings of the IEEE/CVF International Conference on
+Computer Vision (ICCV), pages 28991–29000, 2025. 1, 2
+11
+
+
+DiffSimp: Differentiable Mesh Simplification for
+Gradient-Based Low-Poly Modeling
+Supplementary Material
+Contents
+A. Experimental Details . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+12
+A.1. Low-Poly Mesh Reconstruction. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+12
+A.2. Inverse Rendering . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+13
+B. Implementation Details. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+13
+B.1. Cost Threshold and Budget Control. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+13
+B.2. Placement Branches and Fallbacks . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+13
+B.3. Gradients through Vertex Placement . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+14
+B.4. Face-Quadric Derivatives . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+14
+C. Additional Method Analysis . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+15
+C.1. Forward Simplifier . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+15
+C.1.1. Component Ablation. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+15
+C.1.2. Comparison with Other Simplification Operators . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+15
+C.2. Backward . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+16
+C.2.1. Pass Count and Quadric Reduction-Forest Efficiency . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+16
+C.2.2. Backward Work . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+16
+C.2.3. Gradient Correctness. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+17
+C.3. Iterative Optimization . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+17
+C.3.1. Training Loss Curves . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+17
+C.3.2. Post-Simplification Fine-Tuning . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+17
+C.3.3. Progressive Budget Schedule Ablation . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+17
+D. Additional Inverse Rendering Results . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+19
+D.1. Detailed nvdiffrec Results . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+19
+D.2. Scene Reconstruction with ExMesh . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+19
+E. Limitations and Future Work . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+23
+A. Experimental Details
+A.1. Low-Poly Mesh Reconstruction
+For the low-poly mesh reconstruction experiments in Sec. 5.1, we build on the official FlexiCubes implementation, optimizing
+a randomly initialized SDF at grid resolution n = 128 for T = 5000 iterations using multi-view silhouette, depth, and normal
+supervision without ground-truth SDF. Our reconstruction objective is
+L = λmaskLmask + λdepthLdepth + λnormalLnormal + λdevLdev + λsignLsign,
+(S1)
+where Ldev and Lsign are the FlexiCubes deformation and sign regularizers. We set λmask = 5, λdepth = 400, λnormal = 1,
+and λdev = 1. Following the official FlexiCubes implementation, we linearly decay λsign from 0.2 to 0.01 over the first 0.25T
+iterations. The other reconstruction pipelines in Table 3 use the same multi-view supervision scheme with frontend-specific
+settings. DiffMC follows our FlexiCubes reconstruction setup without Ldev. DMTet also omits Ldev, but uses λmask = 10,
+λdepth = 250, and λnormal = 1, while retaining the same sign regularization schedule. Large Steps uses the same rendering
+loss weights as DMTet, without deformation or sign regularization. Within each frontend, our method and the post-processing
+baselines share the same base reconstruction settings.
+12
+
+
+A.2. Inverse Rendering
+For inverse rendering in Sec. 5.2, we follow the official nvdiffrec configurations for the eight NeRF-synthetic scenes, using
+FlexiCubes at n = 128. Both stages run for 5,000 iterations with the original inverse-rendering objective,
+L = Limage + Lmask + λLreg,
+(S2)
+where the regularization terms follow the official configurations. For the post-processing ADS baseline, which requires an
+initial simplified textured mesh, we apply TQEM to the final textured mesh obtained after both nvdiffrec stages. We then
+refine the TQEM output for 10,000 iterations at 20482 resolution, following the original ADS iteration count and resolution,
+using the final textured mesh as the reference.
+B. Implementation Details
+We provide additional implementation details of the forward simplification in Sec. 4.1 and the closed-form derivatives un-
+derlying the backward formulation in Sec. 4.3.
+B.1. Cost Threshold and Budget Control
+We initialize the pass-wise cost threshold τp (Sec. 4.1) at τ1 = 10−4 and set τp+1 =
+√
+10 τp. Within each pass, parallel
+collapse rounds continue until no edge chosen by independent-region selection (Sec. 3.2) satisfies Ce ≤τp. Let |V | be the
+current vertex count. If a round selects more than |V | −K edges, we collapse only the |V | −K lowest-cost candidates so
+that the target budget K is not overshot.
+B.2. Placement Branches and Fallbacks
+Consider a collapse e = (i, j) ∈Er within a pass. We omit round superscripts when unambiguous: vi, vj denote the positions
+v(r−1)
+i
+, v(r−1)
+j
+before the collapse, and Qe, ve denote Q(r)
+e , v(r)
+e . As in Eq. (1), Qe = Q(r−1)
+i
++ Q(r−1)
+j
+has blocks Ae, be, ce.
+Regularized QEM placement.
+We select the regularized QEM branch when
+µmin(Ae)
+µmax(Ae) > κ,
+κ = 10−3,
+(S3)
+where µmin and µmax are the extremal eigenvalues of Ae; we additionally require µmax(Ae) > 0. The merged vertex is then
+placed at
+ve = −(Ae + λeI)−1be,
+λe = η max
+k
+|(Ae)kk|,
+η = 10−6.
+(S4)
+Edge-segment fallback.
+When the regularized QEM branch is not selected, we instead minimize the collapse error Ee
+(Sec. 3.1) along the edge. With δ = vj −vi, segment placement is used when
+δ⊤Aeδ > ϵs,
+ϵs = 10−7,
+(S5)
+and is given by
+α⋆= −δ⊤(Aevi + be)
+δ⊤Aeδ
+,
+γe = clamp(α⋆, 0, 1),
+ve = vi + γeδ.
+(S6)
+Clamping keeps ve on the edge, at an endpoint when α⋆/∈[0, 1].
+Midpoint fallback.
+If Eq. (S5) is also not satisfied, we use ve = 1
+2(vi + vj).
+For each collapse, the forward pass also records the discrete choices required by the backward pass: the placement branch,
+the segment clamp state (interior or either endpoint), and the diagonal index ke attaining the maximum in Eq. (S4). These
+choices are part of the collapse history σ (Sec. 4.2) and remain fixed during differentiation. Across ten reconstruction sam-
+ples, regularized QEM, edge-segment, and midpoint placements account for 63.1%, 35.6%, and 1.3% of in-loop collapses,
+respectively.
+13
+
+
+B.3. Gradients through Vertex Placement
+We derive the collapse-local VJPs for the placement branches in Sec. B.2, writing gx for the gradient of the loss with respect
+to x. Given the incoming position gradient gve = g(r)
+ve , each branch produces direct position gradients gvi, gvj and a quadric
+gradient Ge = (∂ve/∂Qe)⊤gve. Writing GA and Gb for the gradients with respect to the independent blocks Ae and be, we
+represent the symmetric quadric gradient as
+Ge =
+ GA
+1
+2Gb
+1
+2G⊤
+b
+0
+
+.
+(S7)
+The factors 1
+2 account for the two symmetric occurrences of be in Qe, and the zero block reflects that ce does not affect the
+placement. Let sym(M) = 1
+2(M + M ⊤) denote the symmetric part of a matrix.
+Regularized QEM placement.
+On this branch, Eq. (S3) and µmax(Ae) > 0 imply Ae ≻0. Its diagonal entries are
+therefore positive, and the absolute value in λe can be dropped. Differentiating (Ae + λeI)ve + be = 0 with the recorded ke
+fixed gives
+dve = −(Ae + λeI)−1(dAe ve + dλe ve + dbe),
+dλe = η (dAe)keke.
+(S8)
+With u = (Ae + λeI)−1gve, the VJP is
+GA = −sym(uv⊤
+e ) −η (u⊤ve) ekee⊤
+ke,
+Gb = −u,
+gvi = gvj = 0,
+(S9)
+where eke is the ke-th unit vector. This branch propagates the placement gradient entirely through the quadrics, including the
+dependence of λe on Ae.
+Edge-segment placement.
+For an interior solution γe = α⋆∈(0, 1), let ρ = δ⊤Aeδ, ze = Aeve + be, and
+βe = −δ⊤gve
+ρ
+,
+he = gve + βeAeδ.
+(S10)
+Differentiating Eq. (S6) gives
+gvi = (1 −α⋆) he −βeze,
+gvj = α⋆he + βeze,
+GA = βe sym(δv⊤
+e ),
+Gb = βeδ.
+(S11)
+If the solution is clamped to an endpoint, ve coincides with that endpoint and does not depend on Qe:
+(gvi, gvj) =
+(
+(gve, 0),
+γe = 0,
+(0, gve),
+γe = 1,
+Ge = 0.
+(S12)
+Midpoint placement.
+For ve = 1
+2(vi + vj),
+gvi = gvj = 1
+2gve,
+Ge = 0.
+(S13)
+In all branches, Ge is the placement term of Eq. (7) and is added to the quadric gradients of both endpoints. The direct
+gradients gvi and gvj form the position part of the round-wise VJP g(r−1) = J⊤
+r g(r).
+B.4. Face-Quadric Derivatives
+At the beginning of a pass, let f = (i, j, k) ∈Fp−1 be a nondegenerate face. We write vi, vj, vk for its pass-input positions
+v(0)
+i
+, v(0)
+j , v(0)
+k
+and define
+s = (vj −vi) × (vk −vi),
+nf = s/∥s∥,
+df = −n⊤
+f vi,
+pf =
+
+nf
+df
+
+,
+wf = ∥s∥
+2¯a ,
+Kf = wfpfp⊤
+f ,
+(S14)
+14
+
+
+so that wf = af/¯a as in Sec. 4.1. From Eq. (8), the incoming face-quadric gradient is gKf = g(0)
+Qi +g(0)
+Qj +g(0)
+Qk. Differentiating
+Kf gives
+gpf = 2wf sym(gKf )pf,
+gwf = p⊤
+f gKf pf.
+(S15)
+We partition gpf = (g⊤
+nf , gdf )⊤into normal and offset parts. Since df also depends on nf, the total gradient on nf is
+egnf = gnf −gdf vi, and the gradient with respect to s is
+gs =
+1
+∥s∥(I −nfn⊤
+f )egnf + gwf
+2¯a nf.
+(S16)
+The face contributions to the vertex-position gradients follow from the cross product:
+gf
+vj = (vk −vi) × gs,
+gf
+vk = gs × (vj −vi),
+gf
+vi = −gdf nf −gf
+vj −gf
+vk.
+(S17)
+Summing these contributions over incident faces and adding the direct position gradients g(0)
+vi yields the pass-input gradient
+in Eq. (8). As in Sec. 4.1, ¯a is held fixed during differentiation. Under a fixed collapse history, uniformly scaling all quadrics
+leaves the vertex placement unchanged in every branch.
+C. Additional Method Analysis
+We further analyze the forward simplifier, the fixed-history backward pass, and iterative optimization. Unless stated other-
+wise, we follow the low-poly mesh reconstruction setup of Sec. 5.1 and use the same 79 shapes. We report squared Chamfer
+distance (CD) scaled by 105.
+C.1. Forward Simplifier
+C.1.1. Component Ablation
+We evaluate the contributions of area-weighted face quadrics, the cost-threshold schedule, and pass-wise quadric recompu-
+tation by removing each component from our forward simplifier. All variants simplify the original meshes of the same 79
+shapes (33,228 vertices on average) to K = 1000 without optimization. Base denotes our parallel QEM-based edge-collapse
+simplifier without these three improvements. As shown in Table S1, Base yields higher mean CD (1.879 vs. 1.774) and
+lower F1 (0.196 vs. 0.215) than sequential QEM, reflecting the quality–efficiency trade-off of parallel edge collapse. Our
+complete forward simplifier reduces mean CD to 1.250, while removing any component increases CD and decreases F1.
+Fig. S1 illustrates the qualitative effects of these components.
+Table S1. Component ablation of our forward simplifier on 79 original meshes at K = 1000, without optimization. Metrics as in Table 1.
+CD is scaled by 105.
+Variant
+CD↓
+F1↑
+NC↑
+QEM
+1.774
+0.215
+0.964
+Base
+1.879
+0.196
+0.965
+Ours (w/o area-weighted face quadrics)
+1.601
+0.196
+0.970
+Ours (w/o threshold schedule)
+1.698
+0.216
+0.965
+Ours (w/o quadric recomputation)
+1.505
+0.217
+0.966
+Ours
+1.250
+0.230
+0.970
+C.1.2. Comparison with Other Simplification Operators
+Table S2 compares our forward simplifier with QEM, vertex clustering, and PaMO on the same 79 original meshes at K =
+1000 without optimization. These methods exhibit different trade-offs: vertex clustering is fast but introduces substantial
+geometric error due to spatial quantization, while PaMO ensures intersection-free outputs at higher computational cost.
+Sequential QEM achieves better geometric fidelity than both but requires considerably more time than ours. Our forward
+simplifier achieves the lowest CD, the highest F1 and NC, and the shortest simplification time (7.5 ms) among the evaluated
+methods, while maintaining SI and SR at levels comparable to QEM. This balance of approximation quality and efficiency
+makes it suitable for repeated application within gradient-based optimization.
+15
+
+
+Base
+CD 7.000
+w/o area-weighted
+face quadrics
+CD 4.831
+w/o threshold
+schedule
+CD 4.728
+w/o quadric
+recomputation
+CD 4.570
+Ours
+CD 3.338
+Ground truth
+|V| 50,002
+Figure S1. Component ablation of the forward simplifier on the original mesh at K = 1000, without optimization (Table S1). CD (×10−5)
+is shown beneath each simplified output, and |V | beneath the original mesh (Ground truth).
+Table S2. Comparison of simplification operators on 79 original meshes at K = 1000, without optimization. QEM and vertex clustering
+run on CPU, whereas PaMO and ours run on GPU. CD is scaled by 105.
+Operator
+CD↓
+F1↑
+NC↑
+SI(%)↓
+SR(%)↓
+Time (ms)↓
+QEM
+1.774
+0.215
+0.964
+0.42
+0.02
+368.3
+Vert. Clust.
+39.528
+0.072
+0.895
+9.66
+0.03
+11.7
+PaMO
+5.241
+0.114
+0.950
+0.00
+0.00
+817.4
+Ours
+1.250
+0.230
+0.970
+0.47
+0.06
+7.5
+C.2. Backward
+C.2.1. Pass Count and Quadric Reduction-Forest Efficiency
+Our factorized backward substantially reduces computation within each pass by propagating quadric gradients through the
+reduction forest, allowing face quadrics to be differentiated only once per pass across multiple collapse rounds. As shown
+in Table S3, even at K = 250, simplification requires only 4.3 passes on average despite 101.3 collapse rounds. In contrast,
+recomputing quadrics after every round requires repeated face-quadric differentiation. Our pass-wise approach consequently
+achieves 5.5–8.8× faster backward execution, demonstrating the efficiency of reusing quadrics across collapse rounds. Note
+that the every-round variant still computes collapse-local VJPs in parallel, as described in Sec. 4.3.
+Table S3. Threshold passes, collapse rounds, and operator runtime across vertex budgets on an RTX 5090. Measurements are averaged
+over 79 original meshes without optimization, using one forward and backward evaluation per mesh. Passes and Rounds correspond to
+ours, with rounds summed across all passes. Every round recomputes quadrics after each collapse round.
+Forward (ms)
+Backward (ms)
+K
+Passes
+Rounds
+Ours
+Every round
+Ours
+Every round
+2000
+1.9
+57.5
+6.40
+31.24
+0.84
+4.59
+1000
+2.6
+74.2
+7.48
+42.34
+0.96
+6.16
+250
+4.3
+101.3
+10.28
+65.20
+1.15
+10.17
+C.2.2. Backward Work
+The quadric reduction-forest formulation in Sec. 4.3 performs constant-size updates per collapse and differentiates each pass-
+input face once, yielding work proportional to W = P
+p
+ PRp
+r=1 |Er| + |Fp−1|
+
+. Here, Rp denotes the number of collapse
+rounds in pass p, and the pass index of Er is omitted for brevity. As shown in Table S4, our launched GPU threads remain near
+2.05–2.25 per unit of W across the tested input sizes. In contrast, an autograd replay of the same recorded history launches
+501–772 threads per unit of W, while the normalized direct face-derivative count P
+e |Fe|/W increases from 5.40 to 21.95.
+This increase reflects repeated differentiation of the same face-quadric contributions accumulated in vertex quadrics across
+successive collapses. These results support the linear-work structure of our factorized backward and demonstrate how the
+quadric reduction forest avoids redundant face-level differentiation across collapse rounds.
+16
+
+
+Table S4. Backward work on Gaussian random-field meshes at K = 1000. Launched GPU threads and face-derivative evaluations are
+normalized by W. Fe denotes the faces contributing to the vertex quadrics used to collapse edge e, with the sum taken over all recorded
+collapses.
+Threads/W
+|Vin|
+Passes
+P
+p Rp
+W
+Ours
+Autograd
+P
+e |Fe|/W
+50,145
+4
+86
+178,573
+2.25
+501
+5.40
+502,141
+4
+146
+1,553,225
+2.08
+658
+12.25
+5,045,762
+4
+225
+15,212,320
+2.05
+772
+21.95
+C.2.3. Gradient Correctness
+We validate the factorized CUDA backward pass of DIFFSIMP against a PyTorch autograd replay of the same recorded
+collapse history. We randomly select ten of the 79 original meshes and perform a single forward and backward evaluation per
+mesh at K = 1000, without optimization. For each mesh, we define a random linear loss on the simplified vertex positions.
+Let G and GAD64 denote the input-vertex gradients computed by our double-precision CUDA backward and double-precision
+PyTorch autograd, respectively. We measure the relative L2 error ∥G −GAD64∥2/∥GAD64∥2 over flattened vertex gradients.
+The mean and maximum relative L2 errors are 4.7×10−12 and 2.5×10−11, respectively, demonstrating near-exact numerical
+agreement between our CUDA backward and the autograd reference.
+C.3. Iterative Optimization
+C.3.1. Training Loss Curves
+Fig. S2 compares the training losses of DIFFSIMP and the unsimplified reference in low-poly mesh reconstruction (Sec. 5.1)
+and inverse rendering (Sec. 5.2). With T = 5000, the warmup (tw = 0.2T) and budget-reduction (tr = 0.45T) schedules
+divide training into warmup (0–1000), ramp (1000–3250), and hold (3250–5000) phases. Both methods optimize the same
+dense geometry during warmup. During the ramp, our training loss increases as the vertex budget progressively decreases.
+Once the target budget is reached, our training loss continues to decrease throughout the hold phase, exhibiting a clear
+convergence trend despite repeated simplification during optimization.
+C.3.2. Post-Simplification Fine-Tuning
+An alternative is to simplify the dense reconstruction once and then optimize the simplified mesh with fixed connectivity. To
+construct this baseline, we apply our forward simplifier as post-processing and refine the resulting vertex positions for 2,000
+additional iterations using Large Steps with its multi-view reconstruction objective described in Sec. A.1. Table S5 shows
+that, even after these additional 2,000 iterations, post-simplification fine-tuning fails to match the in-loop output of DIFFSIMP
+in both CD and F1 across all tested vertex budgets. The gaps in both metrics increase under tighter budgets, with the largest
+differences at K = 500.
+Table S5. Post-simplification fine-tuning on 79 shapes. Init denotes the base FlexiCubes reconstruction simplified by our forward simplifier
+as post-processing. Post-FT denotes 2,000 additional fine-tuning iterations using Large Steps. CD (×10−5) and F1 evaluate the final
+simplified meshes.
+CD↓
+F1↑
+K
+Init
+Post-FT
+Ours
+Init
+Post-FT
+Ours
+2000
+0.748
+0.718
+0.704
+0.314
+0.333
+0.339
+1000
+1.528
+1.351
+1.259
+0.230
+0.254
+0.261
+500
+3.971
+3.664
+2.891
+0.156
+0.172
+0.182
+C.3.3. Progressive Budget Schedule Ablation
+We ablate the progressive vertex-budget schedule introduced in Sec. 4.4 by removing either the initial optimization without
+simplification (warmup, tw = 0) or the progressive vertex-budget reduction (ramp, tr = 0). We follow the FlexiCubes
+reconstruction setting of Table 1 at K = 1000 and define failures relative to QEM post-processing applied to the same
+base reconstruction, based on severe surface degradation or excessive interior shell artifacts. Table S6 reports 25 failures
+17
+
+
+0
+1k
+2k
+3k
+4k
+5k
+Iteration
+0
+0.5
+1
+1.5
+2
+2.5
+3
+Training loss
+Warmup
+Ramp
+Hold
+(a) Low-poly mesh reconstruction, K=1000
+0
+1k
+2k
+3k
+4k
+5k
+Iteration
+0.1
+0.02
+0.05
+Training loss
+Warmup
+Ramp
+Hold
+(b) Inverse rendering (Stage 1), K=2000
+3.25k
+4k
+5k
+Iteration (hold)
+6
+4
+2
+0
+Change from it. 3250 (%)
+3.25k
+4k
+5k
+Iteration (hold)
+6
+4
+2
+0
+Change from it. 3250 (%)
+Reference (no simplification)
+Ours
+Figure S2. Training loss curves of the unsimplified reference and DIFFSIMP, aggregated using the geometric mean across shapes or scenes.
+(a) Low-poly mesh reconstruction on 79 shapes at K = 1000 (Table 1). (b) Stage 1 of nvdiffrec on eight NeRF-synthetic scenes at
+K = 2000 (Table 4). Top: Our loss is evaluated at the current vertex budget. Bottom: Relative loss change from iteration 3250 during the
+hold phase.
+Table S6. Budget schedule ablation on 79 FlexiCubes shapes at K = 1000. CD (×10−5), F1, and SI are evaluated on the largest connected
+component (LCC). Failures count shapes with either a broken surface or excessive interior shells relative to QEM applied to the same dense
+reconstruction. Pre-existing interior shells inherited from the unsimplified FlexiCubes reconstruction are excluded from failure counts. The
+common-success subset contains the 50 shapes where all three schedules succeed.
+Schedule
+CDmean ↓
+CDmed ↓
+F1↑
+SI(%)↓
+Failures↓
+All 79 shapes
+w/o warmup (tw = 0)
+1,321.681
+0.745
+0.262
+1.52
+25
+w/o ramp (tr = 0)
+528.277
+0.742
+0.266
+4.37
+8
+Ours
+1.259
+0.757
+0.261
+0.62
+0
+Common-success subset
+w/o warmup (tw = 0)
+1.254
+0.524
+0.347
+0.99
+–
+w/o ramp (tr = 0)
+1.115
+0.526
+0.350
+1.03
+–
+Ours
+1.065
+0.532
+0.343
+0.77
+–
+without warmup and 8 without the ramp, compared with none under our complete schedule. Early in optimization, randomly
+initialized SDFs can produce highly fragmented meshes with interior shell artifacts. Such geometry is problematic for
+simplification: edge collapse cannot merge disconnected components, and interior shells connected to the exterior surface
+cannot be removed by largest-component filtering. These observations motivate the warmup phase, allowing the upstream
+geometry to become more coherent before simplification begins. Without the ramp, imposing the target budget abruptly after
+warmup leads to broken surfaces and increases SI from 0.62% to 4.37% (7.0×). While median CD and F1 remain comparable
+across schedules, our complete schedule avoids the severe geometric failures observed in both ablations. Fig. S3 illustrates
+representative failure cases.
+18
+
+
+Ours
+w/o warmup
+Ground truth
+Ours
+w/o ramp
+Ground truth
+Figure S3. Representative failure cases in the budget schedule ablation at K = 1000 (Table S6). Top: An interior shell remains connected
+to the exterior surface and is therefore retained in the largest connected component, as shown in the cutaway. Bottom: The reconstructed
+surface breaks under abrupt budget reduction. Red highlights interior faces.
+D. Additional Inverse Rendering Results
+D.1. Detailed nvdiffrec Results
+Table S7 reports per-scene PSNR for the inverse-rendering experiments with nvdiffrec in Table 4 at K = 2000. Reference
+denotes the unsimplified reconstruction from the base nvdiffrec pipeline. Fig. S4 shows full-image renderings of Reference
+and ours alongside ground-truth images across the eight NeRF-synthetic scenes.
+Table S7. Novel-view PSNR (dB) per NeRF-synthetic scene at K = 2000, corresponding to Table 4. Reference denotes the unsimplified
+reconstruction from the base nvdiffrec pipeline. Methods marked ∗simplify the final textured reference; their Stage 1 values in Table 4 are
+inherited from Reference and omitted here.
+Method
+Chair
+Drums
+Ficus
+Hotdog
+Lego
+Mat.
+Mic
+Ship
+Mean
+Stage 1
+Reference
+28.97
+23.18
+27.93
+30.44
+26.52
+26.04
+28.58
+23.35
+26.88
+Low-res
+27.35
+19.68
+21.68
+27.41
+22.06
+22.78
+27.18
+21.72
+23.73
+QEM
+28.18
+19.65
+20.14
+29.98
+21.16
+21.89
+28.12
+20.69
+23.73
+Ours (fwd. only)
+28.60
+20.47
+19.63
+30.10
+22.97
+22.18
+28.38
+21.11
+24.18
+Ours
+28.73
+21.41
+23.29
+30.56
+24.65
+24.21
+28.51
+23.13
+25.56
+Full run
+Reference
+31.32
+24.59
+30.96
+32.70
+29.24
+27.19
+30.47
+25.71
+29.02
+TQEM∗
+24.90
+19.06
+21.08
+27.71
+19.46
+20.59
+27.45
+19.53
+22.47
+ADS∗
+29.09
+21.99
+24.54
+30.49
+23.34
+23.62
+29.42
+23.18
+25.71
+Low-res
+29.60
+20.67
+24.26
+29.37
+22.80
+24.71
+29.38
+23.66
+25.56
+QEM
+30.34
+20.52
+22.39
+31.31
+22.49
+24.16
+30.23
+21.97
+25.43
+Ours (fwd. only)
+30.72
+22.12
+23.29
+31.35
+23.28
+24.50
+30.20
+22.81
+26.03
+Ours
+30.42
+22.79
+27.68
+31.55
+25.68
+25.24
+30.40
+24.56
+27.29
+D.2. Scene Reconstruction with ExMesh
+To evaluate the generality of DIFFSIMP across inverse-rendering pipelines, we integrate it into ExMesh and evaluate 15 scans
+from the DTU dataset at K = 1000, using the authors’ released implementation and experimental settings. ExMesh jointly
+optimizes explicit mesh geometry and UV textures with adaptive topology updates. We retain its initialization, loss functions,
+per-scan loss weights, and 10,000-iteration optimization. We follow the same progressive vertex-budget schedule as in Sec. 5,
+with tw = 0.2T and tr = 0.45T. Following ExMesh’s atlas-rebuilding schedule, we rebuild the simplified mesh’s UV atlas
+19
+
+
+at iterations 2000, 4000, and 6000, and once after training. Between these updates, UV correspondence is maintained through
+closest-surface texture mapping. Unlike nvdiffrec, ExMesh has no separate texture-refinement stage after simplification. We
+use the final dense textured mesh from the unmodified ExMesh pipeline as Reference. We therefore compare against TQEM
+and ADS as texture-aware post-processing baselines, both applied to this Reference. For ADS, we follow the refinement
+settings in Sec. A.2.
+As shown in Table S8, ours achieves the lowest Chamfer distance on all 15 scans and the highest PSNR on 14 of 15 scans
+among the simplified methods. Fig. S5 further illustrates better preservation of planar surfaces and sharp geometric features.
+Table S8. ExMesh reconstruction on 15 DTU scans at K = 1000. Reference denotes the unsimplified output of the unmodified ExMesh
+pipeline before post-processing simplification. We report official DTU Chamfer distance (mm) and PSNR (dB) on training views. Refer-
+ence meshes contain 103,423 vertices on average, while all simplified meshes contain 1,000 vertices.
+Scan
+24
+37
+40
+55
+63
+65
+69
+83
+97
+105
+106
+110
+114
+118
+122
+Mean
+CD↓
+Reference
+0.502
+0.697
+0.331
+0.359
+0.784
+0.654
+0.562
+1.116
+0.976
+0.611
+0.479
+0.758
+0.320
+0.396
+0.405
+0.597
+TQEM
+0.702
+0.833
+0.420
+0.473
+0.823
+0.839
+0.829
+1.155
+1.040
+0.667
+0.738
+0.810
+0.458
+0.637
+0.561
+0.732
+ADS
+0.749
+0.815
+0.415
+0.431
+0.851
+0.809
+0.800
+1.217
+1.054
+0.704
+0.695
+0.824
+0.417
+0.596
+0.543
+0.728
+Ours
+0.591
+0.727
+0.353
+0.413
+0.782
+0.734
+0.649
+1.129
+0.965
+0.634
+0.602
+0.710
+0.386
+0.495
+0.464
+0.642
+PSNR↑
+Reference
+22.97
+20.48
+24.00
+26.68
+27.65
+25.59
+25.47
+32.50
+23.99
+27.55
+29.86
+24.02
+26.32
+32.75
+33.11
+26.86
+TQEM
+17.80
+17.20
+20.20
+21.53
+24.87
+20.45
+23.31
+30.10
+21.59
+24.47
+24.90
+23.10
+22.75
+27.34
+27.84
+23.16
+ADS
+21.10
+19.43
+22.87
+24.73
+27.11
+24.12
+24.78
+31.95
+23.41
+26.86
+27.86
+23.76
+25.42
+30.60
+31.10
+25.67
+Ours
+21.88
+20.00
+23.14
+25.23
+27.27
+24.86
+25.03
+32.04
+23.56
+26.93
+28.42
+23.73
+25.77
+31.18
+32.00
+26.07
+20
+
+
+Reference
+Ours
+Ground truth
+Chair
+Drums
+Ficus
+Hotdog
+Lego
+Materials
+Mic
+Ship
+Figure S4. Qualitative comparison of inverse rendering with nvdiffrec on the eight NeRF-synthetic scenes after the full run at K = 2000
+(Table 4). Test views rendered from the reference and ours, alongside ground-truth images. The average vertex counts are 51,512 for the
+reference and 2,000 for ours. Reference denotes the unsimplified reconstruction from the base nvdiffrec pipeline.
+21
+
+
+Reference
+TQEM
+ADS
+Ours
+Ground truth
+Scan 24
+Scan 37
+Scan 40
+Scan 55
+Figure S5. Qualitative comparison of scene reconstruction with ExMesh on scans 24, 37, 40, and 55 from the DTU dataset at K =
+1000 (Table S8). Reference denotes the dense textured mesh reconstructed by the original ExMesh pipeline. Upper rows show textured
+renderings, lower rows show mesh geometry, and Ground truth shows the corresponding input photographs.
+22
+
+
+E. Limitations and Future Work
+Although DIFFSIMP is a training-free, drop-in differentiable mesh simplification layer, its effectiveness depends on the
+quality of intermediate meshes produced during optimization. When upstream mesh generators produce fragmented geometry
+or interior shell artifacts, applying simplification before these defects are resolved can exacerbate these issues and may lead
+to optimization failures. Under aggressive simplification, the many-to-one nature of the collapse map can leave parts of the
+intermediate geometry weakly constrained, potentially producing floating artifacts.
+Future work.
+Our inverse-rendering experiments demonstrate joint optimization of geometry and appearance. However,
+UV correspondence is handled separately from our simplifier. Extending our geometry-based forward simplifier with UV-
+aware collapse costs and seam-aware attribute propagation could reduce reliance on separate UV processing and facilitate
+integration into a broader range of textured-mesh optimization pipelines.
+23

@@ -1,0 +1,614 @@
+LIDAR SIGNALS FOR ROBOT LOCOMOTION: SPHERICAL RANGE IMAGES ENABLE
+ROBUST SIM-TO-REAL TRANSFER
+Nian Liu1,†
+Xinyi Tong2,†
+Ming Ren1
+Long Ye2∗
+Zhaofeng He1∗
+1 School of Artificial Intelligence, Beijing University of Posts and Telecommunications, Beijing, China
+2 School of Data Science and Intelligent Media, Communication University of China, Beijing, China
+† These authors contributed equally.
+∗Corresponding authors.
+ABSTRACT
+Existing legged-locomotion systems commonly rely on depth im-
+ages or online elevation maps. However, depth-based policies suf-
+fer from perceptual sim-to-real discrepancies due to imperfect depth
+sensor modeling, while map-based approaches are vulnerable to drift
+and misalignment. LiDAR offers direct measurements of the sur-
+rounding geometry, but raw LiDAR scans lack a compact, structured
+representation for high-frequency control. We propose a LiDAR per-
+ception pipeline that maintains perceptual consistency across simu-
+lation and reality through sensing- and representation-level align-
+ment. At the sensor level, we recover frame-wise angular sampling
+patterns from the physical LiDAR and replay them in simulation
+with GPU ray casting. At the representation level, simulated and real
+returns undergo the same spherical range image encoding, yielding
+a fixed-size policy observation for end-to-end training and direct de-
+ployment without teacher–student distillation, online elevation map-
+ping, or adaptation. Experiments show that our range-image poli-
+cies achieve stronger sim-to-real transfer than depth- and elevation-
+map-based baselines, while ablations confirm the importance of the
+proposed sensing components. More visualizations and real-world
+videos are available at the https://lidar-img.github.io.
+Index Terms— Signal Processing for Robotics
+1. INTRODUCTION
+Learning-based control has enabled legged robots to acquire increas-
+ingly agile locomotion skills [1, 2]. Extending these capabilities to
+challenging terrain, however, relies on a perception representation
+that faithfully represents the geometry and remains consistent be-
+tween simulation and real-world deployment.
+Existing methods primarily use depth images [3, 4, 5, 6, 7, 8] or
+online elevation maps [9, 10, 2, 11, 12]. Many depth-based meth-
+ods distill a teacher with access to a privileged local height map into
+a student conditioned on onboard depth [3, 4, 5, 13], yet this su-
+pervision is ambiguous when terrain configurations requiring differ-
+ent actions are indistinguishable in the student’s partial view [14].
+More fundamentally, simulators render clean depth, whereas real
+sensors exhibit illumination- and motion-dependent artifacts, includ-
+ing missing values, boundary errors, and jitter. Generic noise mod-
+els cannot fully reproduce these artifacts [4, 15, 16, 17], creating a
+sim-to-real mismatch that can distort terrain perception and degrade
+policy performance on hardware. LiDAR provides direct range mea-
+surements that are less sensitive to illumination than camera-based
+depth. Although raw scans can be processed by dedicated point-
+cloud encoders [18, 19, 20], many legged locomotion systems in-
+stead rely on an additional online mapping pipeline that uses pose-
+based registration, temporal fusion, and filtering to construct robot-
+centric elevation maps [21, 22]. The accuracy of these maps, how-
+ever, depends critically on the pose estimates used to register suc-
+cessive measurements. Odometry or SLAM drift can therefore intro-
+duce gaps, spurious steps, and spatial misalignment with the physical
+terrain [22], compromising control decisions that depend on accurate
+local geometry.
+In this paper, we convert LiDAR signals into structured spheri-
+cal range images that directly condition a locomotion policy. To im-
+prove sim-to-real transfer, we address perceptual discrepancies by
+aligning the sensing process and observation representation across
+simulation and deployment. At the sensor level, we recover frame-
+wise angular scan patterns from the physical LiDAR and replay them
+in simulation through parallel ray casting.
+Articulated robot ge-
+ometry is included to model self-occlusion. At the representation
+level, simulated and real returns undergo the same gravity-aligned
+temporal aggregation and rasterization onto a fixed angular grid.
+This shared encoding preserves angular organization and local range
+structure while providing a compact, fixed-size policy input in both
+domains. The resulting pipeline supports end-to-end policy training
+in simulation and direct deployment without teacher–student distil-
+lation, online elevation mapping, or post-training adaptation.
+We compare our range-image policy with alternative perception
+designs, such as depth images and elevation maps, on challenging
+terrains. Our method outperforms these alternatives by a substantial
+margin in sim-to-real traversal success. Ablations assess the pro-
+posed sensing and representation design.
+2. METHOD
+2.1. Problem Formulation
+We formulate terrain locomotion as a partially observable Markov
+decision process and learn a stochastic policy πθ through reinforce-
+ment learning. At each control step t, the policy receives an obser-
+vation ot and samples an action at ∼πθ(· | ot) for execution by the
+low-level controller. The observation components are specified with
+the policy architecture in Sec. 2.4. Using rewards that promote com-
+mand tracking and stable terrain traversal, we optimize the policy by
+maximizing the expected discounted return
+θ⋆= arg max
+θ
+Eτ∼pθ
+"T −1
+X
+t=0
+γtrt
+#
+,
+(1)
+where pθ(τ) is the policy-induced trajectory distribution, T the hori-
+zon, rt the reward, and γ ∈[0, 1) the discount factor.
+arXiv:2611.27223v1  [cs.AI]  20 Nov 2026
+
+
+Recovered Frame-wise Scan Patterns
+ℓ= 𝑘𝑘−1
+ℓ= 𝑘𝑘
+ℓ= 𝑘𝑘+ 1
+ℓ
+ℓ
+v
+Range Image
+𝜗𝜗
+𝜑𝜑
+Spherical Range-Image Encoding
+𝜗𝜗min
+𝜗𝜗m𝑎𝑎𝑎𝑎
+𝜑𝜑min
+𝜑𝜑𝑚𝑚𝑚𝑚𝑚𝑚
+Velocity Command
+Proprioception
+State History
+Last Action
+…
+Policy
+End-to-End Policy Learning & Deployment
+Action
+PD
+Real LiDAR Measurements
+LiDAR Simulation
+Real Deployment
+Temporal Aggregation
+Scan-Pattern Replay
+Real
+Sim
+𝜤𝜤u, v = min(𝑟𝑟𝑗𝑗−1, 𝑟𝑟𝑗𝑗, 𝑟𝑟𝑗𝑗+1)
+𝑟𝑟𝑒𝑒𝑒𝑒𝑒𝑒
+Fig. 1. Overview of our pipeline. Real-world scan patterns are replayed in simulation, while simulated and real LiDAR returns share the same
+temporal aggregation and spherical range-image encoding for end-to-end policy learning and deployment.
+2.2. Sensor-Level LiDAR Simulation
+Faithful LiDAR simulation requires both accurate scene geometry
+and a sensor model that reproduces how the physical sensor samples
+that geometry, particularly for non-repetitive LiDARs whose ray di-
+rections vary across scans. We therefore extract a temporally ordered
+sequence of frame-wise angular patterns from the physical sensor
+and replay them in simulation. This establishes sensor-level align-
+ment by matching the simulated ray sampling process to the physical
+LiDAR. For each valid return pk,i = [xk,i, yk,i, zk,i]⊤in scan k, af-
+ter removing returns with NaN coordinates, we compute its azimuth
+and elevation as
+(ϑk,i, φk,i) = Πang(pk,i),
+(2)
+where Πang computes the azimuth as mod(atan2(yk,i, xk,i), 2π)
+and the downward elevation as atan2(−zk,i,
+q
+x2
+k,i + y2
+k,i), so that
+φ = 0 is horizontal and φ = π/2 points vertically downward. From
+each scan with at least N valid returns, we sample N angular pairs
+without replacement to form the frame-wise pattern
+Ak = {(ϑk,i, φk,i)}N
+i=1 ,
+(3)
+while scans with fewer valid returns are discarded. The resulting
+patterns are stored in acquisition order and replayed cyclically at the
+LiDAR update rate. Each angular sample defines a unit ray in the
+LiDAR frame,
+dk,i =
+
+
+cos φk,i cos ϑk,i
+cos φk,i sin ϑk,i
+−sin φk,i
+
+.
+(4)
+At simulation time t, let the valid intersection distances for ray i be
+Λt,i = {λ ∈[rmin, rmax] |
+pW
+t
++ λRW
+t dkt,i ∈Mt
+o
+.
+(5)
+The ray range is
+ˆrt,i =
+(
+min Λt,i,
+Λt,i̸ = ∅,
+invalid,
+Λt,i = ∅.
+(6)
+where kt indexes the replayed pattern, pW
+t
+and RW
+t
+denote the Li-
+DAR pose in the world frame, and Mt denotes the geometry queried
+by ray casting at time t. If the set of valid intersections is empty, we
+store an invalid/no-return marker for that ray. Following [20], we
+use NVIDIA Warp [23] to parallelize ray–mesh intersection queries
+across rays and environments. Moreover, we incorporate dynami-
+cally updated robot geometry to model real-time self-occlusion.
+Specifically, Mt comprises both the environment geometry and the
+collision meshes of the robot links extracted from the URDF, whose
+poses are updated at every LiDAR measurement using the corre-
+sponding rigid-body states. Since each ray retains its nearest valid
+intersection, robot links naturally occlude farther environmental sur-
+faces without heuristic masking. Rays with no valid intersection re-
+tain the invalid/no-return marker and are mapped to the unobserved
+value during range-image encoding.
+2.3. Representation-Level Range-Image Encoding
+We encode both simulated and real LiDAR returns as spherical
+range images that serve as the exteroceptive input to the loco-
+motion policy.
+Simulated Cartesian returns are reconstructed as
+psim
+t,i
+= ˆrt,idkt,i, while real returns are read directly from the
+onboard PointCloud2 stream.
+Both domains then share the
+same encoding pipeline, establishing representation-level alignment
+between simulation and deployment. Since a single scan from a non-
+repetitive LiDAR may sparsely cover its field of view, we aggregate
+returns over a short temporal window ∆T = 0.1 s. Each scan is
+motion-deskewed, transformed into the current base frame using
+the calibrated LiDAR extrinsics, and compensated for the robot
+roll, pitch, and yaw at its acquisition time. This robot-centric ag-
+gregation improves angular coverage without global registration or
+persistent mapping. Let Pt = {pt,i}Nt
+i=1 denote all points acquired
+in the current temporal window. After discarding invalid/no-return
+samples and points outside ϑ ∈[0, 2π) or φ ∈[0, π/2], we retain
+points satisfying x ∈[−1.25, 1.5] m, y ∈[−0.75, 0.75] m, and
+r ≤renc = 1.5 m. Let Qt = {¯pt,j}Jt
+j=1 ⊆Pt denote the retained
+points. For each retained point, we compute its range and angular
+coordinates as
+rt,j = ∥¯pt,j∥2 ,
+(ϑt,j, φt,j) = Πang(¯pt,j),
+(7)
+using the convention defined above. We uniformly discretize ϑ ∈
+[0, 2π) and φ ∈[0, π/2] into a W × H grid, with (ϑmin, ϑmax) =
+(0, 2π) and (φmin, φmax) = (0, π/2):
+ut,j =
+ ϑmax −ϑt,j
+ϑmax −ϑmin (W −1)
+
+,
+vt,j =
+ φmax −φt,j
+φmax −φmin (H −1)
+
+.
+(8)
+Let Ct(u, v) = {j | (ut,j, vt,j) = (u, v)}. The spherical range
+image It ∈RW ×H is defined as
+It[u, v] =
+
+
+
+r−1
+enc
+min
+j∈Ct(u,v) rt,j,
+Ct(u, v)̸ = ∅,
+−1,
+otherwise.
+(9)
+
+
+Each cell therefore stores the nearest normalized return, while
+invalid/no-return samples are mapped to the unobserved marker −1.
+Empty cells likewise receive −1, yielding a fixed-size representation
+independent of point count and ordering.
+To improve transfer robustness, we apply LiDAR-specific do-
+main randomization (DR) during training by perturbing the roll
+and pitch used for attitude compensation, individual ranges, and spa-
+tial cropping boundaries by ϵρ, ϵβ, ϵr, and ϵb, respectively. The
+entire pipeline is implemented with batched GPU operations, with
+per-cell nearest ranges computed via parallel scatter-min reduction.
+At deployment, randomization is disabled and the same determinis-
+tic encoder is applied directly to real measurements without online
+mapping or adaptation.
+2.4. End-to-End Locomotion Policy Learning
+To isolate the effect of exteroceptive representation, we retain the
+Stage-1 policy architecture and training setup of Extreme Parkour
+[5] and change only its exteroceptive input to our spherical range
+image It. The reward formulation, terrain curriculum, dynamics
+randomization, and PPO procedure are otherwise unchanged. No
+teacher–student distillation is used. The range image is encoded by
+an MLP Eψ as zext
+t
+= Eψ(vec(It)). The action issued at the pre-
+ceding control step is denoted by at−1. We provide it as an actor
+input, consistent with the policy interface in Fig. 1. Together with
+the proprioceptive observation oprop
+t
+, history latent zhist
+t
+, and com-
+mand ct, the actor input is
+oπ
+t =
+h
+oprop
+t
+, zext
+t
+, zhist
+t
+, ct, at−1
+i
+.
+(10)
+The actor outputs joint-position offsets tracked by a PD controller.
+Unlike privileged scandots, our range-image representation is avail-
+able in both simulation and the real world. This enables end-to-end
+reinforcement learning of perception and locomotion, allowing
+direct deployment without teacher–student distillation.
+3. EXPERIMENTS
+Our experiments address three questions: Q1: Can the proposed Li-
+DAR perception pipeline support learning challenging locomotion
+skills? Q2: Does the range-image policy achieve stronger sim-to-
+real locomotion transfer? Q3: Do our sensor-level simulation com-
+ponents: measured scan-pattern replay, self-occlusion modeling, and
+LiDAR domain randomization, improve sim-to-real transfer?
+3.1. Experimental Setup
+We evaluate in simulation and on two Unitree Go2 robots equipped
+with Unitree L1 and L2 LiDARs, respectively. To enable direct com-
+parison with Extreme Parkour [5], we use its native gap, step, and
+hurdle terrain generators together with the same training and test
+terrain maps. The difficulty ranges are 0.1–0.9 m for gap width,
+0.1–0.45 m for step height, and 0.1–0.4 m for hurdle height. For
+each method and terrain, we first select in simulation the highest dif-
+ficulty L at which the method achieves at least 80% success, and
+then evaluate the same L on hardware. Each terrain is tested in
+20 trials. We follow the Extreme Parkour implementation for the
+depth baseline. For the elevation-map baseline, we use the stage-1
+local height-map policy from Extreme Parkour in simulation. During
+hardware deployment, the elevation map is constructed using Point-
+LIO for odometry and the GridMap implementation released with
+PGTT [24]. All LiDAR-based baselines and ablations use the L1
+Fig. 2. Real-world evaluation of our method on a Unitree Go2 with
+L2 LiDAR across three challenging terrain tasks: Gap, jumping
+across a 0.9 m gap. Step, climbing onto a 0.45 m high platform,
+and Hurdle, traversing over a 0.4 m high obstacle.
+sensor. Only the explicitly labelled L2 row uses L2. Raw-LiDAR
+and PointNet baselines use the same temporal aggregation as our
+method, per-frame standardization, and a fixed number of normal-
+ized XYZ points. They apply no spatial cropping or range filtering,
+and PointNet receives XYZ coordinates directly. We ablate scan-
+pattern replay, self-occlusion, and LiDAR DR.
+3.2. Implementation Details
+We train 4096 parallel Isaac Gym environments on one RTX 4090
+GPU. The terrain curriculum, rewards, action space, PPO hyperpa-
+rameters, control frequency, and PD gains follow the Stage-1 teacher
+of Extreme Parkour [5]. We replace its privileged scandots with
+a 20 × 40 range image encoded by an MLP with hidden dimen-
+sions [128, 64, 32].
+The actor uses [512, 256, 128] hidden units.
+We collect 1500 real LiDAR scans to recover the frame-wise an-
+gular patterns, sampling N = 1000 rays per L1 scan and N =
+4000 per L2 scan. The recovered patterns are replayed cyclically
+in acquisition order at each LiDAR update. The simulated update
+rate is randomized over 14–16 Hz, and returns within the preced-
+ing ∆T = 0.1 s are aggregated into each range image. Percep-
+tion randomization is sampled per episode as ϵρ, ϵβ ∼U(−4◦, 4◦),
+ϵb ∼U(−0.05, 0.05) m, and ϵr ∼U(−0.05, 0.05) m. The policy
+requires no distillation, mapping, or online adaptation.
+3.3. Results
+A1: The range-image pipeline enables learning of challenging
+locomotion skills. Table 1 examines whether the proposed range-
+image observation supports learning challenging locomotion skills
+in simulation. The elevation-map baseline, which uses the privileged
+Stage-1 policy of Extreme Parkour, reaches the maximum difficulty
+L = 9 on all three terrains and serves as an oracle reference. Its
+depth-based Stage-2 student also reaches L = 9, with only modest
+loss after distillation. In contrast, Raw LiDAR reaches L = 3/9/6
+and PointNet L = 4/9/9 on gap, step, and hurdle, respectively.
+We also observe less natural gaits and more frequent terrain contacts
+with these two policies. We attribute this to the difficulty of ex-
+tracting control-relevant geometry from irregular, unstructured point
+sets. PointNet partially alleviates this issue, but still learns from an
+implicitly structured set representation. Our range image instead
+organizes LiDAR returns into a fixed spherical grid before policy
+
+
+Fig. 3. Qualitative comparison of real and simulated observations. The top row shows real-world data and the bottom row shows the
+corresponding simulated observations. From left to right: robot pose and scene state, corrected accumulated LiDAR point cloud, spherical
+range image, and forward-facing depth image rendered by the simulated D435i camera.
+Table 1.
+Traversal success rates (%) in simulation and real de-
+ployment at the same difficulty level. Entries give Sim./Real success
+rates, followed by difficulty L. We select L in simulation as the
+highest level with at least 80% success and reuse it on hardware.
+Methods
+Terrain tasks
+Gap
+Step
+Hurdle
+Sim./Real (%) ↑[difficulty L] ↑
+Baseline Methods
+Extreme Parkour [5]
+85/40% [9] 95/35% [9] 100/75% [9]
+Elevation map
+95/35% [9] 100/0% [9]
+100/5% [9]
+LiDAR Representations
+PointNet [18]
+80/45% [4] 90/10% [9]
+85/45% [9]
+Raw LiDAR data
+85/40% [3] 90/0% [9]
+85/55% [6]
+Component Ablations
+w/o scan-pattern replay
+90/20% [9] 90/10% [9] 100/50% [9]
+w/o LiDAR DR
+95/50% [9] 95/40% [9] 100/80% [9]
+w/o self-occlusion modeling 90/60% [9] 95/50% [9] 100/95% [9]
+Our Method
+L1 LiDAR
+90/60% [9] 90/55% [9] 100/100% [9]
+L2 LiDAR
+95/65% [9] 90/50% [9] 100/95% [9]
+learning, making local terrain geometry explicit and consistently ac-
+cessible. Consequently, both L1 and L2 policies reach L = 9 on all
+three terrains with 90–100% simulated success.
+A2: The range-image policy achieves stronger sim-to-real loco-
+motion transfer. Although the depth and elevation-map baselines
+both reach L = 9 in simulation, their performance drops sharply on
+hardware at the same terrain levels (0.9 m gap, 0.45 m step, and 0.4 m
+hurdle). The depth policy achieves only 40/35/75% success. Across
+hardware trials, depth measurements varied substantially with illu-
+mination and robot motion, with unstable invalid pixels around ob-
+ject boundaries. Failed step trials showed that these artifacts dis-
+torted the perceived platform edge and were frequently accompanied
+by premature or delayed front-leg lifting. We attribute these fail-
+ures partly to this observation shift, absent from the simulated depth
+used to train the distilled student. The elevation-map policy, despite
+the strongest simulation performance, drops to 35/0/5%. Its Stage-
+1 policy is trained with complete privileged height maps, whereas
+real maps must be reconstructed from partial LiDAR observations.
+Obstacle occlusion often produced incomplete local height maps on
+the step and hurdle tasks, while accumulated Point-LIO drift further
+misaligned the extracted height maps. The gap geometry remained
+visible, consistent with its higher success rate. Our range-image
+policies retain substantially more simulated performance. L1 and
+L2 achieve 60/55/100% and 65/50/95% real-world success, averag-
+ing 71.7% and 70.0%, versus 50.0% for depth and 13.3% for eleva-
+tion maps. Their sim-to-real retentions are 76.8% and 73.7%, com-
+pared with 53.6% and 13.6%. We attribute this smaller gap to sensor-
+and representation-level alignment design in our pipeline. Figure 3
+further visualizes this cross-domain consistency. Raw-LiDAR and
+PointNet policies also exhibit unnatural motions and frequent body
+or joint contacts on hardware, consistent with their weaker simula-
+tion performance.
+A3: Sensor-level simulation components improve transfer. We
+also isolate sensing components for sim-to-real transfer while keep-
+ing the range-image representation fixed. All ablations reach L = 9
+with 90–100% simulated success, yet differ substantially on hard-
+ware. The largest degradation occurs without scan-pattern replay:
+replacing the recovered patterns with a fixed uniform pattern re-
+duces mean real-world success from 71.7% to 26.7%, despite nearly
+unchanged simulation performance. Thus, matching only the ray
+count and field of view is insufficient, reproducing the physical sen-
+sor’s frame-wise angular sampling is important for transfer. Remov-
+ing LiDAR-specific domain randomization reduces mean success
+to 56.7%, showing that range and preprocessing perturbations help
+absorb residual sensing mismatch. Self-occlusion modeling has a
+smaller but consistent effect, with mean success decreasing to 68.3%
+and 5-point drops on both step and hurdle. These ablations reveal a
+gap that simulation alone cannot expose: the policies remain equally
+capable in simulation, while sensing fidelity determines how much
+of that capability transfers to hardware.
+4. CONCLUSION
+We presented a LiDAR perception pipeline for end-to-end locomo-
+tion that aligns sensing and representation between simulation and
+reality. The proposed spherical range image provides a structured
+LiDAR observation that supports learning challenging locomo-
+tion skills, while scan-pattern replay, self-occlusion modeling, and
+shared encoding reduce perceptual discrepancies across domains.
+Experiments show stronger hardware transfer than other baselines,
+and ablations identify scan-pattern replay as the most influential
+component, with LiDAR-specific domain randomization and self-
+occlusion modeling providing additional gains.
+
+
+5. COMPLIANCE WITH ETHICAL STANDARDS
+This study did not involve human or animal subjects and therefore
+did not require ethical approval.
+6. ACKNOWLEDGMENTS
+The authors have no financial or nonfinancial interests to disclose.
+7. REFERENCES
+[1] Joonho Lee, Jemin Hwangbo, Lorenz Wellhausen, Vladlen
+Koltun, and Marco Hutter, “Learning quadrupedal locomotion
+over challenging terrain,” Science Robotics, vol. 5, no. 47, pp.
+eabc5986, 2020.
+[2] David Hoeller, Nikita Rudin, Dhionis Sako, and Marco Hutter,
+“ANYmal parkour: Learning agile navigation for quadrupedal
+robots,” Science Robotics, vol. 9, no. 88, pp. eadi7566, 2024.
+[3] Ananye Agarwal, Ashish Kumar, Jitendra Malik, and Deepak
+Pathak, “Legged locomotion in challenging terrains using ego-
+centric vision,” in Proceedings of The 6th Conference on Robot
+Learning. 2023, vol. 205 of Proceedings of Machine Learning
+Research, pp. 403–415, PMLR.
+[4] Ziwen Zhuang, Zipeng Fu, Jianren Wang, Christopher G.
+Atkeson, S¨oren Schwertfeger, Chelsea Finn, and Hang Zhao,
+“Robot parkour learning,” in Proceedings of The 7th Confer-
+ence on Robot Learning. 2023, vol. 229 of Proceedings of Ma-
+chine Learning Research, pp. 73–92, PMLR.
+[5] Xuxin Cheng, Kexin Shi, Ananye Agarwal, and Deepak
+Pathak, “Extreme parkour with legged robots,” in 2024 IEEE
+International Conference on Robotics and Automation (ICRA).
+IEEE, 2024, pp. 11443–11450.
+[6] Shixin Luo, Songbo Li, Ruiqi Yu, Zhicheng Wang, Jun Wu,
+and Qiuguo Zhu, “PIE: Parkour with implicit-explicit learning
+framework for legged robots,” IEEE Robotics and Automation
+Letters, vol. 9, no. 11, pp. 9986–9993, 2024.
+[7] Mohitvishnu S. Gadde, Pranay Dugar, Ashish Malik, and Alan
+Fern, “No more blind spots: Learning vision-based omnidi-
+rectional bipedal locomotion for challenging terrain,” arXiv
+preprint arXiv:2508.11929, 2025.
+[8] Nikita Rudin, Junzhe He, Joshua Aurand, and Marco Hutter,
+“Parkour in the wild: Learning a general and extensible agile
+locomotion policy using multi-expert distillation and RL fine-
+tuning,” The International Journal of Robotics Research, 2026,
+OnlineFirst.
+[9] P´eter Fankhauser,
+Marko Bjelonic,
+C. Dario Bellicoso,
+Takahiro Miki, and Marco Hutter, “Robust rough-terrain loco-
+motion with a quadrupedal robot,” in 2018 IEEE International
+Conference on Robotics and Automation (ICRA). IEEE, 2018,
+pp. 5761–5768.
+[10] Takahiro Miki, Joonho Lee, Jemin Hwangbo, Lorenz Well-
+hausen, Vladlen Koltun, and Marco Hutter, “Learning robust
+perceptive locomotion for quadrupedal robots in the wild,” Sci-
+ence Robotics, vol. 7, no. 62, pp. eabk2822, 2022.
+[11] Wandong Sun, Baoshi Cao, Long Chen, Yongbo Su, Yang
+Liu, Zongwu Xie, and Hong Liu, “Learning perceptive hu-
+manoid locomotion over challenging terrain,” arXiv preprint
+arXiv:2503.00692, 2025.
+[12] Yinzhao Dong, Ji Ma, Liu Zhao, Wanyue Li, and Peng Lu,
+“MARG: MAstering risky gap terrains for legged robots with
+elevation mapping,” IEEE Transactions on Robotics, vol. 41,
+pp. 6123–6139, 2025.
+[13] Ziwen Zhuang, Shenzhe Yao, and Hang Zhao,
+“Humanoid
+parkour learning,” in Proceedings of The 8th Conference on
+Robot Learning. 2025, vol. 270 of Proceedings of Machine
+Learning Research, pp. 1975–1991, PMLR.
+[14] Elliot Chane-Sane, Joseph Amigo, Thomas Flayols, Ludovic
+Righetti, and Nicolas Mansard,
+“SoloParkour: Constrained
+reinforcement learning for visual locomotion from privileged
+experience,” in Proceedings of The 8th Conference on Robot
+Learning. 2025, vol. 270 of Proceedings of Machine Learning
+Research, pp. 4268–4285, PMLR.
+[15] Helei Duan, Bikram Pandit, Mohitvishnu S. Gadde, Bart van
+Marum, Jeremy Dao, Chanho Kim, and Alan Fern, “Learn-
+ing vision-based bipedal locomotion for challenging terrain,”
+in 2024 IEEE International Conference on Robotics and Au-
+tomation (ICRA). IEEE, 2024, pp. 56–62.
+[16] Jingkai Sun, Gang Han, Pihai Sun, Wen Zhao, Jiahang Cao,
+Jiaxu Wang, Qiang Zhang, and Yijie Guo, “DPL: Depth-only
+perceptive humanoid locomotion via realistic depth synthesis
+and cross-attention terrain reconstruction,” IEEE Robotics and
+Automation Letters, vol. 11, no. 8, pp. 9407–9414, 2026.
+[17] Wandong Sun, Yongbo Su, Leoric Huang, Alex Zhang,
+Dwyane Wei, Mu San, Daniel Tian, Ellie Cao, Finn Yan, Ethan
+Xie, and Zongwu Xie, “Now you see that: Learning end-to-
+end humanoid locomotion from raw pixels,”
+arXiv preprint
+arXiv:2602.06382, 2026.
+[18] Charles R Qi, Hao Su, Kaichun Mo, and Leonidas J Guibas,
+“Pointnet: Deep learning on point sets for 3d classification and
+segmentation,” in Proceedings of the IEEE conference on com-
+puter vision and pattern recognition, 2017, pp. 652–660.
+[19] I Made Aswin Nahrendra, Byeongho Yu, Minho Oh, Dongkyu
+Lee, Seunghyun Lee, Hyeonwoo Lee, Hyungtae Lim, and
+Hyun Myung, “Dreamwaq++: Obstacle-aware quadrupedal lo-
+comotion with resilient multi-modal reinforcement learning,”
+IEEE Transactions on Robotics, 2026.
+[20] Zifan Wang, Teli Ma, Yufei Jia, Xun Yang, Jiaming Zhou,
+Wenlong Ouyang, Qiang Zhang, and Junwei Liang, “Omni-
+perception: Omnidirectional collision avoidance for legged
+locomotion in dynamic environments,”
+arXiv preprint
+arXiv:2505.19214, 2025.
+[21] P´eter Fankhauser, Michael Bloesch, and Marco Hutter, “Prob-
+abilistic terrain mapping for mobile robots with uncertain lo-
+calization,” IEEE Robotics and Automation Letters, vol. 3, no.
+4, pp. 3019–3026, 2018.
+[22] Takahiro Miki, Lorenz Wellhausen, Ruben Grandia, Fabian
+Jenelten, Timon Homberger, and Marco Hutter,
+“Elevation
+mapping for locomotion and navigation using GPU,” in 2022
+IEEE/RSJ International Conference on Intelligent Robots and
+Systems (IROS). IEEE, 2022, pp. 2273–2280.
+[23] Miles Macklin,
+“Warp: A high-performance python frame-
+work for gpu simulation and graphics,” in NVIDIA GPU Tech-
+nology Conference (GTC), 2022, vol. 3.
+[24] Alexandros Ntagkas, Chairi Kiourt, and Konstantinos Chatzi-
+lygeroudis, “Pgtt: Phase-guided terrain traversal for perceptive
+legged locomotion,” arXiv preprint arXiv:2510.18348, 2025.

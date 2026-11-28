@@ -1,0 +1,2561 @@
+Parsing Visual Latents for Multimodal Spatial Reasoning
+Zhuoying Yang1∗
+Yichen Guo2∗
+Kathy Jia1∗
+Zichang Su1∗
+Ayesha Kashif1
+Nange Hai1
+Jeffrey Ming Han Li3
+Zhewen He4
+Silvio Kempf1
+Ni Jiachen5
+Junjie Yang6
+Muhammad Hamza3
+Zakaria El Ouahidi7,1
+Gabriel Azpitarte1
+Manling Li8†
+Yi Fang4†
+Shuhong Liu9†
+Mengyu Wang1†
+1Harvard University
+2Nanyang Technological University
+3University of Toronto
+4New York University
+5Tufts University
+6University of Maryland, College Park
+7Centrale Sup´elec
+8Northwestern University
+9The University of Tokyo
+∗Co-first authors
+†Co-senior authors
+Abstract
+Spatial reasoning across multiple views requires infer-
+ring the 3D relations between objects and the camera from
+2D observations, which depends on cross-view correspon-
+dence and scene geometry that vision-language models
+(VLMs) do not reliably extract. Pretrained vision encoders
+already capture this information in their latent features,
+with CLIP linking objects to image regions, DINOv3 match-
+ing semantics across views, and VGGT encoding multi-view
+geometry. However, VLMs do not benefit from these features
+when we present them directly in context as grayscale fea-
+ture images. We therefore propose LatentParse, a training-
+free framework that parses latent features into explicit spa-
+tial evidence for VLMs. In LatentParse, an analyst VLM
+probes the features of all three encoders with predefined
+tools that locate objects, track them across views, and mea-
+sure motion between views. It then distills the results into
+a concise text report, which is provided together with the
+images to the VLM to answer the question. We evaluate
+LatentParse on MMSI-Bench, MV-RoboBench and SPAR-
+Bench, where it improves all five VLMs over the photo-
+only baseline by 0.7–2.4 percentage points on average. On
+MMSI-Bench, it raises Qwen3.8-27B from 34.4% to 39.5%,
+with the largest improvements of 19.2 percentage points on
+the camera-related questions. These results suggest that la-
+tent features become useful for spatial reasoning once they
+are parsed into relation evidence, without training. Code is
+available at https://github.com/Harvard-AI-
+and-Robotics-Lab/LatentParse.
+1. Introduction
+Vision-language models (VLMs) have advanced rapidly in
+recognizing and describing visual content [21, 34], yet they
+Q
+u
+e
+st
+io
+n
+s 
+a
+b
+o
+ut
+ t
+h
+e 
+c
+a
+m
+er
+a 
+  
+3
+1.
+4 
+→
+ 5
+0.
+6
+Camera motion
+71.6 +33.8
+Camera–object
+48.8 +23.2
+Camera–region
+48.2 +8.4
+Region–region
+37.0 +8.6
+Object–region
+37.6 ±0.0
+Object–object
+30.9 −3.1
+Object motion
+42.1 +3.9
+Measurement
+48.4 −1.6
+Appearance
+28.8 +10.6
+Multi-step
+26.3 −10.1
+Camera–camera
+37.6 +6.4
+one ring = 10 pp
+Photo only
+Direct input
+LatentParse (ours)
+Figure 1. LatentParse helps most on questions about the cam-
+era. Qwen3.8-27B on the 11 MMSI-Bench question types. Each
+label gives LatentParse’s accuracy and its change from photo only.
+On the four camera types, marked orange, accuracy rises from
+31.4% to 50.6% on the 334 questions with a paired photo-only
+answer.
+still struggle to reason about the 3D layout of a scene and
+the motion of the camera [7, 25, 42, 43]. Answering these
+questions requires inferring 3D relations such as the rela-
+tive position, distance, and orientation between objects and
+viewpoints [1, 13, 42]. These relations are often underdeter-
+mined by a single image and must be recovered from cross-
+view correspondence and scene geometry, neither of which
+current VLMs explicitly model.
+1
+arXiv:2611.31021v1  [cs.CV]  23 Nov 2026
+
+
+1
+Given directly, little changes
+2
+Correct features matter
+3
+VGGT carries most gain
+photo only
+direct
+Qwen
+3.8
+Gemma
+4
+Intern
+VL
+GPT-6
+Luna
+Claude
+Haiku
+20
+25
+30
+35
+40
+Accuracy %
+−1.4
+−0.7
+−0.6
+−2.6
++0.6
+direct
+parsed
+photo only
+34.6 33.3
+Mismatched
+34.7
+36.6
+Noise
+33.0
+39.5
+Correct
+20
+25
+30
+35
+40
+Accuracy %
+direct
+parsed
+photo only
+33.8 35.6
+CLIP
+33.1
+36.3
+DINOv3
+33.1
+38.5
+VGGT
+33.0
+39.5
+All
+20
+25
+30
+35
+40
+Accuracy %
+Figure 2. Parsing latent features improves accuracy over the tested feature images. All panels use the 1,000 MMSI-Bench questions.
+(1) Given directly, the features of all three encoders (Multi-Latent) change five VLMs by −2.6 to +0.6 pp. (2) For Qwen3.8-27B,
+LatentParse scores highest with the Correct features, while direct input stays near photo only. (3) Each encoder’s features and all three,
+given directly or parsed by the analyst. With all three encoders the analyst is LatentParse; with one encoder it is the earlier single-encoder
+analyst of Section 4. VGGT alone reaches 38.5%, against 39.5% with all three.
+Pretrained vision encoders offer a complementary source
+of this information. In particular, CLIP [29], DINOv3 [32]
+and VGGT [35] are trained with image–text alignment, self-
+supervision and multi-view 3D supervision, respectively.
+Preliminary probing studies reveal that these features en-
+code rich semantic and geometric information [2, 4, 26, 50],
+making them a reliable prior for spatial reasoning. Recent
+studies exploit this prior by training the VLMs to inter-
+pret encoder features. For example, Spatial-MLLM [39],
+VG-LLM [51] and VLM-3R [5] connect visual encoders
+to the language model through learned projectors or fusion
+modules and fine-tune on spatial instruction data.
+Such
+training must be repeated for each encoder–VLM pair,
+which is computationally expensive and cannot be applied
+to closed-source VLMs. Training-free methods, including
+ViperGPT [33], SpatialPIN [24] and SandboxVLM [23], in-
+stead support reasoning with decoded outputs such as depth
+maps, reconstructions or 3D boxes. These outputs are fixed
+before the question is known and may discard the cross-
+view correspondence and region similarity that the latent
+features encode and many spatial questions require.
+A natural alternative is to use the latent features them-
+selves as context, which require neither training nor de-
+coding and leave the VLM free to decide what to measure
+for each question. However, as Figure 2 shows, presenting
+these latent features to a VLM naively as image input brings
+little benefit, likely because the information they carry lies
+in the relations between patches rather than in their appear-
+ance.
+To exploit these relations and realize these bene-
+fits, we propose LatentParse, a training-free framework that
+parses the relations between patches into explicit evidence
+and summarizes it in a text report that an arbitrary VLM can
+use in context, as illustrated in Figure 3.
+LatentParse operates on the last-layer features of
+CLIP [29], DINOv3 [32] and VGGT [35], which respec-
+tively ground object names in image regions, compare re-
+gions within and across views, and relate the views geomet-
+rically. On these features, a library of tools locates named
+objects, tracks them across views, measures content motion,
+and rates each measurement by consensus. An analyst VLM
+that never sees the photos calls these tools in a Python sand-
+box [16, 37] and writes a report. The same VLM then an-
+swers the question in a fresh context from the photos and
+this report. Keeping the analyst blind to the photos is in-
+tended to focus its report on tool measurements rather than
+direct photo inspection.
+We evaluate LatentParse with five open and closed
+VLMs on three spatial reasoning benchmarks [6, 43, 49].
+Across the benchmarks, our method raises the mean accu-
+racy of every VLM over the photo-only baseline by 0.7 to
+2.4 pp, whereas naive input changes accuracy on MMSI-
+Bench by only −2.6 to +0.6 pp. On MMSI-Bench, Latent-
+Parse improves Qwen3.8-27B from 34.4% to 39.5%, with
+the largest gains on camera-related questions, which rise
+from 31.4% to 50.6% as shown in Figure 1. Using mis-
+matched features from a different scene lowers accuracy to
+33.3%, which indicates that the gain depends on features
+that match the scene.
+In summary, our contributions are as follows:
+• We propose LatentParse, a training-free framework that
+enables frozen VLMs to exploit the latent features of
+pretrained vision encoders for spatial reasoning by pars-
+ing these features into relation evidence through a photo-
+blind analyst and a textual report.
+• We design a library of latent-space tools for object lo-
+calization, cross-view tracking, and motion estimation,
+2
+
+
+which rely mainly on basis-invariant comparisons within
+each encoder and rate measurements by cross-encoder
+consensus, without any learned projector.
+• We evaluate five open- and closed-source VLMs on three
+benchmarks, where LatentParse improves the mean accu-
+racy of every VLM over the photo-only baseline by 0.7 to
+2.4 pp whereas the tested grayscale feature images yield
+no consistent gain. For Qwen3.8-27B on MMSI-Bench,
+the gain disappears with mismatched features, concen-
+trates on camera questions and turns into a loss on multi-
+step reasoning.
+2. Related Work
+2.1. Spatial Reasoning in Vision Language Models
+A growing body of benchmarks evaluates whether VLMs
+can infer scene geometry from a single image and relate ob-
+servations across multiple views. 3DSRBench [25] focuses
+on depth order, orientation and object relations within a sin-
+gle image, whereas MMSI-Bench [43], MindCube [36] and
+MV-RoboBench [6] require reasoning about camera mo-
+tion, hypothetical movements and object correspondence
+across views. SPAR-Bench [49] and VSI-Bench [42] fur-
+ther extend this evaluation to indoor scenes and video. To
+improve performance on these benchmarks, most existing
+methods train the VLM itself. SpatialVLM [1] is trained
+on synthetic spatial question-answer pairs, SpatialRGPT [3]
+learns regional representations from 3D scene graphs, and
+GASP [46] derives supervision from correspondence and
+depth consistency without relying on 3D VQA data. An-
+other line of work injects features from additional encoders
+through a trained connector, in the spirit of the pretrained
+projector in LLaVA-NeXT [21]. Cambrian-1 [34] aggre-
+gates features from multiple encoders with a learned Spa-
+tial Vision Aggregator, while Spatial-MLLM [39], VG-
+LLM [51] and VLM-3R [5] incorporate geometry features
+through learned connectors or fusion modules.
+GeoRe-
+ader [17] trains Readers that encode predicted depth and
+camera poses as continuous tokens, and subsequently fine-
+tunes the VLM for spatial QA with the Readers frozen.
+Since such training has to be repeated for every encoder-
+VLM pair, these approaches are costly to extend and cannot
+be applied to closed-source VLMs. In contrast, LatentParse
+requires neither a learned connector nor any VLM update.
+2.2. Spatial Information in Vision Encoder Latents
+Probing studies investigate how much spatial information
+can be recovered from frozen vision features. Probe3D [4]
+evaluates depth estimation, surface-normal prediction and
+cross-view correspondence, including on DINOv2 [27] fea-
+tures, and Lexicon3D [26] extends this analysis to 3D
+grounding, segmentation and registration. Feat2GS [2] as-
+sesses the recovered geometry through novel-view synthe-
+sis, and DepthCLIP [50] shows that coarse depth can be
+read from CLIP [29] even without fitting a dedicated probe.
+These findings establish that rich spatial information re-
+sides in encoder features, yet leave open whether a sepa-
+rate VLM can exploit it to answer spatial questions. A re-
+lated line of research performs reasoning directly in latent
+space. Coconut [9] reasons in a continuous latent space,
+LatentMAS [53] exchanges hidden states among collabo-
+rating agents, and Latent Sketchpad [47] lets a model sketch
+within its own latent space. These methods, however, oper-
+ate on the model’s internal hidden states, which the model is
+trained to produce and interpret. Our work instead draws on
+the patch features of external encoders, namely CLIP, DI-
+NOv3 [32] and VGGT [35], whose channels bear no corre-
+spondence to the VLM’s visual tokens. We therefore com-
+pare presenting these features directly as images with pars-
+ing the relations among their patches into textual evidence.
+2.3. Training-Free Visual Tool Use
+Training-free methods equip a model with vision tools
+rather than modifying its weights.
+VisProg [8] and
+ViperGPT [33] formulate visual reasoning as programs that
+invoke perception modules, and Visual Sketchpad [10] pro-
+duces intermediate drawings for the VLM to inspect. Open-
+VLHarness [52] retains tool outputs in a multimodal mem-
+ory across steps, while MAIA [30] executes code to inter-
+pret model components rather than the scene itself. Closer
+to our setting, SpatialPIN [24] supplies explicit 3D pri-
+ors for spatial reasoning, and SandboxVLM [23] renders
+scene abstractions from 3D bounding boxes.
+Perception
+Programs [11] condenses the outputs of depth, flow and cor-
+respondence tools into compact text, and Coarse Correspon-
+dences [20] overlays objects tracked across views directly
+on the images. Such tool use is typically organized by an
+agent harness, which governs the tools available to a model,
+how each call is executed and what information persists be-
+tween steps [38, 44]. Recent work adapts harnesses by re-
+fining prompts and workflows [12, 16, 19, 28, 37, 41, 48],
+updating memory during deployment [14, 40], improving
+execution efficiency [22], or training the model on harness
+edits and demonstrations [31, 45].
+LatentParse adopts a
+fixed code-execution loop of this kind, in which a photo-
+blind analyst applies predefined tools to the patch features
+of off-the-shelf encoders and summarizes its findings in a
+report that the answering VLM reads alongside the photos.
+Unlike prior methods that operate on images or on the de-
+coded outputs of tools and task heads, our analyst measures
+relations within each encoder’s latent features, and rates
+each finding by cross-encoder consensus.
+3. Method
+A spatial question q comes with answer options and V ≥1
+views {Iv}V
+v=1. We want a VLM to benefit, without train-
+3
+
+
+1 Analyst
+Agent-Directed
+or
+Fixed-Sequence
+motion
+locate_all
+relate
+track
+layout
++18
+report
+printer located in photo 1
+at left edge, centroid x=0.13
+camera turned right
+no matches in photo 2
+the file printing area is
+to the left of the viewer
+question
+CLIP
+DINOv3
+VGGT
+2 Same VLM answers
+2
+1
+question
+report
+VLM
+answer
+photo only
+A Behind
+LatentParse
+D Left
+Agent-Directed, zoomed in
+Step 1  Find the printer
+locate_all
+tier medium
+Step 2  Camera motion
+motion
+left 2/2
+pt_agree 0.69
+Steps 3, 4  Track the printer
+?
+track
+KeyError
+locate
+track
+found unclear
+Not called
+relate
+layout
+text_map
+sim_to
+pca
+kmeans
+match
++12
+Figure 3. Overview of LatentParse. The photo-blind analyst calls predefined tools in up to four steps on the latent features of CLIP,
+DINOv3 and VGGT, zoomed in at left for one MMSI-Bench question, and writes a report, shown abridged. A separate call to the same
+VLM in a fresh context answers from the photos and the report.
+ing, from the per-patch latent features F (k) ∈RV ×h×w×dk
+of a vision encoder Ek. As shown in Figure 3, LatentParse
+first extracts these features from CLIP, DINOv3 and VGGT.
+An analyst VLM then parses them with tools and writes
+a textual report, and the same VLM answers the question
+from the photos and this report in a fresh context. Sec-
+tion 3.1 describes the latent features and why direct input
+fails, Section 3.2 introduces the tools that measure them,
+and Section 3.3 presents the analyst and the answering step.
+3.1. Latent Features as Context
+Three complementary encoders.
+We draw latent fea-
+tures from three pretrained encoders whose training objec-
+tives capture different aspects of a scene.
+CLIP [29] is
+trained with image–text alignment and links object names
+to image regions.
+DINOv3 [32] is trained with self-
+supervision and produces features that match semantically
+similar regions within and across views.
+VGGT [35] is
+trained with multi-view 3D supervision and encodes how
+the views relate geometrically. From each encoder we take
+the patch tokens of the last layer and never use the depth,
+point or camera heads of VGGT. These latent features re-
+tain information that decoded outputs such as depth maps
+or 3D boxes [23, 24] discard, and leave the choice of what
+to measure to the analyst. Table 9 compares other layers.
+Aligned patch grids.
+To let the tools compare encoders
+patch by patch, we place the features of VGGT and DI-
+NOv3 on a shared h × w grid with w = 37. Each photo
+is resized to a width of 518 px with its aspect ratio pre-
+served, and a portrait photo is center-cropped to a square.
+VGGT-1B processes all V views jointly on 14 px patches,
+and we keep its aggregator patch tokens while discarding
+the camera token and the four register tokens, which yields
+dk = 2048. DINOv3 ViT-L/16 encodes each photo sepa-
+rately after a resize that places its 16 px patches on the same
+grid, with dk = 1024. CLIP ViT-L/14 encodes the whole
+photo resized to 224 px square on a coarser 16 × 16 grid
+with dk = 1024, which the tools map onto the shared grid
+when comparing it with the other two encoders.
+Direct input as feature images.
+Direct input places the
+latent features F (k) next to the photos. The global min–
+max image draws the patches×channels matrix as a single
+grayscale image, min–max normalized over the whole ma-
+trix. This rendering presents the features as an appearance,
+whereas their spatial information lies in the relations be-
+tween patches, which motivates the tools in Section 3.2.
+3.2. Basis-Invariant Latent Tools
+Basis-invariant patch comparison.
+Since the channels
+of an external encoder carry no meaning that the VLM
+shares, we compare patches only within each encoder’s fea-
+ture space and rely solely on quantities that do not depend
+on the choice of channel basis. Inner products, Euclidean
+distances and feature norms are unchanged under any or-
+thogonal change of basis R ∈O(dk), and so is a score that
+contrasts a patch with two reference regions,
+(Rf(p))⊤(RµA −RµB) = f(p)⊤(µA −µB),
+(1)
+4
+
+
+where f(p) ∈Rdk is the feature of patch p, and µA and µB
+are the mean features of two regions. All tools are built from
+such quantities, with one exception.
+CLIP’s text map
+compares patches with a text phrase, which works because
+CLIP embeds images and text in a shared space.
+Cross-encoder consensus.
+The three encoders are trained
+with different objectives, so their errors need not coincide.
+The cross-encoder tools therefore measure with every ap-
+plicable encoder and report how many of them agree, such
+as the direction vote of motion or the supported cells of
+locate. The analyst later uses this consensus to rate each
+finding in its report as high, medium or low (Section 3.3).
+Object localization by encoder consensus.
+Localization
+proceeds in three stages. CLIP proposes a region for each
+object name, DINOv3 and VGGT verify it, and their con-
+sensus sets a confidence tier. CLIP’s proposal comes from
+text map, which scores each patch against the prompt
+“a photo of ⟨object⟩” and subtracts its mean score for five
+generic phrases. Because last-layer CLIP patch tokens are
+known to score a named object below its surroundings [18],
+the map is smoothed and negated. locate then z-scores
+the map across all photos and selects the connected compo-
+nent of the top 8% of cells that contains the highest peak.
+support uses DINOv3 and VGGT to check which cells
+belong to the region, and cells supported by at least two en-
+coders define its extent. Encoder consensus, region area,
+CLIP peak score and prominence set a confidence tier of
+high, medium, low or none, and locate all applies this
+procedure to every named object.
+Figure 4 shows what
+text map, DINOv3 similarity and VGGT matches find.
+Cross-view motion and tracking.
+Two tools match
+patches across views. Given two photos, motion matches
+patches with the latent features of each encoder and reports
+how far the matched content shifts, whether it grows or
+shrinks, and the direction on which the encoders agree, such
+as “left 3/3” when all three agree. These quantities describe
+how the image changes rather than the camera pose. track
+instead follows a located object into the other photos using
+VGGT and DINOv3 patch matches, and CLIP checks the
+matched region wherever both encoders agree.
+Within-view relations and layout.
+Within a single photo,
+relate computes the relative offset, size ratio and contact
+of two located objects. layout applies k-means with k=5
+to VGGT and DINOv3 features, retains the segments that
+the two encoders share, and compares all three encoders
+with linear CKA [15]. Other tools in Table 1 provide ba-
+sic feature and geometric operations.
+Table 1. Sandbox tools. In LatentParse the analyst picks tools
+and arguments. Runs on lists the fixed arguments of the Fixed-
+Sequence ablation. Tools that compare photos need several photos.
+C, D and V are CLIP, DINOv3 and VGGT.
+Tool
+Features
+Output
+Runs on
+motion
+C, D, V
+shift, zoom, vote
+≤7 photo pairs
+locate all, locate
+C, D, V
+region and tier
+each object
+support
+D, V
+cells grouped with a
+seed
+inside locate
+relate
+none
+offset, size ratio,
+contact
+located pairs
+track
+D, V
+landing, CLIP check
+≤3 other photos
+layout
+C, D, V
+shared segments, CKA
+≤3 photos
+text map, top region,
+describe,
+region stats
+C
+object map, blob
+first object
+sim to, grow, pca,
+kmeans
+D, V
+similarity, area,
+variance, segments
+each encoder
+match
+C, D, V
+patch matches
+photos 1 and 2
+grid, box, bbox, iou,
+corr, to vggt, to clip
+none
+geometry, overlap,
+correlation
+once
+show
+any
+map drawing
+not available
+Tool calibration.
+Several design choices in the tools
+are specified manually rather than learned, including the
+negated CLIP map, the top 8% of cells in locate and
+k=5 in layout. The thresholds that define the confidence
+tiers and decide whether an encoder counts as reliable in
+motion are chosen once on 150 calibration questions (100
+from 3DSRBench and 50 from MMSI-Bench) outside the
+development sample s1 (Section 4) and reused in all exper-
+iments. They are set so that most high-tier boxes cover the
+named object, as judged by a VLM that sees the photo, and
+so that Gaussian noise almost never reaches the high tier or
+passes the reliability check. No answers are used in this pro-
+cess, and although the tools avoid learned decoding heads,
+they still involve task-specific design.
+3.3. Photo-Blind Analyst and Answering
+Inputs of the photo-blind analyst.
+The analyst receives
+the question, the answer options, the number of views, the
+image dimensions and the latent features of CLIP, DINOv3
+and VGGT, which we refer to as Multi-Latent features. It
+never sees the photos directly: it queries the features with
+tools, although its interpretation may also draw on the ques-
+tion and options. On benchmarks that mark targets with col-
+ored boxes or points, a rule-based color detector supplies
+the color and position of each marker (Section 4).
+Agent-Directed tool use.
+In the Agent-Directed mode,
+the analyst receives no predefined object list. It selects tools
+and their arguments from Table 1 and executes them in a
+sandbox over up to four steps, each of which can build on
+the printed outputs of earlier steps. A heuristic rule in the
+analyst’s prompt reads the image shifts from motion as
+camera motion, so that content moving left indicates that
+the camera turned or moved right. Image shifts alone do
+5
+
+
+1 Latent features as color
+2 What each latent finds
+photo
+CLIP
+16 × 16 grid
+DINOv3
+30 × 37 grid
+VGGT
+30 × 37 grid
+1
+2
+CLIP text map
+peak z 5.2 and 4.7
+DINOv3 similarity
+peak 0.91 and 0.64
+VGGT matches
+22 matches, 0.78 left
+Figure 4. What each latent feature picks out. MMSI-Bench question 439. (1) Each encoder’s first three principal components shown as
+color. (2) CLIP’s text map finds the fireplace in both photos, DINOv3 marks patches similar to the region found in photo 1, and VGGT
+matches 22 of its patches into photo 2. Maps are drawn over the photos for the reader, and the analyst never sees a photo.
+Table 2. Main results of five VLMs on three spatial benchmarks. Accuracy in % with the Correct latent features. Direct gives the
+features directly and Agent parses them in the Agent-Directed mode, which with Multi-Latent features is LatentParse. Shaded rows are
+photo only and ∆is Agent minus photo only. Blue cells mark each VLM’s largest gain per benchmark.
+MMSI-Bench
+MV-RoboBench
+SPAR-Bench
+Avg.
+VLM Input
+Direct
+Agent
+∆
+Direct
+Agent
+∆
+Direct
+Agent
+∆
+Direct
+Agent
+∆
+Photo only
+34.4
+27.9
+57.4
+39.9
++ CLIP
+33.8
+35.6
++1.2
+28.1
+26.7
+−1.2
+59.3
+58.7
++1.3
+40.4
+40.3
++0.4
++ DINOv3
+33.1
+36.3
++1.9
+29.2
+33.1
++5.2
+58.7
+55.1
+−2.3
+40.3
+41.5
++1.6
++ VGGT
+33.1
+38.5
++4.1
+28.5
+28.9
++1.0
+59.8
+57.6
++0.2
+40.5
+41.7
++1.8
+Qwen3.8-27B
+All (Multi-Latent)
+33.0
+39.5
++5.1
+28.9
+29.7
++1.8
+58.0
+57.6
++0.2
+40.0
+42.3
++2.4
+Photo only
+30.0
+37.7
+57.6
+41.8
++ CLIP
+29.8
+29.4
+−0.6
+34.7
+38.8
++1.1
+57.3
+54.0
+−3.6
+40.6
+40.7
+−1.1
++ DINOv3
+30.2
+33.9
++3.9
+35.0
+36.0
+−1.7
+55.8
+55.1
+−2.5
+40.3
+41.7
+−0.1
++ VGGT
+30.9
+33.9
++3.9
+34.4
+34.8
+−2.9
+57.5
+58.5
++0.9
+40.9
+42.4
++0.6
+Gemma 4
+All (Multi-Latent)
+29.3
+32.6
++2.6
+34.0
+37.8
++0.1
+57.1
+58.4
++0.8
+40.1
+42.9
++1.1
+Photo only
+28.7
+22.8
+48.7
+33.4
++ CLIP
+30.7
+27.7
+−1.0
+22.9
+20.8
+−2.0
+48.2
+51.3
++2.6
+33.9
+33.3
+−0.1
++ DINOv3
+29.8
+27.4
+−1.3
+21.7
+19.4
+−3.4
+47.6
+49.6
++0.9
+33.0
+32.1
+−1.3
++ VGGT
+29.8
+27.8
+−0.9
+23.2
+20.6
+−2.2
+48.2
+48.2
+−0.5
+33.7
+32.2
+−1.2
+Open-source
+InternVL
+All (Multi-Latent)
+28.1
+28.9
++0.2
+20.9
+22.5
+−0.3
+46.4
+51.1
++2.4
+31.8
+34.2
++0.8
+Photo only
+38.4
+34.7
+54.0
+42.4
++ CLIP
+35.2
+39.2
++0.8
+33.0
+35.0
++0.3
+50.0
+52.7
+−1.3
+39.4
+42.3
+−0.1
++ DINOv3
+34.1
+39.2
++0.8
+30.9
+38.8
++4.1
+49.5
+50.5
+−3.5
+38.2
+42.8
++0.4
++ VGGT
+33.1
+37.8
+−0.6
+30.9
+37.7
++3.0
+48.7
+53.8
+−0.2
+37.6
+43.1
++0.7
+GPT-6 Luna
+All (Multi-Latent)
+35.8
+40.6
++2.2
+30.9
+35.3
++0.6
+51.6
+53.5
+−0.5
+39.4
+43.1
++0.7
+Photo only
+38.7
+34.4
+55.2
+42.8
++ CLIP
+38.7
+38.5
+−0.2
+33.2
+30.8
+−3.6
+56.4
+55.5
++0.3
+42.8
+41.6
+−1.2
++ DINOv3
+41.4
+42.9
++4.2
+32.5
+32.9
+−1.5
+53.3
+59.5
++4.3
+42.4
+45.1
++2.3
++ VGGT
+38.9
+43.1
++4.4
+32.4
+35.0
++0.6
+55.5
+55.8
++0.6
+42.3
+44.6
++1.8
+Closed-source
+Claude Haiku
+All (Multi-Latent)
+39.3
+41.3
++2.6
+29.8
+35.0
++0.6
+51.6
+54.9
+−0.3
+40.2
+43.7
++0.9
+not determine the 3D motion uniquely. The analyst can-
+not call show and never views a rendering of the features.
+It completes a single pass without a critic, as illustrated in
+Figure 3. This loop follows existing code-execution har-
+nesses [16, 31, 37], and differs in its tool library and restric-
+tion to latent features.
+Report-based answering.
+After its final step, the analyst
+writes a report of up to six findings followed by a brief sum-
+mary, where each finding is supported by numerical evi-
+dence and rated high, medium or low by cross-encoder con-
+sensus. The same VLM then answers the question in a fresh
+context from the photos, the question and this report, with-
+out access to the tools or the latent features. The answer
+6
+
+
+Table 3. Agent-Directed vs. Fixed-Sequence mode. Qwen3.8-
+27B on MMSI-Bench with Multi-Latent features. Acc. is accuracy
+in % and s/q is seconds of analysis per question on one GPU over
+the same 25 questions. Fixed-Sequence runs six predefined code
+blocks in order.
+Analysis
+Acc.
+s/q
+Photo only
+34.4
+0
+Agent-Directed, ours
+39.5
+99
+Fixed-Sequence
+38.9
+79
+∆Agent-Directed −Fixed-Sequence
++0.6
++20
+Table 4.
+Controls.
+Qwen3.8-27B on MMSI-Bench with La-
+tentParse and with the Multi-Latent features given directly. Mis-
+matched features come from another MMSI-Bench question, and
+Random Noise is Gaussian with each view’s per-channel mean and
+standard deviation.
+LatentParse
+Direct input
+Features
+Acc.
+Global
+Photo only
+34.4
+34.4
+Correct, ours
+39.5
+33.0
+Mismatched features
+33.3
+34.6
+Random Noise
+36.6
+34.7
+Correct −Mismatched
++6.2
+−1.6
+therefore depends on the analysis only through the report.
+Fixed-Sequence tool execution.
+To isolate the effect of
+the analyst’s tool choices, the Fixed-Sequence mode in Ta-
+ble 3 keeps the same tools and report format but removes
+the choice of tools from the analyst. A text-only call to the
+same VLM first extracts up to four object names from the
+question and options. Six code blocks then run in a prede-
+termined order with the arguments listed in Table 1, where
+motion uses up to seven photo pairs starting from the near-
+est and track runs at most eight times per question. The
+analyst then reads the outputs and writes the report.
+4. Experiments
+Implementation Details.
+Each VLM is both the analyst
+and the answering model. The analyst runs one round of up
+to four tool steps within 600 s per question. Open VLMs
+decode greedily with thinking off and at most 1,000 new to-
+kens per analyst step, each on one 80 GB GPU such as the
+H100. The VLMs are Qwen3.8-27B, Gemma 4 (gemma-
+4-31B-it), InternVL3-38B, GPT-6 Luna (gpt-6-luna) and
+Claude Haiku (claude-haiku-5-5); the two closed VLMs run
+through their APIs. Tool settings follow Table 1, and the re-
+port holds up to six findings. Sections A and B list every
+threshold and the prompts.
+Baseline Methods.
+Photo only gives the VLM the pho-
+tos, question and answer options. Direct input, the Direct
+columns of Table 2, adds the global min–max image of one
+encoder’s latent features, or of all three, next to the pho-
+tos.
+In the rows + CLIP, + DINOv3 and + VGGT, the
+Agent columns come from an earlier single-encoder ana-
+lyst, which is also photo-blind but has only the basic tools
+in the lower block of Table 1 and can view the maps it
+draws on the feature grid with show. In the row All, La-
+tentParse parses the Multi-Latent features. For Qwen3.8-
+27B on MMSI-Bench we also test whether a gain comes
+from the features’ content or the extra input, by replacing
+the question’s own features (Correct) with two controls.
+Mismatched uses the features of another question of the
+same benchmark with the same number of views, one fixed
+donor per question. Random Noise is Gaussian noise with
+each view’s per-channel mean and standard deviation over
+patches, seeded per question.
+Benchmarks.
+MMSI-Bench [43] has 1,000 multi-view
+questions, from camera motion to multi-step reasoning.
+From MV-RoboBench [6] we take its 861 spatial ques-
+tions, each with five options on synchronized views of one
+robot workspace in AgiBot World or BridgeV2. They ask
+which box marks the same object in another view, which
+boxed object is closest to grasp, where boxed objects sit in
+a 5×5×5 grid and which of five photos the wrist camera
+took with a given head view. SPAR-Bench-Tiny [49] has
+550 multiple-choice questions in 11 tasks of 50 on Scan-
+Net frames, 350 of them with two or three views. MV-
+RoboBench and SPAR-Bench mark targets with colored
+boxes or points drawn into the images. Since the analyst
+never sees the photos, a fixed color detector with no learned
+model gives it the color and position of each marker. Every
+VLM answers every question of the three sets.
+Evaluation Metrics.
+We report accuracy and give differ-
+ences in percentage points (pp). Paired exact sign tests com-
+pare two conditions on the same questions, and a differ-
+ence is significant when p<0.05. All tests are on Qwen3.8-
+27B; see Table 10 and Section H. Ablations change one part
+of the default, LatentParse with Qwen3.8-27B on MMSI-
+Bench. During development we inspected answers only on
+a sample s1 of 145 questions (100 from 3DSRBench and 45
+from MMSI-Bench), so we also report MMSI-Bench results
+on the 955 questions outside it.
+4.1. Quantitative Results and Analysis
+LatentParse improves all five VLMs on average.
+Across the three benchmarks in Table 2, LatentParse raises
+mean accuracy over photo only for all five VLMs by 0.7–
+2.4 pp, while giving the Multi-Latent features directly
+changes it by −3.0 to +0.1 pp.
+The gains are largest
+on MMSI-Bench. On SPAR-Bench, LatentParse improves
+Qwen3.8-27B by only 0.2 pp and lowers GPT-6 Luna and
+7
+
+
+Claude Haiku by 0.5 and 0.3 pp. Multi-Latent features are
+not always the best choice, as Gemma 4 scores 1.0 pp higher
+with CLIP alone on MV-RoboBench.
+Mismatched features remove the gain.
+On MMSI-
+Bench, LatentParse raises Qwen3.8-27B by 5.1 pp over
+photo only, which scores 34.4% in Table 4. Mismatched
+features remove this gain and score 1.1 pp below photo only,
+significantly below Correct. Random Noise keeps 2.2 pp of
+the gain and is not significantly below Correct (p=0.08).
+Against a paired photo-only run the gain of Correct fea-
+tures is significant, and it stays at 5.8 pp on the 955 MMSI-
+Bench questions outside the development sample s1. In a
+separate run that varies the analyst’s input (Section H), re-
+ports from the question alone or the photos without tools do
+not differ significantly from photo only, whereas tools run
+on RGB patches beat it (p=0.003). All inputs gain on the
+68 questions with a “Cannot be determined” or “None of
+the above” option, which inconclusive reports favor. With-
+out them, LatentParse beats photo only (p=0.006) and RGB
+patches (p=0.033) on camera questions, but not photo only
+on all 932 remaining questions (p=0.48). Answered counts
+differ, and the p-values are uncorrected. With one encoder,
+the agent gains 4.1 pp with VGGT, 1.9 pp with DINOv3 and
+1.2 pp with CLIP in Figure 2. VGGT alone is not signifi-
+cantly below all three encoders (p=0.58), but the two miss
+different questions, and at least one is right on 52.1%. The
+single-encoder runs use the earlier analyst and its tools, and
+so do not isolate the effect of adding encoders. LatentParse
+is 17.5 pp better on camera motion, while VGGT alone is
+7.0 pp better on multi-step reasoning.
+The tested feature images do not help.
+Given di-
+rectly, the Correct Multi-Latent features leave Qwen3.8-
+27B 1.4 pp below photo only on MMSI-Bench, and Mis-
+matched features or Random Noise stay within 0.3 pp of
+photo only. Each single encoder given directly also scores
+below photo only there. On the development sample s1,
+Correct and Mismatched features given directly differ by
+0.7 pp for CLIP and for VGGT (p=1.00 for both). Figure 5
+compares direct input with photo only across VLMs.
+Camera questions gain and multi-step questions lose.
+On camera motion in MMSI-Bench, LatentParse raises
+Qwen3.8-27B by 33.8 pp in Figure 1. Over the 334 paired
+camera questions it gains 19.2 pp, and over the 195 paired
+multi-step questions it loses 9.7 pp, both significantly. On
+MV-RoboBench, grid position rises by 6.8 pp and grasp dis-
+tance falls by 3.0 pp. Table 8 lists every question type, and
+Figure 7 shows one success and one failure. We read 35 re-
+ports on multi-step questions that photo only gets right and
+LatentParse misses. In 14 the report points to a wrong op-
+tion, often because a weak CLIP hit places an absent object
+Table 5. Analyst that also sees the photo. Accuracy in % of
+Qwen3.8-27B on the 1,000 MMSI-Bench questions. Both analysts
+read the CLIP, DINOv3 and VGGT features, and the same VLM
+answers in the same way.
+Analyst input
+All
+Camera
+motion
+Multi-step
+Questions
+1,000
+74
+198
+Photo only, no analyst
+34.4
+37.8
+36.4
+Latent features, LatentParse
+39.5
+71.6
+26.3
+Photo and latent features
+39.3
+64.9
+34.8
+in the reference photo or the analyst turns image left and
+right into another viewer’s frame. In 18 it misses the asked
+relation, yet the answer changes.
+4.2. Ablation Study
+A fixed tool sequence comes close.
+The Fixed-Sequence
+mode runs six predefined code blocks instead of letting the
+analyst choose tools. On MMSI-Bench it scores 0.6 pp be-
+low Agent-Directed in Table 3, and the two modes do not
+differ significantly (p=0.73). With VGGT alone the two
+modes tie. Fixed-Sequence also beats photo only signifi-
+cantly, by 5.1 pp on the 989 questions with paired answers.
+On one GPU and the same 25 questions, analysis takes
+99 s per question for Agent-Directed and 79 s for Fixed-
+Sequence. Feature extraction takes about 0.5 s and answer-
+ing 1.5 s per question, so analysis dominates.
+The two modes differ by question type.
+Agent-Directed
+beats Fixed-Sequence by 17.5 pp on camera motion but
+trails by 7.1 pp on multi-step reasoning over the 195 paired
+questions. The Agent-Directed analyst calls motion on
+85% of MMSI-Bench questions and rarely uses most ba-
+sic tools, as Table 7 shows. On camera-motion questions it
+calls motion every time and locate all on 5%, while
+on object–object questions it calls locate all on 93%
+and relate on 38%.
+Seeing the photo helps multi-step questions.
+An analyst
+that also sees the photo scores within 0.2 pp of LatentParse
+in Table 5. It recovers multi-step reasoning with a signifi-
+cant gain of 8.5 pp, but trails by 6.7 pp on camera motion,
+not significantly (p=0.23). Different questions may need
+different evidence.
+5. Conclusion
+We propose LatentParse, a training-free framework that en-
+ables frozen VLMs to exploit the latent features of pre-
+trained vision encoders for spatial reasoning. A photo-blind
+analyst parses the features of CLIP, DINOv3 and VGGT
+with basis-invariant tools and distills the evidence into a
+text report, which the VLM reads alongside the photos.
+8
+
+
+While the tested grayscale feature images yield no consis-
+tent benefit, this report improves the mean accuracy of all
+five VLMs across three benchmarks, with the largest gains
+on MMSI-Bench camera-motion questions, suggesting that
+encoder latents become useful once the relations between
+their patches are made explicit. The Mismatched and Ran-
+dom Noise controls cover only Qwen3.8-27B on MMSI-
+Bench, multi-step reasoning declines without access to the
+photos, and letting the analyst choose its tools has not yet
+outperformed a predetermined sequence. Future work could
+combine photo and latent evidence adaptively per question.
+LLM Usage Statement
+Large language models are also the subject of this study,
+since every VLM we test and the analyst of LatentParse are
+built on one. We used Claude (Anthropic), through Claude
+Code, to write and debug the experiment code, launch and
+monitor runs, compute statistics from the run outputs, sort
+failure cases, draw figures and edit the text, including re-
+lated work. We used ChatGPT (OpenAI) to give feedback
+on drafts and to edit the text. The authors reviewed all code,
+results and text and take full responsibility for the paper.
+References
+[1] Boyuan Chen, Zhuo Xu, Sean Kirmani, Brian Ichter, Danny
+Driess, Pete Florence, Dorsa Sadigh, Leonidas Guibas, and
+Fei Xia.
+SpatialVLM: Endowing vision-language mod-
+els with spatial reasoning capabilities.
+In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), pages 14455–14465, 2024. 1, 3
+[2] Yue Chen, Xingyu Chen, Anpei Chen, Gerard Pons-Moll,
+and Yuliang Xiu. Feat2GS: Probing visual foundation mod-
+els with Gaussian splatting. In CVPR, 2025. 2, 3
+[3] An-Chieh Cheng, Hongxu Yin, Yang Fu, Qiushan Guo, Rui-
+han Yang, Jan Kautz, Xiaolong Wang, and Sifei Liu. Spatial-
+RGPT: Grounded spatial reasoning in vision language mod-
+els. In Advances in Neural Information Processing Systems
+(NeurIPS), 2024. 3
+[4] Mohamed El Banani, Amit Raj, Kevis-Kokitsi Maninis, Ab-
+hishek Kar, Yuanzhen Li, Michael Rubinstein, Deqing Sun,
+Leonidas Guibas, Justin Johnson, and Varun Jampani. Prob-
+ing the 3D awareness of visual foundation models. In CVPR,
+2024. 2, 3
+[5] Zhiwen Fan, Jian Zhang, Renjie Li, Junge Zhang, Runjin
+Chen, Hezhen Hu, Kevin Wang, Huaizhi Qu, Dilin Wang,
+Zhicheng Yan, et al. VLM-3R: Vision-language models aug-
+mented with instruction-aligned 3D reconstruction.
+arXiv
+preprint arXiv:2505.20279, 2025. 2, 3
+[6] Zhiyuan Feng, Zhaolu Kang, Qijie Wang, Zhiying Du, Jion-
+grui Yan, Shubin Shi, Chengbo Yuan, Huizhi Liang, Yu
+Deng, Qixiu Li, Rushuai Yang, Arctanx An, Leqi Zheng,
+Weijie Wang, Shawn Chen, Sicheng Xu, Yaobo Liang,
+Jiaolong Yang, and Baining Guo.
+Seeing across views:
+Benchmarking spatial reasoning of vision-language models
+in robotic scenes. In International Conference on Learning
+Representations (ICLR), 2026. 2, 3, 7
+[7] Xingyu Fu, Yushi Hu, Bangzheng Li, Yu Feng, Haoyu Wang,
+Xudong Lin, Dan Roth, Noah A. Smith, Wei-Chiu Ma, and
+Ranjay Krishna. BLINK: Multimodal large language models
+can see but not perceive. In ECCV, 2024. 1
+[8] Tanmay Gupta and Aniruddha Kembhavi. Visual program-
+ming: Compositional visual reasoning without training. In
+Proceedings of the IEEE/CVF Conference on Computer Vi-
+sion and Pattern Recognition (CVPR), pages 14953–14962,
+2023. 3
+[9] Shibo Hao, Sainbayar Sukhbaatar, DiJia Su, Xian Li, Zhit-
+ing Hu, Jason Weston, and Yuandong Tian. Training large
+language models to reason in a continuous latent space. In
+Conference on Language Modeling (COLM), 2025. 3
+[10] Yushi Hu, Weijia Shi, Xingyu Fu, Dan Roth, Mari Ostendorf,
+Luke Zettlemoyer, Noah A. Smith, and Ranjay Krishna. Vi-
+sual sketchpad: Sketching as a visual chain of thought for
+multimodal language models. In Advances in Neural Infor-
+mation Processing Systems (NeurIPS), 2024. 3
+[11] Muhammad Kamran Janjua, Hugo Silva, Di Niu, and Ba-
+hador Rashidi. Don’t show pixels, show cues: Unlocking
+visual tool reasoning in language models via perception pro-
+grams.
+In Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition (CVPR), 2026. 3
+[12] Wen Jiang, Mingmin Chu, Yimeng Tian, Qianxin Zhang,
+et al.
+HarnessEvolve:
+Learning from reference trajec-
+tories for reliable agent self-evolution.
+arXiv preprint
+arXiv:2609.00829, 2026. 3
+[13] Amita Kamath, Jack Hessel, and Kai-Wei Chang. What’s
+“up” with vision-language models? Investigating their strug-
+gle with spatial reasoning. In EMNLP, 2023. 1
+[14] Seth Karten, Joel Zhang, Tersoo Upaa, Ruirong Feng, et al.
+Continual harness:
+Online adaptation for self-improving
+foundation agents. arXiv preprint arXiv:2605.09998, 2026.
+3
+[15] Simon Kornblith, Mohammad Norouzi, Honglak Lee, and
+Geoffrey Hinton. Similarity of neural network representa-
+tions revisited. In Proceedings of the International Confer-
+ence on Machine Learning (ICML), pages 3519–3529, 2019.
+5
+[16] Yoonho Lee, Roshen Nair, Qizheng Zhang, Kangwook Lee,
+et al. Meta-Harness: End-to-end optimization of model har-
+nesses. arXiv preprint arXiv:2603.28052, 2026. 2, 3, 6
+[17] Rong Li, Shijie Li, Jiangyong Huang, Lingdong Kong, Ji-
+aming Zhou, Dongyue Lu, Zeying Gong, Baoxiong Jia, Jun-
+wei Liang, and Siyuan Huang. GeoReader: Learning latent
+geometry for spatial reasoning in vision-language models.
+arXiv preprint arXiv:2610.18694, 2026. 3
+[18] Yi Li, Hualiang Wang, Yiqun Duan, and Xiaomeng Li. CLIP
+surgery for better explainability with enhancement in open-
+vocabulary tasks. arXiv preprint arXiv:2304.05653, 2023.
+5
+[19] Jiahang Lin, Shichun Liu, Chengjun Pan, Lizhi Lin, et al.
+Agentic harness engineering:
+Observability-driven auto-
+matic evolution of coding-agent harnesses. arXiv preprint
+arXiv:2604.25850, 2026. 3
+9
+
+
+[20] Benlin Liu, Yuhao Dong, Yiqin Wang, Zixian Ma, Yansong
+Tang, Luming Tang, Yongming Rao, Wei-Chiu Ma, and Ran-
+jay Krishna. Coarse correspondences boost spatial-temporal
+reasoning in multimodal language model. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), 2025. 3
+[21] Haotian Liu, Chunyuan Li, Yuheng Li, Bo Li, Yuanhan
+Zhang, Sheng Shen, and Yong Jae Lee. LLaVA-NeXT: Im-
+proved reasoning, OCR, and world knowledge. https://llava-
+vl.github.io/blog/2024-01-30-llava-next/, 2024. 1, 3
+[22] Haozhe Liu, Tian Ye, Sensen Gao, Qihang Cao, et al. SoL-
+Pi:
+Recursively scaling auto-research loops for efficient
+agent harness. arXiv preprint arXiv:2609.20519, 2026. 3
+[23] Yifan Liu, Fangneng Zhan, Kaichen Zhou, Yilun Du, Paul Pu
+Liang, and Hanspeter Pfister. Abstract 3D perception for spa-
+tial intelligence in vision-language models. In CVPR, 2026.
+2, 3, 4
+[24] Chenyang Ma, Kai Lu, Ta-Ying Cheng, Niki Trigoni, and
+Andrew Markham. SpatialPIN: Enhancing spatial reason-
+ing capabilities of vision-language models through prompt-
+ing and interacting 3D priors. In NeurIPS, 2024. 2, 3, 4
+[25] Wufei Ma, Haoyu Chen, Guofeng Zhang, Yu-Cheng Chou,
+Jieneng Chen, Celso M. de Melo, and Alan Yuille. 3DSR-
+Bench: A comprehensive 3D spatial reasoning benchmark.
+In Proceedings of the IEEE/CVF International Conference
+on Computer Vision (ICCV), 2025. 1, 3
+[26] Yunze Man, Shuhong Zheng, Zhipeng Bao, Martial Hebert,
+Liang-Yan Gui, and Yu-Xiong Wang. Lexicon3D: Probing
+visual foundation models for complex 3D scene understand-
+ing. In NeurIPS, 2024. 2, 3
+[27] Maxime Oquab, Timoth´ee Darcet, Th´eo Moutakanni, Huy
+Vo, Marc Szafraniec, Vasil Khalidov, Pierre Fernandez,
+Daniel Haziza, Francisco Massa, Alaaeldin El-Nouby, et al.
+DINOv2: Learning robust visual features without supervi-
+sion. Transactions on Machine Learning Research (TMLR),
+2024. 3
+[28] Wenbo Pan, Shujie Liu, Chin-Yew Lin, Jingying Zeng, et al.
+Evolving agents in the dark: Retrospective harness optimiza-
+tion via self-preference. In Findings of the Association for
+Computational Linguistics: EMNLP, 2026. 3
+[29] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya
+Ramesh, Gabriel Goh, Sandhini Agarwal, Girish Sastry,
+Amanda Askell, Pamela Mishkin, Jack Clark, et al. Learn-
+ing transferable visual models from natural language super-
+vision. In Proceedings of the International Conference on
+Machine Learning (ICML), pages 8748–8763, 2021. 2, 3, 4
+[30] Tamar Rott Shaham, Sarah Schwettmann, Franklin Wang,
+Achyuta Rajaram, Evan Hernandez, Jacob Andreas, and An-
+tonio Torralba.
+A multimodal automated interpretability
+agent. In Proceedings of the International Conference on
+Machine Learning (ICML), 2024. 3
+[31] Shuai Shao, Kangning Zhang, Qingyao Li, Shijian Wang,
+et al.
+Harness-R1: Learning to edit executable runtime
+harnesses from agent failure trajectories.
+arXiv preprint
+arXiv:2608.02276, 2026. 3, 6
+[32] Oriane Sim´eoni, Huy V. Vo, Maximilian Seitzer, Federico
+Baldassarre, Maxime Oquab, Cijo Jose, Vasil Khalidov,
+Marc Szafraniec, Seungeun Yi, Micha¨el Ramamonjisoa,
+et al. DINOv3. arXiv preprint arXiv:2508.10104, 2025. 2,
+3, 4
+[33] D´ıdac Sur´ıs, Sachit Menon, and Carl Vondrick. ViperGPT:
+Visual inference via Python execution for reasoning.
+In
+Proceedings of the IEEE/CVF International Conference on
+Computer Vision (ICCV), pages 11888–11898, 2023. 2, 3
+[34] Shengbang Tong, Ellis Brown, Penghao Wu, Sanghyun
+Woo, Manoj Middepogu, Sai Charitha Akula, Jihan Yang,
+Shusheng Yang, Adithya Iyer, Xichen Pan, et al. Cambrian-
+1: A fully open, vision-centric exploration of multimodal
+LLMs. In Advances in Neural Information Processing Sys-
+tems (NeurIPS), 2024. 1, 3
+[35] Jianyuan Wang, Minghao Chen, Nikita Karaev, Andrea
+Vedaldi, Christian Rupprecht, and David Novotny. VGGT:
+Visual geometry grounded transformer. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), 2025. 2, 3, 4
+[36] Qineng Wang, Baiqiao Yin, Pingyue Zhang, Jianshu Zhang,
+Kangrui Wang, Zihan Wang, Jieyu Zhang, Keshigeyan Chan-
+drasegaran, Han Liu, Ranjay Krishna, Saining Xie, Jia-
+jun Wu, Li Fei-Fei, and Manling Li.
+MindCube: Spa-
+tial mental modeling from limited views. In International
+Conference on Learning Representations (ICLR), 2026.
+arXiv:2506.21458. 3
+[37] Chuyang Wei, Haoxiang Guan, Minghang Zhu, Kexin
+Zhou, et al.
+Self-evolving agent harness.
+arXiv preprint
+arXiv:2610.18813, 2026. 2, 3, 6
+[38] Sherman Wong, Zhenting Qi, Zhaodong Wang, Nathan Hu,
+et al.
+Confucius code agent: Scalable agent scaffolding
+for real-world codebases. arXiv preprint arXiv:2512.10398,
+2025. 3
+[39] Diankun Wu, Fangfu Liu, Yi-Hsin Hung, and Yueqi Duan.
+Spatial-MLLM: Boosting MLLM capabilities in visual-
+based spatial intelligence. arXiv preprint arXiv:2505.23747,
+2025. 2, 3
+[40] Yuxin Xiao, Zhiyun Lu, Jianyu Wang, Yangtian Zhang, et al.
+Recurrent harness for agentic continual learning.
+arXiv
+preprint arXiv:2610.12668, 2026. 3
+[41] Ruiyao Xu, Yanfei Chen, Zhongying CuiZhu, Bhavana Dalvi
+Mishra, et al. Harness2: Recursive agent harnessing for an
+open world. arXiv preprint arXiv:2610.14224, 2026. 3
+[42] Jihan Yang, Shusheng Yang, Anjali W. Gupta, Rilyn Han,
+Li Fei-Fei, and Saining Xie. Thinking in space: How mul-
+timodal large language models see, remember, and recall
+spaces.
+In Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition (CVPR), 2025. 1,
+3
+[43] Sihan Yang, Runsen Xu, Yiman Xie, Sizhe Yang, Mo Li,
+Jingli Lin, Chenming Zhu, Xiaochen Chen, Haodong Duan,
+Xiangyu Yue, et al. MMSI-Bench: A benchmark for multi-
+image spatial intelligence. arXiv preprint arXiv:2505.23764,
+2025. 1, 2, 3, 7
+[44] Yilun Yao, Xinyu Tan, Chao-Hsuan Liu, Yaoming Li, et al.
+Harness-Bench: Evaluating agent harnesses across models
+and realistic workflows. arXiv preprint arXiv:2605.27922,
+2026. 3
+10
+
+
+[45] Haoran Ye, Yuxing Lu, Haonan Dong, Zhaochen Su, et al.
+Harness-Zero:
+Harness distillation via agent-as-harness.
+arXiv preprint arXiv:2609.24974, 2026. 3
+[46] Chun-Hsiao Yeh, Shengyi Qian, Manchen Wang, Yi Ma,
+Joseph Tighe, and Fanyi Xiao. Beyond 3D VQAs: Injecting
+3D spatial priors into vision-language models for enhanced
+geometric reasoning.
+In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition
+(CVPR), 2026. 3
+[47] Huanyu Zhang, Wenshan Wu, Chengzu Li, Ning Shang, Yan
+Xia, Yangyu Huang, Yifan Zhang, Li Dong, Zhang Zhang,
+Liang Wang, Tieniu Tan, and Furu Wei. Latent sketchpad:
+Sketching visual thoughts to elicit multimodal reasoning in
+MLLMs. arXiv preprint arXiv:2510.24514, 2025. 3
+[48] Hangfan Zhang, Shao Zhang, Kangcong Li, Chen Zhang,
+et al.
+Self-Harness: Harnesses that improve themselves.
+arXiv preprint arXiv:2606.09498, 2026. 3
+[49] Jiahui Zhang, Yurui Chen, Yanpeng Zhou, Yueming Xu, Ze
+Huang, Jilin Mei, Junhui Chen, Yu-Jie Yuan, Xinyue Cai,
+Guowei Huang, Xingyue Quan, Hang Xu, and Li Zhang.
+From flatland to space: Teaching vision-language models to
+perceive and reason in 3D.
+In Advances in Neural Infor-
+mation Processing Systems (NeurIPS), Datasets and Bench-
+marks Track, 2025. arXiv:2503.22976. 2, 3, 7
+[50] Renrui Zhang, Ziyao Zeng, Ziyu Guo, and Yafeng Li. Can
+language understand depth? In ACM MM, 2022. 2, 3
+[51] Duo Zheng,
+Shijia Huang,
+Yanyang Li,
+and Liwei
+Wang.
+Learning from videos for 3D world: Enhancing
+MLLMs with 3D vision geometry priors.
+arXiv preprint
+arXiv:2505.24625, 2025. 2, 3
+[52] Yu Zhou, Cheng-Fu Yang, Rui Sun, Di Wu, et al. OpenVL-
+Harness: Real world visual agentic tool-use with multimodal
+memory. arXiv preprint arXiv:2610.26860, 2026. 3
+[53] Jiaru Zou, Ruizhong Qiu, Gaotang Li, Xiyuan Yang, Kather-
+ine Tieu, Pan Lu, Ke Shen, Hanghang Tong, Yejin Choi, Jin-
+grui He, James Zou, Mengdi Wang, and Ling Yang.
+La-
+tent collaboration in multi-agent systems. In Proceedings of
+the International Conference on Machine Learning (ICML),
+2026. 3
+11
+
+
+Parsing Visual Latents for Multimodal Spatial Reasoning
+Supplementary Material
+A. Tool Settings
+Table 6. Tool settings. Fixed values of the tools in Table 1, the
+same for every VLM and benchmark. A cell is one column of the
+shared grid, 1/37 of the photo width, or one CLIP cell for CLIP’s
+own matches. Peak and standout are z-scores of CLIP’s text map.
+Tool
+Setting
+text map
+subtracts the scores of “background”, “a wall”, “the
+floor”, “the sky” and “a surface”
+locate
+CLIP blob from the top 8% of cells and its core from the
+top 4%
+support
+cells above the median plus 1.5 robust standard
+deviations of their similarity to the seed, each 1.4826
+median absolute deviations
+locate
+an encoder keeps the blob when its support holds at least
+0.3 of the core
+High tier
+both encoders keep the blob, VGGT–DINOv3 IoU at
+least 0.2, box area 0.02 to 0.40, peak at least 4.0, standout
+at least 1.0
+Medium tier
+one encoder keeps the blob, box area 0.02 to 0.40, peak at
+least 3.0, standout at least 0.25
+locate
+a high or medium blob drops to tier low when less than
+half of its CLIP cells lie inside the rows VGGT keeps
+locate all two names whose regions in one photo overlap with IoU
+at least 0.5 are one region, and the one with the lower
+peak drops to tier low
+motion
+an encoder is reliable with at least 30 mutual matches, or
+a quarter of its cells but never under 15, and with at least
+0.20 of them fitting one shift, scale and rotation within
+1.5 cells
+motion
+a direction needs a median shift of one cell, over the
+moving matches when at least 0.30 of them move, and
+0.60 of these matches shifting the same way
+motion
+zoom shrinks below scale 0.93 and grows above 1.08
+motion
+a high finding needs pt agree of at least 0.1
+track
+found yes when each encoder has at least 5 mutual
+matches and its landings spread at most 1.5 times the
+region’s own spread plus 0.03, and the landing points of
+the encoders lie within the larger of 0.1 and that spread
+layout
+k-means with k=5, and a VGGT segment and its best
+DINOv3 segment are shared when their IoU is at least 0.5
+The tier thresholds were fitted once and without any an-
+swer.
+The thresholds of the tiers of locate, the bar of
+support and the two bars of motion in Table 6 come
+from one calibration run on 3DSRBench and MMSI-Bench
+questions, made before LatentParse ran on any full bench-
+mark. The calibration reads no answer and no accuracy. For
+each question it names the objects as the analyst would, runs
+the tools on the Correct features and on Random Noise, and
+asks a VLM judge that sees the photo whether each box of
+locate lands on its object. The thresholds of locate
+admit the most objects whose high-tier boxes land on their
+object at least 65% of the time and whose medium-tier
+boxes do so at least 50% of the time, while at most 1% of
+Noise objects reach the high tier and at most 5% the high
+or medium tier. The inlier share of motion sits just above
+its 99th percentile of 0.18 under Noise, and the pt agree
+bar of 0.1 lies well above its 99th percentile of 0.02 under
+Noise.
+At these settings boxes land on their objects and Noise
+yields none.
+On the calibration questions, 65% of the
+high-tier boxes and 54% of the medium-tier boxes land on
+their object, against 3% for random boxes of the same size,
+and no Noise object reaches the high or medium tier.
+No setting changed afterwards.
+All reported runs use
+these values, for all five VLMs, all three benchmarks and
+every question. MV-RoboBench and SPAR-Bench-Tiny en-
+tered the study only after the settings were frozen, so no
+value of Table 6 was fitted to either benchmark.
+B. Prompts
+On MMSI-Bench, the analyst of LatentParse receives the
+system prompt below word for word, for every question
+and VLM. Its first user message gives the number of pho-
+tos, which it does not see, the grid sizes, the question
+and the options, and the sandbox holds the photo sizes as
+photo size. On MV-RoboBench and SPAR-Bench, this
+message also lists the color and position of each marker
+found by the color detector, followed by one of the two
+notes printed below. The printed output of each code step
+returns as the next user message under its execution id.
+Once four code steps or 600 s are used, the analyst is asked
+at most twice to reply with findings only. The boxes it re-
+turns under regions are kept for inspection, as in Fig-
+ure 8, and the photos reach the answering VLM without
+them.
+You are the analyst. You do NOT see the photo(s). You
+get a spatial question and the raw latent features of
+the photo(s) from frozen vision models, loaded in a
+Python sandbox:
+- F["clip"][v]: CLIP ViT-L/14 patch tokens, shape (16,
+16, 1024): a 16x16 grid over the whole photo (
+squeezed to a square). CLIP links image regions to
+words.
+- F["vggt"][v]: VGGT aggregator tokens, shape (h, 37,
+2048). VGGT is a 3D reconstruction model: its features
+encode surfaces, depth and viewpoint, computed
+jointly for all photos of a scene.
+- F["dinov3"][v]: DINOv3 ViT-L/16 patch tokens, shape
+(h, 37, 1024), on exactly the VGGT grid (same cells,
+same vggt_valid). DINOv3 is a self-supervised image
+model: features of objects, parts and surfaces,
+12
+
+
+computed for each photo on its own (it never sees the
+other photos and has no notion of depth).
+Nothing is decoded: there is no depth map, no 3D
+points and no camera pose. CLIP’s grid is 16x16 over
+the whole photo; VGGT and DINOv3 share a grid of 14-
+pixel cells, 37 columns across the photo width (a tall
+photo is centre-cropped; vggt_valid[v] is False on
+padding rows). Positions are photo fractions: x from
+the left, y from the top, both 0-1. Printouts number
+the photos 1, 2, ...; in code and in "regions", view =
+photo number - 1.
+Your job is NOT to answer. Measure evidence in the
+latents that bears on the question, check it across
+latents, and say how reliable it is. There is no
+critic and no second round; a separate model answers
+from the photo(s) and your findings.
+Tools that compare latents (start with these):
+- locate(phrase, v=None): CLIP’s text map (already
+negated, so the named object scores highest) finds the
+object in the photo where it peaks (or in photo v);
+VGGT and DINOv3 each check on their own which cells
+belong with CLIP’s blob. Prints photo, tier, box, area
+, centroid, peak, standout (peak minus the best value
+elsewhere), keep (share of the core of CLIP’s blob
+each latent keeps), iou_vggt_dinov3 and peaks per
+photo. tier is high, medium, low or none. locate_all(
+phrases) runs it for each phrase and marks two names
+that land on one region (same_as).
+- motion(va, vb): how the content moves from photo va
+to photo vb in each latent, from mutual patch matches:
+n, dx, dy (median shift of the moving matches; + =
+right / down), static (share not moving), inl (share
+that one shift + scale + rotation explains; noise
+stays under 0.2), scale (> 1: content grows), rot (
+degrees). reliable lists the latents with enough
+consistent matches (an unreliable one shows only n and
+inl); x, y and zoom give the direction of the
+reliable latents and how many agree ("left 3/3", "left
+2/3 (clip right)", "left (only vggt)", "disagree", "
+mixed", "unreliable"); pt_agree is the share of cells
+VGGT and DINOv3 both match whose targets lie within
+one cell of each other (chance is about 0.01).
+- track(region, vb): where a located region (a locate
+result) lands in photo vb in each geometry latent (n,
+at, spread); found yes / no / unclear; only with yes:
+shift, beyond_camera (shift minus the camera motion:
+the object’s own movement, or parallax) and text_at vs
+text_peak (CLIP’s map at the landing place vs its
+peak there).
+- relate(a, b): region b relative to region a in one
+photo: dx, dy between centroids, size (box area ratio)
+, iou, touch.
+- layout(v): k-means segments VGGT and DINOv3 share,
+and cka: how alike each pair of latents’ maps are (0
+unrelated, 1 the same structure).
+- support(model, seed, v): the cells a latent itself
+groups with a seed region (the seed is not forced in).
+iou(a, b, v): overlap of two masks of photo v (either
+grid).
+Single-latent tools: text_map(phrase, v, pooled=False)
+, top_region(map, frac), sim_to(model, mask, v,
+mask_view), grow(model, seed, v) (its result always
+contains the seed, so it never confirms a region),
+kmeans(model, v, k, mask), pca(model, v, k, mask),
+match(va, vb, model, mask_a), region_stats(map, mask,
+v), corr(map_a, map_b, mask), box(x0, y0, x1, y1,
+model, v), bbox(mask, v), to_vggt / to_clip(
+map_or_mask, v), describe(map), grid(model, v);
+photo_size, n_views and latents (the latents in F).
+numpy and scipy also work.
+Rules for reading the numbers:
+1. Rely on a location, a motion or a relation only
+when the latents agree, and set each finding’s
+reliability from that agreement:
+- high: locate tier high; a motion direction that
+every reliable latent gives, with at least two of them
+("left 3/3", "left 2/2") and pt_agree >= 0.1 when
+VGGT and DINOv3 are both reliable; track found yes.
+- medium: locate tier medium; a direction with a
+dissenting latent ("left 2/3 (...)") or from one
+latent ("only ..."); track "yes (only ...)".
+- low: anything else. "disagree", "mixed", "
+unreliable", tier low or none, and track no or unclear
+are not evidence: say the latents are inconclusive on
+that point. Never settle a disagreement by picking
+the latent you prefer.
+2. Agreement shows that a region is one coherent thing
+in several latents, not that it is the named object;
+that rests on CLIP’s peak and standout.
+3. Camera motion: content moving right from photo a to
+photo b means the camera turned or moved left;
+content moving down means it tilted or moved up; zoom
+"grows" means it moved toward the scene. A shift under
+one cell (0.027) is no movement.
+4. State a relation between two objects only when both
+have tier high or medium; left/right and above/below
+come from their centroids in one photo.
+5. The latents carry no reliable signal for
+orientation: which way an object faces or points, or
+whether two objects are parallel or face the same way.
+Do not infer these; say they are not measured.
+6. PCA scores, similarities and cluster ids have
+arbitrary offset and scale: compare orderings and
+differences relative to the spread, never ratios,
+metres or angles.
+7. If nothing reaches medium reliability, say the
+latents are inconclusive. Every finding must come from
+the latent numbers (source "latent"); do not describe
+what the scene probably looks like.
+Write Python: exactly one ‘‘‘python block per turn, at
+most 4 code steps; variables persist between steps
+and each run gets an id (E1, E2, ...). Print short
+summaries (the tools above print compact lines), never
+whole arrays. Then give your FINDINGS.
+In "regions", give the box of each object the question
+names whose tier is high, or medium when track found
+it in another photo (found yes); view = photo number -
+1. Leave out every other object. The boxes are drawn
+on the photo(s) for the model that answers, so a wrong
+box misleads it.
+When done, reply with a line starting with FINDINGS:
+followed by JSON (at most 6 findings, most decisive
+first, each at most 60 words):
+{"findings": [{"text": "<finding with its numbers, the
+tool and the latents>", "source": "latent", "evidence
+": ["E2"], "reliability": "high|medium|low", "why": "<
+which latents agree or disagree>"}], "summary": "<at
+most 80 words on what the latents show that bears on
+the question; do not pick an option>", "regions": [{"
+label": "<object>", "view": 0, "box": [0.1, 0.2, 0.4,
+0.6]}]}
+The first user message has this form, with h rows set by
+each photo’s aspect ratio.
+2 photo(s) (not shown to you). Grids: CLIP (16, 16)
+per photo; VGGT and DINOv3 [(h, 37), (h, 37)].
+Question: <question>
+Options: A. <option>; B. <option>; C. <option>; D. <
+option>
+On MV-RoboBench and SPAR-Bench, the marks follow the
+options in the form below, with the first note.
+Marks in the photo(s):
+- Photo 1: red box, x 0.12-0.30, y 0.40-0.62
+- Photo 2: blue box, x 0.55-0.71, y 0.20-0.44
+These marks are drawn in the photo(s) and are what the
+question refers to. Their positions are given, not
+guessed, so a marked object counts as located: box(x0,
+y0, x1, y1, model, v) with these coordinates (v =
+photo number - 1; for a point, a box of +-0.04 around
+it) gives the latent cells of the marked object,
+13
+
+
+usable with the other tools.
+When the question names a reference view and no mark lies
+in that photo, the second note replaces the first.
+These marks are drawn in the photo(s) and are what the
+question refers to. Their positions are given, not
+guessed, so a marked object counts as located: box(x0,
+y0, x1, y1, model, v) with these coordinates (v =
+photo number - 1; for a point, a box of +-0.04 around
+it) gives the latent cells of the marked object as a
+boolean mask (print mask.sum(), not the mask), usable
+with the other tools. A mark’s position holds only in
+the photo it is drawn in: when the question asks about
+a relation seen from another photo (for example the
+first photo as the observer’s view), carry the marked
+cells there with track(mask, vb, va=v) or locate the
+object in that photo, and never read a position in one
+photo as a position in another.
+When the step or time limit is reached, the analyst receives
+this message.
+Step or time limit reached. Do not write code. Reply
+only with FINDINGS: and the JSON, using the evidence
+you already have (say what is still uncertain).
+The answering VLM receives the photos, the report under a
+fixed header and the question in the form of the photo-only
+runs, which receive the same message without the report.
+The report keeps the text and reliability of each finding and
+the summary, cut at 1,500 characters. Open VLMs continue
+after the prefix “Answer:”, and the first option letter in the
+reply is the answer. Closed VLMs receive the same content
+as in their photo-only runs.
+<photo 1> <photo 2>
+Notes from another model’s analysis of the latent
+features (CLIP, VGGT and DINOv3) of the photo(s). They
+may contain errors:
+- <finding> (reliability: high)
+- <finding> (reliability: medium)
+Summary: <summary>
+<question>
+A. <option>
+B. <option>
+C. <option>
+D. <option>
+Answer with the option’s letter from the given choices
+directly.
+C. Tools in the Agent-Directed Mode
+In the Agent-Directed mode on MMSI-Bench, the analyst
+runs 3.87 tool steps per question on average. Most of its
+calls, counted in Table 7, go to the top rows of Table 1.
+motion appears in 85% of the questions, including every
+camera-motion question. The analyst relies on the tools that
+compare encoders, as motion, locate all, layout
+and locate together make up 69% of all calls.
+D. Direct Input across VLMs
+Figure 5 compares photo only with the features of each en-
+coder given directly, averaged over the three benchmarks,
+and Figure 6 adds the question types of Qwen3.8-27B. Av-
+Table 7. Tools the Agent-Directed analyst calls. Qwen3.8-27B
+with Multi-Latent features on the 1,000 MMSI-Bench questions.
+Questions in % have at least one call of the tool, and calls per ques-
+tion count only those questions. Five tools, grow, pca, corr,
+iou and to clip, are not called.
+Tool
+Questions in
+%
+Calls
+Calls per
+question
+motion
+84.5
+1,270
+1.50
+locate all
+69.2
+726
+1.05
+layout
+59.5
+1,122
+1.89
+locate
+53.8
+1,760
+3.27
+text map
+25.7
+725
+2.82
+track
+25.0
+444
+1.78
+top region
+14.3
+260
+1.82
+relate
+12.6
+388
+3.08
+box
+7.9
+210
+2.66
+match
+5.2
+93
+1.79
+Eight other tools
+under 2 each
+115
+–
+Five VLMs, mean of 3 benchmarks
+45
+30
+Qwen3.8-27B
+Gemma 4
+InternVL
+GPT-6 Luna
+Claude Haiku
+ours
+photo only
++CLIP
++DINOv3
++VGGT
++Multi-Latent
+Figure 5. Photo only against each encoder’s features given di-
+rectly. Five VLMs on the mean of three benchmarks, with CLIP,
+DINOv3, VGGT or Multi-Latent features shown as an image next
+to the photo. The bold blue line is LatentParse.
+eraged over the three benchmarks, one encoder’s features
+given directly change the accuracy of a VLM by −4.8 to
++0.6 pp against photo only, and the Multi-Latent features
+lower four of the five VLMs by 1.6 to 3.0 pp and leave
+Qwen3.8-27B at +0.1 pp.
+E. Accuracy by Question Type
+Table 8 splits the accuracy of Qwen3.8-27B by question
+type on MV-RoboBench and MMSI-Bench.
+On MMSI-
+Bench, LatentParse raises 7 of the 11 question types, five
+of them by more than 8 pp.
+F. Encoder Layers
+LatentParse is stable across encoder layers.
+We read
+one encoder at a time from another layer on 300 MMSI-
+Bench questions and keep the other two at their last block
+in Table 9. Reading block 5, or blocks 5, 12, 18 and 24
+together, changes accuracy by −1.3 to +4.7 pp against the
+14
+
+
+Five VLMs, mean of 3 benchmarks
+45
+30
+Qwen
+Gemma 4
+InternVL
+Luna
+Haiku
+MV-RoboBench, Qwen3.8
+60
+10
+cross-view
+grasp
+grid
+viewpoint
+MMSI-Bench types, Qwen3.8
+60
+10
+cam-cam
+cam-obj
+cam-reg
+obj-obj
+obj-reg
+reg-reg
+look
+measure
+cam move
+obj move
+multi-step
+photo only
++CLIP
++DINOv3
++VGGT
++Multi-Latent
+Figure 6. Photo only and each encoder’s features given directly, by question type. Five VLMs on the mean of three benchmarks, as
+in Figure 5, and Qwen3.8-27B on each task of MV-RoboBench and each question type of MMSI-Bench. The radii start at 30% in the left
+panel and at 10% in the other two.
+1 Camera motion
+2
+1
+question
+In which direction is
+the camera moving?
+report
+show content moving left and up
+Camera therefore moves right and down
+photo only
+B lower left
+LatentParse
+A lower right
+2 Multi-step reasoning
+2
+1
+question
+Where is the camera positioned
+relative to me when taking
+the second photo?
+report
+content shifts left
+the camera turned/moved to the right
+photo only
+D to the left
+LatentParse
+C to the right
+Figure 7. Qualitative examples. Two MMSI-Bench questions with Qwen3.8-27B. On camera motion, LatentParse’s report leads to the
+right answer where photo only fails. On a multi-step question, the analyst reads the leftward shift as the camera moving right, so LatentParse
+answers wrong while photo only is right. Report lines are abridged excerpts.
+last block, never significantly (p≥0.08). With every layer
+choice, LatentParse stays above photo only, at 33.0% to
+39.0% against 29.7%.
+G. Paired Sign Tests
+Table 10 lists paired exact sign tests for the main exper-
+iments.
+Each test is two-sided and uses only the ques-
+tions that exactly one of the two conditions answers cor-
+rectly. W counts the questions that only the first condition
+answers correctly and L those that only the second does,
+written as 165W/103L in the sections below. The devel-
+opment sample s1 holds 100 3DSRBench and 45 MMSI-
+Bench questions whose answers we inspected during de-
+velopment. Paired photo only is the answer setting of the
+agent runs that receives no notes, so it shares their GPUs
+and batches. The rows on 986 questions keep the questions
+on which its prompt is exactly the photo-only prompt, with
+no box drawn in any photo, as in Table 12. The Fixed-
+Sequence row keeps such questions of the Fixed-Sequence
+runs, 989 of them, and the other paired rows use all ques-
+tions that both conditions answer.
+H. Source of the Gain on MMSI-Bench
+Table 11 isolates the source of the gain of LatentParse. The
+answering model and its input format stay fixed, and only
+what the analyst receives changes. With Question alone, the
+analyst writes its report from the question and the answer
+options, with no features and no tools. With Photos, it also
+sees the photos, still with no tools. With Pixels, the photo-
+blind analyst selects the same predefined tools, which run
+on the RGB patches of the photos on the grids of CLIP and
+VGGT in place of the features, without the tools that need
+CLIP’s text features. Photo only, LatentParse and the con-
+trols are rerun here on the same GPUs with the same batch
+15
+
+
+Table 8. Accuracy by question type. Qwen3.8-27B on all ques-
+tions of MV-RoboBench and MMSI-Bench. Photo only is the run
+of Table 2. All is LatentParse with the Multi-Latent features, and
+∆is its change from photo only. MVR is MV-RoboBench.
+Question type
+n
+Photo
+only
+All
+∆
+Cross-view matching
+200
+25.5
+25.5
++0.0
+Grasp distance
+201
+53.7
+50.7
+−3.0
+Grid position
+204
+12.3
+19.1
++6.8
+MVR
+Viewpoint
+256
+21.9
+25.0
++3.1
+Positional: camera–camera
+93
+31.2
+37.6
++6.4
+Positional: camera–object
+86
+25.6
+48.8
++23.2
+Positional: camera–region
+83
+39.8
+48.2
++8.4
+Positional: object–object
+94
+34.0
+30.9
+−3.1
+Positional: object–region
+85
+37.6
+37.6
++0.0
+Positional: region–region
+81
+28.4
+37.0
++8.6
+Attribute: appearance
+66
+18.2
+28.8
++10.6
+Attribute: measurement
+64
+50.0
+48.4
+−1.6
+Motion: camera
+74
+37.8
+71.6
++33.8
+Motion: object
+76
+38.2
+42.1
++3.9
+MMSI-Bench
+Multi-step reasoning
+198
+36.4
+26.3
+−10.1
+Table 9. Which encoder layer. Accuracy in % of Qwen3.8-27B
+with LatentParse on 300 MMSI-Bench questions. Each column
+reads one encoder from another of its 24 blocks and keeps the
+other two at the last block. The last row concatenates blocks 5, 12,
+18 and 24, which VGGT’s DPT heads read.
+Layer read
+CLIP
+DINOv3
+VGGT
+Photo only
+29.7
+29.7
+29.7
+Last block 24, ours
+34.3
+34.3
+34.3
+Early block 5
+33.0
+36.7
+34.7
+Blocks 5, 12, 18 and 24
+39.0
+34.3
+33.0
+size. Some questions have no answer in three of the runs, so
+accuracy is over the answered questions, each test uses the
+questions answered under both conditions, and the p-values
+are not corrected for multiple comparisons. The gains of
+LatentParse on camera motion and on the four camera types
+remain significant after a Bonferroni correction over the 20
+tests of Table 11. All conclusions of this section hold when
+the questions without an answer are run again, so that every
+condition answers all 1,000 questions.
+Latent features give the largest gain on camera ques-
+tions.
+On the four camera question types, LatentParse
+raises accuracy from 32.7% to 47.5%, at 81W/36L and
+p<10−4, which reproduces the gain of the main text in an
+independent run. A report written from the question alone
+or from the photos does not differ significantly from photo
+only, on the four camera types together or over all ques-
+tions (p≥0.14). The Multi-Latent features score higher than
+Pixels on each of the four camera types and reach 47.5%
+against 41.9% on the four together, where Pixels also beat
+photo only (p=0.003). The largest gain is on camera mo-
+tion, from 36.5% to 68.1% at 23W/1L.
+Without the “Cannot be determined” questions, the la-
+tent features keep the camera gain.
+In 68 questions,
+one option is “Cannot be determined” or “None of the
+above”, and it is the correct answer in 49 of them. A re-
+port that calls the evidence inconclusive moves the answer
+toward this option, so every analyst input gains on these
+questions, from 33.8% for photo only to between 57.4%
+and 77.9%.
+Without them, on the remaining 308 cam-
+era questions, LatentParse scores 45.1% against 35.4% for
+photo only, at 63W/35L and p=0.006, whereas Pixels and
+Question alone do not differ significantly from photo only
+(p=0.22 and p=1.00). LatentParse also outperforms Pixels
+there, 45.1% against 38.1% at 50W/30L and p=0.033. On
+all 932 remaining questions, no analyst input differs sig-
+nificantly from photo only, and LatentParse scores 35.9%
+against 34.6% with p=0.48. The gain of the Multi-Latent
+features is thus concentrated on camera questions, as in the
+main text.
+I. Further Baselines
+Table 12 adds baselines that use the photos or the de-
+coded outputs of an encoder, on the 986 questions of Ta-
+ble 10. Neither beats photo only significantly in any column
+(p≥0.064), while LatentParse does in all three columns.
+Decoded camera poses do not replace the latent features.
+VGGT predicts a camera pose for each photo with its cam-
+era head. We convert the relative pose between the first
+photo and each other photo, and between consecutive pho-
+tos, into sentences that state how many degrees the camera
+turns and tilts and in which direction it moves, and the an-
+swering VLM receives these sentences in place of the re-
+port. The decoded poses raise accuracy on the four cam-
+era types from 31.4% to 35.6% (p=0.098), whereas La-
+tentParse reaches 50.6%, at 89W/39L against the poses and
+p<0.001. On camera motion, the poses score 51.4% and
+LatentParse 71.6%, at 18W/3L and p=0.001.
+More answers from the photos do not explain the gain.
+Self-consistency samples five answers from the photos at
+temperature 0.7 and takes the majority. It scores 33.9%
+overall (p=0.94) and 32.6% on the camera types (p=0.64),
+and LatentParse outperforms it by 5.6 pp at 196W/141L and
+p=0.003. A report written from the question alone, which
+adds the same analysis step without features, also does not
+differ significantly from photo only in Table 11.
+J. Examples on Other Benchmarks
+Figure 8 shows one question from each of the other two
+benchmarks, with Qwen3.8-27B and the marks drawn into
+their photos.
+16
+
+
+Table 10. Paired sign tests of the main text. Qwen3.8-27B on MMSI-Bench, and on the development sample s1 for direct input. Acc. is
+the accuracy in % of the first and of the second condition on the n questions that both answer.
+Acc.
+First vs. second condition
+n
+First
+Second
+W
+L
+p
+LatentParse and its controls
+Correct vs. Mismatched features
+1,000
+39.5
+33.3
+165
+103
+0.0002
+Correct vs. Random Noise
+1,000
+39.5
+36.6
+141
+112
+0.08
+Correct vs. paired photo only
+1,000
+39.5
+33.7
+184
+126
+0.001
+outside s1
+955
+39.6
+33.8
+176
+121
+0.002
+Correct vs. paired photo only, no box drawn
+986
+39.5
+33.7
+181
+124
+0.001
+camera questions
+334
+50.6
+31.4
+99
+35
+<10−4
+multi-step reasoning
+195
+26.2
+35.9
+20
+39
+0.02
+VGGT alone vs. Multi-Latent features
+1,000
+38.5
+39.5
+126
+136
+0.58
+Direct input on s1
+Correct vs. Mismatched, CLIP
+145
+55.9
+55.2
+2
+1
+1.00
+Correct vs. Mismatched, VGGT
+145
+58.6
+59.3
+3
+4
+1.00
+Ablations
+Agent-Directed vs. Fixed-Sequence
+1,000
+39.5
+38.9
+107
+101
+0.73
+with VGGT alone
+1,000
+38.5
+38.5
+105
+105
+1.00
+Fixed-Sequence vs. paired photo only
+989
+38.8
+33.7
+166
+115
+0.003
+Photo and latent features vs. LatentParse, multi-step reasoning
+198
+34.8
+26.3
+32
+15
+0.02
+Photo and latent features vs. LatentParse, camera motion
+74
+64.9
+71.6
+3
+8
+0.23
+Block 5 vs. last block, CLIP
+300
+33.0
+34.3
+25
+29
+0.68
+Block 5 vs. last block, DINOv3
+300
+36.7
+34.3
+35
+28
+0.45
+Block 5 vs. last block, VGGT
+300
+34.7
+34.3
+32
+31
+1.00
+Blocks 5, 12, 18 and 24 vs. last block, CLIP
+300
+39.0
+34.3
+35
+21
+0.08
+Blocks 5, 12, 18 and 24 vs. last block, DINOv3
+300
+34.3
+34.3
+27
+27
+1.00
+Blocks 5, 12, 18 and 24 vs. last block, VGGT
+300
+33.0
+34.3
+30
+34
+0.71
+Table 11. What the analyst receives. Accuracy in % of Qwen3.8-27B on the camera questions of MMSI-Bench in a separate run, over the
+answered questions. The same VLM answers in the same way from the photos, the question and the report. Gray numbers are the p-values
+of paired exact sign tests against photo only.
+Analyst input
+Camera motion
+Camera–camera
+Camera–object
+Camera–region
+Camera, all four
+Questions
+74
+93
+86
+83
+336
+Photo only, no analyst
+36.5
+31.2
+23.3
+41.0
+32.7
+Latent features, LatentParse
+68.1 (<10−4)
+43.7 (0.18)
+37.5 (0.036)
+43.8 (0.86)
+47.5 (<10−4)
+Question alone, no tools
+50.0 (0.041)
+32.3 (1.00)
+24.4 (1.00)
+43.4 (0.84)
+36.9 (0.14)
+Photos, no tools
+26.2 (0.049)
+36.4 (0.54)
+25.4 (0.75)
+47.8 (0.21)
+34.2 (0.73)
+Pixels in place of features
+61.6 (<0.001)
+37.0 (0.31)
+33.7 (0.064)
+38.6 (0.86)
+41.9 (0.003)
+Table 12. Further baselines. Accuracy in % of Qwen3.8-27B on the 986 MMSI-Bench questions with a paired photo-only answer. The
+baselines use the photos or the camera poses decoded by VGGT. Gray numbers are the p-values of paired exact sign tests against photo
+only.
+Condition
+All
+Camera, all four
+Camera motion
+Questions
+986
+334
+74
+Photo only
+33.7
+31.4
+37.8
+LatentParse
+39.5 (0.001)
+50.6 (<10−4)
+71.6 (<10−4)
+Self-consistency, majority of five answers from the photos
+33.9 (0.94)
+32.6 (0.64)
+35.1 (0.77)
+Camera poses decoded by VGGT, given as text
+35.1 (0.31)
+35.6 (0.098)
+51.4 (0.064)
+Two encoders match the marked item across views.
+MV-RoboBench question QA091 of the cross-view match-
+ing task outlines an item with a red box in the right-gripper
+view and asks which colored box holds the same item in the
+other views. The analyst matches the red box into the head
+view with VGGT and DINOv3 and reads both matches as
+the green box. LatentParse answers B, the green box, which
+is correct, while photo only answers C.
+17
+
+
+1 MV-RoboBench, cross-view matching
+2
+3
+question
+Which colored box in
+the other views encloses
+the item in the red box?
+report
+corresponds to the GREEN box
+in the head view
+VGGT and DINOv3 match it with high similarity
+photo only
+C blue
+LatentParse
+B green
+2 SPAR-Bench, position matching
+1
+2
+question
+Which option box in
+photo 2 holds the paper
+in the red box?
+report
+CLIP places the paper in photo 2
+at box [0.378, 0.714, 0.676, 1.0]
+corresponds to option B [405, 734, 632, 1000]
+photo only
+B
+LatentParse
+B
+Figure 8. Examples on MV-RoboBench and SPAR-Bench. Qwen3.8-27B with the marks drawn into the photos. The dashed box is the
+region the analyst returns. On MV-RoboBench, LatentParse’s report points to the green box and leads to the right answer where photo only
+fails. On SPAR-Bench, the paper located from the features alone falls on option B. Report lines are abridged excerpts.
+The features alone find the marked object in the sec-
+ond photo.
+SPAR-Bench-Tiny question 673 marks a pa-
+per with a red box in the first photo and asks which of four
+boxes holds it in the second. Without seeing either photo,
+the analyst locates the paper in the second photo with CLIP
+and DINOv3, and the box it reports covers option B. La-
+tentParse answers B, which is correct.
+18

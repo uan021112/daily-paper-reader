@@ -1,0 +1,2760 @@
+X-3DComposer: Feed-Forward 3D Scene Composition
+with Any Assets from Any Views
+Zidian Qiu
+Ancong Wu*
+Sun Yat-sen University
+qiuzd@mail2.sysu.edu.cn, wuanc@mail.sysu.edu.cn
+Code: X-3DComposer
+Abstract
+Composing an editable 3D scene from images requires an
+asset for each object and a layout that places the assets.
+3D generation and CAD retrieval now supply the assets, but
+layout still lacks a general solution: scene generation meth-
+ods couple it with generation, and pose estimators handle
+one object at a time and need true-size CAD models, depth,
+or iterative refinement. We present X-3DComposer, a feed-
+forward model that predicts the layout separately from asset
+generation. Given one or more images of a scene, the ob-
+ject masks, and an asset for each object from any source, it
+jointly predicts the rotation, translation, and per-axis scale
+of all objects in a single forward pass of about one sec-
+ond. The key idea is to treat objects as views: renders of
+the assets are processed together with the scene images by
+a multi-view geometry model adapted from VGGT-Ω, and
+each object pose follows in closed form from the cameras
+predicted for its renders. Camera intrinsics, camera poses,
+and depth are optional inputs. When the meshes produced
+by five scene generation methods are kept fixed and only
+their layout is replaced, the layouts of X-3DComposer are
+more accurate than the native layouts of these methods.
+Compared with the stand-alone layout model SceneMaker,
+it reduces the scene-level Chamfer distance by 52% on In-
+doorMix, our test set from six indoor datasets, and by 28%
+on 3D-FUTURE.
+1. Introduction
+Composing an editable 3D scene of separate objects from
+one or more images is needed in content creation, embodied
+AI, and robot manipulation.
+Such a scene consists of a
+3D asset for each object and the pose and scale of each
+asset. Assets are increasingly easy to obtain. 3D genera-
+tors [5, 52] produce high-quality meshes from images, and
+*Corresponding author.
+(a) Scene generation
+MIDI, SceneGen,
+SAM 3D
+coupled with generation
+(b) Object pose estimation
+FoundationPose,
+GigaPose, PoseGAM
+one object at a time
+(c) Stand-alone layout
+SceneMaker
+single image only
++
++
+(d) Ours
++
+X-3DComposer
+any views
+any assets
+all objects in one pass
+9-DoF layout
+Figure 1. Approaches to scene layout: (a) scene generation, (b)
+object pose estimation, (c) stand-alone layout models, and (d) X-
+3DComposer, which places all objects in a single forward pass,
+from any number of views and with assets from any source.
+CAD retrieval can provide exact or similar CAD models.
+This paper studies the other half of the problem, scene
+layout: given the assets, estimate the pose and scale of each
+one so that the composed scene matches the images.
+Existing methods fall into three groups (Fig. 1).
+The first group consists of scene generation meth-
+ods [5, 18, 27, 31, 50], which output a layout together with
+the object geometry. This layout is a by-product of genera-
+tion and cannot be applied to assets from other sources. The
+second group takes a CAD model as given. Object pose
+estimators [25, 49] handle one object at a time, assume a
+true-size CAD model, often require depth, and refine each
+pose by render-and-compare. CAD alignment methods [12]
+also estimate scale, but they too treat each detected object
+independently. The third group consists of stand-alone lay-
+out models [28, 39, 56], which separate layout from gener-
+ation but rely on iterative sampling, dense correspondences,
+or per-scene optimization; most accept only a single image.
+A general layout method should accept assets from any
+source and place all objects jointly, in a single forward
+pass, from one or more views. None of the methods above
+1
+arXiv:2611.32491v1  [cs.CV]  24 Nov 2026
+
+
+meets all of these requirements. Multi-view geometry mod-
+els [43, 44] already do this for cameras: they predict the
+cameras of any number of views in a common frame at
+once. We observe that layout can be cast as the same task
+by treating objects as views. We render each asset from a
+few viewpoints with known cameras in its own frame and
+feed the renders to a multi-view geometry model together
+with the scene images. The model predicts a camera for
+every view in a common scene frame. Each render camera
+is then known in the asset frame and predicted in the scene
+frame, and the object pose follows from the two in closed
+form. All objects are thus placed jointly, without sampling
+or optimization, and since the model needs only renders of
+an asset, it applies to any asset. Predicting a camera for each
+view is also the pretraining task of these models, which lets
+us start from the pretrained VGGT-Ω[44], keep its archi-
+tecture, and add few parameters.
+Whole scenes raise further difficulties. The model must
+know which object each render belongs to, even when ob-
+jects look identical, so each object is assigned an identity
+embedding that links its masks, its crops from the scene im-
+ages, and its renders. Generated or retrieved assets often
+differ in proportions from the real objects, and we therefore
+predict one scale per axis. The input also varies from one
+image to several, with or without camera intrinsics, cam-
+era poses, and depth. We treat these as optional geometric
+conditions. Our contributions are as follows:
+• We present X-3DComposer, a feed-forward model that
+predicts the layout of all objects (rotation, translation, and
+per-axis scale) in a single forward pass of about one sec-
+ond, given any number of scene images and assets from
+any source.
+• We extend camera-based pose prediction [4, 37] from sin-
+gle objects to whole scenes: the crops and renders of all
+objects are fed as extra views to a multi-view geometry
+model adapted from VGGT-Ω, with identity embeddings
+and optional geometric conditions, and the object poses
+are read out in closed form from the predicted cameras.
+• With the meshes fixed and only the layout changed, our
+layouts are more accurate than the native layouts of five
+scene generation methods, and our scene-level Chamfer
+distance is 52% lower than that of SceneMaker [39] on
+our IndoorMix test set and 28% lower on 3D-FUTURE.
+2. Related Work
+Compositional 3D scene generation and reconstruction.
+One line of work generates the geometry of several objects
+together with their layout. MIDI [18] and SceneGen [31]
+generate all objects of a scene jointly, while SAM 3D [5]
+and its multi-view extension MV-SAM3D [27] generate a
+mesh for each object and predict its rotation, translation,
+and scale. FIRE3D [50] also outputs the objects together
+with their layout. Such a layout applies only to the assets
+generated with it. Our model does not depend on a partic-
+ular generator. Another line of work first obtains the assets
+and then solves for the layout.
+CAST [54] places each
+generated object in the scene point cloud with an alignment
+model and refines the poses by optimization under physics
+constraints.
+Given a single image, SceneMaker [39]
+samples the object poses iteratively from a pose model
+conditioned on object geometry.
+Mira-Scene [41] and
+Easy-3Dfy [56] solve for the transformation from dense
+correspondences between the object and an estimated point
+cloud, and Lucida [36] adjusts the poses iteratively with a
+vision-language model. SPOON [28] handles uncalibrated
+multi-view input by guiding the pose sampling of SAM 3D
+with a VGGT-Ωreconstruction, followed by per-scene op-
+timization. Pano3DComposer [37] feeds object crops and
+asset renders to VGGT and predicts a transformation with
+per-axis scale for each object separately, from panoramic
+input. These methods handle one object at a time or rely on
+iterative procedures, whereas our model places all objects
+in a single forward pass.
+CAD alignment and object pose estimation.
+Single-
+image CAD alignment methods [11, 12, 24] retrieve a CAD
+model for each detected object and align it to the image, and
+recent methods [1, 7] solve for pose and scale from feature
+correspondences between the image and the CAD model.
+Methods for 6-DoF pose estimation of novel objects as-
+sume a true-size CAD model. MegaPose [25] and Founda-
+tionPose [49] use render-and-compare, GigaPose [33] uses
+templates and feature correspondences, and AlignPose [32]
+refines poses over multiple views. Closest to our approach
+is PoseGAM [4]. Initialized from VGGT, it treats renders
+of the CAD model as views with known cameras, regresses
+the camera of the query image, and derives the 6-DoF ob-
+ject pose from it. In contrast, we place all objects jointly
+and predict per-axis scales, and thus need no true-size CAD
+models.
+Multi-view
+geometry
+models.
+DUSt3R
+[47]
+and
+MASt3R [26] regress point maps directly from image
+pairs, and VGGT [43] predicts the cameras, depth, and
+point maps of multiple images in a single forward pass.
+Later models such as π3 [48], Depth Anything 3 [29], and
+VGGT-Ω[44] follow the same paradigm.
+Pow3R [19],
+MapAnything [21], and OmniVGGT [34] additionally
+accept camera intrinsics, camera poses, or depth as optional
+inputs. These models reconstruct the scene as a whole and
+have no notion of individual objects; we keep their task and
+optional conditions and add objects as extra views.
+3. Method
+Figure 2 gives an overview of X-3DComposer; details are
+in the supplementary material.
+2
+
+
+Scene views Ij × S
+Hi-res object crops × c
+Asset renders × M
+for each object i = 1, …, N (asset 𝒜i)
+DINO
+(a) Optional conditions
+Intrinsics K
+Poses P
+Depth D
+LoRA
+Frame attention
+LoRA
+Global attention
+× 24
+(b) Object identity
+Masks ℳi ×
+embeddings ei
+Camera head
+Dense head
+Scene depth
+Crop depth (auxiliary)
+Scene
+cameras
+Crop
+cameras
+(auxiliary)
+Render
+cameras
+P̂i,m, ℓi,m
+Closed-form readout
+9-DoF layout
+Ri, ti, si
+(a) Optional conditions
+K, P
+MLP
+camera token
+rays
+Conv
+patch tokens
+D
+Conv
+patch tokens
+(b) Object identity
+Frame attention
+Global attention
+query
+LoRA
+key
+value
+LoRA
+attention
+query
+LoRA
+key
+value
+LoRA
+attention
+Linear
+Linear
+camera token
+register token
+patch token
+patch of object i
+frozen
+trained
+Figure 2. Overview. Scene views, object crops, and asset renders are processed as one set of views by a model adapted from VGGT-Ω. (a)
+The optional conditions and their encoders. (b) Object identity: the embeddings ei, added where the masks Mi lie, link the masks, crops,
+and renders of each object. The layout (Ri, ti, si) is read out in closed form from the predicted render cameras ˆPi,m and log-scales ℓi,m.
+3.1. Problem Definition
+The required input consists of S ≥1 images of a scene, the
+scene views {Ij}S
+j=1; the masks Mi of the N target objects
+in these views; and one 3D asset Ai per object. An asset
+is a mesh, usually textured, from a CAD library, a retrieval
+system, or a 3D generator. It need not match its object ex-
+actly; the same category and a similar shape suffice. From
+these inputs, our method predicts the layout of all objects,
+{(Ri, ti, si)}N
+i=1 = F
+ {Ij}, {Mi}, {Ai}; K, P, D
+
+,
+(1)
+where K, P, and D are optional geometric conditions de-
+scribed below. For each object i, the layout specifies a ro-
+tation Ri ∈SO(3), a translation ti ∈R3, and a per-axis
+scale si ∈R3
+>0, nine degrees of freedom in total. A point p
+on the asset is mapped to the scene point
+x = Ri diag(si) p + ti.
+(2)
+Frames and geometric conditions.
+Each asset is first
+normalized: it is translated so that its bounding box is cen-
+tered at the origin and scaled uniformly so that the longest
+side of the box is 1. This defines its asset frame. The output
+poses are expressed in the scene frame, the camera frame
+of the first scene view (Fig. 3). The scene views may come
+with three optional geometric conditions: intrinsics K, the
+camera pose Pj of each view relative to the first one (collec-
+tively P), and depth D. They may be measured, for exam-
+ple by an RGB-D sensor or SLAM, or estimated by other
+models. A camera pose is the rigid transformation from the
+camera frame to a reference frame; the superscripts R and
+o, as in P R
+j and P o
+j , denote the rotation and camera center
+of a pose. If the input fixes a unit of length through depth
+or camera poses, the output is in that unit; otherwise it is
+in normalized units, in which the mean distance from the
+scene points to the first camera is 1.
+3.2. Objects as Views
+Background:
+multi-view geometry models.
+VGGT-
+Ω[44], the successor to VGGT [43], predicts a camera and
+a depth map for every input image in a single forward pass,
+with all cameras expressed in the camera frame of the first
+image. Each image is encoded into patch tokens by a DINO
+encoder, and one camera token and several register tokens
+are prepended. The tokens of all images pass through alter-
+nating frame-attention and global-attention blocks. A cam-
+era head then regresses the camera of each image from its
+camera token, and a dense head predicts depth.
+Representing objects as views.
+We do not feed the as-
+set geometry to the model. Instead, we render each asset
+and treat the renders as extra views. The pretrained model
+already takes images as input, so its ability to relate views
+carries over to relating an asset to the scene, and no 3D en-
+coder has to be trained from scratch.
+Three types of views.
+The model takes three types of
+views as input (Fig. 2):
+• Scene views: the S scene images.
+• Object crops: c square regions around each object, cut
+from the full-resolution scene images. Scene views are
+downsampled before entering the model, and the crops
+restore the detail that small objects lose.
+3
+
+
+(a) Views and their cameras in the scene frame
+scene cameras P̂j
+crop camera
+predicted render cameras P̂i,m
+scene view
+hi-res crop
+asset render
+asset frame, known Li,m
+scaled, Vi,m
+× si
+(b) Closed-form readout:  [Ri,m | ti,m] = P̂i,m V−1
+i,m
+Ri, ti, si
+Figure 3. Pose readout. (a) All cameras are predicted in the scene
+frame. (b) A render camera is Li,m in the asset frame, Vi,m after
+the asset is scaled by si, and ˆPi,m in the scene frame; the transfor-
+mation between the last two is the object pose.
+• Asset renders: M images of each asset rendered in its
+asset frame. The camera pose of the m-th render of object
+i, Li,m = [LR
+i,m | Lo
+i,m], and its intrinsics are known by
+construction.
+Views of all types are processed alike, and the camera head
+predicts a camera for each. The masks are not fed to the
+model as images; they determine where the identity embed-
+dings of the objects are added (Sec. 3.3).
+Pose readout.
+The readout converts the predicted render
+cameras into object poses. Let q = diag(si) p be the co-
+ordinates in the scaled asset frame, where Eq. (2) becomes
+the rigid transformation x = Riq + ti. In this frame, the
+camera of the m-th render is
+Vi,m =
+
+LR
+i,m
+ diag(si) Lo
+i,m
+
+,
+(3)
+that is, its orientation is unchanged and its center is scaled
+together with the asset (Fig. 3b).
+For an isotropic scale
+this is exact; for an anisotropic scale it is a convention,
+which the training labels and the readout both follow. The
+model predicts the camera of each render in the scene frame,
+ˆPi,m = [ ˆP R
+i,m | ˆP o
+i,m], expressed relative to the predicted
+camera of the first scene view. Since Vi,m and ˆPi,m de-
+scribe the same camera in the scaled asset frame and in the
+scene frame, each render gives a rigid pose of the object in
+closed form:
+[ Ri,m | ti,m ] = ˆPi,m V −1
+i,m,
+(4)
+or, explicitly, Ri,m = ˆP R
+i,m(LR
+i,m)⊤and ti,m = ˆP o
+i,m −
+Ri,m diag(si) Lo
+i,m.
+Fusion over renders.
+We average the M pose candidates
+(Ri,m, ti,m) given by Eq. (4) into the fused pose: the trans-
+lation ti is the mean of the candidate translations, and the
+rotation Ri is the mean of the candidate rotation matrices,
+projected back onto SO(3) by SVD. The scale is com-
+puted before the poses, since the candidates depend on it.
+The model outputs a per-axis log-scale ℓi,m for each render
+(Sec. 3.3), and the object scale is si = exp
+  1
+M
+P
+m ℓi,m
+
+,
+used for all render cameras of object i in Eq. (3). If the in-
+put fixes a unit of length, we estimate one global factor that
+converts normalized units to this unit and multiply all ti and
+si by it. The readout involves no test-time optimization and
+does not use the crops.
+3.3. Network
+Backbone and trainable parameters.
+We build on
+VGGT-Ωand keep its architecture. The trainable parame-
+ters (Fig. 2) are (i) the output branch of the camera head, (ii)
+LoRA [17] on the query and value projections of the frame-
+and global-attention blocks and of the attention blocks in the
+camera head, and (iii) the condition encoders and identity
+embeddings introduced below; all other weights are frozen.
+The output layers of the new modules are zero-initialized,
+so training starts from the output of the pretrained back-
+bone. The camera head outputs a 9-dimensional camera en-
+coding per view. We add three dimensions for the per-axis
+log-scale ℓ, used only for the renders.
+Identity embeddings.
+Identical objects cannot be told
+apart by appearance, so each crop and render must be tied
+to its object explicitly. We keep a set of learnable identity
+embeddings and assign one of them, ei, at random to each
+object of a scene. An embedding thus only distinguishes
+the objects within a scene and carries no other meaning. In
+every view, the identity vector of patch u is the sum of the
+embeddings of the objects whose masks overlap the patch,
+weighted by the overlap:
+zu =
+N
+X
+i=1
+αi,u ei,
+(5)
+where αi,u ∈[0, 1] is the fraction of the patch covered by
+the mask of object i, so that zu is zero on the background.
+In scene views and crops, the masks are those given
+as input; in a render, the mask is the foreground of the
+rendered asset. After a linear projection, zu is added to the
+values of every attention block and, in the global-attention
+blocks, also to the queries and keys.
+Condition encoders.
+For a view with intrinsics and a
+camera pose, the camera parameters are encoded by an
+MLP and added to the camera token, and the Pl¨ucker ray of
+each pixel is embedded by a convolution and added to the
+patch tokens. With intrinsics only, the rays are computed in
+the view’s own camera frame. A depth map is embedded
+by a second convolution and added to the patch tokens. The
+render cameras Li,m are always known and are encoded in
+the same way, in the asset frame.
+4
+
+
+Table 1. Layout prediction for generated assets. Each group shares its meshes. Native: the method’s own layout. †: pose model only.
+IndoorMix
+3D-FUTURE
+Meshes
+Layout
+CD-S↓
+F-S↑
+IoU-B↑
+CD-O↓
+F-O↑
+CD-S↓
+F-S↑
+IoU-B↑
+CD-O↓
+F-O↑
+Single-view input
+MIDI [18]
+Native
+57.79
+58.36
+0.241
+248.30
+42.69
+33.28
+69.73
+0.324
+72.95
+61.51
+SceneMaker† [39]
+12.86
+84.27
+0.433
+18.08
+79.98
+11.23
+88.14
+0.504
+22.58
+85.61
+Ours
+7.29
+92.98
+0.616
+9.06
+92.31
+9.22
+91.10
+0.591
+21.45
+88.66
+SceneGen [31]
+Native
+66.07
+56.08
+0.197
+375.12
+35.18
+15.31
+85.32
+0.474
+34.53
+81.08
+SceneMaker†
+13.68
+83.72
+0.419
+20.26
+79.22
+10.09
+89.37
+0.519
+22.35
+87.03
+Ours
+6.49
+92.74
+0.597
+11.40
+91.19
+5.24
+95.58
+0.686
+14.66
+94.45
+FIRE3D [50]
+Native
+11.40
+89.22
+0.492
+19.28
+87.38
+13.94
+88.18
+0.486
+29.46
+85.39
+SceneMaker†
+15.01
+82.23
+0.395
+22.22
+77.77
+15.40
+83.79
+0.454
+28.05
+81.26
+Ours
+8.95
+90.91
+0.539
+13.45
+89.91
+13.47
+88.10
+0.509
+24.36
+86.20
+SAM 3D [5]
+Native
+6.08
+93.97
+0.590
+13.13
+93.11
+8.11
+91.73
+0.571
+19.31
+89.67
+SceneMaker†
+12.99
+86.00
+0.436
+22.76
+81.47
+10.02
+89.66
+0.519
+21.46
+87.41
+Ours
+3.43
+97.02
+0.702
+4.86
+96.34
+5.51
+95.14
+0.671
+14.98
+94.03
+Multi-view input
+FIRE3D
+Native
+6.73
+93.59
+0.572
+16.56
+92.30
+–
+–
+–
+–
+–
+Ours
+4.42
+95.29
+0.602
+5.77
+95.28
+–
+–
+–
+–
+–
+MV-SAM3D [27]
+Native
+6.38
+94.35
+0.553
+11.73
+93.25
+–
+–
+–
+–
+–
+Ours
+1.61
+98.43
+0.747
+1.49
+98.55
+–
+–
+–
+–
+–
+3.4. Training
+Training uses the ground-truth cameras and depth of
+the scene, as well as the ground-truth pose and scale
+(R∗
+i , t∗
+i , s∗
+i ) of every object. As in the backbone, all targets
+are expressed in the normalized units of Sec. 3.1.
+Supervision of cameras, scales, and poses.
+Scene views
+keep the losses of the backbone.
+Renders use the same
+camera loss, with the label P ∗
+i,m = [R∗
+i | t∗
+i ] V ∗
+i,m, where
+V ∗
+i,m is built from the ground-truth scale as in Eq. (3).
+Each log-scale ℓi,m is supervised with an L1 loss against
+log s∗
+i .
+Crops are supervised with auxiliary camera and
+depth losses.
+The camera loss treats each render separately and does
+not directly constrain the pose that is finally read out. We
+therefore also compute the pose candidates differentiably
+with Eq. (4) and compare two poses of object i by
+di(R, t; R′, t′) = ∥t −t′∥2
+∥s∗
+i ∥2
++ ∥R −R′∥F
+√
+2
+.
+(6)
+The translation term is divided by the object size ∥s∗
+i ∥2 and
+is thus independent of the unit of length. We penalize di
+between every candidate and the ground truth, between the
+fused pose and the ground truth, and between every candi-
+date and the fused pose.
+Symmetry, grounding, and physics.
+Objects that are
+symmetric about the vertical axis, such as round tables and
+vases, have several equally correct poses. We detect such
+symmetries for each asset offline and train with the equiv-
+alent label closest to the current prediction. A grounding
+head, used only in training, takes the camera token of each
+crop and render and predicts which scene-view patches its
+object occupies. This encourages the model to link crops
+and renders to their objects in the scene. We also apply
+two physics constraints to the layout that is read out, pe-
+nalizing penetration between objects and the offset of floor-
+supported objects from the floor.
+Training data and sampling.
+Training requires scenes
+with 9-DoF object annotations. We combine several sources
+in a common format: synthetic indoor scenes [9, 10, 22,
+23, 35, 51, 57], real scans from ScanNet++ [55] with anno-
+tated CAD models [3, 38], and single-view images [10, 40].
+We oversample scenes that contain several instances of the
+same asset, so that the model must rely on the identity
+embeddings to tell them apart. We also randomly replace
+the asset of an object with an asset of similar shape from
+the same category and adjust the labels accordingly, which
+mimics assets that do not exactly match the object. Since
+the geometric conditions are optional at inference, each
+training sample is given a random subset of them. The num-
+bers of scene views, objects, and renders per object are also
+drawn at random, so one model covers all input settings.
+4. Experiments
+4.1. Experimental Setup
+Test data.
+Our main test set, IndoorMix, merges held-out
+scenes from six indoor datasets: InternScenes [57], Molmo-
+Spaces [23], SAGE [51], SceneSmith [35], 3D-FRONT [9],
+and the real scans of ScanNet++ [55]. We also report re-
+sults on the 3D-FUTURE [10] test set of SceneGen [31], an
+existing benchmark of rendered single-view indoor scenes.
+Details of the test data, results per dataset, and more quali-
+5
+
+
+(a) Single-view input
+same SAM 3D meshes
+Input
+MIDI
+SceneGen
+FIRE3D
+SAM 3D layout
++ SceneMaker†
++ Ours
+GT
+real scan
+real scan
+(b) Multi-view input
+same MV-SAM3D meshes
+Input
+FIRE3D
+MV-SAM3D layout
++ Ours
+GT
+same MV-SAM3D meshes
+Input
+FIRE3D
+MV-SAM3D layout
++ Ours
+GT
+Figure 4. Predicted layouts of generated assets. As in the evaluation (Sec. 4.1), each predicted scene is registered to the ground truth before
+it is shown. In (a), rows 1–2 are synthetic scenes and rows 3–4 are real scans.
+tative results are given in the supplementary material.
+Metrics
+and
+alignment.
+We
+use
+the
+metrics
+of
+MIDI [18]:
+the scene-level Chamfer distance (CD-S),
+F-score (F-S), and bounding-box IoU (IoU-B), and, in
+Table 1, the object-level CD-O and F-O. The methods
+compared on generated assets (Table 1) output layouts
+in different frames.
+We follow MIDI and normalize the
+predicted and the ground-truth scene separately before
+registering them with a single rigid ICP [2]. These metrics
+therefore measure the relative layout of the objects. CD-S,
+a mean over scenes of squared distances, is sensitive to
+a few scenes with large errors; F-S and IoU-B are less
+so. With ground-truth CAD models (Tables 2 to 4), every
+method outputs poses in the camera frame of the first
+scene view, where we compare them without ICP, aligning
+only the scale of each scene. In all tables, CD values are
+multiplied by 103, F-scores are in percent, and the best
+result is in bold (Tables 3 and 4: second best underlined).
+Inputs and implementation.
+All methods that take ob-
+ject masks use the same ground-truth masks.
+Unless a
+method specifies its own estimator, estimated geometric
+conditions come from MoGe-2 [46] for single-view input
+and from Depth Anything 3 [29] for multi-view input. Our
+model uses the 1B-parameter VGGT-Ωwith rank-32 LoRA
+and is trained with AdamW [30] on 8 GPUs for about 200k
+steps. At inference, we use M = 4 renders per object.
+4.2. Layout Prediction for Generated Assets
+This experiment tests whether a stand-alone layout model
+places a set of assets more accurately than the method that
+generated them.
+We use five scene generation methods:
+MIDI [18], SceneGen [31], FIRE3D [50], SAM 3D [5], and
+MV-SAM3D [27]. MIDI, SceneGen, and SAM 3D take a
+single view, MV-SAM3D takes several views, and FIRE3D
+supports both. Each method generates the meshes of all
+objects in the scene views, together with its native layout.
+We then place the same meshes with our model and with
+the public pose model of SceneMaker [39], which reports
+state-of-the-art pose accuracy and takes only a single view.
+Results.
+In Table 1, our layouts are more accurate than
+SceneMaker’s in every single-view group and, with one
+exception, more accurate than the native layouts in every
+group and metric: in the FIRE3D group on 3D-FUTURE,
+the F-S of the native layout is 0.08 points higher. The gain
+is largest for MIDI and SceneGen, whose native layouts
+have large errors, but there is also a gain for SAM 3D,
+whose native layout is already fairly accurate. Averaged
+over the four single-view groups, our CD-S is 52% lower
+than that of SceneMaker on IndoorMix and 28% lower on
+3D-FUTURE. With multi-view input, our layouts improve
+on the native layouts of FIRE3D and MV-SAM3D in all
+6
+
+
+Table 2. Layout prediction for ground-truth CAD models at their true size. Cond.: given conditions (K: intrinsics, P: camera poses, D:
+depth). Bold: best per block. For 3D-FUTURE, depth is always estimated.
+IndoorMix, single-view
+IndoorMix, multi-view
+3D-FUTURE, single-view
+Method
+Cond.
+CD-S↓
+F-S↑
+IoU-B↑
+CD-S↓
+F-S↑
+IoU-B↑
+CD-S↓
+F-S↑
+IoU-B↑
+Estimated conditions
+FoundationPose [49]
+K+D
+7.51
+95.19
+0.739
+62.96
+92.96
+0.758
+17.35
+90.73
+0.654
+PoseGAM [4]
+K
+422.10
+76.77
+0.549
+155.98
+73.34
+0.445
+188.58
+68.12
+0.452
+AlignPose [32]
+K+P+D
+–
+–
+–
+71.50
+91.11
+0.717
+–
+–
+–
+Ours
+none
+2.67
+97.42
+0.803
+0.85
+99.42
+0.867
+6.67
+97.53
+0.793
+K
+2.87
+97.32
+0.783
+1.15
+99.09
+0.859
+11.59
+93.90
+0.698
+K+D
+7.53
+97.18
+0.780
+1.12
+98.82
+0.859
+10.97
+94.05
+0.700
+K+P+D
+–
+–
+–
+75.95
+98.31
+0.859
+–
+–
+–
+Ground-truth conditions
+FoundationPose
+K+D
+2.64
+98.97
+0.935
+4.23
+97.51
+0.905
+10.62
+94.58
+0.759
+PoseGAM
+K
+439.28
+76.55
+0.567
+100.07
+81.24
+0.578
+147.65
+72.04
+0.524
+AlignPose
+K+P+D
+–
+–
+–
+8.99
+96.27
+0.831
+–
+–
+–
+Ours
+K
+2.51
+97.62
+0.822
+0.84
+99.44
+0.870
+6.03
+97.87
+0.830
+K+D
+0.95
+99.13
+0.851
+0.73
+99.43
+0.873
+5.66
+97.92
+0.832
+K+P+D
+–
+–
+–
+0.52
+99.64
+0.877
+–
+–
+–
+(a) Single-view input
+Input
+FoundationPose
+PoseGAM
+Ours
+GT
+(b) Multi-view input
+Input
+FoundationPose
+AlignPose
+Ours
+GT
+Input
+FoundationPose
+AlignPose
+Ours
+GT
+Figure 5. Predicted layouts of ground-truth CAD models. Dashed outlines: ground truth.
+metrics, most clearly for MV-SAM3D (CD-S 1.61 vs.
+6.38). Our model receives no geometric conditions in this
+comparison, whereas FIRE3D, SAM 3D, MV-SAM3D, and
+SceneMaker all use estimated depth. The gain therefore
+does not come from a better depth estimator. In Fig. 4, when
+objects occlude one another or are cut off by the image
+border, the baselines place them in the wrong position or
+orientation, while our layouts stay close to the ground truth.
+4.3. Layout Prediction for GT CAD Models
+When the asset is the ground-truth CAD model of the ob-
+ject, our task coincides with object pose estimation. We
+compare with FoundationPose [49], PoseGAM [4], and the
+multi-view AlignPose [32]. Since these methods require
+true-size CAD models, all methods receive the ground-truth
+CAD models at their true size, and our model uses the given
+Table 3. Panoramic input: one or two panoramas of a room. For
+our model, K and P follow from the panorama projection.
+One panorama
+Two panoramas
+Method
+Cond.
+CD-S↓
+F-S↑
+IoU-B↑
+CD-S↓
+F-S↑
+IoU-B↑
+Pano3DComposer [37] none
+25.87 84.86
+0.437
+14.13 89.48
+0.465
+Ours
+none
+5.54 96.01
+0.702
+2.04 98.69
+0.762
+K
+5.13 96.48
+0.714
+2.01 98.64
+0.766
+K+P
+3.83 96.78
+0.725
+–
+–
+–
+size in place of its predicted scale.
+Results.
+Among the methods that use no ground-truth
+conditions (upper block of Table 2; examples in Fig. 5), our
+model without conditions is the most accurate in all three
+settings. PoseGAM, the only baseline without depth, has
+much larger errors. With the same estimated conditions as
+the baselines, our F-S and IoU-B are also higher than those
+7
+
+
+Original
+Re-textured
+Original
+Re-textured
+(a) Different texture
+Original
+New shape
+Original
+New shape
+(b) Different shape
+A
+B
+A
+B
+B
+A
+IDs as given
+IDs swapped
+A
+B
+A
+B
+B
+A
+IDs as given
+IDs swapped
+(c) Identical objects
+Figure 6.
+Mismatched assets and identical objects.
+(a) A re-
+textured asset is placed like the original one. (b) An asset of a
+different shape is placed to fit the object. (c) For two identical ob-
+jects A and B, swapping their identity embeddings swaps the two
+assets. Large images: input; small: our results (insets: assets).
+Table 4. Ablation study. Pen.: percentage of objects that penetrate
+another object by more than 4 cm.
+Single-view
+Multi-view
+Physics
+Variant
+CD-S↓
+F-S↑
+IoU-B↑
+CD-S↓
+F-S↑
+IoU-B↑
+Pen.↓
+Full model
+9.49 90.77
+0.578
+3.92 95.89
+0.579
+7.88
+w/o object crops
+11.88 89.56
+0.538
+5.06 95.46
+0.553
+–
+w/o identity embeddings
+72.70 71.68
+0.367
+58.82 72.89
+0.311
+–
+w/o physics constraints
+8.49 90.92
+0.582
+3.67 96.65
+0.586
+10.10
+w/o grounding head
+8.86 90.98
+0.568
+4.94 95.51
+0.555
+–
+w/o pretrained weights
+128.84 40.74
+0.160
+275.97 35.46
+0.073
+–
+of FoundationPose and AlignPose. Our CD-S is lower than
+or on par with that of FoundationPose. With K+P+D,
+however, it is far higher than without conditions (75.95 vs.
+0.85) and slightly above that of AlignPose. Inaccurate esti-
+mated camera poses mislead the model. Ground-truth poses
+give its lowest CD-S (0.52).
+Here, estimated conditions
+do not improve our results and can degrade them, whereas
+ground-truth ones improve them. With ground-truth condi-
+tions (lower block), FoundationPose reaches a higher IoU-B
+on IndoorMix, as its render-and-compare gains more from
+accurate depth than our model does. Our F-S under the
+same conditions is on par or higher.
+4.4. Layout Prediction from Panoramic Input
+We compare with Pano3DComposer [37] on 42 3D-FRONT
+houses that are in the training data of neither method,
+with one or two panoramas of the same room as input.
+For our model, each panorama is split into six perspective
+Table 5. Runtime and peak GPU memory per scene.
+Method
+Time (s)↓
+Mem. (GB)↓
+FoundationPose [49]
+7.5
+4.3
+PoseGAM [4]
+6.8
+15.5
+SceneMaker [39]
+5.8
+13.6
+Ours
+0.91
+5.2
+views, whose intrinsics and relative camera poses within the
+panorama follow from the projection and can be given as
+conditions. In Table 3, our model is more accurate for both
+input types, even without conditions. Adding the intrinsics
+and camera poses derived from a single panorama improves
+our results further.
+4.5. Ablations and Analysis
+Design choices.
+All variants in Table 4 are trained on 3D-
+FRONT with the same shortened schedule and evaluated
+there with ground-truth intrinsics and depth. Trained from
+random initialization, the model fails under this schedule
+(single-view F-S 40.7 vs. 90.8). Without identity embed-
+dings, and hence without the masks, F-S falls to 71.7: the
+embeddings are needed to tie crops and renders to their ob-
+jects in general, not only when objects look identical. The
+object crops give a smaller but consistent gain (single-view
+CD-S 9.49 vs. 11.88). The grounding head helps with multi-
+view input (CD-S 3.92 vs. 4.94) and has a mixed effect
+with single-view input. Without the physics constraints, the
+scene metrics are slightly better, but the percentage of pen-
+etrating objects rises from 7.9% to 10.1%.
+Mismatched assets and identical objects.
+Assets from
+retrieval or generation rarely match the object exactly, and
+a scene may contain identical objects. We test both cases in
+Fig. 6. Re-texturing an asset barely changes the predicted
+pose (a), and replacing it with another asset of the same cat-
+egory makes the model adapt the pose to the new shape (b).
+For two identical objects, swapping their identity embed-
+dings swaps the two assets (c), which shows that the model
+follows the identity embeddings.
+Views, renders, and runtime.
+More scene views im-
+prove accuracy at little extra cost.
+From one to eight
+views, the time per scene grows by less than 0.2 s. More
+renders per object raise F-S and IoU-B slightly (see the
+supplementary material). In Table 5, our model takes about
+1 s per scene, and the three baselines take 5.8–7.5 s.
+5. Conclusion
+We presented X-3DComposer, a feed-forward model that
+composes a 3D scene from given assets by predicting their
+layout. Its key idea is to treat objects as views: with asset
+renders as extra views, layout becomes camera prediction,
+a task that pretrained multi-view geometry models already
+solve well. Our experiments show that layout need not be
+8
+
+
+tied to asset generation. On the same meshes, our layouts
+are more accurate than the native layouts of five scene
+generation methods. Without depth input, our scene-level
+Chamfer distance is 52% lower than that of SceneMaker
+on IndoorMix and 28% lower on 3D-FUTURE. As the
+model needs only asset renders, it can be combined
+with any generator or retrieval system.
+Our model has
+limitations. It requires object masks as input and is trained
+and tested only on indoor scenes.
+It is also sensitive to
+inaccurate geometric conditions, and its physics con-
+straints reduce penetration without guaranteeing physically
+plausible layouts. Predicting the masks within the model
+and extending it to other scene types are left for future work.
+References
+[1] Pattaramanee
+Arsomngern,
+Sasikarn
+Khwanmuang,
+Matthias Nießner, and Supasorn Suwajanakorn. Zero-shot
+inexact CAD model alignment from a single image.
+In
+ICCV, 2025. 2
+[2] Paul J. Besl and Neil D. McKay. A method for registration
+of 3-D shapes. IEEE TPAMI, 14(2), 1992. 6
+[3] Angel X. Chang, Thomas Funkhouser, Leonidas Guibas, Pat
+Hanrahan, Qixing Huang, Zimo Li, Silvio Savarese, Mano-
+lis Savva, Shuran Song, Hao Su, Jianxiong Xiao, Li Yi, and
+Fisher Yu. ShapeNet: An information-rich 3D model repos-
+itory. arXiv preprint arXiv:1512.03012, 2015. 5, 2, 8
+[4] Jianqi Chen,
+Biao Zhang,
+Xiangjun Tang,
+and Peter
+Wonka. PoseGAM: Robust unseen object pose estimation
+via geometry-aware multi-view reasoning. In CVPR, 2026.
+2, 7, 8
+[5] Xingyu Chen, Fu-Jen Chu, Pierre Gleize, Kevin J Liang,
+Alexander Sax, Hao Tang, Weiyao Wang, Michelle Guo,
+Thibaut Hardin, Xiang Li, Aohan Lin, Jia-Wei Liu, Ziqi
+Ma, Anushka Sagar, Bowen Song, Xiaodong Wang, Jianing
+Yang, Bowen Zhang, Piotr Doll´ar, Georgia Gkioxari, Matt
+Feiszli, and Jitendra Malik. SAM 3D: 3Dfy anything in im-
+ages. In CVPR, 2026. 1, 2, 5, 6
+[6] Laura Downs, Anthony Francis, Nate Koenig, Brandon Kin-
+man, Ryan Hickman, Krista Reymann, Thomas B. McHugh,
+and Vincent Vanhoucke. Google scanned objects: A high-
+quality dataset of 3D scanned household items. In ICRA,
+2022. 8
+[7] Saad Ejaz, Miguel Fernandez-Cortizas, Javier Civera, Hol-
+ger Voos, and Jose Luis Sanchez-Lopez. SUFLECA: Scal-
+ing up feature learning for CAD-to-image alignment. arXiv
+preprint arXiv:2607.15058, 2026. 2
+[8] Hao-Shu Fang, Chenxi Wang, Minghao Gou, and Cewu Lu.
+GraspNet-1Billion: A large-scale benchmark for general ob-
+ject grasping. In CVPR, 2020. 8
+[9] Huan Fu, Bowen Cai, Lin Gao, Ling-Xiao Zhang, Jiaming
+Wang, Cao Li, Qixun Zeng, Chengyue Sun, Rongfei Jia,
+Binqiang Zhao, and Hao Zhang. 3D-FRONT: 3D furnished
+rooms with layouts and semantics. In ICCV, 2021. 5
+[10] Huan Fu, Rongfei Jia, Lin Gao, Mingming Gong, Binqiang
+Zhao, Steve Maybank, and Dacheng Tao. 3D-FUTURE: 3D
+furniture shape with texture. International Journal of Com-
+puter Vision, 2021. 5
+[11] Daoyi Gao, David Rozenberszki, Stefan Leutenegger, and
+Angela Dai.
+DiffCAD: Weakly-supervised probabilistic
+CAD model retrieval and alignment from an RGB image.
+ACM Transactions on Graphics (Proc. SIGGRAPH), 2024.
+2
+[12] Can G¨umeli, Angela Dai, and Matthias Nießner.
+ROCA:
+Robust CAD model retrieval and alignment from a single
+image. In CVPR, 2022. 1, 2
+[13] Andrew Guo, Bowen Wen, Jianhe Yuan, Jonathan Tremblay,
+Stephen Tyree, Jeffrey Smith, and Stan Birchfield. HAN-
+DAL: A dataset of real-world manipulable object categories
+with pose annotations, affordances, and reconstructions. In
+IROS, 2023. 8
+[14] Stefan Hinterstoisser, Vincent Lepetit, Slobodan Ilic, Ste-
+fan Holzer, Gary Bradski, Kurt Konolige, and Nassir Navab.
+Model based training, detection and pose estimation of
+texture-less 3D objects in heavily cluttered scenes. In ACCV,
+2012. 8
+[15] Tom´aˇs Hodaˇn, Pavel Haluza, ˇStˇep´an Obdrˇz´alek, Jiˇr´ı Matas,
+Manolis Lourakis, and Xenophon Zabulis.
+T-LESS: An
+RGB-D dataset for 6D pose estimation of texture-less ob-
+jects. In WACV, 2017. 8
+[16] Tom´aˇs Hodaˇn, Frank Michel, Eric Brachmann, Wadim Kehl,
+Anders Glent Buch, Dirk Kraft, Bertram Drost, Joel Vidal,
+Stephan Ihrke, Xenophon Zabulis, Caner Sahin, Fabian Man-
+hardt, Federico Tombari, Tae-Kyun Kim, Jiˇr´ı Matas, and
+Carsten Rother. BOP: Benchmark for 6D object pose esti-
+mation. In ECCV, 2018. 8
+[17] Edward J. Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-
+Zhu, Yuanzhi Li, Shean Wang, Lu Wang, and Weizhu Chen.
+LoRA: Low-rank adaptation of large language models. In
+ICLR, 2022. 4
+[18] Zehuan Huang, Yuan-Chen Guo, Xingqiao An, Yunhan
+Yang, Yangguang Li, Zi-Xin Zou, Ding Liang, Xihui Liu,
+Yan-Pei Cao, and Lu Sheng. MIDI: Multi-instance diffusion
+for single image to 3D scene generation. In CVPR, 2025. 1,
+2, 5, 6
+[19] Wonbong Jang, Philippe Weinzaepfel, Vincent Leroy, Lour-
+des Agapito, and Jerome Revaud. Pow3R: Empowering un-
+constrained 3D reconstruction with camera and scene priors.
+In CVPR, 2025. 2
+[20] Roman Kaskman, Sergey Zakharov, Ivan Shugurov, and Slo-
+bodan Ilic. HomebrewedDB: RGB-D dataset for 6D pose
+estimation of 3D objects. In ICCV Workshops, 2019. 8
+[21] Nikhil Keetha, Norman M¨uller, Johannes Sch¨onberger,
+Lorenzo Porzi,
+Yuchen Zhang,
+Tobias Fischer,
+Arno
+Knapitsch, Duncan Zauss, Ethan Weber, Nelson Antunes,
+Jonathon Luiten, Manuel Lopez-Antequera, Samuel Rota
+Bul`o, Christian Richardt, Deva Ramanan, Sebastian Scherer,
+and Peter Kontschieder.
+MapAnything: Universal feed-
+forward metric 3D reconstruction. In 3DV, 2026. 2
+[22] Mukul Khanna, Yongsen Mao, Hanxiao Jiang, Sanjay
+Haresh, Brennan Shacklett, Dhruv Batra, Alexander Clegg,
+Eric Undersander, Angel X. Chang, and Manolis Savva.
+Habitat synthetic scenes dataset (HSSD-200): An analysis
+9
+
+
+of 3D scene scale and realism tradeoffs for objectgoal navi-
+gation. In CVPR, 2024. 5
+[23] Yejin Kim, Wilbert Pumacay, Omar Rayyan, Max Argus,
+Winson Han, Eli Vanderbilt, Jordi Salvador, Abhay Desh-
+pande, Rose Hendrix, Snehal Jauhri, Shuo Liu, Nur Muham-
+mad Mahi Shafiullah, Maya Guru, Ainaz Eftekhar, Karen
+Farley, Donovan Clay, Jiafei Duan, Arjun Guru, Piper
+Wolters, Alvaro Herrasti, Ying-Chun Lee, Georgia Chal-
+vatzaki, Yuchen Cui, Ali Farhadi, Dieter Fox, and Ranjay Kr-
+ishna. MolmoSpaces: Large-scale open ecosystem for robot
+manipulation and navigation. In Robotics: Science and Sys-
+tems, 2026. 5
+[24] Weicheng Kuo, Anelia Angelova, Tsung-Yi Lin, and Angela
+Dai. Mask2CAD: 3D shape prediction by learning to seg-
+ment and retrieve. In ECCV, 2020. 2
+[25] Yann Labb´e, Lucas Manuelli, Arsalan Mousavian, Stephen
+Tyree, Stan Birchfield, Jonathan Tremblay, Justin Carpentier,
+Mathieu Aubry, Dieter Fox, and Josef Sivic. MegaPose: 6D
+pose estimation of novel objects via render & compare. In
+CoRL, 2022. 1, 2
+[26] Vincent Leroy, Yohann Cabon, and Jerome Revaud. Ground-
+ing image matching in 3D with MASt3R. In ECCV, 2024.
+2
+[27] Baicheng Li, Dong Wu, Jun Li, Shunkai Zhou, Zecui Zeng,
+Lusong Li, and Hongbin Zha. MV-SAM3D: Adaptive multi-
+view fusion for layout-aware 3D generation. arXiv preprint
+arXiv:2603.11633, 2026. 1, 2, 5, 6
+[28] Guibiao Liao, Mochu Xiang, Heng Li, Ken Deng, Zijie
+Wang, Guanbin Li, Ping Tan, Shenghua Gao, and Yizhou
+Yu. SPOON: Towards coherent compositional 3D scene gen-
+eration from uncalibrated multi-view images. arXiv preprint
+arXiv:2609.39590, 2026. 1, 2
+[29] Haotong Lin, Sili Chen, Jun Hao Liew, Donny Y. Chen,
+Zhenyu Li, Yang Zhao, Sida Peng, Hengkai Guo, Xiaowei
+Zhou, Guang Shi, Jiashi Feng, and Bingyi Kang.
+Depth
+Anything 3: Recovering the visual space from any views.
+In ICLR, 2026. 2, 6, 5
+[30] Ilya Loshchilov and Frank Hutter. Decoupled weight decay
+regularization. In ICLR, 2019. 6
+[31] Yanxu Meng, Haoning Wu, Ya Zhang, and Weidi Xie. Scene-
+Gen: Single-image 3D scene generation in one feedforward
+pass. In 3DV, 2026. 1, 2, 5, 6
+[32] Anna ˇS´arov´a Mikeˇst´ıkov´a, M´ed´eric Fourmy, Martin C´ıfka,
+Josef Sivic, and Vladimir Petrik. AlignPose: Generalizable
+6D pose estimation via multi-view feature-metric alignment.
+In CVPR, 2026. 2, 7
+[33] Van Nguyen Nguyen, Thibault Groueix, Mathieu Salzmann,
+and Vincent Lepetit. GigaPose: Fast and robust novel object
+pose estimation via one correspondence. In CVPR, 2024. 2
+[34] Haosong Peng, Hao Li, Yalun Dai, Yushi Lan, Yihang Luo,
+Tianyu Qi, Zhengshen Zhang, Yufeng Zhan, Junfei Zhang,
+Wenchao Xu, and Ziwei Liu. OmniVGGT: Omni-modality
+driven visual geometry grounded transformer.
+In CVPR,
+2026. 2, 1
+[35] Nicholas Pfaff, Thomas Cohn, Sergey Zakharov, Rick Cory,
+and Russ Tedrake.
+SceneSmith:
+Agentic generation of
+simulation-ready indoor scenes. In ICML, 2026. 5
+[36] Minghan Qin, Yuang Wang, Xiuyu Yang, Yushi Long, Yujian
+Zhang, Ruihuan Wang, Kai Ye, Yangang Zhang, and Hang
+Li. Lucida: Parse, generate, and place for composable real-
+to-sim scene modeling. arXiv preprint arXiv:2608.30821,
+2026. 2
+[37] Zidian Qiu and Ancong Wu.
+Pano3DComposer: Feed-
+forward compositional 3D scene generation from single
+panoramic image. In CVPR, 2026. 2, 7, 8
+[38] Yuchen Rao, Stefan Ainetter, Sinisa Stekovic, Vincent Lep-
+etit, and Friedrich Fraundorfer. Leveraging automatic CAD
+annotations for supervised learning in 3D scene understand-
+ing. In CVPR Workshops, 2025. 5, 2
+[39] Yukai Shi, Weiyu Li, Zihao Wang, Hongyang Li, Xingyu
+Chen, Ping Tan, and Lei Zhang. SceneMaker: Open-set 3D
+scene generation with decoupled de-occlusion and pose esti-
+mation model. In CVPR, 2026. 1, 2, 5, 6, 8
+[40] Xingyuan Sun, Jiajun Wu, Xiuming Zhang, Zhoutong
+Zhang, Chengkai Zhang, Tianfan Xue, Joshua B. Tenen-
+baum, and William T. Freeman. Pix3D: Dataset and methods
+for single-image 3D shape modeling. In CVPR, 2018. 5
+[41] Yang-Tian Sun, Tianjia Liu, Zehuan Huang, Yi-Hua Huang,
+Xiaoyang Lyu, Ziyi Yang, Zi-Xin Zou, Yuan-Chen Guo,
+Yan-Pei Cao, and Xiaojuan Qi. Mira-Scene: Pixel-aligned
+layouts for generative 3D scene reconstruction.
+arXiv
+preprint arXiv:2609.23796, 2026. 2
+[42] Stephen Tyree, Jonathan Tremblay, Thang To, Jia Cheng,
+Terry Mosier, Jeffrey Smith, and Stan Birchfield.
+6-DoF
+pose estimation of household objects for robotic manipula-
+tion: An accessible dataset and benchmark. In IROS, 2022.
+8
+[43] Jianyuan Wang, Minghao Chen, Nikita Karaev, Andrea
+Vedaldi, Christian Rupprecht, and David Novotny. VGGT:
+Visual geometry grounded transformer. In CVPR, 2025. 2, 3
+[44] Jianyuan Wang, Minghao Chen, Shangzhan Zhang, Nikita
+Karaev, Johannes Sch¨onberger, Patrick Labatut, Piotr Bo-
+janowski, David Novotny, Andrea Vedaldi, and Christian
+Rupprecht. VGGT-Ω. In CVPR, 2026. arXiv:2605.15195.
+2, 3
+[45] Ruicheng Wang, Sicheng Xu, Cassie Dai, Jianfeng Xiang,
+Yu Deng, Xin Tong, and Jiaolong Yang. MoGe: Unlocking
+accurate monocular geometry estimation for open-domain
+images with optimal training supervision. In CVPR, 2025.
+6
+[46] Ruicheng Wang, Sicheng Xu, Yue Dong, Yu Deng, Jianfeng
+Xiang, Zelong Lv, Guangzhong Sun, Xin Tong, and Jiaolong
+Yang. MoGe-2: Accurate monocular geometry with metric
+scale and sharp details. In NeurIPS, 2025. 6, 5
+[47] Shuzhe Wang,
+Vincent Leroy,
+Yohann Cabon,
+Boris
+Chidlovskii, and Jerome Revaud. DUSt3R: Geometric 3D
+vision made easy. In CVPR, 2024. 2
+[48] Yifan Wang, Jianjun Zhou, Haoyi Zhu, Wenzheng Chang,
+Yang Zhou, Zizun Li, Junyi Chen, Jiangmiao Pang, Chun-
+hua Shen, and Tong He. π3: Permutation-equivariant visual
+geometry learning. In ICLR, 2026. 2
+[49] Bowen Wen, Wei Yang, Jan Kautz, and Stan Birchfield.
+FoundationPose: Unified 6D pose estimation and tracking
+of novel objects. In CVPR, 2024. 1, 2, 7, 8
+10
+
+
+[50] Hongchi Xia, Tianhang Cheng, Wei-Chiu Ma, and Shenlong
+Wang. FIRE3D: Feed-forward interactive 3D scene recon-
+struction within a minute. arXiv preprint arXiv:2609.08848,
+2026. 1, 2, 5, 6
+[51] Hongchi Xia, Xuan Li, Zhaoshuo Li, Qianli Ma, Jiashu Xu,
+Ming-Yu Liu, Yin Cui, Tsung-Yi Lin, Wei-Chiu Ma, Shen-
+long Wang, Shuran Song, and Fangyin Wei. SAGE: Scalable
+agentic 3D scene generation for embodied AI.
+In CVPR,
+2026. 5
+[52] Jianfeng Xiang, Zelong Lv, Sicheng Xu, Yu Deng, Ruicheng
+Wang, Bowen Zhang, Dong Chen, Xin Tong, and Jiaolong
+Yang. Structured 3D latents for scalable and versatile 3D
+generation. In CVPR, 2025. 1
+[53] Yu Xiang, Tanner Schmidt, Venkatraman Narayanan, and
+Dieter Fox. PoseCNN: A convolutional neural network for
+6D object pose estimation in cluttered scenes. In Robotics:
+Science and Systems, 2018. 8
+[54] Kaixin Yao, Longwen Zhang, Xinhao Yan, Yan Zeng, Qix-
+uan Zhang, Lan Xu, Wei Yang, Jiayuan Gu, and Jingyi Yu.
+CAST: Component-aligned 3D scene reconstruction from an
+RGB image. ACM Transactions on Graphics (Proc. SIG-
+GRAPH), 44(4), 2025. 2
+[55] Chandan Yeshwanth, Yueh-Cheng Liu, Matthias Nießner,
+and Angela Dai. ScanNet++: A high-fidelity dataset of 3D
+indoor scenes. In ICCV, 2023. 5
+[56] Ziang Zhang, Wenyou Yi, Zehan Wang, Jiachen Xu, Xintong
+Han, Chunchao Guo, and Zhou Zhao. Easy-3Dfy: Object-
+level geometric composition for single-image 3D scene con-
+struction. arXiv preprint arXiv:2610.32250, 2026. 1, 2
+[57] Weipeng Zhong, Peizhou Cao, Yichen Jin, Li Luo, Wenzhe
+Cai, Jingli Lin, Hanqing Wang, Zhaoyang Lyu, Tai Wang,
+Bo Dai, Xudong Xu, and Jiangmiao Pang.
+InternScenes:
+A large-scale simulatable indoor scene dataset with realistic
+layouts. In NeurIPS Datasets and Benchmarks Track, 2025.
+arXiv:2509.10813. 5
+11
+
+
+X-3DComposer: Feed-Forward 3D Scene Composition
+with Any Assets from Any Views
+Supplementary Material
+Section and equation numbers, Tables 1–5, and Figures
+1–6 refer to the main paper, and the tables follow its con-
+ventions.
+A. Implementation Details
+Backbone.
+The backbone is the 1B-parameter VGGT-Ω
+model. It has a token width of 1024 and alternates 24 frame-
+attention blocks with 24 global-attention blocks; five of the
+global-attention blocks attend only to the camera and reg-
+ister tokens. As in the original model, the resolution of a
+scene view depends on its aspect ratio, and every scene view
+has about 4162 pixels (for example, 416×416 or 304×560).
+For frame attention, views are batched by resolution.
+New modules.
+The ray encoder is a convolution of stride
+16 on the 6-channel Pl¨ucker rays, followed by a linear layer
+that maps to the token width. For a view with intrinsics
+but no camera pose, two learnable “camera pose unknown”
+vectors are added, one to its camera token and the other
+to each of its patch tokens. The depth encoder is a second
+convolution of stride 16, applied to the logarithm of the nor-
+malized depth and a validity mask. The camera encoder is
+an MLP that maps the field of view and the world-to-camera
+rotation (as a quaternion) and translation to the token width.
+There are 64 identity embeddings of dimension 64, so one
+forward pass handles at most 64 objects. In addition to the
+patch-wise identity vectors of Eq. (5), the camera token of
+each crop and render receives the embedding of its object.
+The output layers of the ray and camera encoders, the two
+“camera pose unknown” vectors, the linear projections of
+the identity vectors, and the three log-scale outputs added
+to the camera head are zero-initialized. The convolution of
+the depth encoder has no bias and starts from small ran-
+dom weights; it adds nothing to the tokens of views without
+depth input.
+Frames and geometric conditions.
+In the asset frame,
++Y points up, and coordinates have no physical unit. The
+scale si and the translation ti share one unit of length,
+which can be fixed only by depth or by camera poses with
+a nonzero baseline. Camera poses and depth are accepted
+only together with intrinsics, so there are five combinations
+of conditions: K+P+D, K+P, K+D, K, and none.
+Normalization and metric-scale recovery.
+Let X be the
+ground-truth scene points (in the frame of the first cam-
+era) and oj the camera center of scene view j (o1 = 0).
+The training targets are divided by g, and, following Om-
+niVGGT [34], the input depth and camera centers are nor-
+malized separately:
+g =
+1
+|X|
+X
+x∈X
+∥x∥2,
+˜D =
+D
+mean(D),
+˜oj = oj
+β ,
+β =
+1
+S −1
+S
+X
+j=2
+∥oj∥2,
+(7)
+with β = 1 if S = 1 or if all camera centers coincide. At
+inference, the global factor of Sec. 3.2, denoted here by λ,
+is λD if depth is given, and otherwise λP if camera poses
+of several views are given:
+λD = median
+ D/ ˆD
+
+,
+λP =
+P
+j≥2∥oj∥2 ∥ˆoj∥2
+P
+j≥2∥ˆoj∥2
+2
+,
+(8)
+where the median is taken over the pixels with valid input
+depth, and ˆD and ˆoj are the predicted depth and camera
+centers.
+Training objective.
+The total loss is
+L = Lcam + 5Ls + 15Lshape + Lcons
++ 2Lcand + Lfuse + Lagree + 0.5 Lcrop
++ 0.5 Lgr + 0.3 Lfloor + Lpen,
+(9)
+where Lcam contains the original losses of the backbone
+on the scene views and the camera loss of the renders
+(Sec. 3.4), and Lcrop is the sum of the camera and depth
+losses of the crops. The camera label of a crop is a virtual
+camera with a centered principal point, fitted by minimiz-
+ing the reprojection error of the visible surface points of the
+object in the crop. With · the mean over the three axes,
+Π(v) = v −v 1, the three scale terms are
+Ls = Ew
+i,m |ℓi,m −log s∗
+i |,
+Lshape = Ew
+i,m |Π(ℓi,m) −Π(log s∗
+i )|,
+Lcons = Ei,m (ℓi,m −log si)2,
+(10)
+and the three pose terms are
+Lcand = Ei,m di
+ Ri,m, ti,m; R∗
+i , t∗
+i
+
+,
+Lfuse = Ei di
+ Ri, ti; R∗
+i , t∗
+i
+
+,
+Lagree = Ei,m di
+ Ri,m, ti,m; Ri, ti
+
+.
+(11)
+Here Ew is a mean weighted by wi ∝1 + 2 clip
+ 1 −
+ai/0.01, 0, 1
+
+, where ai is the largest fraction of a scene
+view covered by the visible mask of object i; a small object
+thus gets up to three times the weight of the others. The dis-
+tance di is defined in Eq. (6), and si is the predicted scale
+(Sec. 3.2), which Lfuse and Lagree use in Eq. (3). For Lcand,
+1
+
+
+the scale in Eq. (3) is γis∗
+i with γi = exp (log si −log s∗
+i ),
+so these candidates use the ground-truth axis ratios and the
+geometric mean of the predicted scale.
+Symmetry. We detect the symmetry group Gi of each
+asset about its vertical axis from points sampled on its
+surface (a discrete n-fold symmetry with n
+≥
+2, or
+a continuous rotational symmetry).
+During training, the
+ground-truth rotation is replaced by R∗
+i Q⋆with Q⋆=
+arg minQ∈Gi
+P
+m∥Ri,m −R∗
+i Q∥F , and the camera labels
+of the renders change accordingly.
+Grounding head. For a crop or render r of object i, let
+cr be its final camera token and hu the final token of scene-
+view patch u. Then
+pr(u) = softmax
+u
+ τ cos(W1cr, W2hu)
+
+,
+qr(u) =
+αi,u
+P
+u′ αi,u′ ,
+Lgr = Er KL
+ qr ∥pr
+
+,
+(12)
+where W1 and W2 are linear maps, τ is a learnable temper-
+ature, and αi,u is as in Eq. (5).
+Physics. Both terms are computed from the fused poses,
+with lengths in meters. For a pair of objects (i, k), we sam-
+ple points y ∈Yi inside object i, each standing for a volume
+vy, and read their penetration depth δk(y) = [−ϕk(y)]+
+from the precomputed signed distance field ϕk of object k.
+The floor term covers the set B of objects that are floor-
+supported in the ground truth; bi is the height of the bottom
+of object i, and ei is its offset from the floor, defined below:
+Lpen = wsrc
+N
+X
+i̸=k
+X
+y∈Yi
+vy
+
+δk(y) −ϵik
+
++,
+Lfloor = Ei∈B
+
+|ei| −1 cm
+
++.
+(13)
+The tolerance is ϵik = max(1.5 cm, δ∗
+ik + 1 cm), where
+δ∗
+ik is the largest penetration depth of the same pair in the
+ground-truth layout. wsrc is 0.06 for 3D-FRONT samples,
+0.009 for 3D-FUTURE samples, and 0 for the other sources.
+If the ground truth of the sample gives the floor height b0,
+ei = bi−b0; otherwise ei = (bi−b∗
+i )−mediank∈B(bk−b∗
+k).
+Training samples.
+We describe the sampling of the final
+model (Sec. E); the differences for the main-paper model
+are given at the end. Each sample is given intrinsics with
+probability 0.8. When intrinsics are given, camera poses
+and depth are each given independently with probability
+0.5, so each of the five combinations of conditions has prob-
+ability 0.2. At each step, we draw the number of scene
+views S (1 to 10) and of objects N (1 to 12) from a fixed
+set of combinations, and the number of renders per object
+M from {1, 2, 3, 4, 6, 8}. Each object gets one crop from
+each scene view in which the long side of its input mask is
+at least 64 pixels; if there are more than three such views,
+the three with the longest sides are kept. A crop whose box
+side is at least 336 pixels is used at 336 × 336, the others at
+256×256; the renders of an object with a 336-pixel crop are
+also 336 pixels, and the other renders are 256 pixels. The
+batch size is set by a budget of about 56k tokens per GPU,
+and all samples of one step have the same number of views
+at each resolution. In the multi-view sources, any two scene
+views a and b of a sample satisfy
+∥oa −ob∥2 ≥max
+ 0.6 m, 0.3 ¯zab
+
+,
+(14)
+where ¯zab is the mean over the two views of the median
+depth of the visible objects; pairs whose camera centers are
+less than 0.2 m apart but whose optical axes differ by at least
+30◦are exempt. A target object must be visible in at least
+one of these views, with a visible area of at least 0.25%
+of the image and with at most 55% of the object occluded.
+Renders are composited onto a uniform gray background,
+and their appearance is randomly perturbed. At inference,
+the crops are chosen from the input masks by the same rule,
+and the renders use fixed viewpoints spread evenly in az-
+imuth around the asset, at elevations alternating between
+10◦and 25◦. The main-paper model differs mainly in: one
+or two 256-pixel crops per object (one at inference), one to
+five renders, and about 28k tokens per GPU and step.
+Optimization.
+We use AdamW (β1 = 0.9, β2 = 0.95,
+weight decay 0.05) with gradient clipping at a norm of 1.
+The peak learning rate is 2.5 × 10−5 for the new modules
+and 5×10−6 for the LoRA weights (rank 32) and the output
+branch of the camera head. The learning rate is warmed up
+linearly for 500 steps and then decays with a cosine sched-
+ule to 1% of its peak. Training uses 8 GPUs and runs for
+about 200k steps.
+B. Training Data
+All data are converted to one format. Each scene stores the
+images, object masks, and cameras of its views and, where
+available, their depth, and each asset is rendered in ad-
+vance from 32 viewpoints in its asset frame. We render the
+3D-FRONT rooms with Blender from several viewpoints
+along a walkable trajectory in each room and take the la-
+bels from the layout files. The other synthetic scenes come
+from HSSD, InternScenes, MolmoSpaces, SAGE, and Sce-
+neSmith; we convert their labels from the object transforma-
+tions that each source provides. For ScanNet++, we use the
+DSLR images together with the ShapeNet [3] CAD mod-
+els and the pose annotations of SCANnotate++ [38]. These
+CAD models differ in proportions from the real objects, and
+we take the per-axis scale of each object from the annota-
+tions. The single-view images are real photos from Pix3D
+and rendered scenes from 3D-FUTURE. For the asset re-
+placement of Sec. 3.4, the substitute is the asset of the same
+category with the most similar shape; during training, an
+object that has a substitute is replaced by it with probability
+0.5. Table 6 lists the sources.
+2
+
+
+(a) Single-view input
+same SAM 3D meshes
+Input
+MIDI
+SceneGen
+FIRE3D
+SAM 3D layout
++ SceneMaker†
++ Ours
+GT
+real scan
+n/a
+(b) Multi-view input
+same MV-SAM3D meshes
+Input
+FIRE3D
+MV-SAM3D layout
++ Ours
+GT
+real scan
+same MV-SAM3D meshes
+Input
+FIRE3D
+MV-SAM3D layout
++ Ours
+GT
+Figure 7. Predicted layouts of generated assets: further cases in the setting of Fig. 4. Single-view rows, from top to bottom: a real scan from
+ScanNet++, InternScenes, MolmoSpaces, SAGE, SceneSmith, 3D-FRONT, and 3D-FUTURE. Multi-view: a real scan from ScanNet++
+and MolmoSpaces. In the real scans, every visible object is placed; for objects without a CAD annotation, the ground truth shows the
+corresponding segment of the scanned mesh. n/a: SceneGen produced no output for this scene.
+3
+
+
+(a) Single-view input
+Input
+FoundationPose
+PoseGAM
+Ours
+GT
+(b) Multi-view input
+Input
+FoundationPose
+AlignPose
+Ours
+GT
+Input
+FoundationPose
+AlignPose
+Ours
+GT
+Figure 8. Predicted layouts of ground-truth CAD models with estimated conditions. (a) Single-view input: one scene from 3D-FRONT
+and two from 3D-FUTURE, each method shown in the camera view and in a top view. (b) Multi-view input (top views): one scene from
+InternScenes and one from MolmoSpaces. Dashed outlines: ground truth.
+Table 6. Training sources. Scenes: number of training scenes
+(images for the single-view sources). Share: share of the training
+samples. The share of 3D-FRONT includes 9.2 percentage points
+of samples drawn to contain several instances of the same asset.
+Source
+Type
+Scenes
+Share
+3D-FRONT
+synthetic, multi-view
+17,814
+42.3%
+InternScenes
+synthetic (from real scans), multi-view
+6,030
+9.2%
+SAGE
+synthetic, multi-view
+1,908
+5.5%
+MolmoSpaces
+synthetic, multi-view
+1,238
+6.4%
+HSSD
+synthetic, multi-view
+919
+6.4%
+SceneSmith
+synthetic, multi-view
+290
+3.7%
+ScanNet++
+real, multi-view
+222
+8.0%
+3D-FUTURE
+synthetic, single-view
+13,776
+11.0%
+Pix3D
+real, single-view
+5,829
+7.4%
+C. Evaluation Details
+Test data.
+IndoorMix consists of 400 single-view scenes
+and 224 multi-view scenes with 2, 4, 8, or 12 views. On
+the scenes evaluated in Table 1, the single-view scenes of
+IndoorMix have 4.5 target objects on average and the multi-
+view scenes 4.8, with at most 8 in both; the scenes of 3D-
+FUTURE have 3.6. About 12% of the IndoorMix scenes are
+real scans from ScanNet++, and a further 11% of the single-
+view and 20% of the multi-view scenes come from the
+part of InternScenes that is reconstructed from real scans.
+The MolmoSpaces scenes come from its ProcTHOR part.
+Multi-view scenes must have co-visible views: we connect
+two views if at least 1% of the ground-truth depth points of
+one are visible and unoccluded in the other, or if both show
+the same target object with at least 100 pixels each, and we
+keep a scene only if its view graph is connected, which re-
+moves 10 of 234 candidate scenes. This rule only selects
+test scenes and does not change the input of any method.
+Each comparison is computed on the scenes for which every
+compared method returns the poses of all objects; Table 7
+gives the number of scenes per dataset.
+Overlap with training data.
+The IndoorMix scenes are
+held out from training, but all six datasets are among our
+training sources, whereas most baselines were trained on
+at most one of them. MIDI and SceneMaker were trained
+on 3D-FRONT, so some of our 3D-FRONT test rooms may
+be in their training sets. The training data of FIRE3D in-
+clude SAGE, InternScenes, and SceneSmith scenes and 3D-
+FUTURE assets and therefore also overlap with our test
+datasets. The 3D-FUTURE test set uses the same CAD
+models as 3D-FRONT, and some of them also appear in
+the 3D-FUTURE training images, on which both SceneGen
+and our model are trained.
+Metrics and alignment.
+As in MIDI, each scene is cen-
+tered and scaled so that the longest side of its bounding box
+is 1.9, and all metrics are computed in this frame. CD is a
+squared distance, and the F-score threshold of 0.1 is about
+4
+
+
+(a) One panorama
+Input panorama
+Pano3DComposer
+Ours
+GT
+(b) Two panoramas
+Input panoramas
+Pano3DComposer
+Ours
+GT
+Input panoramas
+Pano3DComposer
+Ours
+GT
+Figure 9. Panoramic input. (a) One panorama: objects overlaid on the panorama, with an oblique view as inset (dashed: ground truth); our
+model uses K+P. (b) Two panoramas of the same room: oblique views; our model uses K.
+Table 7. Results of Table 1 by dataset (F-S and IoU-B). †: pose
+model only. Bold: best in each row.
+Native
+SceneMaker† [39]
+Ours
+Meshes
+Dataset
+#Scenes F-S↑IoU-B↑F-S↑
+IoU-B↑
+F-S↑IoU-B↑
+Single-view input
+MIDI [18]
+InternScenes
+36
+57.9
+0.232
+82.0
+0.398
+89.6
+0.553
+MolmoSpaces 37
+41.6
+0.120
+84.5
+0.306
+94.9
+0.561
+SAGE
+38
+58.8
+0.227
+89.8
+0.448
+94.8
+0.599
+SceneSmith
+39
+67.1
+0.293
+85.6
+0.414
+95.9
+0.658
+ScanNet++
+39
+55.3
+0.248
+75.5
+0.416
+86.1
+0.566
+3D-FRONT
+146
+61.1
+0.263
+85.3
+0.481
+93.9
+0.651
+3D-FUTURE
+134
+69.7
+0.324
+88.1
+0.504
+91.1
+0.591
+SceneGen [31]
+InternScenes
+36
+54.6
+0.156
+83.2
+0.370
+90.1
+0.507
+MolmoSpaces 36
+37.8
+0.090
+83.6
+0.311
+92.8
+0.493
+SAGE
+38
+56.8
+0.177
+89.1
+0.431
+96.2
+0.611
+SceneSmith
+39
+58.2
+0.211
+83.3
+0.411
+92.7
+0.587
+ScanNet++
+36
+49.0
+0.197
+75.9
+0.425
+85.4
+0.561
+3D-FRONT
+146
+61.9
+0.237
+84.5
+0.457
+94.3
+0.652
+3D-FUTURE
+134
+85.3
+0.474
+89.4
+0.519
+95.6
+0.686
+FIRE3D [50]
+InternScenes
+36
+88.9
+0.472
+82.8
+0.381
+89.7
+0.500
+MolmoSpaces 37
+92.4
+0.420
+81.5
+0.283
+94.5
+0.483
+SAGE
+38
+90.5
+0.492
+85.8
+0.401
+92.7
+0.542
+SceneSmith
+38
+94.0
+0.539
+83.6
+0.384
+94.7
+0.567
+ScanNet++
+38
+84.1
+0.503
+76.6
+0.415
+86.2
+0.548
+3D-FRONT
+141
+88.2
+0.502
+82.5
+0.427
+90.1
+0.555
+3D-FUTURE
+131
+88.2
+0.486
+83.8
+0.454
+88.1
+0.509
+SAM 3D [5]
+InternScenes
+36
+94.4
+0.573
+84.3
+0.396
+95.2
+0.643
+MolmoSpaces 37
+97.3
+0.536
+85.3
+0.323
+99.1
+0.684
+SAGE
+38
+96.1
+0.596
+91.3
+0.451
+98.3
+0.684
+SceneSmith
+39
+97.5
+0.663
+85.8
+0.421
+98.8
+0.779
+ScanNet++
+39
+89.1
+0.551
+79.5
+0.438
+93.5
+0.655
+3D-FRONT
+146
+92.8
+0.597
+87.0
+0.476
+97.1
+0.717
+3D-FUTURE
+134
+91.7
+0.571
+89.7
+0.519
+95.1
+0.671
+Multi-view input
+FIRE3D
+InternScenes
+43
+95.2
+0.611
+–
+–
+96.0
+0.638
+MolmoSpaces 43
+94.7
+0.502
+–
+–
+95.2
+0.510
+SAGE
+39
+95.7
+0.636
+–
+–
+96.7
+0.630
+SceneSmith
+37
+96.5
+0.685
+–
+–
+96.3
+0.697
+ScanNet++
+26
+85.5
+0.459
+–
+–
+91.0
+0.551
+3D-FRONT
+26
+89.9
+0.500
+–
+–
+94.9
+0.587
+MV-SAM3D [27] InternScenes
+41
+93.7
+0.554
+–
+–
+97.6
+0.757
+MolmoSpaces 41
+96.6
+0.543
+–
+–
+99.0
+0.682
+SAGE
+35
+95.0
+0.590
+–
+–
+99.0
+0.779
+SceneSmith
+35
+95.2
+0.646
+–
+–
+99.6
+0.818
+ScanNet++
+26
+90.4
+0.456
+–
+–
+96.2
+0.686
+3D-FRONT
+26
+93.6
+0.504
+–
+–
+98.9
+0.764
+5% of this longest side. CD-S and F-S are computed on
+the whole scene and averaged over scenes. IoU-B is the
+IoU between the axis-aligned 3D bounding boxes of each
+predicted object and its ground-truth object, and CD-O and
+F-O are the Chamfer distance and the F-score of each ob-
+ject; these three metrics are measured after the scene-level
+alignment, without any per-object re-alignment, and are av-
+eraged over all objects of the test set. For generated meshes,
+all methods are evaluated with the same code, which fol-
+lows the official evaluation of MIDI; we correct a transpo-
+sition error in the Kabsch step of its ICP.
+With ground-truth CAD models, the prediction and the
+ground truth are both normalized with the transformation of
+the ground-truth scene, and only the scale is aligned. Each
+predicted scene gets one evaluation scale
+κ = median
+i
+∥t∗
+i ∥2
+∥ti∥2
+,
+(15)
+the median ratio between the ground-truth and the predicted
+distance from the first camera to the object centers. In Ta-
+ble 2, the predicted object centers are replaced by κ ti and
+the objects keep their size; in Tables 3, 4 and 9, the whole
+predicted layout is scaled by κ about the first camera. Trans-
+lation and rotation are not aligned, so global translation
+and rotation errors of the layout count toward the metrics.
+The evaluation scale is unrelated to the global factor λ of
+Sec. 3.2.
+Inputs of the compared methods.
+MoGe-2 [46] esti-
+mates intrinsics and depth and is not given the ground-
+truth field of view. Depth Anything 3 [29] estimates in-
+trinsics, depth, and camera poses relative to the first scene
+5
+
+
+Table 8. Our model without conditions and with estimated K+D (Cond.: given conditions), in the setting of Table 1. Bold: better of the
+two; values that are equal after rounding are not bolded.
+IndoorMix
+3D-FUTURE
+Meshes
+Cond.
+CD-S↓
+F-S↑
+IoU-B↑
+CD-O↓
+F-O↑
+CD-S↓
+F-S↑
+IoU-B↑
+CD-O↓
+F-O↑
+Single-view input
+MIDI [18]
+none
+7.29
+92.98
+0.616
+9.06
+92.31
+9.22
+91.10
+0.591
+21.45
+88.66
+K+D
+7.14
+93.05
+0.620
+8.40
+92.53
+8.71
+91.84
+0.598
+20.55
+89.69
+SceneGen [31]
+none
+6.49
+92.74
+0.597
+11.40
+91.19
+5.24
+95.58
+0.686
+14.66
+94.45
+K+D
+6.71
+92.95
+0.601
+10.84
+91.55
+5.27
+95.75
+0.681
+14.00
+94.55
+FIRE3D [50]
+none
+8.95
+90.91
+0.539
+13.45
+89.91
+13.47
+88.10
+0.509
+24.36
+86.20
+K+D
+8.95
+90.54
+0.544
+10.94
+89.77
+13.73
+88.47
+0.513
+24.69
+86.54
+SAM 3D [5]
+none
+3.43
+97.02
+0.702
+4.86
+96.34
+5.51
+95.14
+0.671
+14.98
+94.03
+K+D
+3.17
+97.15
+0.702
+3.86
+96.56
+5.03
+95.88
+0.675
+14.35
+94.83
+Multi-view input
+FIRE3D
+none
+4.42
+95.29
+0.602
+5.77
+95.28
+–
+–
+–
+–
+–
+K+D
+4.40
+95.38
+0.608
+5.66
+95.38
+–
+–
+–
+–
+–
+MV-SAM3D [27]
+none
+1.61
+98.43
+0.747
+1.49
+98.55
+–
+–
+–
+–
+–
+K+D
+1.61
+98.44
+0.742
+1.51
+98.57
+–
+–
+–
+–
+–
+Input photo
+FoundationPose
+PoseGAM
+Ours (one forward)
+Ground truth
+16 objects
+19 objects
+16 objects
+Figure 10. Comparison with FoundationPose and PoseGAM on real HOPE photos. All methods use the same photo, intrinsics, ground-
+truth masks, and true-size object models; FoundationPose and our final model also use the sensor depth. FoundationPose and PoseGAM
+estimate the poses object by object; our model places all objects of a photo in one forward pass, with the given sizes. The assets are overlaid
+on the photo in their own colors, and each object has the same color in all columns.
+view. In Table 1, MIDI and SceneGen use only images and
+masks, and SAM 3D and SceneMaker use point maps from
+MoGe [45]. MV-SAM3D uses the estimates of Depth Any-
+thing 3. FIRE3D uses MoGe-2 for single-view input and,
+for multi-view input, the same Depth Anything 3 estimates
+as MV-SAM3D.
+Ground-truth CAD models.
+For our model, the given
+size replaces the predicted scale only in the final layout;
+the rotation and translation are still those that the model
+predicts. In the rows without depth input, the translations
+are multiplied by the median ratio between the given sizes
+and the predicted scales, which sets the unit of length of
+the scene. FoundationPose is a single-view method. On
+multi-view scenes, it estimates the pose of each object in
+the view where the object’s mask is largest, and this pose
+is transferred to the first scene view with the camera pose.
+We scale the thresholds of its two depth pre-filters with the
+6
+
+
+Input
+Ours
+GT
+Ours, novel view
+GT, novel view
+(a) Views from one centre with large rotations; no object is visible in view 0
+view 0
+view 3
+view 3
+view 3
+top view
+rotation error 51° / 44°
+top view
+(b) Estimated intrinsics: distant objects float above the floor
+side view
+distant objects +17–18 cm
+side view
+Figure 11. Failure cases. Columns: input, our result, ground truth, and novel views of the latter two (dashed: ground-truth objects). (a) No
+object is visible in the first view, and the views share one camera center. (b) Inaccurate estimated intrinsics.
+Table 9. Effect of the number of scene views S and of renders per
+object M (81 scenes, no conditions). Time: seconds per scene on
+a single GPU.
+(a) S (M = 4)
+(b) M (S = 4)
+S
+CD-S↓
+F-S↑
+IoU-B↑Time (s)
+M
+CD-S↓
+F-S↑
+IoU-B↑Time (s)
+1
+4.93 96.25
+0.789
+0.47
+1
+2.63 97.90
+0.835
+0.25
+2
+2.79 98.32
+0.847
+0.50
+2
+1.39 98.97
+0.867
+0.34
+4
+1.58 99.01
+0.873
+0.54
+4
+1.58 99.01
+0.873
+0.54
+8
+0.95 99.44
+0.886
+0.65
+8
+1.10 99.28
+0.884
+0.90
+distance of the object, because the fixed thresholds of the
+official code can remove all depth pixels of a distant object,
+in which case no pose is estimated. AlignPose starts from
+multi-view FoundationPose results and refines the pose of
+each object jointly over the views, using the given intrinsics
+and camera poses (those of Depth Anything 3 in the up-
+per block of Table 2); it is therefore listed with K+P+D.
+PoseGAM uses no depth and handles multi-view scenes in
+the same way as FoundationPose. For FoundationPose and
+PoseGAM, the camera pose is used only for this change of
+frame and is not listed as a condition. We correct an er-
+ror in the translation reset of the official PoseGAM code,
+which combines the intrinsics of the image crop with mask
+coordinates in the full image.
+Panoramic input.
+The test data are 42 houses of 3D-
+FRONT: the 12 houses of the Pano3DComposer test split
+that are not in our training data, and 30 further held-out
+houses that are in neither the training nor the test split of
+Pano3DComposer. With one panorama, each capture po-
+sition is a sample; with two panoramas, a sample consists
+of two capture positions in the same room. The six per-
+spective views of a panorama share its center; they are 60◦
+apart in yaw, are pitched 15◦downward, and have a field
+of view of 72◦. Their intrinsics and relative camera poses
+follow exactly from this arrangement; since the views share
+one camera center, these poses fix no unit of length. The
+relative camera pose between two panoramas is unknown,
+and our model accepts camera poses only for all views or
+for none, so for two panoramas we report only the settings
+without conditions and with intrinsics. Two panoramas give
+12 scene views, more than the maximum of 10 used in train-
+ing. Among the six views of the first panorama, the one
+in which the most objects are visible is used as the first
+scene view; this choice depends only on the input masks.
+Pano3DComposer estimates depth and the relative camera
+poses of the panoramas with its built-in Depth Anything 3.
+D. Additional Results
+Results by dataset.
+The results of Table 1 are broken
+down by dataset in Table 7. Our layouts are the best in
+both metrics in 37 of the 40 rows. In the other three rows,
+all in the two FIRE3D groups, one metric is slightly lower
+than that of the native layout. Our layouts are the best in
+every group on the real scans of ScanNet++ and also on
+3D-FRONT, the training set of MIDI and SceneMaker.
+Layout prediction for generated assets with estimated
+conditions.
+Table 8 compares our model without condi-
+tions and with estimated K+D in the setting of Table 1.
+The two settings differ little in the scene-level metrics; with
+estimated K+D, CD-O is lower in most groups.
+7
+
+
+Number of views and renders.
+Table 9 reports results for
+different numbers of scene views S and of renders per ob-
+ject M on 81 multi-view scenes from InternScenes, Molmo-
+Spaces, SAGE, SceneSmith, and ScanNet++, with ground-
+truth CAD models and without conditions. For each scene,
+we use its first S views and the same objects for all S.
+More views give more accurate layouts. More renders raise
+F-S and IoU-B, with a small gain from four to eight ren-
+ders, while the time grows from 0.54 s to 0.90 s. CD-S does
+not decrease monotonically with M; it is sensitive to a few
+scenes with large errors.
+More qualitative results.
+Figures 7 to 9 show further
+cases with generated assets, with ground-truth CAD mod-
+els and estimated conditions, and with panoramic input, in
+the settings of Fig. 4, Table 2, and Table 3.
+E. Extension to Generic Objects
+The main-paper model is trained and tested on indoor
+scenes, where most assets are furniture. To test whether
+the approach carries over to other kinds of objects, we con-
+tinue training the main-paper model with generic-object
+data added to the training set: the physically based ren-
+dered (PBR) training images of BOP [16] (T-LESS [15],
+HomebrewedDB [20], HOPE [42], HANDAL [13], YCB-
+V [53], and LINEMOD [14]), tabletop scenes that we gen-
+erate by physics simulation with objects from GSO [6] and
+ShapeNet [3], and real images from GraspNet-1Billion [8]
+and YCB-V. In the last part of this training, these data make
+up 19% of the training samples (11.5% BOP renderings,
+6.0% tabletop scenes, and 1.5% real images). The archi-
+tecture and the training objective are unchanged, and the
+samples are drawn as described in Sec. A. We call the result
+the final model; it is used only in this section. As in the
+main paper, the inputs include ground-truth object masks.
+Comparison on real photos.
+Figure 10 compares the fi-
+nal model with FoundationPose [49] and PoseGAM [4] on
+real photos from the HOPE validation set. The photos are
+not in the training set, but their objects were seen in training.
+Each photo contains 12 to 21 objects, whereas a training
+sample contains at most 12. All three methods are given the
+same inputs (listed in the caption); as in Table 2, our model
+uses the given sizes in place of its predicted scales, and the
+rotations and translations are its own predictions. On the
+photos shown, our results are visually similar to those of
+FoundationPose, which renders and refines each object iter-
+atively, whereas PoseGAM, which uses no depth, errs more
+along the viewing direction. Unlike FoundationPose, our
+model uses no test-time optimization, and unlike both meth-
+ods, it gives the poses of all objects in one forward pass.
+F. Limitations and Failure Cases
+All our experiments use ground-truth object masks; the ef-
+fect of predicted masks remains untested. The main-paper
+model is trained and tested only on indoor scenes; generic
+objects are covered in Sec. E.
+Orientation of cameras and objects. The cameras of the
+indoor training data are never rolled far about the optical
+axis. In our tests, rolling the camera by 180◦lowers the
+accuracy sharply, and objects lying on their side or upside
+down are placed less accurately.
+Reference frame. As in the backbone, all outputs are ex-
+pressed in the camera frame of the first scene view, so the
+result depends on which view comes first. In Fig. 11(a), the
+six views come from one panorama: they share one camera
+center, differ by large rotations, and no object is visible in
+the first view; the predicted object rotations have large er-
+rors. This is why the first view of the panorama experiments
+is chosen from the input masks (Sec. C).
+Geometric conditions. The model is sensitive to inac-
+curate geometric conditions (Table 2). In Fig. 11(b), the
+intrinsics estimated by MoGe-2 are inaccurate, and distant
+objects float above the floor.
+Small objects. A scene view has about 4162 pixels, so
+small distant objects cover few pixels; the crops compensate
+only in part.
+Physical plausibility.
+The physics constraints reduce
+penetration between objects but do not guarantee physically
+plausible layouts.
+8

@@ -1,0 +1,813 @@
+EAGLE: Entity-Aware Grounding with Layered Evidence for High-Resolution
+Image Understanding
+Zhongjian Zou
+Quan Qian
+Shanghai University
+Abstract
+Multimodal large language models (MLLMs) still strug-
+gle with fine-grained understanding of high-resolution im-
+ages: attention heads vary in their reliability for ground-
+ing target entities and their attributes, while localized de-
+tails are often disconnected from the broader scene con-
+text.
+We propose EAGLE (Entity-Aware Grounding with
+Layered Evidence for High-Resolution Image Understand-
+ing), a plug-in framework that jointly selects grounding sig-
+nals and organizes hierarchical visual evidence. EAGLE
+employs a fine-grained dataset to screen visually-grounded
+attention heads, followed by entity-aware grounding to ex-
+tract target-specific regions. It then integrates hierarchi-
+cal evidence construction and question-guided routing to
+select optimal view combinations, feeding them into the
+frozen MLLM to enhance fine-grained visual understand-
+ing.
+Experiments with Qwen2.5-VL-7B and InternVL3-
+8B demonstrate that EAGLE consistently improves perfor-
+mance across both backbones and achieves SOTA results on
+V*, HRBench-4K, and HRBench-8K compared with existing
+methods using the same backbone.
+1. Introduction
+Multimodal fine-grained recognition is capable of align-
+ing textual entities with visual regions to uncover subtle
+attributes overlooked by global models, thereby empow-
+ering detail-aware decision-making in autonomous driving
+and smart healthcare. Vision–language pre-training and vi-
+sual instruction tuning have enabled MLLMs to answer di-
+verse questions about images [2, 6, 10, 12, 13, 16]. High-
+resolution images, however, still expose a gap between see-
+ing an image and resolving its fine details [20, 23, 25]. A
+small target may occupy only a few visual tokens, while
+similar objects compete for attention. Even when a crop
+contains the correct target, the model must connect its ap-
+pearance to the intended entity and interpret it within the
+scene.
+Reliable fine-grained understanding therefore re-
+quires both accurate grounding and suitable visual context.
+Prior crop-based methods recover local evidence through
+visual search or attention-guided region extraction [14, 18,
+22, 23, 26].
+However, previous token-wise localization
+methods can retain responses to non-localization words and
+combine regions that refer to different objects. For “woman
+in black jacket”, independently localizing “black”, “jacket”,
+and “woman” may preserve unrelated objects rather than
+their joint referent.
+EAGLE removes non-localization
+words such as “in” and fuses the remaining word heatmaps
+within the entity phrase before region extraction. Figure 2
+contrasts this phrase-level grounding with token-wise local-
+ization.
+Selecting visual grounding heads is another challenge.
+Prior studies show that only a subset of attention heads con-
+sistently supports visual localization [4, 9]. Heads with-
+out this capability often produce diffuse or unrelated im-
+age responses, which act as noise when used for grounding.
+The key is therefore to identify suitable visual heads be-
+fore combining their heatmaps. Available data also vary
+in fine-grained difficulty: in the source examples we in-
+spected, some target objects occupy more than 30% of the
+original image, making them less informative for screening
+heads that must locate small targets. We curate and manu-
+ally annotate Visual-CoT (fine-grained) to build a special-
+ized visual-head pool, then use a trained ranker to select the
+heads most suitable for the current entity.
+Correct localization does not guarantee a correct answer.
+Even a crop that clearly exposes the target can fail to pro-
+vide sufficient evidence for recognition. Prior original-plus-
+crop pipelines [14, 26] leave two related difficulties. A tight
+crop removes context needed to identify the target, while
+the large scale gap between the original image and the mag-
+nified detail can hinder cross-view association. Contextual
+blindness has also motivated multi-scale cropping [8]. EA-
+GLE retains an intermediate view to connect target details
+with their surroundings, then selects the view combination
+according to the question. The examples in Figure 4 show
+that adding detail alone does not consistently improve pre-
+dictions.
+We present EAGLE, a unified framework connecting
+entity-aware grounding, layered evidence construction, and
+question-guided routing (Figure 1). We curate Visual-CoT
+1
+arXiv:2611.27264v1  [cs.CV]  20 Nov 2026
+
+
+Figure 1. EAGLE overview. (a) Offline voting builds a 128-head pool; the dynamic ranker selects Top-K heads per entity word, with K =
+16 chosen on the validation set. (b) Question-guided word weights combine their heatmaps into an entity-phrase grounding map. (c) Two
+localization rounds construct intermediate and detail images from original pixels. Question-guided routing selects the final views for the
+frozen MLLM.
+(fine-grained) from Visual CoT [17] and manually annotate
+fine-grained entity regions to build a specialized candidate
+head pool. A trained ranker selects the Top-K heads for
+the current image and entity word. Question-guided word
+weights fuse their maps within each entity. The resulting
+regions form an intermediate image for further localization
+and contextual reasoning. After removing invalid padding
+regions, refined targets are sampled from the original pixels
+to form a detail image. The router then chooses the image
+combination needed to answer the question.
+Our contributions are as follows:
+• To address non-semantic noise interference in entity
+grounding, we adopt a phrase-level grounding approach.
+It eliminates non-localization word noise and uses ques-
+tion self-attention to weigh and fuse phrase heatmaps.
+• To eliminate the influence of non-localizable heads in
+2
+
+
+Transformer architectures, we employ a voting mecha-
+nism on our self-annotated fine-grained dataset.
+This
+mechanism successfully screens out fine-grained visual
+attention heads, thereby yielding high-quality grounding
+heatmaps.
+• To enrich the context of detail crops and bridge the scale
+gap between global scenes and local crops, we con-
+struct layered evidence and utilize question-guided rout-
+ing to select complementary view combinations, facilitat-
+ing cross-scale evidence association.
+• Among same-backbone methods utilizing Qwen2.5-VL-
+7B and InternVL3-8B as backbone MLLMs, our method
+achieves SOTA performance on all three benchmarks:
+V*, HRBench-4K and HRBench-8K.
+2. Related work
+Previous studies on multimodal visual understanding
+and alignment.
+Vision Transformers represent images as
+patch sequences [7], while CLIP learns transferable visual
+representations from image–text pairs [16]. Flamingo con-
+nects visual encoders with language models for few-shot
+multimodal learning [2], and BLIP-2 uses a lightweight
+querying module to bridge frozen visual and language mod-
+els [10]. LLaVA and InstructBLIP establish visual instruc-
+tion tuning as a route to general-purpose image conversa-
+tion [6, 12]; LLaVA-1.5 improves this recipe with a simple
+connector and task-oriented data [13]. These advances es-
+tablish the backbone capabilities on which EAGLE builds.
+Our focus is how an existing model can access and combine
+the evidence needed for a fine-grained question.
+Fine-grained perception on high-resolution images.
+Early MLLMs commonly encoded images at a fixed resolu-
+tion, limiting access to small objects and text. LLaVA-UHD
+addresses varying resolutions and aspect ratios through im-
+age slicing, token compression, and spatial organization
+[25].
+InternVL scales visual representation learning [5],
+and PS3 introduces selective local pre-training for 4K inputs
+[19]. Qwen2.5-VL and InternVL3 further strengthen high-
+resolution perception [3, 28]. Complementing these back-
+bone advances, V* uses guided visual search [23]; ViCrop,
+ZoomEye, and retrieval-augmented perception recover use-
+ful regions at inference [18, 22, 26]. EAGLE also oper-
+ates at inference, but jointly selects entity-specific ground-
+ing signals and the views supplied for answering.
+Attention-based heatmap grounding.
+Attention rollout
+traces information across Transformer layers [1], while re-
+cent work shows that individual MLLM heads differ in
+visual perception and grounding ability [4, 9].
+ViCrop
+and HiDe both employ attention-based heatmap localization
+[14, 26]. HAVC combines offline OCR-based head screen-
+ing with online heatmap selection [24]. In contrast to these
+generic approaches, we construct Visual-CoT, a manually
+annotated dataset, to identify a specialized head pool and
+dynamically select heads tailored to the specific target.
+3. Method
+3.1. Overview and entity extraction
+Given an image I and a question Q, EAGLE identifies
+the target entities, constructs informative views, and passes
+the selected views to a frozen MLLM for answering (Fig-
+ure 1). Candidate-head screening and ranker learning are
+performed offline. Online selection uses the current image
+and extracted entity words, without access to reference an-
+swers or target bounding boxes.
+Entity extraction removes words that do not identify
+visual content and retains the object, part, and modifiers
+needed to specify the target. For “woman in black jacket”,
+it removes “in” and forms “black jacket woman”. For a re-
+lation between a woman with a backpack and a person with
+a beanie, the two entity phrases remain separate. We fuse
+the word heatmaps within each phrase before extracting re-
+gions, rather than locating every word separately and merg-
+ing all its boxes. This preserves a phrase as one target and
+limits unrelated regions activated by individual words.
+The extracted words are mapped to their positions in the
+question so that their importance can be estimated consis-
+tently. Regions from different entities are retained together
+when constructing the intermediate image. Thus, a rela-
+tional question can preserve both the queried object and its
+reference object rather than enlarging one while losing the
+other.
+3.2. Fine-grained head pool and dynamic ranking
+Building the head pool.
+We construct Visual-CoT (fine-
+grained) from Visual CoT [17] and manually link entity
+phrases to fine-grained image regions. Candidate heads are
+evaluated against these annotations. Let G denote the anno-
+tated target region, R the retained region, and Ωthe full im-
+age. We measure target coverage and background removal
+(BR) as:
+Coverage(R, G) = |R ∩G|
+|G|
+,
+BR(R, G) = 1 −|R| −|R ∩G|
+|Ω| −|G|
+.
+(1)
+Only heads with target coverage of at least 0.90 and
+background removal of at least 0.50 are eligible for voting.
+Each entity votes for up to ten eligible heads, favoring those
+that cover the target and concentrate attention inside it.
+Votes are accumulated across the annotated entity–image
+pairs, and the 128 highest-ranked heads form the candi-
+date pool C. Ties are resolved by aggregate localization
+3
+
+
+Figure 2. Head selection and entity grounding on the soda-can example. (a) Attention maps for “soda” from all 28 heads of the displayed
+HiDe layer and EAGLE’s selected Top-16 heads. (b) HiDe’s token-wise crops lead to “silver”, whereas EAGLE combines “soda” and
+“can”, refines the region, and answers “green”.
+quality.
+This step identifies visual heads suited to fine-
+grained grounding. Online ranking then selects which of
+these heads best responds to the current image and entity
+word.
+Ranking current heatmaps.
+Visual grounding ability is
+not uniform across heads, prior analyses identify context-
+dependent visual activation [4] and a small subset of heads
+suited to localization [9]. These findings motivate select-
+ing heads for the current entity rather than treating all
+visual heads as interchangeable.
+The ranker uses eight
+heatmap features: total attention, component-area entropy,
+edge alignment, top-three component mass, fragmentation,
+largest-component mass, peak component response, and the
+mass of the component containing the global peak. After
+Min–Max normalization within the pool, a learned linear
+score selects the Top-K heads for equal-weight map fusion
+(Figure 1a):
+si,h = θ⊤bfi,h,
+Si = TopKh∈C si,h,
+Hi = 1
+K
+X
+h∈Si
+Ai,h.
+(2)
+Here fi,h describes the heatmap of head h for word i, θ
+contains the learned ranking weights, and Ai,h is the word-
+to-image attention map. We select K on the validation set
+and use K = 16 in all experiments.
+K remains fixed at
+inference, while the selected head identities change with
+the input. Ranking scores determine which heads are se-
+lected; their maps are averaged equally. Aggregating sev-
+eral ranked heads limits the influence of an occasional unre-
+liable head on the fused map. The second localization pass
+reuses these heads and the word weights, but recomputes
+attention on the intermediate image.
+Learning the ranker.
+Manual target annotations order
+heatmaps for the same entity word by target containment,
+4
+
+
+then recall-oriented overlap (F2), coverage, and intersec-
+tion over union (IoU). A preferred and a less preferred
+candidate form a pair (h+, h−), with feature difference
+∆f = f + −f −. The pairwise loss encourages the preferred
+candidate to receive a higher score; Figure 3 evaluates the
+resulting selection against random sampling from the same
+pool:
+Lrank =
+1
+|P|
+X
+(h+,h−)∈P
+log
+
+1 + exp(−θ⊤∆f)
+
+.
+(3)
+P is the set of ordered training pairs; tied candidates
+are excluded. The ranker is trained offline and frozen dur-
+ing inference. Only this small auxiliary model is learned;
+the MLLM parameters remain unchanged. Thus, EAGLE
+adapts the choice of grounding signals without fine-tuning
+the backbone.
+3.3. Question-guided entity heatmaps
+Question-guided word weights.
+Words within an entity
+phrase contribute unequally to a question. Self-attention
+provides word-importance scores,
+following attention-
+based attribution [1]. Normalizing the scores within each
+phrase gives word weights αi; a single-word entity receives
+weight one. These weights combine the selected-head maps
+in Eq. (4), emphasizing question-relevant cues. Figure 1b il-
+lustrates the progression from word scores to a fused phrase
+heatmap.
+Shared-region enhancement applies when an entity
+phrase contains at least two words. Let m denote the num-
+ber of words in that phrase (m ≥2), and let eHi be the spa-
+tially normalized heatmap of its i-th word. Averaging the
+pixelwise minimum over all word pairs yields the shared
+response Ce. The final entity map combines the weighted
+word maps with this response:
+Ce(p) =
+2
+m(m −1)
+X
+i<j
+min
+
+eHi(p), eHj(p)
+
+,
+Pe(p) =
+X
+i∈e
+αi eHi(p) + PC Ce(p).
+(4)
+The shared term reinforces agreement without imposing
+a hard intersection. For “white cup”, it favors locations sup-
+ported by both “white” and “cup”, while the weighted base
+map retains complementary evidence. PC is the positive co-
+efficient controlling this enhancement, and p denotes an im-
+age location in Eq. (4). Single-word entities use their own
+map. Smoothing, normalization, and thresholding yield the
+retained regions. Figure 2 shows the complete localization-
+to-answer pipeline; its improvement reflects the combined
+grounding and evidence construction, rather than isolating
+head selection alone.
+3.4. Layered evidence and question-guided routing
+Constructing intermediate and detail images.
+Fig-
+ure 1c shows two localization rounds. Eagle uses HiDe’s
+layout-preserving reorganization [14] to remove irrelevant
+rows and columns while retaining the arrangement of se-
+lected regions, producing the intermediate image Im. A
+recorded coordinate mapping connects Im to the original
+image I. The second pass localizes targets within Im, re-
+moves geometrically invalid padding, and maps the refined
+regions back to I. Sampling the original pixels produces the
+detail image Id.
+The two constructed images have complementary objec-
+tives. Because the detail image depends on the interme-
+diate image, the first pass favors retaining as many rele-
+vant regions as possible, preserving both target evidence
+and useful context. The intermediate image thus provides
+the search space for refinement and bridges the original
+scene and the detail image. The second pass instead favors
+stronger removal of irrelevant background so that local tar-
+get features become more prominent. Both views are recon-
+structed from original pixels; invalid padding is removed
+geometrically rather than by color. The original image is
+retained when complete scene coverage or distance infor-
+mation is required.
+Question-guided routing.
+Different questions require
+different visual evidence. The router selects the original
+and intermediate images for broad layout or contextual in-
+terpretation, such as a sign’s meaning or an object’s func-
+tion; the intermediate and detail images for clearly local-
+ized attributes, text, faces, and other fine details; and all
+three images when both scene-level information and local
+details are needed, including full-image counting and near–
+far comparisons. The decision follows the information re-
+quired by the question, so the same object can use different
+routes under different questions.
+4. Experiments
+4.1. Experimental setup
+Benchmarks and backbones.
+We evaluate EAGLE
+with Qwen2.5-VL-7B and InternVL3-8B on V*Bench,
+HRBench-4K, and HRBench-8K [3, 21, 23, 28]. V*Bench
+contains 191 questions:
+115 attribute questions and 76
+relative-position questions.
+Each HRBench version con-
+tains 800 evaluation questions: 400 for fine-grained single-
+instance perception (FSP) and 400 for fine-grained cross-
+instance perception (FCP), counting the released option-
+order variants. We report subgroup and overall accuracy
+and compare methods within the same backbone family.
+Fine-grained supervision.
+We curate Visual-CoT (fine-
+grained) from Visual CoT [17], select examples that re-
+5
+
+
+Table 1. High-resolution question answering accuracy (%). ∆reports gains over Base in percentage points, computed before rounding.
+Bold marks within-backbone column maxima, including rounded ties. EviSpec [15] is a concurrent preprint.
+V*Bench
+HRBench-4K
+HRBench-8K
+Method
+Attr
+Spatial
+Avg
+FSP
+FCP
+Avg
+FSP
+FCP
+Avg
+Qwen2.5-VL-7B
+Base
+80.0
+76.3
+78.5
+89.0
+56.0
+72.5
+83.2
+53.2
+68.2
+ViCrop [26]
+89.6
+71.1
+82.2
+90.5
+57.5
+74.0
+85.5
+53.0
+69.3
+DeepEyes [27]
+91.3
+88.2
+90.1
+91.3
+59.0
+75.1
+86.8
+58.5
+72.6
+HiDe [14]
+92.2
+89.5
+91.1
+95.3
+58.3
+76.8
+93.8
+58.8
+76.3
+DeepScan [11]
+93.0
+86.8
+90.6
+90.1
+59.7
+75.0
+87.2
+57.6
+72.4
+EviSpec [15]
+95.7
+86.8
+92.1
+97.0
+64.8
+80.9
+97.5
+65.8
+81.6
+EAGLE
+94.8
+94.7
+94.8
+94.3
+67.8
+81.0
+94.8
+69.0
+81.9
+∆vs. Base
++14.8
++18.4
++16.3
++5.3
++11.8
++8.5
++11.6
++15.8
++13.7
+InternVL3-8B
+Base
+82.6
+76.3
+80.1
+82.0
+56.8
+69.4
+80.5
+57.0
+68.8
+ViCrop [26]
+88.7
+75.0
+83.3
+88.0
+57.0
+72.5
+82.8
+54.8
+68.8
+HiDe [14]
+92.2
+90.8
+91.6
+90.0
+63.5
+76.8
+92.2
+62.0
+77.1
+EviSpec [15]
+90.4
+88.2
+89.5
+93.8
+61.0
+77.4
+90.8
+59.8
+75.3
+EAGLE
+95.7
+90.8
+93.7
+94.3
+63.8
+79.0
+92.8
+62.0
+77.4
+∆vs. Base
++13.1
++14.5
++13.6
++12.3
++7.0
++9.6
++12.3
++5.0
++8.6
+Figure 3. Ranked versus random selection within the same 128-
+head pool. Random selection is repeated ten times; error bars show
+one standard deviation. At K = 16, the ranker achieves 81.5% cov-
+erage versus 57.8% for random selection, a gain of 23.7 percentage
+points.
+quire fine-grained entity localization, and manually anno-
+tate their target regions. These entity–image annotations
+support candidate-head voting and ranker learning. A sepa-
+rate localization set, excluded from voting and ranker fit-
+ting, evaluates head selection.
+This procedure identifies
+useful visual heads offline; online inference does not require
+target annotations.
+Hardware and software environment.
+The experimen-
+tal server is equipped with four NVIDIA H20 GPUs, each
+Table 2. Component ablations with Qwen2.5-VL-7B. Accuracy
+(%). Attr, Spatial, and Avg denote attribute, spatial, and overall
+accuracy. O, I, and D denote the original, intermediate, and detail
+images. Fixed-view variants disable routing. Bold marks the best
+result in each column.
+Method
+Attr Spatial
+Avg
+w/o Entity phrase extraction 90.43
+88.16 89.53
+w/o Head selection
+91.30
+85.53 89.01
+Fixed views: O + I
+90.43
+92.11 91.10
+Fixed views: I + D
+93.04
+92.11 92.67
+Fixed views: O + I + D
+93.91
+92.11 93.19
+EAGLE (Full)
+94.78
+94.74 94.76
+reporting 97,871 MiB of memory (approximately 95.6
+GiB). The software environment consists of Linux (ker-
+nel 5.15.0-139-generic), Python 3.11.4, PyTorch 2.6.0 with
+CUDA 12.4, Transformers 4.57.1, and NVIDIA driver
+550.163.01.
+4.2. Evaluation on high-resolution fine-grained
+benchmarks
+To evaluate EAGLE on high-resolution fine-grained vi-
+sual question answering, we compare its performance on
+V*Bench, HRBench-4K, and HRBench-8K with that of
+methods using the same backbone. Table 1 compares EA-
+GLE with existing methods within each backbone family.
+EAGLE achieves the highest overall accuracy among the
+listed methods on all three benchmarks: 94.8%, 81.0%,
+and 81.9% with Qwen2.5-VL-7B, and 93.7%, 79.0%, and
+6
+
+
+Figure 4. View-combination examples. O, I, and D denote the original, intermediate, and detail views. Only I + D correctly identifies the
+blue backpack in (a); O + I + D recovers the car–lion relation in (b); and O + I preserves the context needed for the hall–bus relation in (c).
+Green marks the correct prediction for each case.
+77.4% with InternVL3-8B. Gains over the correspond-
+ing backbone baselines range from 8.5 to 16.3 percentage
+points. Consistent improvements across two model fami-
+lies and three benchmarks provide evidence of cross-model
+generalizability within the evaluated setting.
+The subgroup results in Table 1 further show strong per-
+formance on instance relations. Qwen2.5-VL-7B reaches
+94.7% on spatial questions and 67.8%/69.0% on HRBench-
+4K/8K FCP. Relative to the concurrent EviSpec preprint
+[15], its overall scores are higher by 2.7, 0.1, and 0.3 points.
+With InternVL3-8B, EAGLE exceeds HiDe by 2.1, 2.2, and
+0.3 points overall.
+4.3. Effect of the ranking function
+To assess whether the learned ranking function selects at-
+tention heads that better cover the target region, we compare
+ranked and random head selection under otherwise identical
+settings. Figure 3 compares ranked and random head se-
+lection on the held-out localization set. Both use the same
+128-head pool, map fusion, and region extraction. Random
+selection is repeated ten times for each K, with heads sam-
+pled without replacement. The standard deviation measures
+variation caused by random selection.
+Figure 3 shows that ranked selection maintains high cov-
+erage across K, whereas random selection deteriorates as
+more heads are averaged. At K = 16, coverage is 81.5%
+versus 57.8%, a 23.7-point gain. K = 2 and K = 4 achieve
+slightly higher coverage, so this plot does not establish K
+= 16 as the coverage optimum. The adopted K = 16 ag-
+gregates more candidate signals while limiting each head to
+1/16 of the fused map.
+4.4. View combinations and the need for routing
+To assess the contributions of the grounding modules and
+determine whether question-guided routing improves on
+fixed view combinations, we conduct module ablations and
+compare alternative view configurations. Table 2 separates
+the grounding components from view selection. Removing
+the entity-phrase design reduces accuracy from 94.76% to
+89.53% (5.24 percentage points before rounding); this vari-
+ant jointly replaces phrase extraction with baseline extrac-
+tion, uses equal word weights, and disables shared-region
+enhancement. Removing head selection yields 89.01% (a
+5.76-point drop). These are module-level ablations, not iso-
+lated tests of each subcomponent. With grounding and an-
+swering settings fixed, O + I, I + D, and O + I + D reach
+7
+
+
+91.10%, 92.67%, and 93.19%, respectively.
+The routed
+method outperforms all three fixed combinations, support-
+ing question-dependent evidence selection.
+To examine how the visual evidence needed for answer-
+ing varies across questions, we qualitatively compare pre-
+dictions obtained with different view combinations. Fig-
+ure 4 illustrates how the useful view combination depends
+on the question. Intermediate and detail views reveal the
+backpack color, all three views support the car–lion rela-
+tion, and original plus intermediate views preserve the con-
+text for the hall–bus relation. In these examples, adding
+or removing a view changes the prediction even though the
+target scene is unchanged.
+5. Conclusion
+EAGLE combines entity-aware grounding with layered vi-
+sual evidence for high-resolution understanding. Removing
+non-localization words and fusing phrase-level responses
+improves target specification; dynamic Top-16 selection
+supplies entity-specific grounding signals. The newly in-
+troduced intermediate views provide detailed context and
+bridge the scale gap between global and local images, while
+question-guided routing is responsible for selecting suitable
+visual evidence for answering. Results on three benchmarks
+with two frozen backbones support the framework’s cross-
+model applicability and achieve SOTA performance among
+the evaluated same-backbone methods.
+Future work will evaluate EAGLE on a broader range of
+multimodal large language models to assess its generaliz-
+ability beyond the two backbones studied here. To address
+the limited availability of high-quality, openly accessible
+fine-grained datasets, we also plan to construct datasets with
+more detailed category annotations and fine-grained visual
+questions, supporting more comprehensive evaluation and
+further research in this area.
+References
+[1] Samira Abnar and Willem Zuidema. Quantifying attention
+flow in transformers. In ACL, pages 4190–4197, 2020. 3, 5
+[2] Jean-Baptiste Alayrac, Jeff Donahue, Pauline Luc, et al.
+Flamingo: A visual language model for few-shot learning.
+In NeurIPS, 2022. 1, 3
+[3] Shuai Bai, Keqin Chen, Xuejing Liu, et al. Qwen2.5-VL
+technical report, 2025. arXiv:2502.13923. 3, 5
+[4] Jing Bi, Junjia Guo, Yunlong Tang, Lianggong Bruce Wen,
+Zhang Liu, Bingjie Wang, and Chenliang Xu. Unveiling vi-
+sual perception in language models: An attention head anal-
+ysis approach. In CVPR, pages 4135–4144, 2025. 1, 3, 4
+[5] Zhe Chen, Jiannan Wu, Wenhai Wang, et al. InternVL: Scal-
+ing up vision foundation models and aligning for generic
+visual-linguistic tasks. In CVPR, pages 24185–24198, 2024.
+3
+[6] Wenliang Dai, Junnan Li, Dongxu Li, et al. InstructBLIP:
+Towards general-purpose vision-language models with in-
+struction tuning. In NeurIPS, 2023. 1, 3
+[7] Alexey Dosovitskiy, Lucas Beyer, Alexander Kolesnikov,
+et al. An image is worth 16×16 words: Transformers for
+image recognition at scale. In ICLR, 2021. 3
+[8] Woojun Jung, Jaehoon Go, Mingyu Jeon, Sunjae Yoon, and
+Junyeong Kim. Visual Funnel: Resolving contextual blind-
+ness in multimodal large language models. In CVPR Find-
+ings, pages 8962–8971, 2026. 1
+[9] Seil Kang, Jinyeong Kim, Junhyeok Kim, and Seong Jae
+Hwang. Your large vision-language model only needs a few
+attention heads for visual grounding. In CVPR, pages 9339–
+9350, 2025. 1, 3, 4
+[10] Junnan Li, Dongxu Li, Silvio Savarese, and Steven Hoi.
+BLIP-2:
+Bootstrapping language-image pre-training with
+frozen image encoders and large language models. In ICML,
+pages 19730–19742, 2023. 1, 3
+[11] Yangfu Li, Hongjian Zhan, Jiawei Chen, Yuning Gong, Qi
+Liu, and Yue Lu. DeepScan: A training-free framework for
+visually grounded reasoning in large vision-language mod-
+els. In CVPR, 2026. 6
+[12] Haotian Liu, Chunyuan Li, Qingyang Wu, and Yong Jae Lee.
+Visual instruction tuning. In NeurIPS, 2023. 1, 3
+[13] Haotian Liu, Chunyuan Li, Yuheng Li, and Yong Jae Lee.
+Improved baselines with visual instruction tuning. In CVPR,
+pages 26296–26306, 2024. 1, 3
+[14] Xianjie Liu, Yiman Hu, Yixiong Zou, Liang Wu, Jian Xu,
+and Bo Zheng.
+HiDe: Rethinking the zoom-in method
+in high resolution MLLMs via hierarchical decoupling. In
+ICML, pages 76654–76672, 2026. 1, 3, 5, 6
+[15] Zhongkuan Mao, Wenzhuo Zhao, Xianjie Liu, Yidong
+Wang, Zhao Gao, Ronghao Xian, Yao Jiang, Yi Zhang,
+Liangjian Wen, and Keren Fu.
+Pay more attention to
+text in high-resolution MLLMs, 2026.
+arXiv preprint
+arXiv:2609.23495. 6, 7
+[16] Alec Radford, Jong Wook Kim, Chris Hallacy, et al. Learn-
+ing transferable visual models from natural language super-
+vision. In ICML, pages 8748–8763, 2021. 1, 3
+[17] Hao Shao, Shengju Qian, Han Xiao, et al. Visual CoT: Ad-
+vancing multi-modal language models with a comprehensive
+dataset and benchmark for chain-of-thought reasoning. In
+NeurIPS, pages 8612–8642, 2024. 2, 3, 5
+[18] Haozhan Shen, Kangjia Zhao, Tiancheng Zhao, Ruochen
+Xu, Zilun Zhang, Mingwei Zhu, and Jianwei Yin. ZoomEye:
+Enhancing multimodal LLMs with human-like zooming ca-
+pabilities through tree-based image exploration. In EMNLP,
+pages 6602–6618, 2025. 1, 3
+[19] Baifeng Shi, Boyi Li, Han Cai, Yao Lu, Sifei Liu, Marco
+Pavone, Jan Kautz, Song Han, Trevor Darrell, Pavlo
+Molchanov, and Hongxu Yin. Scaling vision pre-training to
+4K resolution. In CVPR, pages 9631–9640, 2025. 3
+[20] Shengbang Tong, Zhuang Liu, Yuexiang Zhai, et al. Eyes
+wide shut? Exploring the visual shortcomings of multimodal
+LLMs. In CVPR, pages 9568–9578, 2024. 1
+[21] Wenbin Wang, Liang Ding, Minyan Zeng, Xiabin Zhou, Li
+Shen, Yong Luo, and Dacheng Tao. Divide, conquer and
+8
+
+
+combine: A training-free framework for high-resolution im-
+age perception in multimodal large language models, 2024.
+arXiv:2408.15556. 5
+[22] Wenbin Wang, Yongcheng Jing, Liang Ding, Yingjie Wang,
+Li Shen, Yong Luo, Bo Du, and Dacheng Tao. Retrieval-
+augmented perception: High-resolution image perception
+meets visual RAG. In ICML, pages 63290–63307, 2025. 1,
+3
+[23] Penghao Wu and Saining Xie. V*: Guided visual search as
+a core mechanism in multimodal LLMs. In CVPR, pages
+13084–13094, 2024. 1, 3, 5
+[24] Junfei Xie, Peng Pan, and Xulong Zhang. Head-aware vi-
+sual cropping: Enhancing fine-grained VQA with attention-
+guided subimage, 2026. arXiv:2601.22483. 3
+[25] Ruyi Xu, Yuan Yao, Zonghao Guo, et al. LLaVA-UHD: An
+LMM perceiving any aspect ratio and high-resolution im-
+ages. In ECCV, 2024. 1, 3
+[26] Jiarui Zhang, Mahyar Khayatkhoei, Prateek Chhikara, and
+Filip Ilievski. MLLMs know where to look: Training-free
+perception of small visual details with multimodal LLMs. In
+ICLR, 2025. 1, 3, 6
+[27] Ziwei Zheng, Michael Yang, Jack Hong, Chenxiao Zhao,
+Guohai Xu, Le Yang, Chao Shen, and Xing Yu. DeepEyes:
+Incentivizing thinking with images via reinforcement learn-
+ing. In ICLR, 2026. 6
+[28] Jinguo Zhu, Weiyun Wang, Zhe Chen, et al.
+InternVL3:
+Exploring advanced training and test-time recipes for open-
+source multimodal models, 2025. arXiv:2504.10479. 3, 5
+9
